@@ -1,9 +1,9 @@
 /**
  * @file The bulk writers (the five revokers and markSessionAuthenticated)
  * lock the rows they write in id order, whatever plan or physical row layout
- * Postgres uses (`user-token.repository.ts`'s header). Three groups of tests pin that
- * property: a race on a built physical layout, a plan-shape check, and a
- * schema guard.
+ * Postgres uses (`user-token.repository.ts`'s header). Three groups of tests
+ * pin that property: a race on a built physical layout, a plan-shape check,
+ * and a schema guard.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { eq, sql, type Logger, type SQL } from 'drizzle-orm'
@@ -22,10 +22,9 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * A single-connection client and its drizzle wrapper. The pool has two
- * connections, and the property test holds three transactions open.
- * @param logger - Records each statement drizzle sends, when given.
- * @returns The client and the drizzle instance over it.
+ * A single-connection client and its drizzle wrapper, with a `logger` that sees each statement
+ * drizzle sends when given. The race holds three transactions open and the pool has two
+ * connections, so each actor needs a connection of its own.
  */
 function dedicatedConnection(logger?: Logger): { client: postgres.Sql; conn: typeof db } {
   const client = postgres(getEnv().DATABASE_URL, { max: 1, onnotice: () => {} })
@@ -68,17 +67,16 @@ afterAll(async () => {
 })
 
 /**
- * The sets every stand-in writes, as the real writers write them through `touched`.
- * @returns The revoke's column values.
+ * The column values every stand-in writes. The real writers stamp `revokedAt` with
+ * `clock_timestamp()` instead of `now()`, which does not change which rows they lock or in what
+ * order.
  */
 function revokedNow(): { revokedAt: SQL; updatedAt: SQL } {
   return { revokedAt: sql`now()`, updatedAt: sql`now()` }
 }
 
 /**
- * The distinct non-null session ids of revoked rows.
- * @param rows - The rows an UPDATE returned.
- * @returns The ids, deduplicated.
+ * The distinct non-null session ids of the rows an UPDATE returned.
  */
 function distinctSessionIds(rows: { sessionId: string | null }[]): string[] {
   const ids = rows
@@ -88,10 +86,8 @@ function distinctSessionIds(rows: { sessionId: string | null }[]): string[] {
 }
 
 /**
- * A `revokeAllForSession` stand-in that updates by its predicate directly.
- * @param sessionId - The session.
- * @param executor - Where to run the query.
- * @returns How many rows were revoked.
+ * A `revokeAllForSession` stand-in that updates by its predicate with no id-ordered lock, so it
+ * locks rows in scan order.
  */
 async function unorderedRevokeAllForSession(
   sessionId: string,
@@ -108,10 +104,8 @@ async function unorderedRevokeAllForSession(
 }
 
 /**
- * A `revokeAllForUser` stand-in that updates by its predicate directly.
- * @param userId - The user.
- * @param executor - Where to run the query.
- * @returns The distinct session ids revoked.
+ * A `revokeAllForUser` stand-in that updates by its predicate with no id-ordered lock, so it locks
+ * rows in scan order.
  */
 async function unorderedRevokeAllForUser(
   userId: string,
@@ -128,11 +122,8 @@ async function unorderedRevokeAllForUser(
 }
 
 /**
- * A `revokeAllForUserExceptSession` stand-in that updates by its predicate directly.
- * @param userId - The user.
- * @param sessionId - The session to spare.
- * @param executor - Where to run the query.
- * @returns The distinct session ids revoked.
+ * A `revokeAllForUserExceptSession` stand-in that updates by its predicate with no id-ordered
+ * lock, so it locks rows in scan order.
  */
 async function unorderedRevokeAllForUserExceptSession(
   userId: string,
@@ -150,13 +141,9 @@ async function unorderedRevokeAllForUserExceptSession(
 }
 
 /**
- * A `revokeAllForUserExceptToken` stand-in that updates by its predicate directly.
- * @param userId - The user.
- * @param spared - The one row to spare, and its session.
- * @param spared.id - The spared row's id.
- * @param spared.sessionId - The spared row's session, left out of the result.
- * @param executor - Where to run the query.
- * @returns The distinct session ids revoked, never the spared row's.
+ * A `revokeAllForUserExceptToken` stand-in that updates by its predicate with no id-ordered lock,
+ * so it locks rows in scan order. Like the real method, it leaves the spared row's session out of
+ * the result.
  */
 async function unorderedRevokeAllForUserExceptToken(
   userId: string,
@@ -174,11 +161,8 @@ async function unorderedRevokeAllForUserExceptToken(
 }
 
 /**
- * A `revokeAllForUserAndPurpose` stand-in that updates by its predicate directly.
- * @param userId - The user.
- * @param purpose - The purpose.
- * @param executor - Where to run the query.
- * @returns Resolves once the rows are revoked.
+ * A `revokeAllForUserAndPurpose` stand-in that updates by its predicate with no id-ordered lock,
+ * so it locks rows in scan order.
  */
 async function unorderedRevokeAllForUserAndPurpose(
   userId: string,
@@ -194,9 +178,8 @@ async function unorderedRevokeAllForUserAndPurpose(
 }
 
 /**
- * Run `run` with the five revokers swapped for their unordered stand-ins.
- * @param run - The test body.
- * @returns Resolves once `run` settles and every writer is restored.
+ * Runs `run` with the five revokers swapped for their unordered stand-ins, and restores every
+ * writer afterwards.
  */
 async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
   const prototype = UserTokenRepository.prototype
@@ -225,9 +208,7 @@ async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
 }
 
 /**
- * A row's physical position.
- * @param id - The token row's id.
- * @returns Its page and line pointer.
+ * A token row's physical position, as its page and line pointer.
  */
 async function ctidOf(id: string): Promise<[number, number]> {
   const [row] = await rawSql<{ ctid: string }[]>`
@@ -239,10 +220,7 @@ async function ctidOf(id: string): Promise<[number, number]> {
 }
 
 /**
- * Insert a live refresh row.
- * @param userId - The user.
- * @param sessionId - The session.
- * @returns The row's id.
+ * Inserts a live refresh row for the session and returns its id.
  */
 async function insertRefresh(userId: string, sessionId: string): Promise<string> {
   const [row] = await db
@@ -261,11 +239,11 @@ async function insertRefresh(userId: string, sessionId: string): Promise<string>
 }
 
 /**
- * Two live rows of one session whose physical order (b, a) disagrees with
- * their index order (a, b): a is HOT-updated onto a later slot of b's page.
- * No application path updates a live row without revoking it; this is the
- * layout such a path, or a composite index, would create.
- * @returns The user, the session and the two row ids.
+ * Builds two live rows of one session whose physical order (b, a) disagrees with
+ * their index order (a, b): a is HOT-updated onto a later slot of b's page. An
+ * in-place update of a live row, as `markSessionAuthenticated` does, can
+ * produce this layout. A multi-column index leading with user_id or session_id
+ * would also make scans diverge from id order (see the schema guard below).
  * @throws {Error} When no attempt produces the layout.
  */
 async function divergentPair(): Promise<{
@@ -310,19 +288,16 @@ interface Actor {
 }
 
 /**
- * Thrown to roll an actor's transaction back once the test releases it.
+ * Thrown to roll a transaction back on purpose.
  */
 class Rollback extends Error {}
 
 /**
- * Run `work` in a transaction on `conn` with the given planner settings,
- * report its outcome as soon as it settles, and hold the transaction open
- * (as a locked caller would) until `end` resolves; then roll back.
- * @param conn - The actor's dedicated connection.
- * @param planner - `SET LOCAL` settings, e.g. `enable_seqscan = off`.
- * @param work - The statement under test.
- * @param end - Resolved by the test to end the transaction.
- * @returns The actor's backend pid, statement outcome and transaction.
+ * Runs `work` in a transaction on `conn` under the `planner` settings (`SET LOCAL` values such as
+ * `enable_seqscan = off`), and reports its outcome as soon as it settles. After a statement that
+ * succeeds it holds the transaction open, as a locked caller would, until `end` resolves, then rolls
+ * back; a statement that fails rolls back at once. The result carries the backend pid, the
+ * statement's outcome and the transaction's completion.
  */
 function actor(
   conn: typeof db,
@@ -356,9 +331,8 @@ function actor(
 }
 
 /**
- * Race revokeAllForUser (sequential scan) against revokeAllForSession (index
- * scan) on the divergent layout, with a third connection holding b.
- * @returns Both writers' outcomes.
+ * Races `revokeAllForUser` (sequential scan) against `revokeAllForSession` (index scan) on the
+ * divergent layout, with a third connection holding b, and reports both writers' outcomes.
  */
 async function raceOnDivergentLayout(): Promise<{ A: Outcome; B: Outcome }> {
   const { userId, sessionId, b } = await divergentPair()
@@ -413,9 +387,8 @@ async function raceOnDivergentLayout(): Promise<{ A: Outcome; B: Outcome }> {
 }
 
 /**
- * A race that builds the one physical layout where a forced sequential scan
- * and a forced index scan would visit shared rows in opposite orders, and
- * so deadlock if either writer locked out of id order.
+ * A race that builds a physical layout where a forced sequential scan and a forced index scan
+ * visit shared rows in opposite orders, and so deadlock if either writer locks out of id order.
  */
 describe('bulk token revokers lock rows in id order', () => {
   it('revokeAllForUser (sequential scan) and revokeAllForSession (index scan) never deadlock', async () => {
@@ -504,8 +477,6 @@ const PLANNERS: { label: string; settings: readonly string[] }[] = [
 
 /**
  * The UPDATE a writer sends, captured by running it for ids that match no row.
- * @param run - The writer.
- * @returns Its SQL text and bound parameters.
  */
 async function capturedUpdate(
   run: (executor: DbExecutor) => Promise<unknown>
@@ -518,10 +489,7 @@ async function capturedUpdate(
 }
 
 /**
- * The JSON plan of a captured statement under the given planner settings.
- * @param statement - The statement and its parameters.
- * @param settings - `SET LOCAL` settings for the EXPLAIN's transaction.
- * @returns The plan's root node.
+ * The root of the JSON plan of a captured statement, planned under the given `SET LOCAL` settings.
  */
 async function planOf(
   statement: CapturedStatement,
@@ -540,9 +508,7 @@ async function planOf(
 }
 
 /**
- * Every LockRows node in a plan.
- * @param node - The plan's root.
- * @returns The LockRows nodes, outermost first.
+ * Every LockRows node in a plan, outermost first.
  */
 function lockRowsNodes(node: PlanNode): PlanNode[] {
   const own = node['Node Type'] === 'LockRows' ? [node] : []
@@ -550,9 +516,8 @@ function lockRowsNodes(node: PlanNode): PlanNode[] {
 }
 
 /**
- * Whether a node yields rows in id order: a sort on id, or a forward scan of the primary key.
- * @param node - LockRows' input.
- * @returns True when the node yields id order.
+ * Whether LockRows' input yields rows in id order: a sort on id, or a forward scan of the primary
+ * key.
  */
 function isIdOrdered(node: PlanNode | undefined): boolean {
   if (node?.['Node Type'] === 'Sort') {
@@ -567,9 +532,8 @@ function isIdOrdered(node: PlanNode | undefined): boolean {
 }
 
 /**
- * Assert that a writer's plan locks through one LockRows fed in id order.
- * @param run - The writer.
- * @param settings - The planner settings to plan under.
+ * Asserts that a writer's plan, under the planner `settings`, locks through one LockRows fed in id
+ * order.
  */
 async function expectIdOrderedLocking(
   run: (executor: DbExecutor) => Promise<unknown>,
@@ -625,9 +589,8 @@ const GUARD_MESSAGE =
   'They lock in id order (UserTokenRepository.lockedIds); that is what keeps this safe.'
 
 /**
- * Every index on user_tokens, read in a transaction that is rolled back.
- * @param probeDdl - A statement run first in that transaction, e.g. a CREATE INDEX.
- * @returns Each index's name, key column count and leading column.
+ * Reads every index on user_tokens inside a transaction that is rolled back, so `probeDdl` (for
+ * example a CREATE INDEX) runs first without leaving its index behind.
  */
 async function userTokenIndexes(probeDdl?: string): Promise<IndexShape[]> {
   // A holder object: TypeScript does not see assignments made inside the callback.
@@ -654,9 +617,7 @@ async function userTokenIndexes(probeDdl?: string): Promise<IndexShape[]> {
 }
 
 /**
- * The indexes that would let two revokers scan shared rows in different orders.
- * @param indexes - Every index on user_tokens.
- * @returns Their names.
+ * The names of the indexes that would let two revokers scan shared rows in different orders.
  */
 function orderChangingIndexes(indexes: IndexShape[]): string[] {
   return indexes
@@ -671,7 +632,7 @@ describe('user_tokens schema guard', () => {
   it('has no multi-column index leading with user_id or session_id', async () => {
     const indexes = await userTokenIndexes()
 
-    // The query sees the single-column indexes the revokers scan today.
+    // The query sees the single-column indexes the revokers scan.
     expect(indexes).toEqual(
       expect.arrayContaining([
         { indexName: 'user_tokens_user_id_idx', keyColumns: 1, leadingColumn: 'user_id' },

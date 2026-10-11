@@ -63,9 +63,18 @@ const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
 const { withMutatedModule } = await import('../../helpers/mutate')
 const { request } = await import('../../helpers/request')
 
+/**
+ * The fake PostHog server `startFakePosthog` starts.
+ */
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
+/**
+ * One issue row, as `issuesAnswer` takes it to build PostHog's answer.
+ */
 type SeededIssue = Parameters<typeof issuesAnswer>[0][number]
 
+/**
+ * An issue as the Errors list returns it.
+ */
 interface Issue {
   issueId: string
   type: string
@@ -77,6 +86,9 @@ interface Issue {
   link: string
 }
 
+/**
+ * The Errors list response; `configured` is false for an unconfigured environment.
+ */
 interface ErrorsPage {
   configured: boolean
   items?: Issue[]
@@ -92,8 +104,7 @@ const fake: { posthog?: FakePosthog } = {}
 const tenantIds: string[] = []
 
 /**
- * The running fake.
- * @returns It.
+ * The running fake PostHog, failing the test when it is not started.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -102,9 +113,6 @@ function posthog(): FakePosthog {
 
 /**
  * An issue whose most recent event was sent under `distinctId`.
- * @param distinctId - Whose event.
- * @param overrides - Any other columns.
- * @returns The seeded issue.
  */
 function seeded(distinctId: string, overrides: Partial<SeededIssue> = {}): SeededIssue {
   return {
@@ -123,7 +131,6 @@ function seeded(distinctId: string, overrides: Partial<SeededIssue> = {}): Seede
 
 /**
  * Answer every query with these issues.
- * @param issues - The issues.
  */
 function answerWith(issues: SeededIssue[]): void {
   posthog().respondToQuery(() => ({ status: 200, json: issuesAnswer(issues) }))
@@ -131,18 +138,13 @@ function answerWith(issues: SeededIssue[]): void {
 
 /**
  * A GET of one Errors view.
- * @param token - The staff bearer token.
- * @param path - The path under /api/v1/platform.
- * @returns The response.
  */
 function getErrors(token: string, path: string): Promise<Response> {
   return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
 }
 
 /**
- * The status of a response.
- * @param pending - The request.
- * @returns Its status.
+ * The status of a request, for a case where only the status is under test.
  */
 async function statusOf(pending: PromiseLike<Response>): Promise<number> {
   const response = await pending
@@ -150,9 +152,7 @@ async function statusOf(pending: PromiseLike<Response>): Promise<number> {
 }
 
 /**
- * The page in a 200 response.
- * @param response - The response.
- * @returns Its data.
+ * The page in a 200 response; fails the test on any other status.
  */
 function pageOf(response: Response): ErrorsPage {
   expect(response.status).toBe(200)
@@ -161,8 +161,6 @@ function pageOf(response: Response): ErrorsPage {
 
 /**
  * How many errors-view audit entries target an id.
- * @param targetId - The user or tenant id.
- * @returns The count.
  */
 async function errorsAudits(targetId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`
@@ -173,7 +171,6 @@ async function errorsAudits(targetId: string): Promise<number> {
 
 /**
  * A customer tenant with no members, tracked for cleanup.
- * @returns Its id.
  */
 async function createTenant(): Promise<string> {
   const tenant = await tenantRepository.createWithoutOwner({
@@ -401,9 +398,8 @@ describe('the Errors audit with Redis down', () => {
   })
 
   /**
-   * Deliberately red when run with MUTATION_PROOF=1: the app loads against a
-   * view audit that skips the entry when Redis is down (failing toward not
-   * auditing), and the real test's own assertion then fails. Skipped by
+   * Red when run with MUTATION_PROOF=1: the app loads against a view audit that skips the entry
+   * when Redis is down (failing toward silence), so the two-entry assertion fails. Skipped by
    * default, so the file is green:
    *
    *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/platform-errors.test.ts   # red

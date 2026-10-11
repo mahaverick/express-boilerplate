@@ -29,6 +29,9 @@ import {
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -37,6 +40,9 @@ interface ApiEnvelope<TData> {
   errors?: Record<string, string[]>
 }
 
+/**
+ * One message as the list and the detail return it.
+ */
 interface SummaryBody {
   id: string
   recipient: string
@@ -47,6 +53,9 @@ interface SummaryBody {
   canResend: boolean
 }
 
+/**
+ * One page of the message list, with its cursors.
+ */
 interface PageBody {
   messages: SummaryBody[]
   nextCursor: string | null
@@ -54,15 +63,24 @@ interface PageBody {
 }
 
 const app = createApp()
+/**
+ * Orders strings for `toSorted`.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 const HEX_TOKEN = /[\da-f]{64}/
 
+/**
+ * The `data` of a response, failing the test when there is none.
+ */
 function dataOf<TData>(response: Response): TData {
   const data = (response.body as ApiEnvelope<TData>).data
   if (!data) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * Staff read requests, with the query a list filters on.
+ */
 function get(token: string, path: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)
     .get(`/api/v1/platform${path}`)
@@ -70,16 +88,25 @@ function get(token: string, path: string, query: Record<string, string> = {}): P
     .set('Authorization', `Bearer ${token}`)
 }
 
+/**
+ * The status of a request, for a case where only the status is under test.
+ */
 async function statusOf(pending: Promise<Response>): Promise<number> {
   const response = await pending
   return response.status
 }
 
+/**
+ * Whether the detail endpoint tells this staff member the message can be resent.
+ */
 async function canResendAs(token: string, messageId: string): Promise<boolean> {
   const detail = dataOf<SummaryBody>(await get(token, `/emails/${messageId}`))
   return detail.canResend
 }
 
+/**
+ * A short unique tag for recipients, so a `q` search finds only this test's rows.
+ */
 function tagged(): string {
   return `pe${randomUUID().slice(0, 8)}`
 }
@@ -184,6 +211,9 @@ describe('GET /api/v1/platform/emails', () => {
       templateKey: 'tenant_invitation',
       tenantId,
     })
+    /**
+     * The ids of the messages listed for this test's tag, with the extra `query`.
+     */
     const ids = async (query: Record<string, string>): Promise<string[]> =>
       dataOf<PageBody>(await get(token, '/emails', { q: tag, ...query })).messages.map(
         (message) => message.id
@@ -490,6 +520,9 @@ describe('GET /api/v1/platform/email-suppressions', () => {
     const lifted = await createTrackedSuppression(`${tag}-b@example.test`, { isLifted: true })
     const lifter = await createTrackedUser({ firstName: 'Grace' })
     await sql`update email_suppressions set lifted_by = ${lifter.id} where id = ${lifted.id}`
+    /**
+     * The ids of the suppressions listed for this test's tag, with the extra `query`.
+     */
     const ids = async (query: Record<string, string>): Promise<string[]> =>
       dataOf<{ suppressions: { id: string }[] }>(
         await get(token, '/email-suppressions', { q: tag, ...query })

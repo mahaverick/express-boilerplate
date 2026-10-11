@@ -3,7 +3,7 @@
  * `tests/helpers/worker-database.ts`). Every user this file creates is
  * deleted in `afterEach` — deleting the user is enough: `notifications.user_id`
  * carries `ON DELETE CASCADE` (`notification.model.ts`), so a row this file
- * never explicitly deletes is still gone once its owning user is. One
+ * never explicitly deletes is gone once its owning user is. One
  * cascade test below asserts that property directly rather than leaving it
  * an unverified assumption.
  */
@@ -21,22 +21,18 @@ const notificationRepository = new NotificationRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `notification-repo-${randomUUID()}@example.test`
 }
 
 /**
- * Page through an entire inbox with a page size far smaller than the
- * total, following the real `nextCursor` each time, and return the set of
- * every id seen across every page plus how many pages it took. Shared by
- * both pagination tests below — the only difference between them is how
- * `createdAt` was assigned to the rows being paged through.
- * @param userId - The user whose notifications to page through.
- * @param expectedIds - Every id the caller expects to see exactly once, used only to size the safety-valve page limit.
- * @returns The set of ids seen across every page, and how many pages were fetched.
+ * Pages through a user's whole inbox two rows at a time, following the real `nextCursor`, and
+ * reports the ids seen and the page count. Both pagination tests use it; they differ only in how
+ * `createdAt` was assigned. `expectedIds` only sizes the page limit that stops a cursor that
+ * never ends.
  */
 async function pageThroughAll(
   userId: string,
@@ -100,8 +96,7 @@ describe('NotificationRepository', () => {
   })
 
   /**
-   * A fresh user for a test to own notifications with, tracked for cleanup.
-   * @returns The created user's id.
+   * Creates a user for a test to own notifications, tracked for cleanup.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -345,10 +340,10 @@ describe('NotificationRepository', () => {
     })
 
     /**
-     * Rows created one `create()` call at a time land at least a
-     * millisecond apart, exercising the ordinary `created_at < $cursor`
-     * branch, not the `created_at = $cursor AND id < $id` tiebreaker (see
-     * the test below for that).
+     * Rows created one `create()` call at a time normally get distinct
+     * `createdAt` values, so this exercises the ordinary `created_at < $cursor`
+     * branch, not the `created_at = $cursor AND id < $id` tiebreaker (see the
+     * test below for that).
      */
     it('pages through every notification exactly once, with no gaps or duplicates', async () => {
       const userId = await createUser()
@@ -368,13 +363,12 @@ describe('NotificationRepository', () => {
     })
 
     /**
-     * The load-bearing test for `notification.model.ts`'s claim that
-     * `createdAt`'s millisecond precision is what stops the cursor from
-     * silently skipping a row sharing a millisecond with the cursor
-     * boundary. `createdAt` is passed explicitly and identically for every
-     * row here, forcing every comparison in the keyset predicate through
-     * the `id` tiebreaker, the exact branch a same-millisecond burst would
-     * hit.
+     * `createdAt`'s millisecond precision (`notification.model.ts`) lets the
+     * cursor round-trip through a JS `Date` exactly. `createdAt` is passed
+     * explicitly and identically for every row here, so every comparison in the
+     * keyset predicate goes through the `id` tiebreaker, the branch a
+     * same-millisecond burst hits, and a row sharing the cursor's millisecond
+     * must not be skipped.
      */
     it('pages through every notification exactly once, with no gaps or duplicates, when every row shares the same createdAt', async () => {
       const userId = await createUser()

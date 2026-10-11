@@ -1,9 +1,10 @@
 /**
- * @file audit_logs' trigger as migration 0017 left it: UPDATE always
- * raises, and DELETE raises unless the deleting transaction set both
- * `app.audit_purge` to `'on'` and `app.audit_purge_before` past the row's
- * `occurred_at`. Each setting is tested missing on its own, so a guard of
- * the form `a && b` cannot lose either half unnoticed here. Raw SQL throughout.
+ * @file The purge gate of audit_logs' trigger (migration 0017): DELETE raises
+ * unless the deleting transaction set both `app.audit_purge` to `'on'` and
+ * `app.audit_purge_before` past the row's `occurred_at`, and an UPDATE raises
+ * even then (the redact exception is in audit-redact-trigger.test.ts). Each
+ * setting is tested missing on its own, so a guard of the form `a && b` cannot
+ * lose either half unnoticed. Raw SQL throughout.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -24,8 +25,7 @@ afterEach(async () => {
 })
 
 /**
- * A raw tenant row, tracked for cleanup.
- * @returns Its id.
+ * Inserts a raw tenant row, tracked for cleanup, and returns its id.
  */
 async function insertTenant(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -37,9 +37,8 @@ async function insertTenant(): Promise<string> {
 }
 
 /**
- * One system-actor audit row.
- * @param occurredAt - Its occurred_at, ISO.
- * @returns Its id.
+ * Inserts one system-actor audit row, on a tenant of its own, and returns its
+ * id. `occurredAt` is an ISO timestamp.
  */
 async function insertAuditRow(occurredAt: string): Promise<string> {
   const tenantId = await insertTenant()
@@ -53,12 +52,8 @@ async function insertAuditRow(occurredAt: string): Promise<string> {
 }
 
 /**
- * Delete or update one audit row in a transaction that first applies
- * `settings` with set_config(..., true).
- * @param settings - Setting name to value.
- * @param statement - Which write to attempt.
- * @param id - The row's id.
- * @returns Resolves when the transaction commits.
+ * Deletes or updates one audit row in a transaction that first applies
+ * `settings` with set_config(..., true), so they last only until it ends.
  */
 async function inTransactionWith(
   settings: Record<string, string>,
@@ -77,8 +72,6 @@ async function inTransactionWith(
 
 /**
  * Whether an audit row still exists.
- * @param id - The row's id.
- * @returns True when it does.
  */
 async function isPresent(id: string): Promise<boolean> {
   const rows = await sql`select 1 from audit_logs where id = ${id}`

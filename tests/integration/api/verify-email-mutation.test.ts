@@ -2,8 +2,7 @@
  * @file Proves the password check in POST /auth/verify-email is
  * load-bearing: a status-code-only test cannot show that the
  * emailVerifiedAt column stays null when a wrong password should have
- * been refused. See the describe block below for the two-test
- * mutation-proof pattern this file follows.
+ * been refused. The describe block below explains the two-test pattern.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -27,9 +26,8 @@ afterEach(async () => {
 })
 
 /**
- * Seed an unverified user with a hashed password and a live
- * email_verification token.
- * @returns The user and raw token.
+ * Seeds an unverified user with a hashed password and a live
+ * email_verification token, returning the raw token.
  */
 async function seedUnverifiedUser(): Promise<{ user: { id: string }; token: string }> {
   const user = await userRepository.create({
@@ -43,32 +41,29 @@ async function seedUnverifiedUser(): Promise<{ user: { id: string }; token: stri
 }
 
 /**
- * Two tests, matching claim-token-mutation.test.ts's own pattern:
+ * Two tests, following claim-token-mutation.test.ts:
  *
- *   1. Always on, both directions in one run: mutate isPasswordValid to
- *      always return true, show that a wrong password now verifies the
- *      account (the column IS written), then restore and show a fresh
- *      seed + wrong password does NOT verify. This is what `pnpm test`
- *      and CI run, and it is always green.
+ *   1. Always runs and passes, covering both directions: with
+ *      isPasswordValid mutated to always return true, a wrong password
+ *      verifies the account (the column is written); restored, a fresh seed
+ *      and a wrong password do not.
  *
- *   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, deliberately red:
- *      reproduces the direct test's assertion (emailVerifiedAt is null
- *      after a wrong password) against the mutated dependency, so the
- *      failure shown is the actual regression test failing. Skipped by
- *      default:
+ *   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, red by design: it
+ *      asserts the real test's expectation (emailVerifiedAt is null after a
+ *      wrong password) against the mutated dependency, so the failure shown
+ *      is the regression test itself failing. Skipped by default:
  *
  *        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/verify-email-mutation.test.ts   # red
  *        pnpm exec vitest run tests/integration/api/verify-email-mutation.test.ts                    # green
  *
- * withMutatedModule re-evaluates the full module graph between
- * password.utilities and app.ts, including database.service.ts — which
- * opens a fresh postgres pool (max 2 connections) each time, leaked for
- * the life of the worker process. Acceptable for the handful of calls a
+ * withMutatedModule re-evaluates the module graph between password.utilities
+ * and app.ts, including database.service.ts, which opens a postgres pool
+ * (`DB_POOL_MAX`) each time and nothing closes it. Fine for the few calls a
  * mutation proof needs; do not call it in a loop.
  */
 describe('mutation proof: isPasswordValid is load-bearing for verify-email', () => {
   it('bypassing isPasswordValid lets a wrong password verify the account; restoring it refuses', async () => {
-    // MUTATED: isPasswordValid always returns true.
+    // Mutated: isPasswordValid always returns true.
     const { user: mutatedUser, token: mutatedToken } = await seedUnverifiedUser()
 
     await withMutatedModule(
@@ -81,13 +76,13 @@ describe('mutation proof: isPasswordValid is load-bearing for verify-email', () 
           .post('/api/v1/auth/verify-email')
           .send({ token: mutatedToken, password: 'not-the-right-password' })
 
-        // Under the mutation a wrong password succeeds — the column IS written, proving the password check matters.
+        // Under the mutation a wrong password verifies the account, so the password check is what prevents it.
         const row = await userRepository.findById(mutatedUser.id)
         expect(row?.emailVerifiedAt).toBeInstanceOf(Date)
       }
     )
 
-    // RESTORED: a fresh seed + wrong password must NOT verify.
+    // Restored: a fresh seed and a wrong password must not verify.
     const { user: restoredUser, token: restoredToken } = await seedUnverifiedUser()
     const { createApp } = await import('@/app')
     const restoredApp = createApp()
@@ -99,7 +94,7 @@ describe('mutation proof: isPasswordValid is load-bearing for verify-email', () 
     expect(row?.emailVerifiedAt).toBeNull()
   })
 
-  // DELIBERATELY red when run with MUTATION_PROOF=1 — see this file's header comment. Left unset, this test is skipped and the file is green.
+  // Red by design under MUTATION_PROOF=1 (see the describe's comment); skipped otherwise.
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the direct test assertion against the mutated dependency',
     async () => {
@@ -115,7 +110,7 @@ describe('mutation proof: isPasswordValid is load-bearing for verify-email', () 
             .post('/api/v1/auth/verify-email')
             .send({ token, password: 'not-the-right-password' })
 
-          // The real test asserts this is null; under the mutation it is a Date instead, proving the password check is load-bearing.
+          // The real test asserts null here; under the mutation it is a Date, which is the failure this test shows.
           const row = await userRepository.findById(user.id)
           expect(row?.emailVerifiedAt).toBeNull()
         }

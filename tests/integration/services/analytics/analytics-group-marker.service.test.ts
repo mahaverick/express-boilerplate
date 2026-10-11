@@ -1,10 +1,10 @@
 /**
  * @file resolveGroupMarkers against the real per-worker Postgres: a live
  * tenant's marker gets its current name, status and creation time, an
- * archived one its `archived` status, a purged one the scrub, a stored
- * `$group_set` from an older release is replaced, every other row passes
- * through untouched, and the batch's tenants are read in one query (none
- * when the batch has no marker).
+ * archived one its `archived` status, a purged one the scrub, a `$group_set`
+ * already stored on a marker is replaced, every other row passes through
+ * untouched, and the batch's tenants are read in one query (none when the
+ * batch has no marker).
  */
 import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
@@ -19,10 +19,8 @@ const OCCURRED_AT = new Date('2030-01-01T00:00:00.000Z')
 const tenantIds: string[] = []
 
 /**
- * Insert one tenant row directly.
- * @param name - Its name.
- * @param lifecycle - Its lifecycle state; an archived tenant is also soft-deleted.
- * @returns Its id and creation time.
+ * Inserts a tenant row straight into the table, tracked for cleanup, and returns its id and the
+ * creation time the database stamped. An archived tenant is also soft-deleted.
  */
 async function insertTenant(
   name: string,
@@ -44,10 +42,7 @@ async function insertTenant(
 }
 
 /**
- * A claimed outbox row, as the drainer holds it.
- * @param event - The event name.
- * @param properties - Its stored properties.
- * @returns The row.
+ * An outbox row in the state the drainer holds it after a claim, with the given stored properties.
  */
 function claimed(event: string, properties: Record<string, unknown>): AnalyticsOutboxRow {
   return {
@@ -63,10 +58,7 @@ function claimed(event: string, properties: Record<string, unknown>): AnalyticsO
 }
 
 /**
- * A stored tenant marker.
- * @param tenantId - The tenant.
- * @param extra - Further stored properties.
- * @returns The claimed row.
+ * A claimed `$groupidentify` marker row for `tenantId`, with `extra` stored properties added.
  */
 function marker(tenantId: string, extra: Record<string, unknown> = {}): AnalyticsOutboxRow {
   return claimed('$groupidentify', {

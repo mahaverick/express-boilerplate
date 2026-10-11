@@ -1,7 +1,7 @@
 /**
- * @file The platform tenant's member routes, which are how staff roles
- * change: owner-on-owner, the active-owner guard and step-up apply there
- * and nowhere else.
+ * @file The platform tenant's member routes, which are how staff roles change: owner-on-owner
+ * changes, the active-owner guard and step-up apply there, and a customer tenant keeps its own
+ * rules (no step-up for its members, and an owner cannot demote another owner).
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -37,11 +37,6 @@ afterEach(async () => {
 
 /**
  * Change a member's role.
- * @param token - The caller's bearer token.
- * @param slug - The tenant.
- * @param userId - The member.
- * @param role - The new role.
- * @returns The response.
  */
 function changeRole(token: string, slug: string, userId: string, role: string): Promise<Response> {
   return request(app)
@@ -52,10 +47,6 @@ function changeRole(token: string, slug: string, userId: string, role: string): 
 
 /**
  * Remove a member.
- * @param token - The caller's bearer token.
- * @param slug - The tenant.
- * @param userId - The member.
- * @returns The response.
  */
 function removeMember(token: string, slug: string, userId: string): Promise<Response> {
   return request(app)
@@ -66,10 +57,6 @@ function removeMember(token: string, slug: string, userId: string): Promise<Resp
 
 /**
  * Invite someone.
- * @param token - The caller's bearer token.
- * @param slug - The tenant.
- * @param role - The offered role.
- * @returns The response.
  */
 function invite(token: string, slug: string, role: string): Promise<Response> {
   return request(app)

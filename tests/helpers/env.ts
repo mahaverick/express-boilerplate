@@ -8,6 +8,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+/**
+ * Read one env file into `process.env`, skipping a missing file and any variable already set.
+ * @param file - The path, relative to the working directory.
+ */
 const load = (file: string): void => {
   const full = path.resolve(process.cwd(), file)
   if (!fs.existsSync(full)) return

@@ -1,12 +1,10 @@
 /**
- * @file The maintenance-mode gate through the real app, with this worker's
- * process store reloaded from the real row: the `Maintenance-Mode` header
- * on every response (let through, refused, 404, error), the 503 body and
- * `Retry-After` for both codes, CORS on a refusal and on a preflight,
- * sign-in in `full` (non-staff refused after the credential check, staff
- * admitted, refresh still answered by its own handler), and the public
- * status endpoint (shape, cache header, rate limit), and the staff pass on
- * the customer routes Apex calls (one platform-role read per request, and a
+ * @file The maintenance-mode gate through the real app, with this worker's process store reloaded
+ * from the real row: the `Maintenance-Mode` header on every response (let through, refused, 404,
+ * error), the 503 body and `Retry-After` for both codes, CORS on a refusal and on a preflight,
+ * sign-in in `full` (non-staff refused after the credential check, staff admitted, refresh still
+ * answered by its own handler), the public status endpoint (shape, cache header, rate limit), and
+ * the staff pass on the customer routes Apex calls (one platform-role read per request, and a
  * revoked role taking effect on the next request).
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -55,8 +53,6 @@ const NONE = null
 
 /**
  * Store a mode and load it into this process's store, as a published change would.
- * @param mode - The mode.
- * @param message - The customer message.
  */
 async function enter(
   mode: 'read_only' | 'full',
@@ -68,7 +64,6 @@ async function enter(
 
 /**
  * Revoke a staff member's platform role by deleting their platform-tenant membership.
- * @param userId - The staff member.
  */
 async function revokeStaff(userId: string): Promise<void> {
   const platform = await platformTenant()
@@ -77,7 +72,6 @@ async function revokeStaff(userId: string): Promise<void> {
 
 /**
  * A tenant owned by a fresh customer.
- * @returns The tenant and its owner's token.
  */
 async function customerTenant(): Promise<{ tenant: Tenant; ownerToken: string }> {
   const owner = await createTrackedUser()

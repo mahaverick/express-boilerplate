@@ -1,13 +1,11 @@
 /**
- * @file Integration test against the real per-worker Postgres database
- * (see tests/helpers/worker-database.ts) — same convention as
- * tests/integration/api/profile.test.ts: every user created here is
- * deleted in afterEach, and notifications/notification_preferences
- * cascade off that delete (ON DELETE CASCADE, notification.model.ts),
- * so nothing else needs explicit cleanup.
- * Authenticated requests sign a token directly with `signAccessToken`
- * rather than going through POST /api/v1/auth/login, since these tests
- * are about what happens after authentication, not about login itself.
+ * @file Integration test against this worker's real Postgres database (see
+ * tests/helpers/worker-database.ts), with the same cleanup convention as
+ * tests/integration/api/profile.test.ts: every user created here is deleted in afterEach, and
+ * notifications and notification_preferences cascade off that delete (ON DELETE CASCADE,
+ * notification.model.ts), so nothing else needs explicit cleanup. Authenticated requests sign a
+ * token directly with `signAccessToken` instead of going through POST /api/v1/auth/login, since
+ * these tests are about what happens after authentication.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -36,8 +34,8 @@ const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
 
 /**
- * The envelope every controller response is wrapped in
- * (response.utilities.ts), narrowed to the fields these tests read.
+ * The envelope every controller response is wrapped in (response.utilities.ts), narrowed to the
+ * fields these tests read.
  */
 interface ApiEnvelope<TData> {
   success: boolean
@@ -61,11 +59,8 @@ interface PreferencesBody {
 }
 
 /**
- * Cast a supertest response's body to a known envelope shape. supertest
- * types `.body` as `any`; every access after this point is a normal,
- * type-checked property access rather than an unsafe one.
- * @param response - The supertest response.
- * @returns The response body, typed.
+ * Types a supertest response body (typed `any`) as the API envelope, so later accesses are
+ * type-checked.
  */
 function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
@@ -74,7 +69,6 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 /**
  * Encode a value the way a cursor travels: base64url JSON, or a raw string.
  * @param value - The decoded cursor, or a string to encode as is.
- * @returns The cursor.
  */
 function b64(value: unknown): string {
   return Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString(
@@ -83,20 +77,16 @@ function b64(value: unknown): string {
 }
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `notification-api-${randomUUID()}@example.test`
 }
 
 /**
- * Insert one `verify_email` notification directly through the repository,
- * bypassing the API — these tests are about reading/mutating notifications
- * that already exist, not about how one gets created.
- * @param userId - The owning user's id.
- * @param title - The notification's title. Defaults to a fixed string when omitted.
- * @returns The inserted notification.
+ * Inserts one `verify_email` notification through the repository, bypassing the API: these tests
+ * read and mutate notifications that already exist.
  */
 async function seedNotification(
   userId: string,
@@ -113,8 +103,6 @@ async function seedNotification(
 /**
  * Seed one notification the way the notification worker writes it, with a
  * non-null `dedupeKey`, so a response that leaks the column shows a value.
- * @param userId - The owning user's id.
- * @returns The inserted row.
  */
 async function seedDedupedNotification(userId: string): Promise<Notification> {
   const row = await notificationRepository.createOnce({
@@ -139,9 +127,7 @@ describe('/api/v1/notifications', () => {
   })
 
   /**
-   * Create a disposable user row, sign an access token for it, and track
-   * the row for cleanup.
-   * @returns The created row and a valid bearer token for it.
+   * Creates a disposable user, signs an access token for it and tracks the row for cleanup.
    */
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -528,21 +514,14 @@ describe('/api/v1/notifications', () => {
   })
 
   /**
-   * PUT /preferences cannot be exercised end-to-end for a successful
-   * upsert in this describe block. CONFIGURABLE_NOTIFICATION_TYPES
-   * (notification.validators.ts) is currently empty — every
-   * NOTIFICATION_TYPES entry is listed as non-disableable — so every
-   * well-formed preferences update is rejected until a type with a
-   * disableable channel ships. The tests below cover that rejection
-   * (and the ordinary validation failures alongside it); a positive
-   * upsert-through-the-controller test has nothing to exercise it
-   * with yet. NotificationPreferenceRepository.upsert itself already
-   * has direct coverage in notification-preference.repository.test.ts,
-   * which does not go through this validator and so is unaffected by
-   * the empty configurable list.
+   * No test here upserts a preference successfully through the route: `CONFIGURABLE_NOTIFICATION_TYPES`
+   * (notification.validators.ts) is empty because every `NOTIFICATION_TYPES` entry is
+   * non-disableable, so every well-formed update is rejected. The tests below cover that rejection
+   * and the ordinary validation failures; `NotificationPreferenceRepository.upsert` is covered
+   * directly in notification-preference.repository.test.ts, which bypasses the validator.
    */
   describe('PUT /api/v1/notifications/preferences', () => {
-    // CONFIGURABLE_NOTIFICATION_TYPES is currently empty (see this describe block's own JSDoc), so this is a rejection, not a bug.
+    // CONFIGURABLE_NOTIFICATION_TYPES is empty (see the JSDoc above), so this is a rejection, not a bug.
     it('rejects an update for verify_email with a clear, field-scoped message', async () => {
       const { token } = await createAuthenticatedUser()
 

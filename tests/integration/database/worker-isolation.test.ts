@@ -1,12 +1,12 @@
 /**
  * @file Direct, deterministic proof that per-worker test databases (see
- * `tests/helpers/worker-database.ts`) actually isolate concurrent workers,
- * independent of which workers vitest's scheduler assigns this run to.
- * Connects to worker 1's and worker 2's dedicated databases directly and
- * inserts the identical email into each: if the "worker" URLs secretly
- * resolved to the same physical database, the second insert would violate
- * `migrate.test.ts`'s case-insensitive unique index with a real
- * constraint-violation error, not a mismatched assertion.
+ * `tests/helpers/worker-database.ts`) isolate concurrent workers,
+ * whichever workers vitest's scheduler assigns this run to. It connects to
+ * worker 1's and worker 2's databases directly and inserts the identical
+ * email into each: if the two URLs resolved to the same database, the second
+ * insert would violate the users table's case-insensitive unique email index
+ * (asserted in `migrate.test.ts`) with a real constraint-violation error, not
+ * a mismatched assertion.
  */
 import postgres from 'postgres'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -34,13 +34,13 @@ describe('worker database isolation', () => {
     const first = await workerOneDb`insert into users (email) values (${email}) returning email`
     expect(first[0]?.email).toBe(email)
 
-    // If worker 1's and worker 2's databases were secretly the same physical database, this insert would violate the case-insensitive unique index instead of succeeding.
+    // Were the two worker databases the same database, this insert would violate the case-insensitive unique index instead of succeeding.
     const second = await workerTwoDb`insert into users (email) values (${email}) returning email`
     expect(second[0]?.email).toBe(email)
   })
 
   it("this worker's shared client (database.service.ts) is on its own worker database, not the shared base", async () => {
-    // The two inserts above prove WORKER_COUNT separately-migrated databases exist; they do not prove that database.service.ts's sql/db (what every real test uses) is one of them rather than the shared base. If useWorkerDatabase() ever silently no-ops, this is the assertion that would catch it — the inserts above would keep passing regardless.
+    // The inserts above show two separate worker databases exist, not that database.service.ts's sql and db (what every real test uses) point at one of them instead of the base database; if useWorkerDatabase() did nothing, only this assertion would fail.
     const [row] = await sql`select current_database() as name`
     const expected = `${new URL(base).pathname.slice(1)}_w${process.env.VITEST_POOL_ID}`
     expect(row?.name).toBe(expected)

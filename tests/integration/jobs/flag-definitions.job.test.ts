@@ -76,7 +76,8 @@ const BETA_FLAG = {
 }
 
 /**
- * `example_beta_page` (a boolean entry) with a multivariate definition: kind_drift today.
+ * `example_beta_page`, a boolean registry entry, with a multivariate
+ * definition, which the parser flags as `kind_drift`.
  */
 const DRIFTED_BETA_FLAG = {
   ...BETA_FLAG,
@@ -92,8 +93,7 @@ const DRIFTED_BETA_FLAG = {
 }
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog started in beforeAll; fails the test when it is not running.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -216,7 +216,7 @@ describe('runFlagDefinitionsJob', () => {
     const redis = await getRedis()
     const raw = await redis.get(flagSnapshotKey())
     const first = JSON.parse(String(raw)) as Record<string, unknown>
-    // Stand for a snapshot an earlier registry or parser stored: no verdict yet.
+    // Stands for a snapshot stored by a different registry or parser, which has no `unsupported` verdict.
     const flags = first.flags as Record<string, Record<string, unknown>>
     const earlier = {
       ...first,

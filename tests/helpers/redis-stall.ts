@@ -8,8 +8,9 @@ import { REDIS_REQUEST_DEADLINE_MS } from '@/constants/platform.constants'
 import { settle } from './timing'
 
 /**
- * How long a caller of a stalled Redis may take: well past
- * `REDIS_REQUEST_DEADLINE_MS`, well short of anything that hangs.
+ * How long a caller of a stalled Redis may take: five times
+ * `REDIS_REQUEST_DEADLINE_MS`, so a caller that answers late, after the
+ * deadline, still beats it and one that never answers does not.
  */
 const STALL_ANSWER_BOUND_MS = REDIS_REQUEST_DEADLINE_MS * 5
 

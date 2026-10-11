@@ -1,12 +1,10 @@
 /**
- * @file Refresh, rotation, reuse detection, logout and cookie
- * handling, against the real per-worker Postgres database and the
- * real compose Redis — every email used here is unique to this run
- * and every row created is deleted in afterEach, the same convention
- * tests/integration/api/auth.test.ts already follows. This file lives
- * under tests/integration/, never tests/unit/ — see CLAUDE.md's note
- * on why a DB/Redis-dependent test under tests/unit/ breaks
- * .husky/pre-commit whenever Docker is down.
+ * @file Refresh, rotation, reuse detection, logout and cookie handling,
+ * against the real per-worker Postgres database and the real compose Redis.
+ * Every email is unique to the run and every row is deleted in afterEach. The
+ * file lives under tests/integration/, never tests/unit/: a test that reaches
+ * the database or Redis would break the pre-commit hook whenever Docker is
+ * down (CLAUDE.md).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -30,10 +28,9 @@ const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database (or, for the rate-limit
- * test below, the shared Redis instance) may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold or, for the rate-limit tests below, with
+ * keys in the shared Redis.
  */
 function uniqueEmail(): string {
   return `auth-refresh-${randomUUID()}@example.test`
@@ -59,13 +56,12 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 }
 
 /**
- * The exact `name=value` pair for the refresh-token cookie out of a
- * response's raw `Set-Cookie` header — suitable for replaying verbatim via
- * `.set('Cookie', ...)` on a LATER, unrelated request, which is what proves
- * a specific raw token was (or was not) accepted, independent of whatever
- * cookie a test's own supertest call would otherwise be carrying.
+ * The refresh cookie's `name=value` pair from a response's `Set-Cookie`
+ * header, for replaying verbatim with `.set('Cookie', ...)` on a later
+ * request: replaying one specific raw token is what proves it was or was not
+ * accepted.
  * @param response - The supertest response.
- * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
+ * @returns The pair, or undefined if the cookie was not set.
  */
 function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
@@ -77,11 +73,10 @@ function refreshCookiePair(response: Response): string | undefined {
  * Register a fresh user, mark them verified, and log in through the real
  * HTTP endpoints.
  *
- * Looked up by address rather than read out of the register response body.
- * register's response does not carry the user any more (it would be an
- * enumeration oracle), and a helper that reads `registerBody.data.id`
- * does not FAIL when that becomes null — it silently stops tracking the
- * row and leaks it into the shared worker database.
+ * The user is looked up by address, not read from the register response,
+ * which does not carry it (that would be an enumeration oracle). A helper
+ * reading `registerBody.data.id` would not fail on a null there: it would
+ * silently stop tracking the row and leak it into the worker's database.
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
  * @returns The login response, the email used, and the verified user row.
  */
@@ -105,18 +100,10 @@ async function registerAndLogin(
  * Register a user through the real HTTP endpoint, look it up, track it for
  * cleanup, and mark it verified.
  *
- * Own copy of auth.test.ts's helper of the same name, not a shared import:
- * this file's helpers take `createdIds` as a parameter (see
- * `registerAndLogin` above) rather than closing over a describe-scoped
- * array, so the signature follows this file's own convention instead of
- * the other file's.
- *
- * Marked verified because login requires `emailVerifiedAt` to succeed:
- * an unverified seed would fail login outright, and a test built on it
- * needs to keep testing what it claims to test rather than starting to
- * pass for the wrong reason (login itself getting rejected would make
- * a before/after comparison of two `null`s look like proof rotation
- * doesn't write, when it would really be proof login never happened).
+ * Marked verified because login requires `emailVerifiedAt`: with an
+ * unverified seed login would be rejected, and a before/after comparison of
+ * two `null`s would look like proof that rotation does not write when it
+ * only proves login never happened.
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
  * @returns The seeded (verified) user row and the email it was registered with.
  */
@@ -133,7 +120,7 @@ async function seedLoginableUser(createdIds: string[]): Promise<{ user: User; em
 }
 
 /**
- * Push every consumed token of a user 11s into the past, beyond REFRESH_REUSE_GRACE_MS, without sleeping.
+ * Push every consumed token of a user 11 s into the past, beyond `REFRESH_REUSE_GRACE_MS` (10 s), without sleeping.
  * @param userId - The user whose consumed tokens are aged.
  */
 async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
@@ -145,7 +132,7 @@ async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
 }
 
 /**
- * The raw token inside a `refreshToken=<value>` pair.
+ * The raw token inside a `<cookie name>=<value>` pair.
  * @param pair - A pair from `refreshCookiePair`.
  * @returns The decoded raw token.
  */
@@ -154,11 +141,8 @@ function rawTokenOf(pair: string): string {
 }
 
 /**
- * Kept as its own file rather than folded into auth.test.ts:
- * refresh/logout exercise a materially different concern (cookie
- * round-tripping, rotation, rate limiting) from register/login, and
- * this file's helpers (raw cookie extraction, replay) have no use for
- * that file's registration-specific assertions.
+ * Refresh and logout exercise cookie round-tripping, rotation and rate
+ * limiting, which auth.test.ts's register and login tests do not.
  */
 describe('POST /api/v1/auth/refresh and /logout', () => {
   const createdIds: string[] = []
@@ -181,7 +165,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
         .set('Cookie', firstCookie as string)
       const firstRefreshBody = envelopeOf<{ accessToken: string }>(firstRefresh)
 
-      // The access token is not asserted to differ from login's: signing is deterministic, so two tokens for the same user within the same second are legitimately byte-identical. What "a new pair" proves here is the refresh token, asserted below via secondCookie.
+      // Rotation is proven by the refresh token (secondCookie below); the access tokens are only checked to be present.
       expect(firstRefresh.status).toBe(200)
       expect(firstRefreshBody.data?.accessToken).toEqual(expect.any(String))
       expect(loginBody.data?.accessToken).toEqual(expect.any(String))
@@ -279,7 +263,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(replayed.status).toBe(401)
     })
 
-    // After a COOKIE_DOMAIN change the browser holds two refreshToken cookies (one per domain scope) and sends the older one first (RFC 6265 §5.4).
+    // After a COOKIE_DOMAIN change the browser holds two refresh cookies (one per domain scope) and sends the older one first (RFC 6265 §5.4).
     it('reads the last of two refreshToken cookies: a stale one first does not revoke the live session', async () => {
       const { response: loginResponse, user } = await registerAndLogin(createdIds)
       const stale = refreshCookiePair(loginResponse) as string
@@ -315,7 +299,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
       await request(app)
         .post('/api/v1/auth/refresh')
-        // The raw Set-Cookie line, replayable verbatim — this file's own helper, not a hand-built cookie.
+        // The `name=value` pair taken from login's Set-Cookie, not a hand-built cookie.
         .set('Cookie', refreshCookiePair(login) as string)
 
       const after = await userRepository.findById(user.id)
@@ -473,18 +457,16 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   })
 
   /**
-   * The production limiters on /register and /logout are proven wired
-   * here, not proven to 429: exhausting either would take 100
-   * registrations (or 300 logouts) from this suite's single client
-   * address, spending a budget every other integration file running in
-   * parallel shares. The 429 behaviour itself is proven against the
-   * same `createRateLimiter` calls, with small `limit` overrides, in
+   * The limiters on /register and /logout are proven wired, not proven to
+   * 429: exhausting either would take 100 registrations (or 300 logouts) from
+   * this suite's single client address, spending a budget that every
+   * integration file running in parallel shares. The 429 behaviour is proven
+   * with small `limit` overrides in
    * tests/unit/middlewares/rate-limit.middleware.test.ts.
    *
-   * `RateLimit-*` headers are set by express-rate-limit on every
-   * response it lets through, not only on a 429 (standardHeaders:
-   * true), so their presence on an ordinary response is exactly the
-   * evidence that a limiter ran.
+   * `RateLimit-*` headers are set on every response a limiter lets through,
+   * not only on a 429, so their presence on an ordinary response is evidence
+   * that a limiter ran.
    */
   describe('every auth route is behind a limiter (wiring, not thresholds)', () => {
     it('runs a limiter on /register — proven by the RateLimit-* headers on an ordinary response', async () => {
@@ -535,6 +517,9 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
     it('returns 429 after the configured number of attempts, with RateLimit-* headers', async () => {
       const email = uniqueEmail()
+      /**
+       * One login with a wrong password for this test's address.
+       */
       const attempt = (): Test =>
         request(app).post('/api/v1/auth/login').send({ email, password: 'wrong-password' })
 

@@ -3,8 +3,8 @@
  * `tests/helpers/worker-database.ts`). Every user this file creates is
  * deleted in `afterEach`; `notification_preferences.user_id` carries `ON
  * DELETE CASCADE` (`notification.model.ts`), so a preference row is never
- * explicitly deleted here — the same cascade
- * `notification.repository.test.ts` verifies once directly.
+ * explicitly deleted here. `notification.repository.test.ts` verifies the
+ * same cascade directly for `notifications.user_id`.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -17,8 +17,8 @@ const preferenceRepository = new NotificationPreferenceRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `notification-pref-repo-${randomUUID()}@example.test`
@@ -34,8 +34,7 @@ describe('NotificationPreferenceRepository', () => {
   })
 
   /**
-   * A fresh user for a test to hold preferences for, tracked for cleanup.
-   * @returns The created user's id.
+   * Creates a user for a test to hold preferences, tracked for cleanup.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -148,7 +147,7 @@ describe('NotificationPreferenceRepository', () => {
         inAppEnabled: false,
       })
 
-      // The one channel this repository refuses to ever report disabled: a user who turned it off would lock themselves out of verifying their own account. in_app, by contrast, honours the row above.
+      // This repository never reports this channel disabled: a user who turned it off would lock themselves out of verifying their own account. in_app, by contrast, honours the row above.
       expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'email')).toBe(
         true
       )

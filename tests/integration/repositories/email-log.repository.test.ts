@@ -22,20 +22,16 @@ import { sql } from '@/services/database.service'
 const emailLogRepository = new EmailLogRepository()
 
 /**
- * A disposable recipient address, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A fresh `@example.test` address per call, so rows from different tests never share a recipient.
  */
 function uniqueRecipient(): string {
   return `email-log-repo-${randomUUID()}@example.test`
 }
 
 /**
- * A syntactically email-shaped string of an exact total length, for
- * boundary-testing `recipient` normalization against MAX_EMAIL_LENGTH
- * itself — not an assumed number. Appends `randomUUID()` before the domain
- * so two calls in the same test never collide even at the same length.
- * @param length - The exact total character length to produce.
- * @returns A string of exactly `length` characters, shaped like `<padding>-<uuid>@example.test`.
+ * An email-shaped string of exactly `length` characters, `<padding>-<uuid>@example.test`, for
+ * boundary-testing `recipient` normalization. The uuid keeps two calls from colliding at the same
+ * length.
  */
 function recipientOfLength(length: number): string {
   const suffix = `-${randomUUID()}@example.test`
@@ -139,13 +135,12 @@ describe('EmailLogRepository', () => {
   /**
    * The test above uses a 64-character token, which fails
    * `withErrorCodeNormalized`'s length check alone and never exercises
-   * `ERROR_CODE_PATTERN` (see `email-log-error-code-shape-mutation.test.ts`
-   * for the load-bearing proof that the regex clause is covered). This
-   * value is deliberately 32 characters, exactly `ERROR_CODE_MAX_LENGTH`,
-   * so it passes the length check and the regex clause is the only thing
-   * standing between it and the database — and it is also the realistic
-   * leak: a 32-character lowercase-hex fragment is exactly what a
-   * truncated or mis-derived raw token would look like.
+   * `ERROR_CODE_PATTERN` (`email-log-error-code-shape-mutation.test.ts` proves
+   * that clause is covered). This value is 32 characters, exactly
+   * `ERROR_CODE_MAX_LENGTH`, so it passes the length check and only the shape
+   * clause keeps it from reaching the insert. It is also the realistic leak: a
+   * 32-character lowercase-hex fragment is what a truncated or mis-derived raw
+   * token looks like.
    */
   it('normalizes a wrong-shaped-but-within-width error code to UNKNOWN_ERROR_CODE', async () => {
     const recipient = uniqueRecipient()
@@ -236,8 +231,8 @@ describe('EmailLogRepository', () => {
    * Width normalization for recipient/templateKey/providerMessageId, with
    * boundaries measured against the real column widths (`MAX_EMAIL_LENGTH`,
    * `TEMPLATE_KEY_MAX_LENGTH`, `PROVIDER_MESSAGE_ID_MAX_LENGTH`), not
-   * assumed: "exactly N passes through unchanged; N+1 normalizes" is the
-   * only way to prove the boundary is where the code claims it is.
+   * assumed: "exactly N passes through unchanged; N+1 normalizes" proves the
+   * boundary is where the code claims it is.
    */
   describe('width normalization at the exact boundary', () => {
     it('a recipient of exactly MAX_EMAIL_LENGTH characters is stored unchanged', async () => {

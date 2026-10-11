@@ -1,11 +1,11 @@
 /**
  * @file A reported 5xx under the real HTTP and Express instrumentations, in
  * an SDK this file starts before Express loads
- * (`tests/helpers/trace-capture.ts`): the span records the exception with
- * its scrubbed message only and is marked an error, the `$exception`
- * carries the request's trace id, and the route template survives the
- * Express instrumentation's own routing patches. Error tracking is enabled
- * through a mocked `getEnv()` against a fake PostHog.
+ * (`tests/helpers/trace-capture.ts`): the span records the exception as
+ * its scrubbed stand-in (name, message and stack frames) and is marked an
+ * error, the `$exception` carries the request's trace id, and the route
+ * template survives the Express instrumentation's own routing patches. Error
+ * tracking is enabled through a mocked `getEnv()` against a fake PostHog.
  */
 import { SpanStatusCode } from '@opentelemetry/api'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -41,6 +41,9 @@ const { logger } = await import('@/services/logger.service')
 const { startFakePosthog } = await import('../../helpers/fake-posthog')
 const { request } = await import('../../helpers/request')
 
+/**
+ * The fake PostHog this file reports to.
+ */
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
 const fake: { posthog?: FakePosthog } = {}
 

@@ -1,8 +1,7 @@
 /**
  * @file Lives under `tests/integration/` because `@/app` (and `@/server`
- * through it) reaches `database.service.ts` at module scope — see
- * CLAUDE.md on why that makes a file integration regardless of what it
- * asserts.
+ * through it) reaches `database.service.ts` at module scope. CLAUDE.md says to
+ * check where a test's dependencies reach, not where its assertions live.
  */
 import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
@@ -32,13 +31,9 @@ const userRepository = new UserRepository()
 const SHUTDOWN_BUDGET_MS = SERVER_DRAIN_TIMEOUT_MS / 2
 
 /**
- * Open a notification stream and wait for its 200.
- * @param port - The test server's port on 127.0.0.1.
- * @param token - A valid access token.
- * @param headers - Extra request headers.
- * @param agent - The agent to send through; omitted uses Node's global
- * agent, whose default has keep-alive on.
- * @returns The request, and a promise that resolves when the server ends the stream.
+ * Opens a notification stream on the test server at `port` and waits for its 200. Without an
+ * `agent` it goes through Node's global agent, whose default has keep-alive on. The result carries
+ * a promise that resolves when the server ends the stream.
  */
 async function openStream(
   port: number,
@@ -65,10 +60,8 @@ async function openStream(
 }
 
 /**
- * GET a URL through an agent and drain the body.
- * @param url - The URL to fetch.
- * @param agent - The agent to send through.
- * @returns The response status code.
+ * GETs `url` through `agent` and drains the body. With a keep-alive agent the socket stays open
+ * afterwards, which the shutdown tests need.
  */
 async function getOnce(url: string, agent: http.Agent): Promise<number | undefined> {
   const response = await new Promise<IncomingMessage>((resolve, reject) => {
@@ -109,7 +102,7 @@ describe('graceful shutdown with open notification streams', () => {
     const health = await getOnce(`http://127.0.0.1:${port}/health`, keepAliveAgent)
     expect(health).toBe(200)
 
-    // Deleted now: gracefulShutdown closes the database pool.
+    // Deleted before shutdown, because gracefulShutdown closes the database pool.
     await sql`delete from users where id = ${user.id}`
 
     try {
@@ -241,9 +234,8 @@ describe('trust proxy', () => {
      * The wiring proof for the one line that decides what `request.ip`
      * means, and therefore what every IP-keyed rate limiter actually keys
      * on. Without this assertion, deleting `app.set('trust proxy', ...)`
-     * from `createApp()` breaks nothing visible: the limiters still run,
-     * they just silently share one bucket for every client behind the
-     * proxy.
+     * from `createApp()` breaks nothing visible: the limiters run, but
+     * silently share one bucket for every client behind the proxy.
      */
     expect(createApp().get('trust proxy')).toBe(trustProxySetting(getEnv().TRUST_PROXY))
   })

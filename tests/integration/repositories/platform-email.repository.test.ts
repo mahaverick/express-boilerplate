@@ -25,14 +25,16 @@ afterEach(async () => {
   await deleteTrackedEmailRows()
 })
 
+/**
+ * A short random tag for one test's recipients, so a search by it matches only that test's rows.
+ */
 function newTag(): string {
   return `e${randomUUID().slice(0, 8)}`
 }
 
 /**
- * Five messages for one tag, created a minute apart, oldest first.
- * @param tag - The tag every recipient starts with.
- * @returns Their ids, newest first (the search order).
+ * Creates five messages whose recipients start with `tag`, a minute apart, and returns their ids
+ * newest first, the search order.
  */
 async function fiveMessages(tag: string): Promise<string[]> {
   const base = Date.parse('2026-09-30T08:00:00.000Z')
@@ -48,6 +50,9 @@ async function fiveMessages(tag: string): Promise<string[]> {
   return ids.toReversed()
 }
 
+/**
+ * Runs `search` and keeps only the ids of the rows it found, for filter assertions.
+ */
 async function idsOf(options: Parameters<PlatformEmailRepository['search']>[0]): Promise<string[]> {
   const page = await repository.search(options)
   return page.rows.map((row) => row.id)
@@ -231,6 +236,9 @@ describe('PlatformEmailRepository.searchSuppressions', () => {
     })
     const lifted = await createTrackedSuppression(`${tag}-b@example.test`, { isLifted: true })
     const newer = await createTrackedSuppression(`${tag}-c@example.test`)
+    /**
+     * Searches this test's suppressions in one state, for the active, lifted and all assertions.
+     */
     const search = async (state: 'active' | 'lifted' | 'all') => {
       const page = await repository.searchSuppressions({
         limit: 10,

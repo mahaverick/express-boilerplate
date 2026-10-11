@@ -4,8 +4,8 @@
 import { getRedis, redisKey } from '@/services/redis.service'
 
 /**
- * Delete the stored flag snapshot, every flags counter and every exposure
- * dedupe key (`flags:exp:*`) under this worker's key prefix.
+ * Delete every `flags:` key under this worker's key prefix: the stored
+ * snapshot, the counters and the exposure dedupe keys (`flags:exp:*`).
  * @returns Resolves once deleted.
  */
 export async function clearFlagKeys(): Promise<void> {

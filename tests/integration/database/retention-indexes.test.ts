@@ -1,14 +1,14 @@
 /**
  * @file Each retention predicate has an index that can serve it. With
  * sequential scans disabled for one transaction, the planner takes an index
- * whenever one applies, so the index's name in the plan proves it is
- * usable. Where a sibling composite index whose second column is the same
- * timestamp can serve the predicate too (a skip scan), the planner's choice
- * between them on a near-empty table is a tie, so those siblings are dropped
- * inside the transaction, which then rolls back: the named index alone must
- * serve it. The predicates are the repositories' own purge predicates,
- * written out as SQL; `tenant_invitations` has no index on purpose (see its
- * repository method).
+ * whenever one applies, so the index's name in the plan shows it is usable.
+ * Where a sibling composite index whose second column is the same timestamp
+ * can serve the predicate too (a skip scan), the planner's choice between
+ * them on a near-empty table is a tie, so those siblings are dropped inside
+ * the transaction, which then rolls back: the named index alone must serve
+ * it. The predicates are the repositories' own purge predicates written out
+ * as SQL; `tenant_invitations` has no index on purpose (see its repository
+ * method).
  */
 import { describe, expect, it } from 'vitest'
 import { sql } from '@/services/database.service'
@@ -17,7 +17,8 @@ const CUTOFF = `'2001-01-01T00:00:00.000Z'::timestamptz`
 const TOKEN_PREDICATE = `expires_at < ${CUTOFF} or (revoked_at < ${CUTOFF} and consumed_at is null)`
 
 /**
- * The sibling composites on `audit_logs` that also serve an `occurred_at` range.
+ * The sibling composites on `audit_logs` that also serve an `occurred_at`
+ * range, dropped for the plan so `audit_logs_occurred_idx` has no competitor.
  */
 const AUDIT_OCCURRED_SIBLINGS = [
   'audit_logs_tenant_occurred_idx',
@@ -26,23 +27,18 @@ const AUDIT_OCCURRED_SIBLINGS = [
 ]
 
 /**
- * Thrown to roll back the transaction that dropped the hidden indexes.
+ * Thrown to roll back the transaction that dropped the hidden indexes, carrying the plan out of it.
  */
 class RollbackAfterPlan extends Error {
-  /**
-   * @param plan - The plan captured before the rollback.
-   */
   constructor(readonly plan: string) {
     super('rollback after plan')
   }
 }
 
 /**
- * The text plan for `query`, with sequential scans off and `hidden` dropped;
- * the transaction always rolls back, so the drops never persist.
- * @param query - A SELECT with no parameters.
- * @param hidden - Indexes to drop for the plan.
- * @returns The plan's lines, joined.
+ * The text plan for `query`, a SELECT with no parameters, with sequential
+ * scans off and the `hidden` indexes dropped; the transaction always rolls
+ * back, so the drops never persist.
  */
 async function planFor(query: string, hidden: readonly string[] = []): Promise<string> {
   try {

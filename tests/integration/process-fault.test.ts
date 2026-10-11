@@ -3,12 +3,12 @@
  * reports it to a fake PostHog before it exits 1, and boot raised V8's stack
  * depth to `ERROR_FRAME_LIMIT` first. The child's database and Redis point
  * at port 1, so it reaches no shared service; `tests/helpers/process-fault-preload.ts`
- * throws once boot has installed its listener. What the event carries beyond
- * its capture point is the reporter's. A second child faults while PostHog
- * holds the report: during that fatal flush it is already out of rotation,
- * and a SIGTERM then still exits 1. Each child binds a port the OS picks
- * (the preload) and prints it; the test never chooses one, so no other
- * process can take it between the choice and the bind.
+ * throws once boot has installed its listener. The first test checks that
+ * the report arrives with its capture point and the boot-time stack depth.
+ * The second faults a child while PostHog holds the report: during that
+ * fatal flush it is already out of rotation, and a SIGTERM then exits 1.
+ * Each child binds a port the OS picks (the preload) and prints it, so the
+ * test never chooses a port that another process could take first.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -25,9 +25,8 @@ const fake: { posthog?: FakePosthog } = {}
 const LISTENING_LINE = /process-fault-preload listening (\d+)/
 
 /**
- * The port a child's server bound, read from the line the preload prints.
- * @param child - A child started with stdout piped.
- * @returns Resolves with the port once the line arrives.
+ * The port a child's server bound, read from the line the preload prints on
+ * the stdout of `child`, which must be started with stdout piped.
  */
 async function listeningPort(child: ChildProcess): Promise<number> {
   return new Promise<number>((resolve, reject) => {
@@ -42,12 +41,10 @@ async function listeningPort(child: ChildProcess): Promise<number> {
 }
 
 /**
- * The environment of a child `src/index.ts` that reaches no shared service.
- * `APP_PORT` is 1, a port the child may not bind: the preload replaces it
- * with one the OS picks, and a child that ignored the preload would fail
- * to start rather than race another process for a port.
- * @param posthog - The fake PostHog it reports to.
- * @returns The environment.
+ * The environment of a child `src/index.ts` that reaches no shared service
+ * and reports to `posthog`. `APP_PORT` is 1, a port the child may not bind:
+ * the preload replaces it with one the OS picks, and a child that ignored the
+ * preload would fail to start rather than race another process for a port.
  */
 function childEnv(posthog: FakePosthog): NodeJS.ProcessEnv {
   return {

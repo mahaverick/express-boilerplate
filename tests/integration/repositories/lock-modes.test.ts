@@ -52,8 +52,7 @@ afterEach(async () => {
 })
 
 /**
- * A fresh user, tracked for cleanup.
- * @returns The user.
+ * Creates a user to own or join a test's tenant, tracked for cleanup.
  */
 async function createUser(): Promise<User> {
   const user = await userRepository.create({ email: `lock-modes-${randomUUID()}@example.test` })
@@ -62,9 +61,7 @@ async function createUser(): Promise<User> {
 }
 
 /**
- * A tenant owned by `owner`, tracked for cleanup.
- * @param owner - The owner.
- * @returns The tenant.
+ * Creates a tenant owned by `owner`, tracked for cleanup.
  */
 async function createTenant(owner: User): Promise<Tenant> {
   const tenant = await tenantRepository.create({
@@ -77,11 +74,8 @@ async function createTenant(owner: User): Promise<Tenant> {
 }
 
 /**
- * Hold `lock` in transaction A while `other` runs in transaction B, and
- * report whether B queued behind A. A stays open until the probe answers.
- * @param lock - Takes the lock under test in A.
- * @param other - The statement that may conflict, run in B.
- * @returns True when B waited on A's lock.
+ * Holds the lock `lock` takes in transaction A while `other` runs in transaction B, and reports
+ * whether B queued behind A. A stays open until the probe answers.
  */
 async function wasBlockedBehind(
   lock: (tx: DbTransaction) => Promise<unknown>,
@@ -112,11 +106,7 @@ async function wasBlockedBehind(
 }
 
 /**
- * An audit entry for `tenant`: its insert checks the tenant foreign key.
- * @param tenant - The tenant.
- * @param actor - The acting user.
- * @param tx - The transaction to insert in.
- * @returns The insert.
+ * Inserts an audit entry for `tenant`, whose insert checks the tenant foreign key.
  */
 function auditInsert(tenant: Tenant, actor: User, tx: DbTransaction): Promise<unknown> {
   return record(
@@ -133,10 +123,7 @@ function auditInsert(tenant: Tenant, actor: User, tx: DbTransaction): Promise<un
 }
 
 /**
- * A `TenantRepository.lockById` stand-in that takes FOR UPDATE.
- * @param id - The tenant's id.
- * @param executor - The transaction to hold the lock in.
- * @returns The locked tenant, or undefined.
+ * A `TenantRepository.lockById` stand-in that takes FOR UPDATE, as the mutated lock mode.
  */
 async function lockTenantForUpdate(
   id: string,
@@ -152,10 +139,8 @@ async function lockTenantForUpdate(
 }
 
 /**
- * A `TenantSettingsRepository.lockByTenantId` stand-in that takes FOR UPDATE.
- * @param tenantId - The tenant whose settings to lock.
- * @param executor - The transaction to hold the lock in.
- * @returns The locked row, or undefined.
+ * A `TenantSettingsRepository.lockByTenantId` stand-in that takes FOR UPDATE, as the mutated lock
+ * mode.
  */
 async function lockSettingsForUpdate(
   tenantId: string,
@@ -170,11 +155,8 @@ async function lockSettingsForUpdate(
 }
 
 /**
- * A `UserMembershipRepository.lockOwners` stand-in that takes FOR UPDATE whatever the mode.
- * @param tenantId - The tenant whose owners to lock.
- * @param _mode - Ignored.
- * @param executor - The transaction to hold the lock in.
- * @returns The locked owner memberships.
+ * A `UserMembershipRepository.lockOwners` stand-in that takes FOR UPDATE and ignores the mode it
+ * is given, as the mutated lock mode.
  */
 async function lockOwnersForUpdate(
   tenantId: string,
@@ -190,13 +172,8 @@ async function lockOwnersForUpdate(
 }
 
 /**
- * A `UserMembershipRepository.lockMemberships` stand-in that takes FOR UPDATE whatever the
- * mode.
- * @param tenantId - The tenant.
- * @param userIds - The users whose memberships to lock.
- * @param _mode - Ignored.
- * @param executor - The transaction to hold the locks in.
- * @returns The locked memberships.
+ * A `UserMembershipRepository.lockMemberships` stand-in that takes FOR UPDATE and ignores the mode
+ * it is given, as the mutated lock mode.
  */
 async function lockMembershipsForUpdate(
   tenantId: string,
@@ -216,9 +193,6 @@ async function lockMembershipsForUpdate(
 
 /**
  * FOR KEY SHARE on one settings row, the lock a referencing insert would take.
- * @param tenantId - The settings row's key.
- * @param tx - The transaction to take it in.
- * @returns The select.
  */
 function keyShareSettings(tenantId: string, tx: DbTransaction): Promise<unknown> {
   return tx
@@ -229,10 +203,7 @@ function keyShareSettings(tenantId: string, tx: DbTransaction): Promise<unknown>
 }
 
 /**
- * FOR KEY SHARE on one membership row.
- * @param membershipId - The membership's id.
- * @param tx - The transaction to take it in.
- * @returns The select.
+ * FOR KEY SHARE on one membership row, the lock a referencing insert would take.
  */
 function keyShareMembership(membershipId: string, tx: DbTransaction): Promise<unknown> {
   return tx
@@ -472,10 +443,9 @@ describe('UserMembershipRepository lock modes', () => {
 })
 
 /**
- * Run `run` while recording the mode lockOwners and lockMemberships are
- * called with, and each lockPlatformRole call (it has no mode: FOR SHARE).
- * @param run - The service call to observe.
- * @returns One `method:mode` entry per lock call, or `lockPlatformRole`, in call order.
+ * Runs `run` and returns one entry per lock call, in call order: `lockOwners:<mode>` or
+ * `lockMemberships:<mode>` (`default` when no mode is passed), or `lockPlatformRole`, which has no
+ * mode because it always takes FOR SHARE.
  */
 async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
   const calls: string[] = []
@@ -485,10 +455,16 @@ async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
   const realMemberships = UserMembershipRepository.prototype.lockMemberships
   // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realPlatformRole = UserMembershipRepository.prototype.lockPlatformRole
+  /**
+   * Wraps `lockOwners` so `recordModes` sees the mode each call site passes.
+   */
   const owners: typeof realOwners = function (this: UserMembershipRepository, ...parameters) {
     calls.push(`lockOwners:${parameters[1] ?? 'default'}`)
     return realOwners.apply(this, parameters)
   }
+  /**
+   * Wraps `lockMemberships` so `recordModes` sees the mode each call site passes.
+   */
   const memberships: typeof realMemberships = function (
     this: UserMembershipRepository,
     ...parameters
@@ -496,6 +472,9 @@ async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
     calls.push(`lockMemberships:${parameters[2] ?? 'default'}`)
     return realMemberships.apply(this, parameters)
   }
+  /**
+   * Wraps `lockPlatformRole` so `recordModes` sees which call sites lock the platform role.
+   */
   const platformRole: typeof realPlatformRole = function (
     this: UserMembershipRepository,
     ...parameters

@@ -1,13 +1,13 @@
 /**
  * @file drainAnalyticsOutbox against the real per-worker Postgres and the
  * fake PostHog: every sent event carries `$geoip_disable`, acknowledged rows
- * are deleted, a retryable answer keeps every
- * row through an outage of any length, a lease that expires is resent, two
- * drainers never claim one row, and a rejected batch is bisected down to the
- * row PostHog refuses, which is dropped at its third rejection, unless it
- * refuses every part of the batch and a lone row of each half, which keeps
- * every row. Analytics is enabled for this file only, through a mocked
- * `getEnv()`.
+ * are deleted, a retryable answer keeps every row through an outage of any
+ * length, a lease that expires is resent, two drainers never claim one row,
+ * and a rejected batch is bisected down to the row PostHog refuses, which is
+ * dropped at its third rejection. When PostHog refuses every part of the
+ * batch and a lone row of each half, the drainer treats it as an endpoint
+ * fault and keeps every row. Analytics is enabled for this file only, through
+ * a mocked `getEnv()`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -47,8 +47,7 @@ const NOT_LEASED = null
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog started in `beforeAll`, failing the test when it is not running.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -56,9 +55,8 @@ function posthog(): FakePosthog {
 }
 
 /**
- * Insert outbox rows one millisecond apart, oldest first.
- * @param events - Each row's event name.
- * @returns Their ids, in the same order.
+ * Inserts one outbox row per event name straight into the table, a millisecond apart so the
+ * drainer claims them oldest first, and returns their ids in that order.
  */
 async function seed(...events: string[]): Promise<string[]> {
   const base = Date.now() - MINUTE_MS
@@ -76,8 +74,8 @@ async function seed(...events: string[]): Promise<string[]> {
 }
 
 /**
- * Every outbox row's settlement columns, by id.
- * @returns The rows, oldest first.
+ * Reads each outbox row's attempts, rejections and lease, oldest first, to assert what a drain
+ * kept.
  */
 function outboxRows() {
   return sql<
@@ -86,36 +84,29 @@ function outboxRows() {
 }
 
 /**
- * A moment some time after another.
- * @param start - The earlier moment.
- * @param ms - How much later.
- * @returns The later moment.
+ * The `now` to pass a later drain, `ms` milliseconds after `start`, so a test can move past a lease
+ * or backoff without waiting.
  */
 function after(start: Date, ms: number): Date {
   return new Date(start.getTime() + ms)
 }
 
 /**
- * Whether a batch carries the event PostHog is made to refuse.
- * @param events - The batch.
- * @returns True when one of them is named `poison`.
+ * Whether a batch carries an event named `poison`, the one the fake PostHog is told to refuse.
  */
 function hasPoison(events: PosthogBatchEvent[]): boolean {
   return events.some((event) => event.event === 'poison')
 }
 
 /**
- * Sort ids for comparison.
- * @param ids - Ids.
- * @returns A sorted copy.
+ * A sorted copy of the ids, so lists with no guaranteed order can be compared.
  */
 function sorted(ids: string[]): string[] {
   return ids.toSorted((a, b) => a.localeCompare(b))
 }
 
 /**
- * The event names of each batch the fake received.
- * @returns One list per batch.
+ * The event names of each batch the fake PostHog received, one list per batch, in arrival order.
  */
 function batchEvents(): string[][] {
   return posthog().batches.map((batch) => batch.map((event) => event.event))

@@ -7,8 +7,8 @@ import { sql } from '@/services/database.service'
 /**
  * Empty audit_logs in this worker's database. Call it before hard-deleting
  * tenants or users: `audit_logs` has RESTRICT foreign keys to `tenants` and
- * `users`, and a trigger rejects every other DELETE, but TRUNCATE fires no
- * row trigger.
+ * `users`, and a row trigger rejects an ordinary DELETE, but TRUNCATE fires
+ * no row trigger.
  * @returns Resolves once the table is empty.
  */
 export async function truncateAuditLogs(): Promise<void> {

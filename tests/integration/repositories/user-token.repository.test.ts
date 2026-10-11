@@ -24,37 +24,30 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `user-token-repo-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable, distinct token hash — stands in for a real SHA-256 digest;
- * these tests never need the hash to correspond to a real raw token.
- * @returns A 64-character hex string, unique to this call.
+ * A fresh 64-character hex string standing in for a SHA-256 token digest; these tests never need it
+ * to correspond to a real raw token.
  */
 function uniqueHash(): string {
   return randomBytes(32).toString('hex')
 }
 
 /**
- * Order two ids for a sort, so an unordered result can be compared.
- * @param left - One id.
- * @param right - The other id.
- * @returns A negative, zero or positive number, as `localeCompare` does.
+ * Sort comparator for the session ids `revokeAllForUser` returns, which come in no guaranteed order.
  */
 function byId(left: string, right: string): number {
   return left.localeCompare(right)
 }
 
 /**
- * A live refresh row for `userId` in `sessionId`.
- * @param userId - The owner.
- * @param sessionId - The session.
- * @returns The created row.
+ * Creates a live refresh row for `userId` in `sessionId`.
  */
 function refreshRow(userId: string, sessionId: string) {
   return userTokenRepository.create({
@@ -67,9 +60,7 @@ function refreshRow(userId: string, sessionId: string) {
 }
 
 /**
- * A row's `revokedAt`, read by its hash.
- * @param tokenHash - The row's token hash.
- * @returns Its `revokedAt`, or undefined when there is no such row.
+ * A row's `revokedAt`, read by its hash: null until it is revoked, undefined when there is no such row.
  */
 async function revokedAtOf(tokenHash: string): Promise<Date | null | undefined> {
   const row = await userTokenRepository.findByHash(tokenHash)
@@ -77,10 +68,8 @@ async function revokedAtOf(tokenHash: string): Promise<Date | null | undefined> 
 }
 
 /**
- * Issue a token in `sessionId` and rotate it, so its row carries a `consumed_at`.
- * @param userId - The owner.
- * @param sessionId - The session.
- * @returns The consumed row's token hash.
+ * Issues a token in `sessionId` and rotates it, so its row carries a `consumed_at`, and returns
+ * that row's token hash.
  */
 async function consumedHashIn(userId: string, sessionId: string): Promise<string> {
   const issued = await issueRefreshToken(userId, sessionId)
@@ -98,8 +87,7 @@ describe('UserTokenRepository', () => {
   })
 
   /**
-   * Create a disposable user for a test and track it for cleanup.
-   * @returns The created user's id.
+   * Creates a user to own the token rows a test issues, tracked for cleanup, and returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -232,10 +220,11 @@ describe('UserTokenRepository', () => {
   })
 
   /**
-   * Without this predicate, a password-reset token could be spent as an
-   * email verification, or a verification token could reset a password —
-   * turning "I can receive mail at this address" into "I can take over
-   * this account."
+   * The `purpose` predicate keeps a token minted for one purpose from being
+   * spent as another (SECURITY.md): a password-reset token as an email
+   * verification, or a verification link, valid for 24h and mailed without a
+   * reset request, as a reset link, outside the 1h window `PASSWORD_RESET_TTL`
+   * keeps reset links to.
    */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()
@@ -247,7 +236,7 @@ describe('UserTokenRepository', () => {
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    // Wrong purpose: the row exists and is still live, but must not be claimable as anything other than what it was issued for.
+    // Wrong purpose: the row exists and is live, but must not be claimable as anything other than what it was issued for.
     const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
     expect(wrongPurpose).toBeUndefined()
 
@@ -448,8 +437,8 @@ describe('UserTokenRepository', () => {
 
     /**
      * The trap this method exists to close: a row with no sessionId at all
-     * (sessionId is only ever set on a 'refresh' row) must still be
-     * revoked, since a predicate written with `session_id != $2` evaluates
+     * (sessionId is only ever set on a 'refresh' row) must be revoked too,
+     * since a predicate written with `session_id != $2` evaluates
      * to NULL, not true, for this row, silently leaving it live if the
      * repository's `IS DISTINCT FROM` is ever "simplified" to `!=`.
      */
@@ -542,8 +531,8 @@ describe('UserTokenRepository', () => {
 
   /**
    * `softDelete`/`markDeleted` (`BaseRepository`) — real token lifecycle
-   * uses `claimOnce`/`revokeAllFor*` instead, but this is still real,
-   * inherited public API.
+   * uses `claimOnce`/`revokeAllFor*` instead, but this is real, inherited
+   * public API.
    */
   it('softDelete sets deletedAt and excludes the row from findById by default', async () => {
     const userId = await createUser()

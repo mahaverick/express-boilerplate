@@ -16,13 +16,10 @@ const DEFAULT_BASELINE = '713112c'
  */
 export const CORPUS_SEED = 20_261_010
 
-/**
- * The gate's modes.
- */
 const MODES = ['corpus', 'hunt', 'vectors', 'replay', 'slice'] as const
 
 /**
- * One of the gate's modes.
+ * What the gate does on this run; the first command-line word.
  */
 type Mode = (typeof MODES)[number]
 

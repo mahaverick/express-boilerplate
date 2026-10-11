@@ -1,9 +1,11 @@
 /**
- * @file Proves that without the `purpose` predicate participating in
- * `claimOnce`'s single atomic statement, a password-reset token could be
- * claimed as an email verification — turning "I can receive mail at this
- * address" into "I can take over this account." The real, always-green
- * proof of this lives in
+ * @file Proves that without the `purpose` predicate in `claimOnce`'s single
+ * atomic statement, a token minted for one purpose can be claimed as another:
+ * here a password-reset token is claimed as an email verification. The same
+ * gap would let a verification link, valid for 24h and mailed without a
+ * reset request, be spent as a reset link, outside the 1h window
+ * `PASSWORD_RESET_TTL` keeps reset links to. The
+ * always-green proof of this lives in
  * `tests/integration/repositories/user-token.repository.test.ts` and
  * `tests/integration/services/session.service.test.ts`; this file exists to
  * show those tests would actually catch a regression, same rationale and
@@ -27,30 +29,25 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `claim-purpose-mutation-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable, distinct token hash — stands in for a real SHA-256 digest;
- * this file never needs the hash to correspond to a real raw token.
- * @returns A 64-character hex string, unique to this call.
+ * A fresh 64-character hex string standing in for a SHA-256 token digest; this file never needs it to
+ * correspond to a real raw token.
  */
 function uniqueHash(): string {
   return randomBytes(32).toString('hex')
 }
 
 /**
- * `claimForRotation`'s exact former predicate: claims the first
- * not-yet-revoked row for a hash, regardless of purpose. `_purpose` is
- * accepted (and ignored) only so this matches `claimOnce`'s signature for
- * `withMutatedMethod`.
- * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
- * @param _purpose - Unused — this is exactly the bug: no purpose predicate at all.
- * @returns The claimed row, or undefined when no live row matched.
+ * A `claimOnce` stand-in with no purpose predicate: it claims the unrevoked, non-deleted row
+ * for a hash whatever its purpose, which is the bug under test. `_purpose` is accepted and ignored
+ * only so the signature matches `claimOnce` for `withMutatedMethod`.
  */
 async function purposeBlindClaimOnce(
   tokenHash: string,
@@ -80,8 +77,7 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
   })
 
   /**
-   * Create a disposable user row for a test and track it for cleanup.
-   * @returns The created user's id.
+   * Creates a user to own the token rows a test issues, tracked for cleanup, and returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -90,11 +86,9 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
   }
 
   /**
-   * Always on: mutates `claimOnce` to the purpose-blind predicate
-   * `claimForRotation` once used (tokenHash + revokedAt IS NULL, no purpose
-   * check), shows a password-reset token is claimable as an email
-   * verification, then shows a fresh token is correctly rejected once
-   * restored.
+   * Always on: mutates `claimOnce` to the purpose-blind predicate (tokenHash + revokedAt IS NULL,
+   * no purpose check), shows a password-reset token is claimable as an email verification, then
+   * shows a fresh token is rejected after the real method is restored.
    */
   it('a purpose-blind claimOnce lets a password-reset token be claimed as an email verification; restoring the predicate blocks it again', async () => {
     const userId = await createUser()

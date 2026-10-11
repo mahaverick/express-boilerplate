@@ -1,8 +1,9 @@
 /**
  * @file PlatformStatsRepository against the real database. Day windows sit in
- * 2001, where only rows this file backdates can land, and totals are read as
- * deltas inside one repeatable-read snapshot, so rows other files left in this
- * worker's database cannot move them.
+ * 2001, where only rows this file backdates can land. Totals are asserted as
+ * deltas or, in one test, against a count read in the same repeatable-read
+ * snapshot, so rows other files left in this worker's database cannot change
+ * the result.
  */
 import { randomUUID } from 'node:crypto'
 import { sql as drizzleSql } from 'drizzle-orm'
@@ -18,6 +19,9 @@ const repository = new PlatformStatsRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 
+/**
+ * Reads one named total, so each assertion names the total it expects to move.
+ */
 function pick(
   totals: { tenants: number; users: number; staff: number },
   key: 'tenants' | 'users' | 'staff'
@@ -25,6 +29,10 @@ function pick(
   return totals[key]
 }
 
+/**
+ * The count of messages with `status` on 2001-07-02, the day the email test backdates them to, or
+ * 0 when there are none.
+ */
 function messageCountOf(
   rows: { day: string; status: string; count: number }[],
   status: string
@@ -46,6 +54,9 @@ describe('PlatformStatsRepository', () => {
     userIds.length = 0
   })
 
+  /**
+   * Creates a user backdated to `iso`, tracked for cleanup, and returns its id.
+   */
   async function userCreatedAt(iso: string): Promise<string> {
     const user = await userRepository.create({ email: `stats-${randomUUID()}@example.test` })
     userIds.push(user.id)
@@ -53,6 +64,9 @@ describe('PlatformStatsRepository', () => {
     return user.id
   }
 
+  /**
+   * Creates a tenant for `ownerId` backdated to `iso`, tracked for cleanup.
+   */
   async function tenantCreatedAt(iso: string, ownerId: string): Promise<void> {
     const slug = `stats-${randomUUID().slice(0, 8)}`
     const tenant = await tenantRepository.create({ name: slug, slug, ownerId })
@@ -141,6 +155,9 @@ describe('PlatformStatsRepository', () => {
     const at = '2001-06-02T10:00:00.000Z'
     const owner = await userCreatedAt(at)
     let previous = await repository.totals()
+    /**
+     * How each total changed since the previous call, which this call then takes as the baseline.
+     */
     async function delta(): Promise<{ tenants: number; users: number; staff: number }> {
       const now = await repository.totals()
       const change = {

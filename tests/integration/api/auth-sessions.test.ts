@@ -137,7 +137,7 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
     const current = await sessionFor(user)
     const live = await sessionFor(user)
     const aged = await sessionFor(user)
-    // Unexpired and unrevoked, but started before SESSION_ABSOLUTE_TTL: rotation refuses it, so it is not signed in.
+    // Unexpired and unrevoked, but started longer ago than SESSION_ABSOLUTE_TTL: rotation refuses it, so it is not signed in.
     await sql`update user_tokens set session_started_at = now() - interval '400 days' where session_id = ${aged.refresh.sessionId}`
 
     const response = await revokeOthers(current.bearer)
@@ -290,7 +290,7 @@ async function plantResetRowInSession(caller: SessionWithSibling): Promise<strin
  * A grace-window replay mints a sibling: a second live chain in the caller's
  * own session. The refresh cookie the browser sends on this route names the
  * caller's chain, so everything else in the session ends with the other
- * sessions; without a usable cookie the whole session is spared, as before.
+ * sessions; without a usable cookie the whole session is spared.
  */
 describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
   it('ends the sibling chain when the caller presents its refresh cookie, and keeps the caller', async () => {

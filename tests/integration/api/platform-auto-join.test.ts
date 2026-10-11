@@ -1,14 +1,11 @@
 /**
- * @file Auto-join through the paths that call it: password login, Google
- * sign-in, markEmailVerified and a password reset, with
- * PLATFORM_EMAIL_DOMAINS set. getEnv() memoises the first environment it
- * parses, and database.service.ts parses it at module scope, so the
- * variable is stubbed in beforeAll and every runtime module is imported
- * after it (google-oauth.test.ts explains the pattern); the suite's own
- * environment leaves the variable unset. Auto-join writes audit rows, so
- * afterEach empties audit_logs, as every file that writes them does,
- * before deleting this file's users (which cascades to their
- * memberships, providers and tokens).
+ * @file Auto-join through the paths that call it: password login, Google sign-in,
+ * markEmailVerified and a password reset, with PLATFORM_EMAIL_DOMAINS set. getEnv() memoises the
+ * first environment it parses, and database.service.ts parses it at module scope, so the variable
+ * is stubbed in beforeAll and every runtime module is imported after it (google-oauth.test.ts
+ * explains the pattern); the suite's own environment leaves the variable unset. Auto-join writes
+ * audit rows, so afterEach empties audit_logs before deleting this file's users (which cascades
+ * to their memberships, providers and tokens).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -38,7 +35,6 @@ const PASSWORD = 'correct horse battery staple'
 
 /**
  * A fresh address on the auto-join domain.
- * @returns The address.
  */
 function staffEmail(): string {
   return `auto-join-${randomUUID()}@${STAFF_DOMAIN}`
@@ -47,9 +43,6 @@ function staffEmail(): string {
 /**
  * A Google profile for `email`, verified by Google, shaped like what
  * passport hands the callback (google-oauth.test.ts's fixture, trimmed).
- * @param email - The address Google reports.
- * @param id - Google's stable profile id.
- * @returns The profile.
  */
 function googleProfile(email: string, id: string = randomUUID()): GoogleProfile {
   const nowSeconds = Math.floor(Date.now() / 1000)
@@ -137,11 +130,6 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
    * A fresh user, tracked for cleanup. Verification is written with raw SQL
    * so it does not itself trigger auto-join: this is a user verified before
    * the domain was listed.
-   * @param email - The address.
-   * @param options - Setup choices.
-   * @param options.hasPassword - Give the account PASSWORD.
-   * @param options.isVerified - Mark the address verified.
-   * @returns The user as stored.
    */
   async function createUser(
     email: string,
@@ -160,7 +148,6 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
 
   /**
    * The user's platform role, read straight from the repository.
-   * @param userId - The user.
    * @returns The role, or null when the user is not staff.
    */
   async function platformRoleOf(userId: string): Promise<string | null> {
@@ -169,8 +156,6 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
 
   /**
    * How many auto-join audit rows name this user.
-   * @param userId - The user.
-   * @returns The row count.
    */
   async function autoJoinedRowCount(userId: string): Promise<number> {
     const rows = await sql`
@@ -183,8 +168,6 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
   /**
    * A stand-in for insertIfAbsent that raises a real SQL error, so
    * Postgres aborts whatever transaction ran it.
-   * @param _data - The membership, ignored.
-   * @param executor - Where the failing query runs.
    * @returns Rejects with Postgres's division-by-zero error.
    */
   const failingInsert: InstanceType<
@@ -195,9 +178,6 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
 
   /**
    * Log in over HTTP.
-   * @param email - The address.
-   * @param password - The password to try.
-   * @returns The response.
    */
   async function login(email: string, password: string): Promise<Response> {
     return request(app).post('/api/v1/auth/login').send({ email, password })
@@ -205,8 +185,6 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
 
   /**
    * Reset the user's password with a freshly issued link, as the mailed one would.
-   * @param user - The user.
-   * @returns Resolves once the reset is stored.
    */
   async function resetWithLink(user: User): Promise<void> {
     const link = await issueToken(user.id, 'password_reset', 60_000)

@@ -45,8 +45,8 @@ afterAll(async () => {
 const STAFF_REASON = 'Customer asked us to, ticket 4411'
 
 /**
- * A disposable email, unique to one call.
- * @returns The address.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `platform-access-${randomUUID()}@example.test`
@@ -54,8 +54,6 @@ function uniqueEmail(): string {
 
 /**
  * The `data` of an enveloped response.
- * @param body - The response body.
- * @returns Its `data`.
  */
 function dataOf<TData>(body: unknown): TData {
   return (body as { data: TData }).data
@@ -63,10 +61,6 @@ function dataOf<TData>(body: unknown): TData {
 
 /**
  * Invite an address with `role` as the bearer of `token`.
- * @param tenant - The tenant.
- * @param token - The inviter's token.
- * @param role - The role offered.
- * @returns The response.
  */
 async function invite(tenant: Tenant, token: string, role: MembershipRole) {
   return request(app)
@@ -77,11 +71,6 @@ async function invite(tenant: Tenant, token: string, role: MembershipRole) {
 
 /**
  * Change `target`'s role as the bearer of `token`.
- * @param tenant - The tenant.
- * @param token - The actor's token.
- * @param target - The member to change.
- * @param role - The new role.
- * @returns The response.
  */
 async function changeRole(tenant: Tenant, token: string, target: User, role: MembershipRole) {
   return request(app)
@@ -92,10 +81,6 @@ async function changeRole(tenant: Tenant, token: string, target: User, role: Mem
 
 /**
  * Remove `target` as the bearer of `token`.
- * @param tenant - The tenant.
- * @param token - The actor's token.
- * @param target - The member to remove.
- * @returns The response.
  */
 async function removeMember(tenant: Tenant, token: string, target: User) {
   return request(app)
@@ -106,8 +91,6 @@ async function removeMember(tenant: Tenant, token: string, target: User) {
 
 /**
  * The target's current role in the tenant.
- * @param tenant - The tenant.
- * @param target - The member.
  * @returns The role, or undefined when no longer a member.
  */
 async function roleOf(tenant: Tenant, target: User): Promise<string | undefined> {
@@ -116,10 +99,8 @@ async function roleOf(tenant: Tenant, target: User): Promise<string | undefined>
 }
 
 /**
- * A pending viewer invitation sent by `inviter`, mailed a day ago.
- * @param tenant - The tenant.
- * @param inviter - The sender.
- * @returns The invitation id.
+ * A pending viewer invitation sent by `inviter`, with its last send backdated
+ * so a resend is not refused for being too soon; returns its id.
  */
 async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string> {
   const invitation = await new TenantInvitationRepository().createPending({
@@ -151,7 +132,6 @@ describe('platform access over the API', () => {
 
   /**
    * A fresh user with a bearer token, tracked for cleanup.
-   * @returns The user and a token.
    */
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -161,10 +141,8 @@ describe('platform access over the API', () => {
 
   /**
    * A tenant owned by a fresh user, tracked for cleanup.
-   * @param fields - Optional name and slug.
    * @param fields.name - The tenant name; defaults to "Acme Inc".
    * @param fields.slug - The slug; defaults to a unique one.
-   * @returns The owner, their token and the tenant.
    */
   async function ownedTenant(
     fields: { name?: string; slug?: string } = {}
@@ -181,8 +159,6 @@ describe('platform access over the API', () => {
 
   /**
    * A fresh staff user with `role`, a token that passes step-up, and one that does not.
-   * @param role - The platform role.
-   * @returns The user, a recent token and a stale one.
    */
   async function staffUser(
     role: MembershipRole
@@ -198,9 +174,6 @@ describe('platform access over the API', () => {
 
   /**
    * A fresh member of `tenant` with `role`, bypassing the API.
-   * @param tenant - The tenant.
-   * @param role - The role.
-   * @returns The member.
    */
   async function addMember(tenant: Tenant, role: MembershipRole): Promise<User> {
     const { user } = await createAuthenticatedUser()
@@ -571,7 +544,7 @@ describe('platform access over the API', () => {
       }
     )
 
-    // An older client sends no reason: it must learn to re-authenticate first, not to add one.
+    // A client that sends no reason must be told to re-authenticate first, not to add one.
     it.each(writes)(
       '$name: refuses staff with a stale sign-in and no reason 401 REAUTH_REQUIRED, step-up before reason',
       async (write) => {

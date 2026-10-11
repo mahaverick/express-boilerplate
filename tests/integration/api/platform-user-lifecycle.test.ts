@@ -24,6 +24,9 @@ import {
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -37,6 +40,9 @@ const userMembershipRepository = new UserMembershipRepository()
 const createdTenantIds: string[] = []
 const REASON = 'Ticket #4411: account compromise'
 
+/**
+ * Applies a user lifecycle verb as the actor under test; the body defaults to the staff `reason`.
+ */
 function action(token: string, userId: string, verb: string, body?: object): Promise<Response> {
   return request(app)
     .post(`/api/v1/platform/users/${userId}/${verb}`)
@@ -44,6 +50,9 @@ function action(token: string, userId: string, verb: string, body?: object): Pro
     .send(body ?? { reason: REASON })
 }
 
+/**
+ * Soft-deletes a user as the actor under test; the body defaults to the staff `reason`.
+ */
 function remove(token: string, userId: string, body?: object): Promise<Response> {
   return request(app)
     .delete(`/api/v1/platform/users/${userId}`)
@@ -53,8 +62,6 @@ function remove(token: string, userId: string, body?: object): Promise<Response>
 
 /**
  * Sign `user` in through the real endpoint: a live session with a refresh cookie.
- * @param user - A user with TEST_PASSWORD.
- * @returns The access token and the refresh cookie pair.
  */
 async function signIn(user: User): Promise<{ accessToken: string; refreshCookie: string }> {
   const response = await request(app)
@@ -70,6 +77,9 @@ async function signIn(user: User): Promise<{ accessToken: string; refreshCookie:
   return { accessToken, refreshCookie: line.split(';', 1)[0] as string }
 }
 
+/**
+ * The statuses an access token (on the profile) and a refresh cookie (on refresh) get.
+ */
 async function sessionStatuses(session: {
   accessToken: string
   refreshCookie: string
@@ -83,6 +93,9 @@ async function sessionStatuses(session: {
   return { access: profile.status, refresh: refresh.status }
 }
 
+/**
+ * The audit entries that target `targetId`, oldest first.
+ */
 async function auditActions(targetId: string): Promise<{ action: string; metadata: unknown }[]> {
   return sql<{ action: string; metadata: unknown }[]>`
     select action, metadata from audit_logs where target_id = ${targetId} order by occurred_at, id
@@ -93,7 +106,6 @@ async function auditActions(targetId: string): Promise<{ action: string; metadat
  * A pending invitation sent by `inviterId` into a fresh tenant where they are
  * an admin. Another user owns it, so the inviter is never its last owner.
  * @param inviterId - The inviting user (made admin of the tenant).
- * @returns The invitation's id.
  */
 async function pendingInvitationFrom(inviterId: string): Promise<string> {
   const owner = await createTrackedUser()
@@ -116,7 +128,6 @@ async function pendingInvitationFrom(inviterId: string): Promise<string> {
 
 /**
  * The audit entries filed against one invitation, with where they were filed.
- * @param invitationId - The invitation.
  * @returns Each entry's action, tenant, access, actor and metadata, oldest first.
  */
 function invitationAudit(invitationId: string): Promise<Record<string, unknown>[]> {
@@ -129,7 +140,6 @@ function invitationAudit(invitationId: string): Promise<Record<string, unknown>[
 
 /**
  * Whether an invitation is revoked.
- * @param invitationId - The invitation.
  * @returns True when `revoked_at` is set.
  */
 async function isRevoked(invitationId: string): Promise<boolean> {
@@ -248,6 +258,9 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
         hasPassword: true,
         active: verb !== 'reactivate',
       })
+      /**
+       * Sends the verb under test: a delete for `delete`, the matching action otherwise.
+       */
       const send = (token: string, userId: string): Promise<Response> =>
         verb === 'delete' ? remove(token, userId) : action(token, userId, verb)
 

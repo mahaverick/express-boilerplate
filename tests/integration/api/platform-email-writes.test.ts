@@ -1,9 +1,8 @@
 /**
- * @file POST /platform/emails/:id/resend and
- * POST /platform/email-suppressions/:id/lift. A resend runs the SP2 action
- * that sent the mail, so that action's 403/404/409s pass straight through
- * and its audit entry is written beside `email.resent`. Mail is asserted on
- * the queue and in `email_messages`, never delivered.
+ * @file POST /platform/emails/:id/resend and POST /platform/email-suppressions/:id/lift. A resend
+ * runs the action that sent the mail, so that action's 403/404/409s pass straight through and its
+ * audit entry is written beside `email.resent`. Mail is asserted on the queue and in
+ * `email_messages`, never delivered.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -40,6 +39,9 @@ import { waitForJob } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 import { waitUntil } from '../../helpers/timing'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -47,6 +49,9 @@ interface ApiEnvelope<TData> {
   data?: TData
 }
 
+/**
+ * An `audit_logs` row, narrowed to the columns these tests assert on.
+ */
 interface AuditRow {
   action: string
   tenant_id: string
@@ -62,6 +67,9 @@ const createdTenantIds: string[] = []
 const createdInvitationIds: string[] = []
 const REASON = 'Customer asked on the phone'
 
+/**
+ * Staff write requests; with no body they carry the staff `reason` every write needs.
+ */
 function post(token: string, path: string, body?: object): Promise<Response> {
   return request(app)
     .post(`/api/v1/platform${path}`)
@@ -69,15 +77,15 @@ function post(token: string, path: string, body?: object): Promise<Response> {
     .send(body ?? { reason: REASON })
 }
 
+/**
+ * Staff reads of the email views, used for the `canResend` hints and checks after a write.
+ */
 function get(token: string, path: string): Promise<Response> {
   return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
 }
 
 /**
  * `canResend` for one message, from the detail and from the list row.
- * @param token - A staff token.
- * @param message - The message.
- * @returns Both answers.
  */
 async function resendHintsOf(
   token: string,
@@ -96,11 +104,17 @@ async function resendHintsOf(
   }
 }
 
+/**
+ * The status of a request, for a case where only the status is under test.
+ */
 async function statusOf(pending: Promise<Response>): Promise<number> {
   const response = await pending
   return response.status
 }
 
+/**
+ * Resends a tracked message as the actor under test; the body defaults to the staff `reason`.
+ */
 function resend(token: string, message: EmailMessage, body?: object): Promise<Response> {
   return post(token, `/emails/${message.id}/resend`, body)
 }
@@ -109,9 +123,6 @@ function resend(token: string, message: EmailMessage, body?: object): Promise<Re
  * A staff member with a token minted at a sign-in at `authenticatedAt`
  * (now by default), so a test can pick a stale sign-in time;
  * `createTrackedStaff`'s own token is always recent.
- * @param role - The platform role.
- * @param authenticatedAt - When the session signed in.
- * @returns The user and the token.
  */
 async function staffSignedIn(
   role: MembershipRole,
@@ -121,6 +132,9 @@ async function staffSignedIn(
   return { user, token: signAccessToken(user, randomUUID(), authenticatedAt) }
 }
 
+/**
+ * The audit entries that target `targetId`, oldest first.
+ */
 async function auditRows(targetId: string): Promise<AuditRow[]> {
   return sql<AuditRow[]>`
     select action, tenant_id, target_type, access, metadata from audit_logs
@@ -128,17 +142,26 @@ async function auditRows(targetId: string): Promise<AuditRow[]> {
   `
 }
 
+/**
+ * The actions of the audit entries that target `targetId`, oldest first.
+ */
 async function auditActions(targetId: string): Promise<string[]> {
   const rows = await auditRows(targetId)
   return rows.map((row) => row.action)
 }
 
+/**
+ * The messages created by resending `originalId`.
+ */
 async function resentRows(originalId: string): Promise<{ id: string; template_key: string }[]> {
   return sql<{ id: string; template_key: string }[]>`
     select id, template_key from email_messages where resent_from_id = ${originalId}
   `
 }
 
+/**
+ * A tracked customer tenant with a fresh owner, for staff to act on.
+ */
 async function customerTenant(): Promise<Tenant> {
   const owner = await createTrackedUser()
   const tenant = await tenantRepository.create({
@@ -152,9 +175,6 @@ async function customerTenant(): Promise<Tenant> {
 
 /**
  * A pending invitation in `tenant` and the tracked message that mailed it.
- * @param tenant - The tenant.
- * @param role - The role it offers.
- * @returns The invitation id and the message.
  */
 async function invitationMessage(
   tenant: Tenant,
@@ -373,7 +393,7 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
         message: 'the invitation resend creates a message linked back to the original',
       }
     )
-    // The email context carries only resentFromId: the reason stays in the audit entry.
+    // Neither the job nor the stored message carries the reason: it stays in the audit entry.
     const job = await waitForJob<EmailJobData>(
       getEmailQueue(),
       (data) => data.to === message.recipient && data.templateKey === TENANT_INVITATION_TEMPLATE_KEY

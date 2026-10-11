@@ -22,6 +22,9 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
+/**
+ * One tenant row of the staff search.
+ */
 interface PlatformTenantRowBody {
   id: string
   name: string
@@ -31,12 +34,18 @@ interface PlatformTenantRowBody {
   createdAt: string
 }
 
+/**
+ * One page of the staff tenant search, with its cursors.
+ */
 interface SearchPage {
   tenants: PlatformTenantRowBody[]
   nextCursor: string | null
   prevCursor: string | null
 }
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   data?: TData
@@ -48,18 +57,27 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
+/**
+ * The search page in a response, failing the test when there is none.
+ */
 function pageOf(response: Response): SearchPage {
   const data = (response.body as ApiEnvelope<SearchPage>).data
   if (!data) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * A response body without its per-request `requestId`, so two responses can be compared.
+ */
 function withoutRequestId(body: unknown): Record<string, unknown> {
   const copy = { ...(body as Record<string, unknown>) }
   delete copy.requestId
   return copy
 }
 
+/**
+ * Runs the staff tenant search as the actor under test, with the filters a test sets.
+ */
 function search(token: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)
     .get('/api/v1/platform/tenants')
@@ -67,6 +85,9 @@ function search(token: string, query: Record<string, string> = {}): Promise<Resp
     .set('Authorization', `Bearer ${token}`)
 }
 
+/**
+ * A short unique tag for tenant names, so a `q` search finds only this test's rows.
+ */
 function newTag(): string {
   return `t${randomUUID().slice(0, 8)}`
 }
@@ -86,18 +107,27 @@ describe('GET /api/v1/platform/tenants', () => {
     createdUserIds.length = 0
   })
 
+  /**
+   * A fresh non-staff user with a bearer token, tracked for cleanup.
+   */
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: `platform-api-${randomUUID()}@example.test` })
     createdUserIds.push(user.id)
     return { user, token: signAccessToken(user, randomUUID(), new Date()) }
   }
 
+  /**
+   * A token for a fresh staff user holding platform `role`.
+   */
   async function createStaff(role: MembershipRole = 'viewer'): Promise<string> {
     const { user, token } = await createUser()
     await makeStaff(user.id, role)
     return token
   }
 
+  /**
+   * A tenant called `name`, owned by a fresh user and tracked for cleanup.
+   */
   async function createNamedTenant(name: string): Promise<Tenant> {
     const { user } = await createUser()
     const tenant = await tenantRepository.create({
@@ -109,6 +139,9 @@ describe('GET /api/v1/platform/tenants', () => {
     return tenant
   }
 
+  /**
+   * A live, a suspended and an archived tenant whose names start with `tag`.
+   */
   async function seedStates(
     tag: string
   ): Promise<{ live: Tenant; suspended: Tenant; archived: Tenant }> {
@@ -120,6 +153,9 @@ describe('GET /api/v1/platform/tenants', () => {
     return { live, suspended, archived }
   }
 
+  /**
+   * Five tenants named `tag a` to `tag e`; returns the names in sorted order.
+   */
   async function seedFive(tag: string): Promise<string[]> {
     // Created out of order, so the result proves the ordering, not insertion order.
     for (const suffix of ['c', 'a', 'e', 'b', 'd']) {
@@ -129,7 +165,6 @@ describe('GET /api/v1/platform/tenants', () => {
   }
 
   describe('access', () => {
-    // Ordered first: before the route exists, the first red failure is this 404-for-200.
     it('admits a platform viewer, behind the 60-a-minute limiter', async () => {
       const response = await search(await createStaff('viewer'))
 

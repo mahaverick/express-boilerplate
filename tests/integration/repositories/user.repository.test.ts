@@ -17,9 +17,8 @@ import { backdateUpdatedAt } from '../../helpers/backdate'
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `user-repo-${randomUUID()}@example.test`
@@ -178,7 +177,7 @@ describe('UserRepository', () => {
 
       const second = await userRepository.markEmailVerified(user.id)
 
-      // undefined is success here, not failure: verification.controller.ts depends on it to answer 200, not 400, on a second valid token.
+      // undefined is success here, not failure: `verifyEmail` (verification.service.ts) answers success, not 400, when a valid link is redeemed for an account that is already verified.
       expect(second).toBeUndefined()
       const reread = await userRepository.findById(user.id)
       expect(reread?.emailVerifiedAt?.getTime()).toBe(first?.emailVerifiedAt?.getTime())

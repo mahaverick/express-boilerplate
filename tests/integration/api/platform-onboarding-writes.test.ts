@@ -33,6 +33,9 @@ import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-u
 import { queuedJobs } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -41,6 +44,9 @@ interface ApiEnvelope<TData> {
   data?: TData
 }
 
+/**
+ * An `audit_logs` row, narrowed to the columns these tests assert on.
+ */
 interface AuditRow {
   action: string
   tenant_id: string
@@ -51,6 +57,9 @@ interface AuditRow {
   metadata: Record<string, unknown>
 }
 
+/**
+ * An `email_messages` row, narrowed to the columns these tests assert on.
+ */
 interface MessageRow {
   id: string
   recipient: string
@@ -62,11 +71,17 @@ interface MessageRow {
 }
 
 const app = createApp()
+/**
+ * Orders strings for `toSorted`.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 const REASON = 'Agreed on the onboarding call'
 // A test that waits on a lock gets room for the probe's own 5-second deadline.
 const LOCK_WAIT_TIMEOUT_MS = 10_000
 
+/**
+ * Staff write requests; with no body they carry the staff `reason` every write needs.
+ */
 function post(token: string, path: string, body?: object): Promise<Response> {
   return request(app)
     .post(`/api/v1/platform${path}`)
@@ -74,28 +89,37 @@ function post(token: string, path: string, body?: object): Promise<Response> {
     .send(body ?? { reason: REASON })
 }
 
+/**
+ * Staff-completes a tenant's manual onboarding step as the actor under test.
+ */
 function complete(token: string, tenantId: string, stepKey: string, body?: object) {
   return post(token, `/tenants/${tenantId}/onboarding/steps/${stepKey}/complete`, body)
 }
 
+/**
+ * Staff reminder to a tenant's owners to finish onboarding, as the actor under test.
+ */
 function remind(token: string, tenantId: string, body?: object) {
   return post(token, `/tenants/${tenantId}/onboarding/remind`, body)
 }
 
 /**
  * A reminder request already on the wire: supertest sends only once awaited.
- * @param token - The staff bearer token.
- * @param tenantId - The tenant.
- * @returns The response.
  */
 async function sentNow(token: string, tenantId: string): Promise<Response> {
   return await remind(token, tenantId)
 }
 
+/**
+ * The response's error `code`, to tell refusals apart by code rather than by status alone.
+ */
 function codeOf(response: Response): string | undefined {
   return (response.body as ApiEnvelope<unknown>).code
 }
 
+/**
+ * The audit entries of `action` filed in the tenant, oldest first.
+ */
 async function auditRows(tenantId: string, action: string): Promise<AuditRow[]> {
   return sql<AuditRow[]>`
     select action, tenant_id, target_type, target_id, access, actor_user_id, metadata
@@ -104,6 +128,9 @@ async function auditRows(tenantId: string, action: string): Promise<AuditRow[]> 
   `
 }
 
+/**
+ * The tenant's `email_messages` rows, ordered by recipient.
+ */
 async function messagesFor(tenantId: string): Promise<MessageRow[]> {
   return sql<MessageRow[]>`
     select id, recipient, template_key, tenant_id, user_id, sender_class, variables
@@ -111,6 +138,9 @@ async function messagesFor(tenantId: string): Promise<MessageRow[]> {
   `
 }
 
+/**
+ * The queued email jobs that carry the tenant's message ids.
+ */
 async function reminderJobsFor(tenantId: string): Promise<EmailJobData[]> {
   const rows = await messagesFor(tenantId)
   const ids = new Set(rows.map((row) => row.id))
@@ -122,10 +152,6 @@ async function reminderJobsFor(tenantId: string): Promise<EmailJobData[]> {
 
 /**
  * Insert one `onboarding.reminder_sent` entry at a chosen time.
- * @param tenantId - The tenant it is filed in.
- * @param actorId - The staff member.
- * @param occurredAt - When it was sent.
- * @returns Resolves once it is in.
  */
 async function addReminderEntry(tenantId: string, actorId: string, occurredAt: Date) {
   await sql`
@@ -490,6 +516,10 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realLatest = PlatformOnboardingRepository.prototype.latestReminderAt
       let calls = 0
+      /**
+       * Holds the first `latestReminderAt` call inside its transaction until released, so a second
+       * reminder queues on the tenant row.
+       */
       const pausingLatest: typeof realLatest = async function (
         this: PlatformOnboardingRepository,
         ...arguments_
@@ -511,7 +541,7 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
           const first = sentNow(token, tenant.id)
           const firstPid = await untilSignalled(reached.promise, first, 'first reminder')
           const second = sentNow(token, tenant.id)
-          // Both hold the actor's rows FOR SHARE, so the tenant row is the only lock it can queue on.
+          // Both hold the actor's membership and user rows FOR SHARE, so only the tenant row can make the second queue.
           expect(await waitForWaiter(firstPid, second)).toBe(true)
           release.resolve()
           responses = await Promise.all([first, second])

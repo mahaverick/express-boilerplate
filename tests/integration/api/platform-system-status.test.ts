@@ -1,9 +1,8 @@
 /**
- * @file GET /api/v1/platform/system/status through the real app: an admin
- * gets the release, error tracking's status, the flags' status and the
- * maintenance section, a viewer
- * the plain 404, and no read is audited. The counters themselves are the
- * error-counters and flag-counters services'; here they are spied.
+ * @file GET /api/v1/platform/system/status through the real app: an admin gets the release, error
+ * tracking's status, the flags' status and the maintenance section; a viewer gets the plain 404;
+ * no read is audited. The counters themselves are the error-counters and flag-counters services';
+ * here they are spied.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
@@ -23,7 +22,6 @@ const app = createApp()
 
 /**
  * A Redis read that never settles.
- * @returns A promise that stays pending.
  */
 function never(): Promise<never> {
   return new Promise<never>(() => {})
@@ -31,7 +29,6 @@ function never(): Promise<never> {
 
 /**
  * A status as the counters service could answer it.
- * @returns The status.
  */
 function sampleStatus(): counters.ErrorTrackingStatus {
   return {
@@ -46,7 +43,6 @@ function sampleStatus(): counters.ErrorTrackingStatus {
 
 /**
  * A flags status as the flag-counters service could answer it.
- * @returns The status.
  */
 function sampleFlagsStatus(): FlagsStatus {
   return {
@@ -72,7 +68,6 @@ function sampleFlagsStatus(): FlagsStatus {
 
 /**
  * A maintenance section as the maintenance-mode service could answer it.
- * @returns The section.
  */
 function sampleMaintenanceStatus(): MaintenanceModeStatus {
   return {

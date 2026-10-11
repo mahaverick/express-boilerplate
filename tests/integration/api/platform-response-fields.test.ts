@@ -22,6 +22,9 @@ import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   data?: TData
@@ -37,16 +40,25 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
+/**
+ * The `data` of a response, failing the test when there is none.
+ */
 function dataOf<TData>(response: Response): TData {
   const data = (response.body as ApiEnvelope<TData>).data
   if (data === undefined) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * Adds a user to a tenant with `role`, bypassing the API.
+ */
 async function join(userId: string, tenant: Tenant, role: MembershipRole): Promise<void> {
   await userMembershipRepository.create({ userId, tenantId: tenant.id, role })
 }
 
+/**
+ * Reads a tenant as a member, to check the platform fields on the detail.
+ */
 function readTenant(slug: string, token: string) {
   return request(app).get(`/api/v1/tenants/${slug}`).set('Authorization', `Bearer ${token}`)
 }
@@ -66,12 +78,18 @@ describe('platform response fields', () => {
     createdUserIds.length = 0
   })
 
+  /**
+   * A fresh user with a bearer token, tracked for cleanup.
+   */
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: `fields-${randomUUID()}@example.test` })
     createdUserIds.push(user.id)
     return { user, token: signAccessToken(user, randomUUID()) }
   }
 
+  /**
+   * A tenant owned by a fresh user, tracked for cleanup.
+   */
   async function createTenant(): Promise<Tenant> {
     const { user } = await createUser()
     const tenant = await tenantRepository.create({
@@ -116,6 +134,9 @@ describe('platform response fields', () => {
   describe('POST /api/v1/auth/login', () => {
     const PASSWORD = 'correct horse battery staple'
 
+    /**
+     * A user with a password and a verified address, tracked for cleanup.
+     */
     async function createVerifiedPasswordUser(): Promise<User> {
       const user = await userRepository.create({
         email: `fields-login-${randomUUID()}@example.test`,
@@ -126,6 +147,9 @@ describe('platform response fields', () => {
       return user
     }
 
+    /**
+     * Signs in the way a client does, to read the user the login response carries.
+     */
     function login(email: string): Promise<Response> {
       return request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
     }

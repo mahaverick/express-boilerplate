@@ -23,8 +23,7 @@ afterEach(async () => {
 })
 
 /**
- * An owner and the tenant they own, tracked for cleanup.
- * @returns Both.
+ * Creates an owner and the tenant they own, tracked for cleanup.
  */
 async function ownedTenant(): Promise<{ owner: User; tenant: Tenant }> {
   const owner = await createTrackedUser()

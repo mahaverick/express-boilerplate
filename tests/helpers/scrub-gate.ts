@@ -6,7 +6,7 @@
  * with it on generated texts (tests/helpers/scrub-gate-generators.ts).
  *
  * Modes:
- * - `corpus`: cases 0 to count-1 of the fixed-seed corpus;
+ * - `corpus`: cases 0 to count-1 of the corpus (fixed seed unless `--seed` is given);
  * - `hunt`: mutated cases from a fresh or given seed, for a count or a time;
  * - `vectors`: each row of the shared fixture against its expectation;
  * - `replay`: one case, `--replay corpus:<seed>:<index>` or `hunt:<seed>:<index>`;
@@ -252,10 +252,10 @@ function checkVectors(candidate: Scrub): VectorReport {
 }
 
 /**
- * Write the slice the unit suite checks, formatted as the repository's
- * Prettier config says: for each case the planted values
- * (by index) the baseline leaves partly in view, and the cases the baseline
- * itself changes on a second pass.
+ * Write the slice file the unit suite checks, formatted with the repository's
+ * Prettier config. It records, per case index, which planted values (by
+ * position) the baseline leaves partly in view (`allowed`), and which cases
+ * the baseline changes on a second pass (`unstable`).
  * @param baseline - The baseline scrubber.
  * @param options - The options.
  */

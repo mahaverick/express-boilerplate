@@ -23,6 +23,9 @@ import {
 import { waitForJob } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
+/**
+ * The JSON envelope every API response is wrapped in.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -32,12 +35,18 @@ interface ApiEnvelope<TData> {
 const app = createApp()
 const HOUR_MS = 60 * 60 * 1000
 
+/**
+ * The envelope's `data`, failing the test with the status when the response carries none.
+ */
 function dataOf<TData>(response: Response): TData {
   const data = (response.body as ApiEnvelope<TData>).data
   if (!data) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * A staff POST under `/api/v1/platform/users`; `path` is appended to that prefix.
+ */
 function post(token: string, path: string, body: object = {}): Promise<Response> {
   return request(app)
     .post(`/api/v1/platform/users${path}`)
@@ -45,6 +54,10 @@ function post(token: string, path: string, body: object = {}): Promise<Response>
     .send(body)
 }
 
+/**
+ * A staff PATCH of one platform user, resolving with the raw response so
+ * tests can assert refusals as well as successes.
+ */
 function patch(token: string, id: string, body: object): Promise<Response> {
   return request(app)
     .patch(`/api/v1/platform/users/${id}`)
@@ -54,8 +67,6 @@ function patch(token: string, id: string, body: object): Promise<Response> {
 
 /**
  * The audit rows about one user, oldest first (ties, as in one transaction, by id).
- * @param targetId - The user.
- * @returns Their action, tenant and metadata.
  */
 async function auditRows(
   targetId: string
@@ -66,6 +77,9 @@ async function auditRows(
   `
 }
 
+/**
+ * Waits for the account-setup mail queued for `to`, since mail is asserted on the queue.
+ */
 function setupMailFor(to: string) {
   return waitForJob<EmailJobData>(
     getEmailQueue(),
@@ -192,7 +206,7 @@ describe('POST /api/v1/platform/users', () => {
     expect(response.status).toBe(404)
     const response2 = await post(admin.token, '', { email, password: 'chosen-by-staff' })
     expect(response2.status).toBe(400)
-    // The server picks the link's frontend: a new user is not staff, so it is the web app.
+    // The server picks the link's frontend: a new user holds no platform role, so it is the web app.
     const response3 = await post(admin.token, '', { email, app: 'apex' })
     expect(response3.status).toBe(400)
     expect(await sql`select 1 from users where email = ${email}`).toHaveLength(0)

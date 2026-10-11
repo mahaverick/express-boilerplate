@@ -56,19 +56,19 @@ function keptCharacters(text: string): Map<string, number> {
  */
 export interface CaseComparison {
   /**
-  Planted windows the candidate shows and the baseline hid.
+   * Planted windows the candidate shows and the baseline hid.
    */
   exposedWindows: string[]
   /**
-  Letters and digits the candidate keeps more of than the baseline.
+   * Letters and digits the candidate keeps more of than the baseline.
    */
   exposedAlnum: number
   /**
-  Other characters the candidate keeps more of than the baseline.
+   * Other characters the candidate keeps more of than the baseline.
    */
   exposedOther: number
   /**
-  Characters the baseline keeps more of than the candidate.
+   * Characters the baseline keeps more of than the candidate.
    */
   overRedacted: number
 }

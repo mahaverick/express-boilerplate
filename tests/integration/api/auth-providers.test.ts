@@ -1,12 +1,9 @@
 /**
- * @file Integration tests for GET /api/v1/auth/providers, against the
- * real per-worker Postgres database — same conventions as
- * tests/integration/api/profile.test.ts, whose token approach this
- * file reuses: requests sign a bearer token directly with
- * `signAccessToken` rather than going through POST /auth/login, since
- * these tests are about what happens after authentication rather than
- * about login itself. The case this file exists for is the
- * Google-only user — see the test below.
+ * @file GET /api/v1/auth/providers against the real per-worker Postgres
+ * database. Requests sign a bearer token directly with `signAccessToken`
+ * instead of logging in, as profile.test.ts does. The case this file exists
+ * for is the Google-only user: an account with an 'email' provider row and no
+ * password.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -28,9 +25,8 @@ const authProviderRepository = new AuthProviderRepository()
 const PASSWORD = 'correct horse battery staple'
 
 /**
- * vitest types `expect.any(...)` as `any`; see profile.test.ts's own
- * comment for why this cast exists and is reused across every
- * assertion.
+ * vitest types `expect.any(...)` as `any`; cast once and reused across the
+ * assertions.
  */
 const ANY_STRING = expect.any(String) as unknown as string
 
@@ -65,8 +61,8 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 }
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-providers-${randomUUID()}@example.com`
@@ -145,15 +141,13 @@ describe('GET /api/v1/auth/providers', () => {
   })
 
   /**
-   * A Google signup writes both an 'email' row and a 'google' row in
-   * one transaction (google-auth.service.ts's `resolveGoogleUser`),
-   * so the presence of an 'email' provider says nothing about whether
-   * a password exists — an implementation that inferred `hasPassword`
-   * from the provider list would report `true` for an account that
-   * cannot log in with a password at all. That is why the endpoint
-   * carries `hasPassword` as its own field, read from
-   * `users.password_hash`, and why the assertions below pin the two
-   * apart.
+   * A Google sign-up writes an 'email' row and a 'google' row in one
+   * transaction (`resolveGoogleUser`), so an 'email' provider says nothing
+   * about whether a password exists. An endpoint that inferred `hasPassword`
+   * from the provider list would report `true` for an account that cannot
+   * log in with a password. The endpoint therefore carries `hasPassword` as
+   * its own field, read from `users.password_hash`, and these assertions pin
+   * the two apart.
    */
   it('reports hasPassword false for a Google-only account, which still has an email provider row', async () => {
     const { token } = await seedUser({ withPassword: false, providers: ['email', 'google'] })
@@ -194,7 +188,7 @@ describe('GET /api/v1/auth/providers', () => {
   })
 
   it('orders providers oldest first, even when that is not the order they were inserted in', async () => {
-    // Backdating the google row makes insertion order and createdAt order disagree, so only a controller that actually sorts can answer ['google', 'email'].
+    // Backdating the google row makes insertion order and createdAt order disagree, so only an endpoint that sorts can answer ['google', 'email'].
     const { userId, token } = await seedUser({
       withPassword: true,
       providers: ['email', 'google'],

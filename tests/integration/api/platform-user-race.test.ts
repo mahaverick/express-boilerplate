@@ -64,6 +64,10 @@ describe('concurrent staff deletes', () => {
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realRevoke = TenantInvitationRepository.prototype.revokePendingByInviter
       let calls = 0
+      /**
+       * Pauses the first call after the real revoke until released; later calls run straight
+       * through.
+       */
       const pausingRevoke: typeof realRevoke = async function (
         this: TenantInvitationRepository,
         ...arguments_
@@ -142,6 +146,9 @@ describe('a delete whose target came to own a tenant after the first ownership r
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realList = PlatformUserRepository.prototype.listOwnedTenants
     let calls = 0
+    /**
+     * Reports no owned tenants on the first call and the real list afterwards.
+     */
     const lateList: typeof realList = async function (this: PlatformUserRepository, ...arguments_) {
       calls += 1
       return calls === 1 ? [] : realList.apply(this, arguments_)

@@ -21,10 +21,8 @@ afterEach(async () => {
 })
 
 /**
- * Insert one valid queued message, tracked for cleanup.
- * @param overrides - Columns to set instead of the defaults, as raw values.
- * @param overrides.resentFromId - The message it was resent from.
- * @returns The message's id.
+ * Inserts one valid queued message, tracked for cleanup, and returns its id.
+ * `resentFromId` makes it a resend of that message.
  */
 async function insertMessage(overrides: { resentFromId?: string } = {}): Promise<string> {
   const id = randomUUID()
@@ -39,9 +37,7 @@ async function insertMessage(overrides: { resentFromId?: string } = {}): Promise
 }
 
 /**
- * Insert one valid delivered event for a message.
- * @param messageId - The message.
- * @returns The event's id.
+ * Inserts one valid delivered event for a message and returns its id.
  */
 async function insertEvent(messageId: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`

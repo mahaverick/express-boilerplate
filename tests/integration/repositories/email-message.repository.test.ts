@@ -22,9 +22,8 @@ afterEach(async () => {
 })
 
 /**
- * A queued message with a fresh id, header and recipient.
- * @param overrides - Fields to change.
- * @returns The row to pass to `createQueued`.
+ * A row for `createQueued` with an allocated id and a Message-ID header and recipient derived from
+ * it, tracked for cleanup.
  */
 async function queuedRow(
   overrides: Partial<NewQueuedEmailMessage> = {}

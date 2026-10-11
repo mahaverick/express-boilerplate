@@ -1,10 +1,11 @@
 /**
  * @file processAnalyticsDeletions against the real per-worker Postgres and
  * the fake PostHog: an acknowledged deletion removes its rows, a failure
- * keeps them with a backoff and `last_error`, a row not yet due is not sent,
+ * keeps them with a backoff and `last_error`, a row that is not due is not sent,
  * one tick sends at most `ANALYTICS_DELETION_BATCH_SIZE` ids, and nothing
- * is sent while the personal API key is not configured. The timeline config
- * is set for this file only, through a mocked `getEnv()`.
+ * is sent while the personal API key is not configured. The PostHog personal
+ * API key, project id and app host are set for this file only, through a
+ * mocked `getEnv()`.
  */
 import { asc } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -39,8 +40,7 @@ const MINUTE_MS = 60_000
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog started in `beforeAll`, failing the test when it is not running.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -48,9 +48,7 @@ function posthog(): FakePosthog {
 }
 
 /**
- * Insert deletion rows due at `notBefore`.
- * @param notBefore - When they are due.
- * @param ids - Their distinct ids.
+ * Inserts one deletion row per id straight into the table, due at `notBefore`.
  */
 async function seed(notBefore: Date, ...ids: string[]): Promise<void> {
   for (const id of ids) {
@@ -61,8 +59,7 @@ async function seed(notBefore: Date, ...ids: string[]): Promise<void> {
 }
 
 /**
- * Every row, by id.
- * @returns The rows.
+ * Reads every deletion row ordered by id, to assert what a tick kept.
  */
 function rows() {
   return db.select().from(analyticsDeletionModel).orderBy(asc(analyticsDeletionModel.distinctId))

@@ -55,10 +55,7 @@ export async function clearOutbox(): Promise<void> {
  * An `insertMany` that sends the real insert with an event name one
  * character too long, so Postgres refuses it (22001) inside whatever
  * transaction or savepoint the caller is in.
- * @param this - The repository.
- * @param rows - The rows the caller built.
- * @param executor - Where the caller asked to insert.
- * @returns Never resolves; Postgres rejects the statement.
+ * @returns Never resolves successfully; the promise rejects with Postgres's error.
  */
 export function overlongInsertMany(
   this: AnalyticsOutboxRepository,

@@ -18,6 +18,9 @@ import {
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
+/**
+ * One row of the directory listing, as the tests read it.
+ */
 interface UserRowBody {
   id: string
   email: string
@@ -25,12 +28,18 @@ interface UserRowBody {
   membershipCount: number
 }
 
+/**
+ * One page of the directory listing with its paging cursors.
+ */
 interface UserPageBody {
   users: UserRowBody[]
   nextCursor: string | null
   prevCursor: string | null
 }
 
+/**
+ * The JSON envelope every API response is wrapped in.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   data?: TData
@@ -42,12 +51,18 @@ const tenantRepository = new TenantRepository()
 const authProviderRepository = new AuthProviderRepository()
 const createdTenantIds: string[] = []
 
+/**
+ * The envelope's `data`, failing the test with the status when the response carries none.
+ */
 function dataOf<TData>(response: Response): TData {
   const data = (response.body as ApiEnvelope<TData>).data
   if (!data) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * A staff GET of the directory; `query` carries the filters and cursor.
+ */
 function list(token: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)
     .get('/api/v1/platform/users')
@@ -55,6 +70,10 @@ function list(token: string, query: Record<string, string> = {}): Promise<Respon
     .set('Authorization', `Bearer ${token}`)
 }
 
+/**
+ * A staff GET of one user's detail, resolving with the raw response so tests
+ * can assert the 404s as well as the body.
+ */
 function detail(token: string, id: string): Promise<Response> {
   return request(app).get(`/api/v1/platform/users/${id}`).set('Authorization', `Bearer ${token}`)
 }
@@ -214,7 +233,7 @@ describe('GET /api/v1/platform/users/:id', () => {
     const { token } = await createTrackedStaff('viewer')
     const gone = await createTrackedUser()
     await sql`update users set deleted_at = now() where id = ${gone.id}`
-    // A pending invitation to the address, which may since belong to someone else.
+    // A pending invitation to the address, which may belong to someone else.
     const owner = await createTrackedUser()
     const tenant = await tenantRepository.create({
       name: 'Invites Co',

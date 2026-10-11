@@ -79,10 +79,10 @@ export interface ProbeClock {
 }
 
 /**
- * Poll `isObserved` every 10 ms on a dedicated connection until it answers true
- * (true) or `settled` has settled (false). Each probe query runs under a
- * statement_timeout of the time left, so a hung probe fails at the deadline
- * in force when it was issued.
+ * Poll `isObserved` on a dedicated connection, `POLL_INTERVAL_MS` apart, until
+ * it answers true (resolves true) or `settled` has settled (resolves false).
+ * Each probe query runs under a statement_timeout of the time left, so a hung
+ * probe fails at the deadline in force when it was issued.
  * @param isObserved - One probe query answering whether the wait is seen.
  * @param settled - The work being watched.
  * @param timeoutMs - The longest wait, counted from the start or, with `clock`, from when it starts (and never past `clock.withinMs`).
@@ -100,6 +100,9 @@ export async function pollUntil(
   clock?: ProbeClock
 ): Promise<boolean> {
   let hasSettled = false
+  /**
+   * Lets the poll learn that `settled` finished, without awaiting it or failing on its rejection.
+   */
   const observe = async (): Promise<void> => {
     try {
       await settled
@@ -122,6 +125,11 @@ export async function pollUntil(
     deadline: pollStart + (clock?.withinMs ?? timeoutMs),
     limitMs: clock?.withinMs ?? timeoutMs,
   }
+  /**
+   * Moves the deadline to `timeoutMs` from now once `startsOn` resolves, unless that is past the poll's `withinMs` bound.
+   * @param startsOn - The clock's start signal.
+   * @param withinMs - The poll's overall bound from its start.
+   */
   const startClock = async (startsOn: Promise<unknown>, withinMs: number): Promise<void> => {
     try {
       await startsOn

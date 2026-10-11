@@ -11,30 +11,30 @@ import { WORKER_RATE_LIMIT_KEY_PATTERN } from './redis-prefix'
 import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
 
 /**
- * Delete every rate-limit counter left in Redis before the run starts.
+ * Delete every test worker's rate-limit counters from Redis before the run
+ * starts.
  *
- * Unlike Postgres, Redis is NOT per-worker: all `WORKER_COUNT` workers share
- * the one compose instance, and a counter outlives the run that created it
- * for the length of its window (an hour, for registration). Every integration test
- * also reaches the API from the same client address, so an IP-keyed limiter
- * accumulates across runs — `pnpm test` twice in a row would spend one
- * budget twice and the second run would start seeing 429s that have nothing
- * to do with the code under test. The login limiter never hit this only
- * because its key includes a per-run unique email; the registration and
- * logout limiters are keyed on IP alone and cannot dodge it that way.
+ * Redis is one instance shared by all `WORKER_COUNT` workers, and a counter
+ * outlives the run that created it for the length of its window (an hour, for
+ * registration). Every integration test reaches the API from the same client
+ * address, so an IP-keyed limiter accumulates across runs: `pnpm test` twice
+ * in a row would spend one budget twice, and the second run would see 429s
+ * that have nothing to do with the code under test. The composite login
+ * limiter avoids this because its key includes a per-run unique email; the
+ * IP-only limiters (registration, logout) cannot.
  *
  * SCAN, not KEYS: KEYS blocks the server for the whole keyspace, and this
- * may be a developer's own Redis with other data in it. Deletion is scoped
- * to the test workers' `rl:` keyspaces (./redis-prefix) for the same reason:
- * a dev server's keys on this Redis are never touched, and never FLUSHDB.
+ * may be a developer's own Redis with other data in it. For the same reason
+ * deletion is scoped to the test workers' `rl:` keyspaces (./redis-prefix),
+ * and never FLUSHDB.
  *
  * Non-fatal: if Redis is unreachable, `SharedRateLimitStore` falls back to
  * a per-process in-memory store that cannot accumulate across runs anyway,
  * so there is nothing to clear and nothing to fail for.
  *
- * Note this runs once per `vitest run`, so a long `vitest watch` session
- * re-running the same file many times can still accumulate against the
- * production limits; restart the watcher if that ever surfaces.
+ * This runs once per `vitest run`, so a long `vitest watch` session re-running
+ * the same file can still accumulate against the production limits; restart
+ * the watcher if that surfaces.
  */
 async function clearRateLimitCounters(): Promise<void> {
   const url = process.env.REDIS_URL
@@ -69,13 +69,10 @@ async function clearRateLimitCounters(): Promise<void> {
 
 /**
  * Create and migrate every worker's dedicated test database once, before
- * any worker (and therefore any test file) starts. This must run from
- * vitest's `globalSetup`, not from `tests/helpers/setup-global.ts`'s
- * `setupFiles` hook: that hook runs once per test file inside every forked
- * worker, so migrating from there would race up to `WORKER_COUNT` processes
- * against the same `CREATE TABLE`/`CREATE UNIQUE INDEX`, and drizzle's
- * migrator holds no cross-process lock — the loser sees a duplicate-object
- * error that reads like an unrelated flake, not a migration race.
+ * any worker (and therefore any test file) starts. It runs from vitest's
+ * `globalSetup` and not from `tests/helpers/setup-global.ts`'s `setupFiles`
+ * hook, which runs once per test file inside every forked worker and would
+ * run the migrator again for each file.
  */
 export default async function setup(): Promise<void> {
   // Populate process.env from .env.test(.local) before reading DATABASE_URL.

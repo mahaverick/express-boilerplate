@@ -49,13 +49,10 @@ interface SeenRead {
 }
 
 /**
- * Run `run` while resolveTenant's pool read of the staff user's platform
- * role returns the role as read, then applies `change` to their platform
- * membership. The request therefore carries the stale platform role.
- * @param staff - The staff user.
- * @param change - What to do to their platform membership.
- * @param seen - Receives the role resolveTenant read.
- * @param run - The request(s) to make while the hook is installed.
+ * Runs `run` with a hook that applies `change` to the staff user's platform
+ * membership right after resolveTenant's pool read of their platform role,
+ * so the request carries the stale role. `seen` receives the role resolveTenant
+ * read. Fails the test if the hook never fired.
  */
 async function withPlatformRoleChangedAfterResolve(
   staff: User,
@@ -67,6 +64,9 @@ async function withPlatformRoleChangedAfterResolve(
   const realFind = UserMembershipRepository.prototype.findPlatformRole
   const platform = await platformTenant()
   let hasChanged = false
+  /**
+   * Returns the real read's role, and on resolveTenant's own pool read applies `change` once.
+   */
   const changingFind: typeof realFind = async function (
     this: UserMembershipRepository,
     userId: string,
@@ -93,13 +93,10 @@ async function withPlatformRoleChangedAfterResolve(
 }
 
 /**
- * Run `run` while resolveTenant's pool read of the staff user's membership
- * in `tenant` returns the row as read, then deletes it. The request
- * therefore passes the route as a member, and the service's locked re-read
- * finds only their platform role.
- * @param staff - The staff user who is also a member of `tenant`.
- * @param tenant - The tenant the request names.
- * @param run - The request(s) to make while the hook is installed.
+ * Runs `run` with a hook that deletes the staff user's membership in `tenant`
+ * right after resolveTenant's pool read of it, so the request passes the route
+ * as a member while the service's locked re-read finds only their platform
+ * role. Fails the test if the hook never fired.
  */
 async function withMembershipRemovedAfterResolve(
   staff: User,
@@ -109,6 +106,9 @@ async function withMembershipRemovedAfterResolve(
   // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findByUserAndTenant
   let hasChanged = false
+  /**
+   * Returns the real read's row, and on resolveTenant's own pool read deletes the membership once.
+   */
   const removingFind: typeof realFind = async function (
     this: UserMembershipRepository,
     userId: string,
@@ -134,10 +134,8 @@ async function withMembershipRemovedAfterResolve(
 }
 
 /**
- * A pending viewer invitation sent by `inviter`, mailed a day ago.
- * @param tenant - The tenant.
- * @param inviter - The sender.
- * @returns The invitation id.
+ * A pending viewer invitation sent by `inviter`, with its last send backdated
+ * so a resend is not refused for being too soon; returns its id.
  */
 async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string> {
   const invitation = await new TenantInvitationRepository().createPending({
@@ -153,10 +151,8 @@ async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string>
 }
 
 /**
- * A locked re-read that returns the role resolveTenant saw: a service that
- * trusted the earlier read.
- * @param seen - The role resolveTenant read.
- * @returns A stand-in for lockPlatformRole.
+ * A stand-in for `lockPlatformRole` that returns the role resolveTenant saw,
+ * as a service trusting the earlier read would.
  */
 function trustingEarlierRead(seen: SeenRead): UserMembershipRepository['lockPlatformRole'] {
   // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
@@ -164,9 +160,7 @@ function trustingEarlierRead(seen: SeenRead): UserMembershipRepository['lockPlat
 }
 
 /**
- * The tenant's stored name.
- * @param tenant - The tenant.
- * @returns Its name column.
+ * The tenant's stored name, read with raw SQL.
  */
 async function storedName(tenant: Tenant): Promise<string | undefined> {
   const [row] = await sql<{ name: string }[]>`select name from tenants where id = ${tenant.id}`
@@ -174,10 +168,7 @@ async function storedName(tenant: Tenant): Promise<string | undefined> {
 }
 
 /**
- * PATCH the tenant's name as the bearer of `token`.
- * @param tenant - The tenant.
- * @param token - The caller's token.
- * @returns The response status and body.
+ * PATCHes the tenant's name as the bearer of `token`, returning only the status and body.
  */
 async function rename(tenant: Tenant, token: string): Promise<{ status: number; body: unknown }> {
   const response = await request(app)
@@ -187,17 +178,13 @@ async function rename(tenant: Tenant, token: string): Promise<{ status: number; 
   return { status: response.status, body: response.body as unknown }
 }
 
-/**
- * Each test changes the staff user's platform membership straight
- * after resolveTenant has read it, so requireRole still sees the old
- * role; the write must be refused and must change nothing. Staff
- * visits write audit rows, so afterEach clears audit_logs first.
- */
+// Each test changes the staff user's platform membership right after resolveTenant read it, so requireRole still sees the old role; the write must be refused and change nothing.
 describe('the staff role is re-read under lock (platform role changed after resolveTenant)', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    // Staff visits write audit rows, whose foreign keys restrict deleting the tenants and users.
     await truncateAuditLogs()
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
@@ -210,7 +197,6 @@ describe('the staff role is re-read under lock (platform role changed after reso
 
   /**
    * A fresh user with a bearer token, tracked for cleanup.
-   * @returns The user and token.
    */
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
@@ -222,7 +208,6 @@ describe('the staff role is re-read under lock (platform role changed after reso
 
   /**
    * A tenant owned by a fresh user, tracked for cleanup.
-   * @returns The tenant.
    */
   async function ownedTenant(): Promise<Tenant> {
     const { user: owner } = await createAuthenticatedUser()
@@ -236,9 +221,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
   }
 
   /**
-   * A fresh staff user with `role`, and a token.
-   * @param role - The platform role.
-   * @returns The user and token.
+   * A fresh staff user with the given platform role, and a token.
    */
   async function staffUser(role: MembershipRole): Promise<{ user: User; token: string }> {
     const staff = await createAuthenticatedUser()
@@ -247,9 +230,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
   }
 
   /**
-   * A fresh manager of `tenant`.
-   * @param tenant - The tenant.
-   * @returns The member's user id.
+   * A fresh manager of `tenant`; returns their user id.
    */
   async function manager(tenant: Tenant): Promise<string> {
     const { user } = await createAuthenticatedUser()
@@ -309,7 +290,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
       role: 'viewer',
     })
     const { user: staff } = await staffUser('owner')
-    // Staff member writes on a customer tenant need a recent sign-in and a reason.
+    // A staff member's role change on a customer tenant needs a recent sign-in and a reason.
     const recentToken = signAccessToken(staff, randomUUID(), new Date())
 
     await withPlatformRoleChangedAfterResolve(staff, 'demote-to-viewer', {}, async () => {
@@ -325,7 +306,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
     expect(membership?.role).toBe('viewer')
   })
 
-  // Always on: the locked re-read is the only thing refusing the stale role.
+  // Runs every time, unlike the MUTATION_PROOF case below: with the locked re-read trusting the earlier read the stale role gets through, so that re-read is what refuses it.
   it('lets the stale role through only while the locked re-read trusts the earlier read', async () => {
     const trustedTenant = await ownedTenant()
     const trusted = await staffUser('admin')
@@ -466,10 +447,9 @@ describe('the staff role is re-read under lock (platform role changed after reso
   })
 
   /**
-   * DELIBERATELY red under MUTATION_PROOF=1: it makes the service's
-   * locked re-read return the role resolveTenant saw, which is what a
-   * service trusting that earlier read would do, and keeps the first
-   * test's own assertions.
+   * Red under MUTATION_PROOF=1 by design: the service's locked re-read
+   * returns the role resolveTenant saw, as a service trusting that earlier
+   * read would, while the first test's assertions stand.
    *
    *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/tenant-platform-race.test.ts   # red
    *   pnpm exec vitest run tests/integration/api/tenant-platform-race.test.ts                    # green

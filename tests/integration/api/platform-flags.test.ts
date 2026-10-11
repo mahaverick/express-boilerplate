@@ -1,14 +1,12 @@
 /**
- * @file GET /api/v1/platform/flags and GET /api/v1/platform/flags/evaluate
- * through the real app and snapshot store. The list joins the registry with
- * the snapshot (each state, the condition summary, PostHog links, the
- * unregistered flags sorted, the traits, the snapshot block) and never calls
- * PostHog. Evaluate answers one user's traits and every flag's value and
- * reason, a holdout's recorded variant included, after its gates: 404 for an
- * unknown user, 400 for a tenant the user isn't in or a tenant with
- * `app=apex`, and is audited once per staff member, user, tenant and app
- * per throttle window. Flags are switched on with a mock; the project id and app host
- * come from a mocked `getEnv()`.
+ * @file GET /api/v1/platform/flags and GET /api/v1/platform/flags/evaluate through the real app
+ * and snapshot store. The list joins the registry with the snapshot (each state, the condition
+ * summary, PostHog links, the unregistered flags sorted, the traits, the snapshot block) and never
+ * calls PostHog. Evaluate answers one user's traits and every flag's value and reason, a holdout's
+ * recorded variant included, after its gates: 404 for an unknown user, 400 for a tenant the user
+ * isn't in or a tenant with `app=apex`. It is audited once per staff member, user, tenant and app
+ * per throttle window. Flags are switched on with a mock; the project id and app host come from a
+ * mocked `getEnv()`.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -47,7 +45,13 @@ const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
 const { clearFlagKeys } = await import('../../helpers/flag-redis')
 const { request } = await import('../../helpers/request')
 
+/**
+ * What the flags list `data` holds.
+ */
 type FlagsList = import('@/types/flags').FlagsListResponse
+/**
+ * What the flags evaluate `data` holds.
+ */
 type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 
 // eslint-disable-next-line unicorn/no-null -- JSON null, as the list carries it
@@ -59,9 +63,6 @@ const tenantIds: string[] = []
 
 /**
  * GET a platform path as a staff member.
- * @param token - The staff bearer token.
- * @param path - The path under /api/v1/platform, with its query.
- * @returns The response.
  */
 function staffGet(token: string, path: string): Promise<Response> {
   return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
@@ -69,8 +70,6 @@ function staffGet(token: string, path: string): Promise<Response> {
 
 /**
  * The data of a 200 response.
- * @param response - The response.
- * @returns Its envelope's data.
  */
 function dataOf<T>(response: Response): T {
   return (response.body as { data: T }).data
@@ -78,7 +77,6 @@ function dataOf<T>(response: Response): T {
 
 /**
  * A user who owns a fresh tenant.
- * @returns The user's id and the tenant's id.
  */
 async function memberWithTenant(): Promise<{ userId: string; tenantId: string }> {
   const user = await createTrackedUser()
@@ -93,8 +91,6 @@ async function memberWithTenant(): Promise<{ userId: string; tenantId: string }>
 
 /**
  * The `user.flags_evaluated` entries a staff member wrote.
- * @param actorId - The staff member's id.
- * @returns Each entry's tenant, target and metadata.
  */
 async function evaluateAudits(actorId: string): Promise<Record<string, unknown>[]> {
   return sql<Record<string, unknown>[]>`

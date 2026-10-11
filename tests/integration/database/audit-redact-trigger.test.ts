@@ -1,9 +1,9 @@
 /**
- * @file audit_logs' trigger as migration 0019 leaves it: an UPDATE passes
- * only inside a transaction that set `app.audit_redact`, and only when it
- * nulls the actor columns (actor_user_id, ip, user_agent) and changes
- * nothing else. Every other UPDATE, and every DELETE outside the purge
- * settings, still raises. Raw SQL throughout.
+ * @file The redact exception of audit_logs' trigger (migration 0019): an
+ * UPDATE passes only inside a transaction that set `app.audit_redact` to
+ * `'on'`, and only when it nulls the actor columns (actor_user_id, ip,
+ * user_agent) and changes nothing else. Every other UPDATE, and every DELETE
+ * outside the purge settings, still raises. Raw SQL throughout.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -22,8 +22,8 @@ afterEach(async () => {
 })
 
 /**
- * One user-actor audit row with an IP and user agent.
- * @returns The row's id and its actor's id.
+ * Inserts one user-actor audit row with an IP and user agent, on a tenant and
+ * a user of their own; returns the row's id and its actor's id.
  */
 async function insertActorRow(): Promise<{ id: string; actorId: string }> {
   const [user] = await sql<{ id: string }[]>`
@@ -45,10 +45,8 @@ async function insertActorRow(): Promise<{ id: string; actorId: string }> {
 }
 
 /**
- * Run one statement in a transaction that first sets `settings`.
- * @param settings - Setting name to value, applied with set_config(..., true).
- * @param write - The statement.
- * @returns Resolves when the transaction commits.
+ * Runs `write` in a transaction that first applies `settings` with
+ * set_config(..., true), so they last only until it ends.
  */
 async function withSettings(
   settings: Record<string, string>,

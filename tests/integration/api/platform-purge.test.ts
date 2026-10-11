@@ -37,7 +37,7 @@ const REASON = 'Erasure request, ticket 9001'
 
 afterEach(async () => {
   await truncateAuditLogs()
-  // Every user purge queues a PostHog deletion; the table is never pruned.
+  // Every user purge inserts an analytics_deletions row; clearing them keeps them from piling up in the shared worker database.
   await sql`delete from analytics_deletions`
   if (messageIds.length > 0) await sql`delete from email_messages where id = any(${messageIds})`
   messageIds.length = 0
@@ -58,11 +58,7 @@ afterEach(async () => {
 })
 
 /**
- * Purge a user.
- * @param token - The caller's bearer token.
- * @param userId - The user.
- * @param body - The request body.
- * @returns The response.
+ * Permanently removes a soft-deleted user as the actor under test; the body defaults to the staff `reason`.
  */
 function purgeUser(token: string, userId: string, body?: object): Promise<Response> {
   return request(app)
@@ -72,11 +68,7 @@ function purgeUser(token: string, userId: string, body?: object): Promise<Respon
 }
 
 /**
- * Purge a tenant.
- * @param token - The caller's bearer token.
- * @param tenantId - The tenant.
- * @param body - The request body.
- * @returns The response.
+ * Permanently removes an archived tenant as the actor under test; the body defaults to the staff `reason`.
  */
 function purgeTenant(token: string, tenantId: string, body?: object): Promise<Response> {
   return request(app)
@@ -87,7 +79,6 @@ function purgeTenant(token: string, tenantId: string, body?: object): Promise<Re
 
 /**
  * A soft-deleted user who once acted in a tenant and was mailed.
- * @returns The user's id and email, the tenant they acted in, the id of that audit entry, and of an invitation they sent.
  */
 async function deletedUserWithHistory(): Promise<{
   id: string
@@ -430,13 +421,8 @@ describe('the purge actor re-check under lock', () => {
 })
 
 /**
- * An email message tracked for cleanup.
- * @param recipient - Its recipient.
- * @param options - Its owner, tenant and creation time.
- * @param options.userId - `user_id`.
- * @param options.tenantId - `tenant_id`.
+ * Inserts an email message and tracks it for cleanup.
  * @param options.createdAt - `created_at`, ISO.
- * @returns Its id.
  */
 async function trackedMessage(
   recipient: string,
@@ -448,10 +434,9 @@ async function trackedMessage(
 }
 
 /**
- * A suppression tracked for cleanup.
+ * Inserts an email suppression and tracks it for cleanup.
  * @param address - The address, lowercased.
- * @param liftedBy - Who lifted it, or undefined for an active one.
- * @returns Its id.
+ * @param liftedBy - Who lifted it; undefined for an active one.
  */
 async function trackedSuppression(address: string, liftedBy?: string): Promise<string> {
   suppressedAddresses.push(address.toLowerCase())
@@ -466,9 +451,7 @@ async function trackedSuppression(address: string, liftedBy?: string): Promise<s
 }
 
 /**
- * Which of `ids` still exist in email_messages.
- * @param ids - Message ids.
- * @returns The surviving ids, in the order given.
+ * Which of `ids` still exist in email_messages, in the order given.
  */
 async function survivingMessages(ids: string[]): Promise<string[]> {
   const rows = await sql<{ id: string }[]>`select id from email_messages where id = any(${ids})`

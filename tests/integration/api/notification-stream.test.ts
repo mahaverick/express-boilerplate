@@ -1,11 +1,10 @@
 /**
- * @file Integration test against the real per-worker Postgres database
- * (see tests/helpers/worker-database.ts) — same convention as
- * tests/integration/api/notification.test.ts: every user created here
- * is deleted in afterEach, and notifications cascade off that delete
- * (ON DELETE CASCADE, notification.model.ts). This is the one file in
- * tests/integration/api/ that cannot use `request(app)` (supertest)
- * end-to-end; see `SseConnection` below for why.
+ * @file Integration test against this worker's real Postgres database (see
+ * tests/helpers/worker-database.ts), with the same cleanup convention as
+ * tests/integration/api/notification.test.ts: every user created here is deleted in afterEach, and
+ * notifications cascade off that delete (ON DELETE CASCADE, notification.model.ts). It cannot use
+ * `request(app)` (supertest) end to end, which never resolves for a response that never ends; see
+ * `SseConnection`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -58,11 +57,8 @@ const notificationRepository = new NotificationRepository()
 const tenantRepository = new TenantRepository()
 
 /**
- * One parsed SSE event — the fields `notification-stream.controller.ts`'s
- * `formatNotificationFrame` actually writes, plus whatever any other named
- * field (`retry`) happened to land in the same raw block. See
- * `parseSseBlock`'s own comment for why a block can contain more than one
- * logical field set.
+ * One parsed SSE event: the `id`, `event` and `data` fields of a block. Other fields, such as
+ * `retry`, are parsed but not kept.
  */
 interface SseFrame {
   id?: string
@@ -71,17 +67,12 @@ interface SseFrame {
 }
 
 /**
- * Parse one `\n`-joined block of SSE field lines — everything between two
- * `\n\n` boundaries — into an `SseFrame`. Comment lines (`:ping`, and any
- * line with no `:`) are skipped, not just `id`/`event`/`data`: the very
- * first block this file's client ever parses is the server's `retry:
- * 3000\n` line merged with whatever the next real write turns out to be,
- * since `retry` is sent with only a single trailing `\n`, not a blank line
- * (matching this codebase's own SSE endpoint exactly). Parsing field-by-field
- * rather than assuming one block is exactly one dispatched event is what
- * makes that merge harmless here.
+ * Parses one `\n`-joined block of SSE field lines (everything between two `\n\n` boundaries) into
+ * an `SseFrame`. Lines starting with `:` (the `:ping` heartbeat) and lines with no `:` are skipped.
+ * The first block a connection parses is the server's `retry: 3000\n`, which is sent with a single
+ * trailing newline and so merges with whatever the next write is; parsing field by field keeps
+ * that harmless.
  * @param raw - The raw block, without its trailing blank line.
- * @returns The fields found in this block.
  */
 function parseSseBlock(raw: string): SseFrame {
   const frame: SseFrame = {}
@@ -97,15 +88,11 @@ function parseSseBlock(raw: string): SseFrame {
 }
 
 /**
- * Apply one parsed `field: value` pair to `frame`. A standalone function,
- * not a `switch` inlined into `parseSseBlock`'s own `for` loop — this
- * codebase's lint rules require a `switch` over three-or-more `else if`
- * branches, but also forbid a `break` inside a `switch` nested in a loop;
- * pulling the `switch` out into its own, non-nested function satisfies
- * both.
+ * Applies one parsed `field: value` pair to `frame`. A standalone function because
+ * `unicorn/prefer-switch` wants a `switch` here while `unicorn/no-break-in-nested-loop` forbids a
+ * `break` in a `switch` inside `parseSseBlock`'s loop.
  * @param frame - The frame being built. Mutated in place.
- * @param field - The field name, e.g. `id`, `event`, `data`, or `retry`.
- * @param value - The field's value, already trimmed of its leading space.
+ * @param field - The field name, e.g. `id`, `event`, `data` or `retry`.
  */
 function applyField(frame: SseFrame, field: string, value: string): void {
   switch (field) {
@@ -121,29 +108,24 @@ function applyField(frame: SseFrame, field: string, value: string): void {
       frame.data = value
       break
     }
-    // Any other field (e.g. retry) is parsed but deliberately not captured — nothing in this file asserts on it.
+    // Any other field (e.g. retry) is parsed but not captured: nothing in this file asserts on it.
     default:
   }
 }
 
 /**
- * A raw `node:http` connection to `/api/v1/notifications/stream`,
- * buffering and incrementally parsing the SSE byte stream as it
- * arrives. Neither supertest nor a plain `await` can observe a
- * response that never ends: supertest resolves a request once its
- * response has fully ended, and an SSE response, by design, never
- * ends on its own — same reason this file opens its own real,
- * ephemeral `http.Server` (see `beforeAll` below) rather than using
- * `request(app)` end-to-end.
+ * A raw `node:http` connection to `/api/v1/notifications/stream` that buffers and parses the SSE
+ * byte stream as it arrives. supertest resolves a request only once its response has ended, and an
+ * SSE response never ends on its own, so this file also opens its own `http.Server` (see
+ * `beforeAll`) instead of using `request(app)`.
  */
 class SseConnection {
   private buffer = ''
   private readonly ready: Promise<IncomingMessage>
   private readonly ended: Promise<void>
   /**
-   * How many of `frames` `nextFrame` has already handed out — so repeated
-   * calls advance rather than all returning the first frame that ever
-   * arrived.
+   * How many of `frames` `nextFrame` has already handed out, so repeated calls advance instead of
+   * returning the first frame again.
    */
   private nextFrameIndex = 0
   readonly request: http.ClientRequest
@@ -153,8 +135,8 @@ class SseConnection {
    */
   readonly frames: SseFrame[] = []
   /**
-   * The full, unparsed byte stream received so far — for assertions (the
-   * heartbeat test) that only care about a raw substring, not framing.
+   * The full, unparsed byte stream received so far, for assertions (the heartbeat test) that only
+   * care about a raw substring, not framing.
    */
   rawText = ''
 
@@ -200,17 +182,15 @@ class SseConnection {
   }
 
   /**
-   * Wait for the response's headers to arrive.
-   * @returns The response, with `.statusCode`/`.headers` already populated.
+   * Waits for the response's headers and returns the response, with `.statusCode` and `.headers`
+   * populated.
    */
   async waitForResponse(): Promise<IncomingMessage> {
     return this.ready
   }
 
   /**
-   * Wait for a non-streaming response (the 401 rejections) to finish, and
-   * return everything it sent.
-   * @returns The full response body.
+   * Waits for a non-streaming response (the 401 rejections) to finish.
    */
   async collectBody(): Promise<string> {
     await this.ended
@@ -218,19 +198,16 @@ class SseConnection {
   }
 
   /**
-   * Close the connection. Idempotent — safe to call from both a test's own
-   * assertions and this file's `afterEach` cleanup.
+   * Closes the connection. Idempotent, so a test's assertions and `afterEach` can both call it.
    */
   destroy(): void {
     this.request.destroy()
   }
 
   /**
-   * Wait for the next frame this connection has not yet handed out —
-   * proof the stream is actually alive and delivering, not merely that
-   * headers arrived.
+   * Waits for the next frame this connection has not yet handed out, which proves the stream is
+   * delivering and not merely that headers arrived.
    * @param timeoutMs - How long to wait before giving up. Defaults to 5000ms.
-   * @returns The next unread frame.
    * @throws {Error} When no new frame arrives within `timeoutMs`.
    */
   async nextFrame(timeoutMs = 5000): Promise<SseFrame> {
@@ -247,11 +224,8 @@ class SseConnection {
   }
 
   /**
-   * Whether the server ended this response within `timeoutMs` — resolves
-   * `false` on a timeout rather than rejecting, so a test asserting a
-   * stream stays OPEN doesn't need to catch anything.
-   * @param timeoutMs - How long to wait for the response to end.
-   * @returns True once the response has ended; false if `timeoutMs` elapses first.
+   * Whether the server ended this response within `timeoutMs`. Resolves `false` on a timeout
+   * instead of rejecting, so a test asserting a stream stays open needs no catch.
    */
   async closed(timeoutMs: number): Promise<boolean> {
     // The losing settle keeps its timer until it fires; nothing waits on it.
@@ -268,21 +242,17 @@ class SseConnection {
 }
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `notification-stream-${randomUUID()}@example.test`
 }
 
 /**
- * Insert one `verify_email` notification directly through the repository —
- * mirrors what `processNotificationJob` (notification.worker.ts) does
- * before it calls `emitNotification`, without running BullMQ or the worker
- * itself.
- * @param userId - The owning user's id.
- * @param title - The notification's title. Defaults to a fixed string when omitted.
- * @returns The inserted notification.
+ * Inserts one `verify_email` notification through the repository, as `processNotificationJob`
+ * (notification.worker.ts) does before it calls `emitNotification`, without running BullMQ or the
+ * worker.
  */
 async function seedNotification(
   userId: string,
@@ -300,8 +270,6 @@ async function seedNotification(
  * Emit a never-persisted sentinel and wait for its frame. It crosses the same
  * Redis channel, handler and response as every earlier emit, in order, so
  * once it arrives nothing emitted before it is still in flight.
- * @param connection - The stream to wait on.
- * @param userId - The stream's user.
  * @returns The notification frames that arrived before the sentinel.
  */
 async function framesBeforeSentinel(
@@ -336,15 +304,10 @@ async function framesBeforeSentinel(
 }
 
 /**
- * `emitNotification` is imported and called directly in several tests
- * below, rather than going through a real `NotificationWorker` job —
- * the same "test this layer, not the whole pipeline" reasoning
- * tests/unit/workers/notification.worker.test.ts applies to the worker
- * in the other direction. `notification.worker.test.ts` (both the
- * unit and integration variants) already covers that
- * `processNotificationJob` calls `emitNotification` after a successful
- * insert; this file only needs to prove the SSE endpoint reacts
- * correctly once that call happens.
+ * `emitNotification` is called directly in several tests below instead of through a real
+ * `NotificationWorker` job: this file tests the SSE endpoint, not the whole pipeline.
+ * tests/unit/workers/notification.worker.test.ts covers that `processNotificationJob` calls
+ * `emitNotification` after a successful insert.
  */
 describe('GET /api/v1/notifications/stream', () => {
   let server: http.Server
@@ -353,14 +316,10 @@ describe('GET /api/v1/notifications/stream', () => {
   const openConnections: SseConnection[] = []
 
   /**
-   * A dedicated server, not tests/integration/server.test.ts's own
-   * `startServer`/`gracefulShutdown`: this file's cleanup must destroy
-   * every still-open SSE connection before the server can close at all
-   * (an SSE response never ends on its own, so `server.close()`'s
-   * callback would otherwise never fire) — a concern specific to this
-   * file, not something to route through a shared helper that also
-   * tears down the database/Redis/queue connections every other test
-   * file in this worker still needs.
+   * A dedicated server, not tests/integration/server.test.ts's `startServer`/`gracefulShutdown`:
+   * this file's cleanup must destroy every open SSE connection before the server can close (an SSE
+   * response never ends on its own, so `server.close()`'s callback would otherwise never fire), and
+   * `gracefulShutdown` also closes the database pool this file's cleanup still needs.
    */
   beforeAll(async () => {
     server = createApp().listen(0, '127.0.0.1')
@@ -395,18 +354,12 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   /**
-   * Open a tracked SSE connection — tracked so `afterEach` destroys it even
-   * if the test that opened it never does.
-   *
-   * Accepts either a raw `path` (+ optional `headers`), which is how every
-   * pre-existing call in this file builds its request, or `{ header?,
-   * query? }` to authenticate the fixed `/api/v1/notifications/stream` path
-   * via an `Authorization` header and/or a `?token=` query parameter — for
-   * the Bearer-header tests below, so they don't each hand-assemble a URL
-   * and header themselves.
+   * Opens an SSE connection and tracks it, so `afterEach` destroys it even if the test never does.
+   * Takes a raw `path` (with optional `headers`), or `{ header?, query? }` to request the fixed
+   * stream path with an `Authorization` header and/or a `?token=` query parameter, so the Bearer
+   * tests don't each assemble a URL and header.
    * @param pathOrAuth - The request path (including any query string), or `{ header?, query? }` to build a request against the stream endpoint.
    * @param headers - Extra request headers, e.g. `Last-Event-ID`. Only used when `pathOrAuth` is a path string.
-   * @returns The opened connection.
    */
   function openStream(
     pathOrAuth: string | { header?: string; query?: string },
@@ -430,9 +383,7 @@ describe('GET /api/v1/notifications/stream', () => {
   }
 
   /**
-   * Create a disposable user row, sign an access token for it, and track
-   * the row for cleanup.
-   * @returns The created row and a valid bearer token for it.
+   * Creates a disposable user, signs an access token for it and tracks the row for cleanup.
    */
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -441,11 +392,9 @@ describe('GET /api/v1/notifications/stream', () => {
   }
 
   /**
-   * Open an authenticated SSE stream for a brand-new user's new session,
-   * keeping that session's refresh token — unlike `createAuthenticatedUser`,
-   * whose `signAccessToken(user, randomUUID())` has no refresh row, a caller
-   * here can revoke this exact session afterward, as logout does.
-   * @returns The opened connection, its user id, and its session's raw refresh token.
+   * Opens an authenticated SSE stream for a new user's new session and keeps that session's
+   * refresh token. Unlike `createAuthenticatedUser`, whose `signAccessToken(user, randomUUID())`
+   * has no refresh row, a caller here can revoke this exact session, as logout does.
    */
   async function openStreamForNewSession(): Promise<{
     stream: SseConnection
@@ -589,7 +538,7 @@ describe('GET /api/v1/notifications/stream', () => {
   it('rejects a connection with an expired token, carrying the distinguishable code', async () => {
     const token = jwt.sign({ sub: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
-      // Already expired the moment it's signed — mirrors auth.middleware.test.ts's own "rejects an expired access token" case.
+      // Already expired when signed, as in tests/integration/middlewares/auth.middleware.test.ts's "rejects an expired access token".
       expiresIn: -10,
     })
 
@@ -704,18 +653,13 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   /**
-   * The deterministic version of the race the test above only ever wins
-   * by chance: `withMutatedMethod` holds `findByIdAndUser` (the first
-   * of `fetchMissedNotifications`'s two queries) at a gate until both
-   * notifications below have reached the stream's handler, guaranteeing
-   * `isReplaying` is still true when they arrive. That reliably
-   * exercises both branches the flush loop has: a notification that
-   * also landed in the missed burst (persisted before the replay query
-   * ran) must be delivered exactly once, deduped out of
-   * `pendingDuringReplay` by its own `missedIds` check; a notification
-   * with no corresponding row at all (never persisted) can never appear
-   * in that burst, and must still reach the client via the flush loop
-   * itself.
+   * The deterministic version of the race the test above only hits by chance: `withMutatedMethod`
+   * holds `findByIdAndUser` (the first of `fetchMissedNotifications`'s two queries) at a gate until
+   * both notifications below have reached the stream's handler, so `isReplaying` is still true when
+   * they arrive. That exercises both branches of the flush loop: a notification that also landed in
+   * the missed burst (persisted before the replay query ran) is delivered exactly once, deduped out
+   * of `pendingDuringReplay` by its `missedIds` check, and one with no row at all can never appear
+   * in that burst and must still reach the client through the flush loop.
    */
   it('routes notifications emitted during replay through the pending queue — deduping one already in the missed burst, flushing one that is not', async () => {
     const { user, token } = await createAuthenticatedUser()
@@ -725,6 +669,9 @@ describe('GET /api/v1/notifications/stream', () => {
     const release = deferred()
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realFindByIdAndUser = NotificationRepository.prototype.findByIdAndUser
+    /**
+     * Holds `findByIdAndUser` at `gate` until the test releases it.
+     */
     const gatedFindByIdAndUser: typeof realFindByIdAndUser = async function (
       this: NotificationRepository,
       id,
@@ -735,8 +682,11 @@ describe('GET /api/v1/notifications/stream', () => {
       await release.promise
       return result
     }
-    // Registered after the stream's handler, so it hears each notification second.
     const passedStreamHandler = new Set<string>()
+    /**
+     * Registered after the stream's handler, so it hears each notification second and records which
+     * ones have passed that handler.
+     */
     const hearAfterStream = (notification: Notification): void => {
       passedStreamHandler.add(notification.id)
     }
@@ -815,7 +765,7 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   it('does not leak its listener when the client disconnects while a reconnect’s replay query is still in flight', async () => {
-    // request.on('close') must also be registered before the replay query, or a disconnect during that window fires 'close' before any handler was attached, leaking the subscription and the heartbeat timer for the life of the process. Destroying as soon as the response headers arrive gives the disconnect its best chance of landing inside that window; listenerCount reaching 0 either way is the invariant.
+    // response.on('close') must also be registered before the replay query, or a disconnect during that window fires 'close' before any handler was attached, leaking the subscription and the heartbeat timer for the life of the process. Destroying as soon as the response headers arrive gives the disconnect its best chance of landing inside that window; listenerCount reaching 0 either way is the invariant.
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
 
@@ -878,20 +828,17 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   /**
-   * requireAuth rejects a denied session only at connect — it never
-   * runs again on a connection already open, and this controller has
-   * no connect-time check of its own for a denied session (see the
-   * "refuses to open a stream for an already-denied session" test
-   * below for that path). The heartbeat is the only thing that recurs
-   * on an open SSE connection, so it is the only place a revoked
-   * session can actually be caught here — this test proves that closes
-   * the stream, not merely that the session is rejected on a fresh
-   * connect.
+   * requireAuth rejects a denied session only at connect and never runs again on a connection
+   * already open; this controller runs no denylist check of its own at connect (its only
+   * connect-time check is requireSessionId; the "refuses to open a stream for an already-denied
+   * session" test below covers the denied path). The heartbeat is the only
+   * thing that recurs on an open SSE connection, so it is the only place a revoked session can be
+   * caught, and this test proves that closes the stream.
    */
   it('closes an open stream once its session is revoked', async () => {
     const { stream, userId, refreshToken } = await openStreamForNewSession()
 
-    // Alive first, or the assertion below proves nothing: the first frame to arrive is always a heartbeat.
+    // Alive first, or the assertion below proves nothing: with nothing emitted, the first frame is the heartbeat's.
     await expect(stream.nextFrame()).resolves.toBeDefined()
 
     await revokeRefreshToken(refreshToken)
@@ -929,14 +876,10 @@ describe('GET /api/v1/notifications/stream', () => {
   }, 10_000)
 
   /**
-   * Pairs with the test above: that one proves a session denied after
-   * connect closes an already-open stream (the heartbeat, the only
-   * thing that recurs on an open connection). This one proves a
-   * session denied before connect never gets to open a stream at all —
-   * via `requireAuth`'s own denylist check, the same one every other
-   * route on this router already relies on, not a check this
-   * controller runs itself. Distinguished from the sid-less rejection
-   * below by message: both carry `ACCESS_TOKEN_EXPIRED_CODE`, but only
+   * Pairs with the test above, which proves a session denied after connect closes an open stream
+   * (the heartbeat). This one proves a session denied before connect never opens a stream, through
+   * `requireAuth`'s own denylist check, not one this controller runs. It is told apart from the
+   * sid-less rejection below by message: both carry `ACCESS_TOKEN_EXPIRED_CODE`, but only
    * `requireAuth`'s denylist rejection says "Session ended".
    */
   it("refuses to open a stream for an already-denied session, via requireAuth's denylist check", async () => {
@@ -962,13 +905,10 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   /**
-   * The next two tests are a pair: a positive control proving the
-   * fixture is sound, and the actual assertion. `requireAuth` tolerates
-   * a sid-less token until it expires — this route's own handler does
-   * not, once `requireAuth` has let the request through (see
-   * `requireSessionId`'s own comment for why). That means this exact
-   * token, genuinely accepted by `requireAuth`, must still fail to open
-   * a stream, purely on this controller's own check.
+   * The next two tests are a pair: a positive control proving the fixture is sound, and the actual
+   * assertion. `requireAuth` tolerates a sid-less token until it expires, but this route's handler
+   * does not (see `requireSessionId`), so a token `requireAuth` accepts must still fail to open a
+   * stream on this controller's own check.
    */
   it('opens a stream for an ordinary signAccessToken token — the positive control for the next test', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -1071,9 +1011,9 @@ describe('GET /api/v1/notifications/stream', () => {
     const response = await stream.waitForResponse()
     expect(response.statusCode).toBe(200)
 
-    // exp is whole seconds, so the end lands 1-2s after the 2s TTL starts.
+    // exp is whole seconds, so the token expires between 1 and 2s after the stream opens.
     await expect(stream.closed(4000)).resolves.toBe(true)
-    // The registry slot is freed too (request 'close' ran), not just the listener.
+    // The registry slot is freed too, not just the listener.
     await waitUntil(() => countStreams(user.id) === 0, {
       message: 'the expired stream leaves the shutdown registry',
       timeout: 2000,
@@ -1163,7 +1103,7 @@ describe('GET /api/v1/notifications/stream', () => {
     })
     expect(streamResponse.destroyed).toBe(true)
     expect(streamResponse.writableEnded).toBe(false)
-    // The request 'close' cleanup ran, a tick after the stall path's own offNotification, so wait on the registry.
+    // The stall path's closeStream frees the registry slot and the listener.
     await waitUntil(() => countStreams(user.id) === 0, {
       message: 'the dropped stream leaves the shutdown registry',
     })

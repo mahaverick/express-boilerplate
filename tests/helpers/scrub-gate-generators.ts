@@ -18,15 +18,15 @@ type Rng = () => number
  */
 export interface GateCase {
   /**
-  The text handed to the scrubber.
+   * The text handed to the scrubber.
    */
   input: string
   /**
-  Every secret value the text holds, each at least 8 characters.
+   * Every secret value the text holds, each at least 8 characters.
    */
   planted: string[]
   /**
-  The families its pieces came from, joined by `+`.
+   * The families its pieces came from, joined by `+`.
    */
   family: string
 }
@@ -363,7 +363,8 @@ const DOMAINS = [
 const AT_FORMS = ['@', '@', '@', '%40', '%2540', '＠', '﹫']
 
 /**
- * A secret value wrapped in an optional quote, the close sometimes missing.
+ * A secret value or an array of them, wrapped in an optional quote with the
+ * close sometimes missing, sometimes followed by trailing text.
  * @param rng - The generator.
  * @param quote - The opening quote, or ''.
  * @returns The quoted value.
@@ -397,9 +398,9 @@ function arrayValue(rng: Rng): Piece {
 }
 
 /**
- * A secret-named key and its value, in every separator, quote and nesting
- * form: plain, quoted, unbalanced, a later key inside an unquoted value, a
- * placeholder inside the value.
+ * A secret-named key and its value, with a random separator and quotes (the
+ * closing quote sometimes missing), sometimes followed by a second key and
+ * value.
  * @param rng - The generator.
  * @returns The piece.
  */
@@ -434,8 +435,9 @@ function keyValue(rng: Rng): Piece {
 }
 
 /**
- * An Authorization or Cookie header line: a scheme and its parameters, with
- * plain, single or escaped outer quotes.
+ * A header line (Authorization, Cookie and similar): a scheme and its
+ * parameters, cookie pairs or a bare secret, with plain, single or escaped
+ * outer quotes.
  * @param rng - The generator.
  * @returns The piece.
  */
@@ -500,8 +502,9 @@ function header(rng: Rng): Piece {
 }
 
 /**
- * A URL or path: userinfo, a `/reset/`-style token segment (sometimes with
- * a key name glued to its end), a query and a fragment.
+ * A URL or path, each of these sometimes present: userinfo, a `/reset/`-style
+ * token segment (sometimes with a key name glued to its end), a query and a
+ * fragment.
  * @param rng - The generator.
  * @returns The piece.
  */
@@ -555,9 +558,9 @@ function url(rng: Rng): Piece {
 }
 
 /**
- * An email address in any `@` form, sometimes with a secret run joined by
- * `/` before its local part or a base64 run as its domain, or a package ref
- * that is not an address.
+ * An email address in any `@` form, sometimes with a secret run joined to
+ * its local part or a base64 run as its domain, or a package ref that is not
+ * an address.
  * @param rng - The generator.
  * @returns The piece.
  */
@@ -686,9 +689,9 @@ function oauth(rng: Rng): Piece {
 }
 
 /**
- * Placeholders an earlier scrub wrote, standing where a carve-out once
- * kept text: before a key, inside a value, after a path token, as a
- * fragment, in quotes before an `@`.
+ * Placeholders an earlier scrub wrote, standing before a key, inside a value,
+ * after a path token, as a fragment or in quotes before an `@`, next to a
+ * secret.
  * @param rng - The generator.
  * @returns The piece.
  */
@@ -710,7 +713,7 @@ function placeholders(rng: Rng): Piece {
 }
 
 /**
- * Postgres and JSON input echoes.
+ * A Postgres or JSON parse error message that echoes an input value.
  * @param rng - The generator.
  * @returns The piece.
  */

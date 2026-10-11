@@ -6,10 +6,10 @@
  * the personal key, under `/api/projects/<id>/`: `query/` (answered by
  * `respondToQuery`), `groups_types/` (from `groupTypes`, with `groupTypesStatus`),
  * `persons/bulk_delete/` (with `bulkDeleteStatus`) and `feature_flags/`
- * (GET pages `featureFlags`; POST creates one with PostHog's validation,
- * unless `onFeatureFlagCreate`'s responder answers first);
+ * (GET pages `featureFlags`; POST creates one after the fake's copy of
+ * PostHog's validation, unless `onFeatureFlagCreate`'s responder answers first);
  * any other `/api/projects/` path, one without its trailing slash included,
- * answers 404. It serves `GET /flags/definitions` from `flagDefinitions`,
+ * answers 404. It serves `/flags/definitions` from `flagDefinitions`,
  * answering 304 with an empty body when `If-None-Match` names the current
  * ETag, after awaiting `beforeFlagDefinitions` when one is set (a test
  * changes Redis mid-run with it). `respondWith` and `onBatch` govern none
@@ -73,9 +73,9 @@ interface FakePosthogGroupType {
 }
 
 /**
- * One flag of the project, as the `feature_flags/` list answers it: the
- * fields `pnpm flags:sync` reads, plus a `created_by` that stands for the
- * personal data a real answer carries.
+ * One flag of the project, as the fake's `feature_flags/` list answers it:
+ * the fields `pnpm flags:sync` reads, plus a `created_by` that stands for
+ * personal data the sync must not print.
  */
 export interface FakePosthogFeatureFlag {
   id: number
@@ -124,7 +124,8 @@ export interface FakePosthog {
    */
   requests: FakePosthogRequest[]
   /**
-   * The status every later request is answered with (200 at start).
+   * The status every later `/batch/` request, and any request outside the
+   * private API and `/flags/definitions`, is answered with (200 at start).
    */
   respondWith: (status: number) => void
   /**
@@ -176,17 +177,17 @@ export interface FakePosthog {
    */
   authHeaders: string[]
   /**
-   * The JSON body `GET /flags/definitions` answers with (`EMPTY_FLAG_DEFINITIONS` at start).
+   * The JSON body a request to `/flags/definitions` is answered with (`EMPTY_FLAG_DEFINITIONS` at start).
    */
   flagDefinitions: unknown
   /**
-   * The ETag `GET /flags/definitions` answers with (`W/"fake-0"` at start);
+   * The ETag a request to `/flags/definitions` is answered with (`W/"fake-0"` at start);
    * undefined sends none. `If-None-Match` equal to it, with or without the
    * `W/` prefix, gets a 304 with an empty body.
    */
   flagDefinitionsEtag: string | undefined
   /**
-   * The status a non-304 `GET /flags/definitions` answers with (200 at start).
+   * The status a non-304 request to `/flags/definitions` is answered with (200 at start).
    */
   flagDefinitionsStatus: number
   /**
@@ -195,13 +196,14 @@ export interface FakePosthog {
    */
   flagDefinitionsRawBody: string | undefined
   /**
-   * Awaited before `GET /flags/definitions` is answered; undefined at start.
+   * Awaited before a request to `/flags/definitions` is answered; undefined at start.
    * A test stands in for another replica with it, between the job's read of
    * the stored snapshot and its answer.
    */
   beforeFlagDefinitions: (() => Promise<void>) | undefined
   /**
-   * Replace the definitions and give them a fresh ETag, as PostHog does on every flag change.
+   * Replace the definitions and give them a fresh ETag, as PostHog does on
+   * every flag change.
    */
   setFlagDefinitions: (body: unknown) => void
   /**
@@ -227,7 +229,8 @@ export interface FakePosthog {
    */
   onFeatureFlagCreate: (responder: FeatureFlagCreateResponder | undefined) => void
   /**
-   * Whether a create without tags is refused, as project 644121's `require_tags` does (true at start).
+   * Whether a create without tags is refused with a 400, as a PostHog project
+   * that requires tags answers (true at start).
    */
   requireFeatureFlagTags: boolean
   /**
@@ -242,8 +245,8 @@ export interface FakePosthog {
 type PrivateEndpoint = 'query' | 'groups_types' | 'bulk_delete' | 'feature_flags' | 'unknown'
 
 /**
- * The private-API endpoint a path names, or `undefined` when it is not under
- * `/api/projects/`, or `'unknown'` when it is but names no endpoint the fake
+ * The private-API endpoint a path names: `undefined` when it is not under
+ * `/api/projects/`, and `'unknown'` when it is but names no endpoint the fake
  * serves.
  * @param path - The request path, without its query string.
  * @returns The endpoint.
@@ -302,7 +305,8 @@ function bulkDeleteOf(body: Buffer): FakePosthogBulkDelete {
 }
 
 /**
- * PostHog's 202 answer to a bulk delete, as planning probe 3 recorded it.
+ * PostHog's 202 answer to a bulk delete, which the fake copies: every count equals the ids
+ * sent, except events and recordings, which count only when the request asked.
  * @param deletion - The recorded request.
  * @param deletionErrors - The `deletion_errors` list to answer with.
  * @returns The body.
@@ -321,7 +325,7 @@ function bulkDeleteAnswer(
 }
 
 /**
- * PostHog's 400 validation body.
+ * A 400 body in the shape of PostHog's validation errors.
  * @param code - The error code.
  * @param detail - The message.
  * @param attribute - The field it names.
@@ -505,6 +509,10 @@ export async function startFakePosthog(): Promise<FakePosthog> {
       fake.featureFlagsPageLimit
     )
     const offset = Number(url.searchParams.get('offset') ?? '0')
+    /**
+     * Builds the `next` and `previous` links, which are full URLs that keep the same `limit`.
+     * @param start - The offset the linked page starts at.
+     */
     const pageUrl = (start: number): string => {
       const next = new URL(url.pathname, fake.url)
       next.searchParams.set('limit', String(limit))
@@ -620,7 +628,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
   }
 
   /**
-   * The answer to `GET /flags/definitions`: a 304 with an empty body for the
+   * The answer to a request to `/flags/definitions`, whatever its method: a 304 with an empty body for the
    * current ETag, otherwise the status, the raw body or the JSON
    * definitions, with the ETag header.
    * @param request - The incoming request.
@@ -676,6 +684,9 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     void (async () => {
       const body = await readBody(request)
       const result = await answerFor(request, body)
+      /**
+       * Writes the response, at once or when a `hang` delay ends; `close()` cancels a held one.
+       */
       const answer = (): void => {
         held.delete(response)
         if (response.writableEnded) return

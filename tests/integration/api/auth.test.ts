@@ -1,13 +1,9 @@
 /**
- * @file Integration test against the real per-worker Postgres database
- * (see tests/helpers/worker-database.ts) — every email used here is
- * unique to this run (never a fixed literal) and every row created is
- * deleted in afterEach, the same convention
- * tests/integration/repositories/user.repository.test.ts and
- * tests/integration/middlewares/auth.middleware.test.ts already follow.
- * This file lives under tests/integration/, never tests/unit/ — see
- * CLAUDE.md's note on why a DB-dependent test under tests/unit/ breaks
- * .husky/pre-commit whenever Docker is down.
+ * @file Integration test against the real per-worker Postgres database (see
+ * tests/helpers/worker-database.ts). Every email is unique to the run and
+ * every row is deleted in afterEach. The file lives under
+ * tests/integration/, never tests/unit/: a test that reaches the database
+ * would break the pre-commit hook whenever Docker is down (CLAUDE.md).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -44,19 +40,15 @@ const authProviderRepository = new AuthProviderRepository()
 const { name: REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH } = testRefreshCookie()
 
 /**
- * register/resendVerification enqueue via BullMQ (addNotificationJob
- * for verification mail, addEmailJob directly for the
- * registration-attempt notice) instead of calling sendMail() directly.
- * Nothing in this file's own request cycle ever processes those jobs,
- * so without live Workers every `findMailpitMessages` assertion below
- * would poll its budget and find nothing, and every
- * `assertNoMailpitMessage`-shaped assertion would pass for the wrong
- * reason. The notification worker is required too: a verification
- * email only reaches the "email" queue after the notification worker
- * fans the notification job out to it. One Worker of each kind for the
- * whole file, not one per test — Worker construction opens a real
- * connection and BullMQ blocking commands, which is not something to
- * pay for per test.
+ * register and resendVerification enqueue jobs (`addNotificationJob` for the
+ * verification mail, `addEmailJob` directly for the registration-attempt
+ * notice) instead of sending mail in the request. Nothing in a request
+ * processes them, so without live Workers every `findMailpitMessages`
+ * assertion would find nothing and every `assertNoMailpitMessage`-shaped
+ * assertion would pass for the wrong reason. The notification worker is needed
+ * too: a verification email reaches the "email" queue only after it fans the
+ * notification job out. One Worker of each kind serves the whole file, since
+ * constructing one opens a real connection and BullMQ blocking commands.
  */
 const worker: Worker<EmailJobData> = startEmailWorker()
 const notificationWorker = startNotificationWorker()
@@ -71,26 +63,22 @@ afterAll(async () => {
 })
 
 /**
- * A valid registration password everywhere it's needed as a fixture,
- * not itself the thing under test — 8+ characters, comfortably under
- * the byte ceiling.
+ * A valid registration password for tests where the password is not under
+ * test: 8+ characters, well under the byte ceiling.
  */
 const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
- * The API legitimately returns JSON `null` for an unset nullable
- * column (firstName/lastName) — `toEqual` must match that exact value,
- * and `undefined` would not.
+ * What the API returns for an unset nullable column (firstName/lastName):
+ * JSON `null`, which `toEqual` does not match with `undefined`.
  */
 // eslint-disable-next-line unicorn/no-null -- see comment above
 const NO_NAME = null
 
 /**
- * vitest types `expect.any(...)` as `any` (it's an asymmetric matcher,
- * not a real string), which trips \@typescript-eslint/no-unsafe-assignment
- * at every call site; the `as unknown as string` cast resolves that at
- * the type level in exactly one place, reused everywhere a `toEqual`
- * shape needs "any string here".
+ * vitest types `expect.any(...)` as `any`, which trips
+ * \@typescript-eslint/no-unsafe-assignment at every call site. The cast
+ * resolves that once, for every `toEqual` shape that needs "any string".
  */
 const ANY_STRING = expect.any(String) as unknown as string
 
@@ -124,9 +112,8 @@ interface LoginBody {
 }
 
 /**
- * Cast a supertest response's body to a known envelope shape. supertest
- * types `.body` as `any`; every access after this point is a normal,
- * type-checked property access rather than an unsafe one.
+ * Cast a supertest response's body, which supertest types as `any`, to a
+ * known envelope shape.
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
@@ -135,17 +122,15 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 }
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-api-${randomUUID()}@example.test`
 }
 
 /**
- * Find the raw `Set-Cookie` line for the refresh-token cookie in a
- * supertest response, if one was set.
+ * The refresh cookie's raw `Set-Cookie` line in a response.
  * @param response - The supertest response.
  * @returns The raw `Set-Cookie` header value, or undefined if the cookie was not set.
  */
@@ -169,13 +154,16 @@ async function login(
 }
 
 /**
- * How many registration-attempt notices were queued to `recipient`: the
- * first is awaited, then a further one would arrive fire-and-forget,
- * which has no event to wait for.
+ * How many registration-attempt notices were queued to `recipient`. It waits
+ * for the first, then settles for a further one, which is queued
+ * fire-and-forget and so has no event to wait on.
  * @param recipient - The address.
  * @returns The count of tracked `registration_attempt` messages.
  */
 async function registrationAttemptNotices(recipient: string): Promise<number> {
+  /**
+   * The notices stored for the recipient so far.
+   */
   const count = async (): Promise<number> => {
     const [row] = await sql<{ count: number }[]>`
       select count(*)::int as count from email_messages
@@ -205,11 +193,10 @@ describe('POST /api/v1/auth/register and /login', () => {
    * Register a user through the real HTTP endpoint and track it for
    * cleanup.
    *
-   * Looked up by address rather than read out of the response body.
-   * register's response does not carry the user any more (it would be an
-   * enumeration oracle), and a helper that reads `body.data.id` does not
-   * FAIL when that becomes null — it silently stops tracking the row and
-   * leaks it into the shared worker database.
+   * The user is looked up by address, not read from the response, which does
+   * not carry it (that would be an enumeration oracle). A helper reading
+   * `body.data.id` would not fail on a null there: it would silently stop
+   * tracking the row and leak it into the worker's database.
    * @param overrides - Fields to override on the default registration body.
    * @returns The raw supertest response, its typed envelope, and the email used.
    */
@@ -365,7 +352,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(detail.Text).toContain('/verify-email?token=')
       await deleteMailpitMessage(messages[0]?.ID ?? '')
 
-      // The proof sendVerificationMail routes through addNotificationJob, not addEmailJob directly: an in-app row must also exist. No race to poll for — processNotificationJob inserts this row before it enqueues the paired email, so Mailpit already having the message above proves this row was written first.
+      // sendVerificationMail goes through addNotificationJob, not addEmailJob directly, so an in-app row must also exist. There is no race: processNotificationJob inserts the row before it enqueues the paired email, so the message already in Mailpit proves the row was written.
       const user = await userRepository.findByEmail(email)
       if (!user) throw new Error('mails a verification link: no stored row')
       const notifications = await sql`
@@ -379,7 +366,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       await registerUser({ email })
       await drainMailpit(email)
 
-      // Use toUpperCase: proves the taken branch fires case-insensitively.
+      // The upper-cased address proves the taken branch matches case-insensitively.
       await registerUser({ email: email.toUpperCase() })
 
       const messages = await findMailpitMessages(email)
@@ -531,13 +518,17 @@ describe('POST /api/v1/auth/register and /login', () => {
      * would answer differently from the free one and the oracle test
      * above must go red. Disguises that 409 as a 422 on
      * UserRepository.prototype via withMutatedMethod; no source files
-     * touched.
+     * touched. The first register succeeds; the second hits the mutated 422,
+     * which proves the oracle.
      */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'MUTATION PROOF: an unrecognised unique violation on the taken branch is detected as an oracle',
       async () => {
         // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         const originalCreate = UserRepository.prototype.create
+        /**
+         * `create` with a duplicate's 409 disguised as a 422.
+         */
         const mutatedCreate: typeof originalCreate = async function (
           this: UserRepository,
           ...arguments_
@@ -554,7 +545,6 @@ describe('POST /api/v1/auth/register and /login', () => {
 
         await withMutatedMethod(UserRepository.prototype, 'create', mutatedCreate, async () => {
           const taken = uniqueEmail()
-          // First register succeeds (no duplicate yet).
           const firstResponse = await request(app)
             .post('/api/v1/auth/register')
             .send({ email: taken, password: VALID_PASSWORD })
@@ -562,7 +552,6 @@ describe('POST /api/v1/auth/register and /login', () => {
           if (firstUser) createdIds.push(firstUser.id)
           expect(firstResponse.status).toBe(202)
 
-          // Second register hits the mutated 422, proving the oracle.
           const secondResponse = await request(app)
             .post('/api/v1/auth/register')
             .send({ email: taken, password: VALID_PASSWORD })
@@ -699,7 +688,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('refuses a cross-site form POST outright, so it can never set a session cookie', async () => {
-      // sameSite: 'strict' does not help here: it governs when a cookie is sent, not whether a cross-site response may set one. Real, registered credentials are used deliberately, so this proves the request is refused on its encoding, before the controller ever looks at the body.
+      // Real, registered credentials are used so the 415 proves the request is refused on its encoding, before the controller reads the body. sameSite: 'strict' is not what stops it: it governs when a cookie is sent, not whether a cross-site response may set one (content-type.middleware.ts).
       const email = uniqueEmail()
       await registerUser({ email })
 
@@ -800,6 +789,9 @@ describe('POST /api/v1/auth/register and /login', () => {
      */
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const originalFindByEmail = UserRepository.prototype.findByEmail
+    /**
+     * `findByEmail` reporting every user it finds as verified.
+     */
     const mutatedFindByEmail: typeof originalFindByEmail = async function (
       this: UserRepository,
       email,
@@ -881,7 +873,7 @@ describe('POST /api/v1/auth/register and /login', () => {
 
   describe('logout', () => {
     it('stops honouring the access token as soon as the user logs out', async () => {
-      // registerVerifiedUser + login, not signAccessToken(user, randomUUID()): a fabricated session id has no user_tokens row behind it, so the denylist (which denies by presence) would never deny it and this test would pass vacuously. The access token must carry the sid this login actually created.
+      // registerVerifiedUser + login, not signAccessToken(user, randomUUID()): logout denies the sid of the session it revokes, so a fabricated session id would never be denied and the final 401 could not happen. The access token must carry the sid this login created.
       const { email } = await registerVerifiedUser()
       const { response: loginResponse, body: loginBody } = await login(email, VALID_PASSWORD)
       const accessToken = loginBody.data?.accessToken
@@ -902,7 +894,7 @@ describe('POST /api/v1/auth/register and /login', () => {
         .set('Cookie', refreshCookie as string)
       expect(logoutResponse.status).toBe(200)
 
-      // The whole point: the same access token, which has not expired, is now refused — requireAuth's isSessionDenied check reads the denylist entry logout wrote.
+      // The whole point: the same access token, which has not expired, is now refused — the auth middleware's isSessionDenied check reads the denylist entry logout wrote.
       const afterLogout = await request(app)
         .get('/api/v1/profile')
         .set('Authorization', `Bearer ${accessToken as string}`)

@@ -26,8 +26,8 @@ describe('runPlatformGrant', () => {
   })
 
   /**
-   * A fresh verified user, tracked for cleanup.
-   * @returns Its id and address.
+   * Creates a user with a verified email, tracked for cleanup, because `runPlatformGrant` refuses an
+   * unverified account.
    */
   async function createVerifiedUser(): Promise<{ id: string; email: string }> {
     const user = await userRepository.create({ email: `grant-script-${randomUUID()}@example.test` })

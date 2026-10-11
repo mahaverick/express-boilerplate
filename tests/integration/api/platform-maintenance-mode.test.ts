@@ -1,12 +1,10 @@
 /**
- * @file `GET` and `PUT /api/v1/platform/maintenance-mode` through the real
- * app, with no Worker running, so notice jobs stay queued to be counted:
- * the staff view, the change rules (switch-on and escalation need a reason,
- * a message and `confirm` equal to `APP_ENV`; everything else does not),
- * the version conflict, the no-op, the audit entry, who is notified, and
- * two owners saving at once. The role, step-up and OPTIONS gates are
- * `platform-route-gates.test.ts`'s; a change into `full`, which waits for
- * its notices, is `platform-maintenance-mode-notices.test.ts`'s.
+ * @file `GET` and `PUT /api/v1/platform/maintenance-mode` through the real app, with no Worker
+ * running, so notice jobs stay queued to be counted: the staff view, the change rules (a mode that
+ * is on needs a message; switching on or escalating also needs a reason and a `confirm` equal to
+ * `APP_ENV`), the version conflict, the no-op, the audit entry, who is notified, and two owners
+ * saving at once. The role, step-up and OPTIONS gates are `platform-route-gates.test.ts`'s; a
+ * change into `full`, which waits for its notices, is `platform-maintenance-mode-notices.test.ts`'s.
  */
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,12 +38,13 @@ const ENVIRONMENT = 'local'
 const PATH = '/api/v1/platform/maintenance-mode'
 // eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
 const NONE = null
+/**
+ * Orders strings for `toSorted`.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 /**
  * The view in a response.
- * @param response - The response.
- * @returns Its `data`.
  */
 function viewOf(response: Response): PlatformMaintenanceModeView {
   return (response.body as { data: PlatformMaintenanceModeView }).data
@@ -53,8 +52,6 @@ function viewOf(response: Response): PlatformMaintenanceModeView {
 
 /**
  * The stored version, as a client would read it.
- * @param token - A staff token.
- * @returns The version.
  */
 async function currentVersion(token: string): Promise<number> {
   const response = await request(app).get(PATH).set('Authorization', `Bearer ${token}`)
@@ -63,9 +60,6 @@ async function currentVersion(token: string): Promise<number> {
 
 /**
  * Send a change.
- * @param token - The caller's token.
- * @param body - The body.
- * @returns The response.
  */
 function change(token: string, body: Record<string, unknown>): Promise<Response> {
   return request(app).put(PATH).set('Authorization', `Bearer ${token}`).send(body)
@@ -75,8 +69,6 @@ function change(token: string, body: Record<string, unknown>): Promise<Response>
  * The pending notices addressed to the test's own users. The worker database
  * can hold platform staff another file left behind, and they are notified
  * too, so a test counts only the recipients it created.
- * @param userIds - The test's users.
- * @returns Their pending notices.
  */
 async function noticesTo(
   userIds: readonly string[]
@@ -88,7 +80,6 @@ async function noticesTo(
 
 /**
  * The maintenance-mode audit entries.
- * @returns Their target and metadata.
  */
 async function auditEntries(): Promise<
   { targetType: string; targetId: string; metadata: Record<string, unknown> }[]
@@ -814,10 +805,8 @@ describe('a failure after the change committed', () => {
   const MESSAGE = 'Read only while we migrate.'
 
   /**
-   * Switch the mode on as a new owner, with an admin to notify.
-   * @param mode - The mode to switch to.
-   * @param arm - Installs the failure, after the version is read and before the change is sent.
-   * @returns The response, the version the change was sent against, and the owner's id.
+   * Switch the mode on as a new owner, with an admin to notify. `arm` installs the failure after
+   * the version is read and before the change is sent.
    */
   async function switchOn(
     mode: 'read_only' | 'full',
@@ -839,7 +828,6 @@ describe('a failure after the change committed', () => {
 
   /**
    * Assert each logger call is `(message, { error })` with the owner's message and reason in neither the text nor any other meta key.
-   * @param calls - The spy's recorded calls.
    */
   function expectLoggedAsErrorObjectOnly(calls: unknown[][]): void {
     for (const [text, meta] of calls) {

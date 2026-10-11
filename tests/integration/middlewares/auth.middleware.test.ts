@@ -1,14 +1,12 @@
 /**
- * @file Lives under `tests/integration/`, not `tests/unit/`, even though
- * several cases here need no database at all: the two that actually
- * motivate this middleware's existence — a soft-deleted or deactivated
- * user's still-signature-valid token is nonetheless rejected — need a real
- * user row against this worker's own database. `vitest.unit.config.ts`
- * (the git hooks' config) excludes `tests/integration/**` and sets up no
- * database, so a database-touching test must not move there; see
- * CLAUDE.md for why. `pnpm test` still runs this file, and every vitest
- * worker owns its own database, so it is safe to run in parallel with
- * every other file.
+ * @file `requireAuth` against this worker's own database. The file lives
+ * under `tests/integration/`, although several cases need no database,
+ * because others do: a soft-deleted or deactivated user's still-valid token
+ * must be rejected, which needs a real user row. The git hooks run
+ * `vitest.unit.config.ts`, which excludes `tests/integration/**` and sets up
+ * no database, so a test that touches the database must not move to
+ * `tests/unit/` (CLAUDE.md). `pnpm test` runs this file, and every vitest
+ * worker owns its database, so files run in parallel.
  */
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
@@ -29,22 +27,17 @@ import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-middleware-${randomUUID()}@example.test`
 }
 
 /**
- * Build a minimal mock request carrying (or omitting) an Authorization
- * header. `requireAuth` only ever calls `.get` and assigns `.user`, so
- * nothing else needs to exist on this object — mirroring
- * error.middleware.test.ts's own minimal-mock approach for the same
- * reason.
- * @param header - The Authorization header value, or undefined to omit it.
- * @returns A mock request, mutable enough for `requireAuth` to set `.user` on it.
+ * A minimal mock request carrying, or omitting, an Authorization header.
+ * `requireAuth` reads the request only through `.get('Authorization')` and
+ * otherwise assigns properties to it, so nothing else needs to exist.
  */
 function buildRequest(header?: string): Request {
   return {
@@ -53,10 +46,8 @@ function buildRequest(header?: string): Request {
 }
 
 /**
- * Build a `next` spy whose recorded argument is inspectable as `unknown`
- * rather than `any` — avoiding an unsafe-assignment escape hatch when a
- * test later narrows it to `HttpError`.
- * @returns The spy (cast to `NextFunction` for calling `requireAuth`) and the argument its most recent call recorded.
+ * A `next` spy whose most recent argument reads back as `unknown` instead of
+ * `any`, so a test narrows it to `HttpError` without an unsafe assignment.
  */
 function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   const spy = vi.fn<(error?: unknown) => void>()
@@ -79,8 +70,7 @@ describe('requireAuth', () => {
   })
 
   /**
-   * Create a disposable, active user row and track it for cleanup.
-   * @returns The created user row.
+   * Creates an active user row, tracked for deletion in afterEach.
    */
   async function createUser() {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -120,7 +110,7 @@ describe('requireAuth', () => {
   })
 
   it('rejects a well-formed but invalid token without the expired-token code', async () => {
-    // The negative half of "distinguishable": a middleware that attached ACCESS_TOKEN_EXPIRED_CODE to every rejection would still pass every other test here.
+    // A middleware that attached ACCESS_TOKEN_EXPIRED_CODE to every rejection would still pass the other rejection tests; this one pins that a rejected invalid token carries no code.
     const { next, lastCallArgument } = mockNext()
 
     await requireAuth(buildRequest('Bearer not-a-real-jwt'), noResponse, next)
@@ -169,12 +159,7 @@ describe('requireAuth', () => {
     expect(rejected).not.toHaveProperty('userId')
   })
 
-  /**
-   * Hand-signed, deliberately not via `signAccessToken`, which always sets
-   * `sid`: this reproduces a token minted before that claim existed. Do not
-   * "modernise" this to `signAccessToken` — that would delete the one case
-   * pinning `auth.middleware.ts`'s `payload.sid && ...` guard as tested.
-   */
+  // Hand-signed because `signAccessToken` always sets `sid`; this token has none, which the `payload.sid &&` guard in requireAuth must accept.
   it('accepts a token with no `sid` claim — one release of tolerance for tokens minted before this claim existed', async () => {
     const user = await createUser()
     const token = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
@@ -209,16 +194,11 @@ describe('requireAuth', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
-    // Same code as an expired token, deliberately: the client-facing contract is "try a refresh", and the refresh token was revoked in the same operation that denied this session.
+    // Same code as an expired token, deliberately: the client's contract is "try a refresh", which then fails because the session's refresh tokens are revoked in the database before it is denied.
     expect((error as HttpError).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
-  /**
-   * Mutation, not a hand edit (see CLAUDE.md): `isSessionDenied` is
-   * overridden to resolve `true` unconditionally, so only the
-   * `payload.sid &&` short-circuit can keep a sid-less token accepted
-   * below.
-   */
+  // A mutation, not a hand edit (CLAUDE.md): `isSessionDenied` resolves true for everything, so only the `payload.sid &&` short-circuit can keep a sid-less token accepted.
   it('keeps a sid-less token honoured even when the denylist would deny every session, proving `payload.sid &&` is a real short-circuit', async () => {
     const user = await createUser()
 
@@ -244,19 +224,14 @@ describe('requireAuth', () => {
         const denied = mockNext()
         await subject.requireAuth(buildRequest(`Bearer ${sidToken}`), noResponse, denied.next)
         const error = denied.lastCallArgument() as { statusCode?: number; code?: string }
-        // Not toBeInstanceOf(HttpError): vi.resetModules() re-evaluates error.middleware.ts too, giving a different HttpError class identity — a false negative, not a real failure.
+        // Not toBeInstanceOf(HttpError): vi.resetModules() re-evaluates @/errors/http-error too, so this HttpError is a different class from the one imported here.
         expect(error.statusCode).toBe(401)
         expect(error.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
       }
     )
   })
 
-  /**
-   * A test-local Redis whose `EXISTS` never settles, the way a connected
-   * server that has stopped answering behaves. Loaded through
-   * `withMutatedModule`, so the deadline's cooldown state is fresh too and
-   * nothing here leaks into the next test.
-   */
+  // The Redis stand-in's `EXISTS` never settles, as with a connected server that has stopped answering; withMutatedModule also loads a fresh deadline cooldown state, so none leaks into the next test.
   it('lets an authenticated request through, within the deadline, when the denylist read stalls', async () => {
     const user = await createUser()
     const token = signAccessToken(user, randomUUID())
@@ -275,7 +250,7 @@ describe('requireAuth', () => {
         const outcome = await answerWithinBound(subject.requireAuth(request, noResponse, next))
 
         expect(outcome).not.toBe('hung')
-        // Fail open, as on any denylist failure: the request is not denied.
+        // The denylist read fails open, so the request is not denied.
         expect(next).toHaveBeenCalledTimes(1)
         expect(lastCallArgument()).toBeUndefined()
         expect(request.user?.id).toBe(user.id)
@@ -297,7 +272,7 @@ describe('requireAuth', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
-    // code and errors are separate envelope fields (error.middleware.ts); asserting errors is still absent proves they stay independent even with code set.
+    // code and errors are separate envelope fields (error.middleware.ts); errors stays absent even with code set.
     expect((error as HttpError).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
     expect((error as HttpError).errors).toBeUndefined()
   })

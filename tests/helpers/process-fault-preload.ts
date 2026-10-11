@@ -18,7 +18,6 @@ const originalListen = net.Server.prototype.listen
 /**
  * `net.Server#listen` with a numeric port replaced by 0 on 127.0.0.1,
  * reporting the port the OS chose once the server listens.
- * @param this - The server.
  * @param parameters - The arguments `listen` was called with.
  * @returns The server.
  */

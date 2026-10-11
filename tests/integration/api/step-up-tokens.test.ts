@@ -18,9 +18,7 @@ const userRepository = new UserRepository()
 const PASSWORD = 'correct horse battery staple'
 
 /**
- * The verified `auth_time` and `sid` of the access token in a login or refresh reply.
- * @param response - The reply.
- * @returns The claims.
+ * The `auth_time` and `sid` claims of the access token in a login or refresh reply.
  */
 function claimsOf(response: Response): { authTime: number | undefined; sid: string | undefined } {
   const token = (response.body as { data: { accessToken: string } }).data.accessToken
@@ -38,6 +36,9 @@ describe('auth_time on issued access tokens', () => {
     createdIds.length = 0
   })
 
+  /**
+   * A verified user with a password, tracked for deletion in afterEach; returns their email.
+   */
   async function createUser(): Promise<string> {
     const email = `step-up-tokens-${randomUUID()}@example.test`
     const user = await userRepository.create({ email, passwordHash: await hashPassword(PASSWORD) })

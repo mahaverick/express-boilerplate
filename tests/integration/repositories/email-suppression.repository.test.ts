@@ -17,8 +17,8 @@ afterEach(async () => {
 })
 
 /**
- * A fresh address in mixed case, tracked (lowercased) for cleanup.
- * @returns The mixed-case address.
+ * A fresh mixed-case address, so tests can check that `suppress` lowercases it and lookups ignore
+ * case. It is tracked lowercased for cleanup.
  */
 function uniqueAddress(): string {
   const address = `Suppressed-${randomUUID()}@Example.test`

@@ -6,6 +6,9 @@
  */
 import { sql } from '@/services/database.service'
 
+/**
+ * The tables `backdateUpdatedAt` may touch.
+ */
 type BackdatableTable = 'users' | 'tenants' | 'tenant_settings' | 'user_memberships'
 
 /**

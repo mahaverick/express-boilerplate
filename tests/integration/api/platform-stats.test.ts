@@ -18,6 +18,9 @@ import { makeStaff } from '../../helpers/platform-staff'
 import { deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
+/**
+ * What the stats `data` holds.
+ */
 interface StatsBody {
   range: string
   signups: unknown[]
@@ -28,6 +31,9 @@ interface StatsBody {
 const app = createApp()
 const userRepository = new UserRepository()
 
+/**
+ * Reads the Overview totals as the actor under test, with the `range` a test sets.
+ */
 function stats(token: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)
     .get('/api/v1/platform/stats')
@@ -47,6 +53,9 @@ describe('GET /api/v1/platform/stats', () => {
     createdUserIds.length = 0
   })
 
+  /**
+   * A fresh non-staff user with a bearer token, tracked for cleanup.
+   */
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
       email: `platform-stats-${randomUUID()}@example.test`,
@@ -55,6 +64,9 @@ describe('GET /api/v1/platform/stats', () => {
     return { user, token: signAccessToken(user, randomUUID()) }
   }
 
+  /**
+   * A fresh staff user with `role`; returns its bearer token.
+   */
   async function createStaff(role: MembershipRole = 'viewer'): Promise<string> {
     const { user, token } = await createUser()
     await makeStaff(user.id, role)
@@ -102,6 +114,9 @@ describe('GET /api/v1/platform/stats', () => {
 
   it('counts a stuck tenant in totals.stuckTenants, whatever the range', async () => {
     const token = await createStaff('viewer')
+    /**
+     * The `totals.stuckTenants` the endpoint reports for `range`.
+     */
     const stuckNow = async (range = '7d'): Promise<number> => {
       const response = await stats(token, { range })
       return (response.body as { data: StatsBody }).data.totals.stuckTenants ?? 0

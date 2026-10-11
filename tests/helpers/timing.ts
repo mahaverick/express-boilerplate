@@ -65,7 +65,6 @@ export async function waitUntil<T>(
  * Wait `ms` of real time on purpose. Use only when no condition can be observed instead.
  * @param ms - How long to wait.
  * @param reason - Why no condition can replace this wait; a blank reason rejects.
- * @returns Resolves after `ms`.
  * @throws {TypeError} When `reason` is empty or only whitespace.
  */
 export async function settle<R extends string>(

@@ -2,7 +2,8 @@
  * @file Email tracking rows for the staff email tests, inserted directly.
  * Every message and suppression made here is tracked; call
  * `deleteTrackedEmailRows` in an afterEach. Deleting a message cascades to
- * its attempts and events, and also removes the messages resent from it.
+ * its attempts and events, but a message resent from it survives with a null
+ * `resent_from_id`, so `deleteTrackedEmailRows` deletes the resent ones first.
  */
 import { randomUUID } from 'node:crypto'
 import type { BounceKind, EmailEventType, SuppressionReason } from '@/constants/email.constants'
@@ -147,7 +148,7 @@ export async function createTrackedSuppression(
 
 /**
  * Delete every tracked suppression and message, and the messages resent
- * from a tracked one (the delegated actions insert those).
+ * from a tracked one; a staff resend inserts those and no helper tracks them.
  * @returns Resolves once the rows are gone.
  */
 export async function deleteTrackedEmailRows(): Promise<void> {

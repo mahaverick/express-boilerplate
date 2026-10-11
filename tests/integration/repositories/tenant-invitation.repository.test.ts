@@ -26,32 +26,30 @@ const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 
 /**
- * The test pool's own size (`database.service.ts`, `max: 2`), so both
- * claims really run at the database at once.
+ * The test pool's size (`DB_POOL_MAX=2` in `.env.test`), so both calls get a connection and really
+ * run at the database at once.
  */
 const CONCURRENT_CLAIMS = 2
 const HOUR_MS = 60 * 60 * 1000
 
 /**
- * A disposable email, unique to one call.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in
+ * this worker's database hold.
  */
 function uniqueEmail(): string {
   return `invitation-repo-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable 64-character hex string standing in for a token hash.
- * @returns A hash unique to this call.
+ * A fresh 64-character hex string standing in for a token hash, unique per call because the column
+ * is unique.
  */
 function uniqueHash(): string {
   return randomBytes(32).toString('hex')
 }
 
 /**
- * The current state of one invitation row, read straight from the table.
- * @param id - The invitation id.
- * @returns The row, or undefined when it does not exist.
+ * Reads one invitation row straight from the table, bypassing the repository's filters.
  */
 async function reload(id: string): Promise<TenantInvitation | undefined> {
   const [row] = await db
@@ -62,9 +60,8 @@ async function reload(id: string): Promise<TenantInvitation | undefined> {
 }
 
 /**
- * Create a pending invitation inside a transaction, as the service does.
- * @param overrides - The tenant and inviter, plus any field to override.
- * @returns The inserted row.
+ * Creates a pending invitation inside a transaction, as the service does. A test names the tenant
+ * and inviter and overrides any other field.
  */
 async function createPending(
   overrides: Partial<NewPendingInvitation> & Pick<NewPendingInvitation, 'tenantId' | 'invitedBy'>
@@ -98,8 +95,8 @@ describe('TenantInvitationRepository', () => {
   })
 
   /**
-   * A fresh user named Ada Lovelace, tracked for cleanup.
-   * @returns The created user.
+   * Creates a user named Ada Lovelace, tracked for cleanup, so inviter-name assertions have known
+   * values.
    */
   async function createUser(): Promise<User> {
     const user = await userRepository.create({
@@ -112,8 +109,7 @@ describe('TenantInvitationRepository', () => {
   }
 
   /**
-   * An owner and a tenant they own, both tracked for cleanup.
-   * @returns The owner and the tenant.
+   * Creates an owner and a tenant they own, both tracked for cleanup.
    */
   async function setup(): Promise<{ owner: User; tenant: Tenant }> {
     const owner = await createUser()
@@ -167,7 +163,7 @@ describe('TenantInvitationRepository', () => {
       expect(pending.map((invitation) => invitation.id)).toEqual([second.id])
     })
 
-    // An expired row still holds the partial index's slot (it cannot filter on now()); without the revoke this insert would 23505.
+    // An expired row holds the partial index's slot (it cannot filter on now()); without the revoke this insert would 23505.
     it('replaces an expired pending invitation too', async () => {
       const { owner, tenant } = await setup()
       const email = uniqueEmail()

@@ -1,13 +1,12 @@
 /**
- * @file The invitation endpoints end to end, against the real per-worker
- * Postgres and Redis. No Worker runs: tests read the invitation and
- * verification emails straight off the queues (tests/helpers/queue-jobs.ts).
+ * @file The invitation endpoints end to end, against the real Postgres (one database per worker)
+ * and the test Redis. No Worker runs: tests read the invitation and verification emails straight
+ * off the queues (tests/helpers/queue-jobs.ts).
  *
- * Rate limits here are wiring, not thresholds. The preview limiter (60 per
- * 15 min) is keyed on IP and every request here comes from 127.0.0.1; this
- * file makes 18 preview requests, so keep them under 60. Accept (20 per 15
- * min) is keyed on the signed-in user, not the IP. Thresholds
- * are proven with small overrides in
+ * Rate limits here are wiring, not thresholds. The preview limiter (60 per 15 min) is keyed on IP
+ * and every request here comes from the same loopback address, so this file's 21 preview
+ * requests must stay under 60. Accept (20 per 15 min) is keyed on the signed-in user, not the IP.
+ * Thresholds are proven with small overrides in
  * tests/unit/middlewares/rate-limit.middleware.test.ts.
  */
 
@@ -97,17 +96,15 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * Cast a supertest body to a known envelope shape.
- * @param response - The supertest response.
- * @returns The body, typed.
+ * Types a supertest response body as the API envelope.
  */
 function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
 /**
- * A disposable email, unique to one call.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `invitation-api-${randomUUID()}@example.test`
@@ -121,13 +118,8 @@ afterAll(async () => {
 
 /**
  * Write an invitation with a known raw token, bypassing the API.
- * @param tenant - The tenant.
- * @param inviter - The inviter.
- * @param options - Address, role and expiry.
- * @param options.email - The invited address.
  * @param options.role - The offered role. Defaults to editor.
  * @param options.expiresAt - The expiry. Defaults to an hour from now.
- * @returns The raw token and the invitation id.
  */
 async function seedInvitation(
   tenant: Tenant,
@@ -153,10 +145,6 @@ async function seedInvitation(
 
 /**
  * POST an invitation as `bearer`.
- * @param slug - The tenant slug.
- * @param bearer - The caller's access token.
- * @param body - The request body.
- * @returns The response.
  */
 async function inviteVia(slug: string, bearer: string, body: object): Promise<Response> {
   return request(app)
@@ -168,7 +156,6 @@ async function inviteVia(slug: string, bearer: string, body: object): Promise<Re
 /**
  * POST the public preview for a token (a JSON body, never the URL).
  * @param token - The raw token (or anything, for malformed cases).
- * @returns The response.
  */
 async function previewVia(token: string): Promise<Response> {
   return request(app).post('/api/v1/invitations/preview').send({ token })
@@ -176,9 +163,6 @@ async function previewVia(token: string): Promise<Response> {
 
 /**
  * POST an accept, optionally signed in.
- * @param token - The raw token.
- * @param bearer - The caller's access token, if any.
- * @returns The response.
  */
 async function acceptVia(token: string, bearer?: string): Promise<Response> {
   const pending = request(app).post('/api/v1/invitations/accept')
@@ -189,9 +173,6 @@ async function acceptVia(token: string, bearer?: string): Promise<Response> {
 /**
  * Tracked messages enqueued to `recipient` with `templateKey`, after the
  * fire-and-forget follow-up work has had time to run.
- * @param recipient - The address.
- * @param templateKey - The template.
- * @returns How many were enqueued.
  */
 async function trackedMailCount(recipient: string, templateKey: string): Promise<number> {
   await settle(1500, 'the mail is enqueued fire-and-forget after the reply; absence has no event')
@@ -204,8 +185,6 @@ async function trackedMailCount(recipient: string, templateKey: string): Promise
 
 /**
  * The Redis key holding an address's daily invitation-mail count across every tenant.
- * @param email - The address.
- * @returns The key.
  */
 function recipientBudgetKey(email: string): string {
   return redisKey('rl', 'invitation-recipient', hashRateLimitIdentity(email.trim().toLowerCase()))
@@ -213,7 +192,6 @@ function recipientBudgetKey(email: string): string {
 
 /**
  * How many invitation mails the address's daily budget has spent, across every tenant.
- * @param email - The address.
  * @returns The count; 0 when nothing has been spent.
  */
 async function recipientBudgetSpent(email: string): Promise<number> {
@@ -223,10 +201,6 @@ async function recipientBudgetSpent(email: string): Promise<number> {
 
 /**
  * Resend a pending invitation as `bearer`, with no body, as the clients do.
- * @param slug - The tenant slug.
- * @param bearer - The caller's access token.
- * @param invitationId - The invitation.
- * @returns The response.
  */
 async function resendVia(slug: string, bearer: string, invitationId: string): Promise<Response> {
   return request(app)
@@ -237,9 +211,6 @@ async function resendVia(slug: string, bearer: string, invitationId: string): Pr
 /**
  * Whether an invitation is still pending under its original link: not
  * revoked, not accepted, and its token hash unchanged (a resend replaces it).
- * @param invitationId - The invitation.
- * @param rawToken - The link's raw token when it was seeded.
- * @returns True when nothing touched it.
  */
 async function isStillPending(invitationId: string, rawToken: string): Promise<boolean> {
   const [row] = await sql<{ untouched: boolean }[]>`
@@ -269,7 +240,6 @@ describe('invitations API', () => {
    * @param options - Whether the address is verified, and an explicit address.
    * @param options.verified - Set `emailVerifiedAt` to now. Defaults to true.
    * @param options.email - The address. Defaults to a unique one.
-   * @returns The user and a valid bearer token for them.
    */
   async function createUser(
     options: { verified?: boolean; email?: string } = {}
@@ -286,8 +256,6 @@ describe('invitations API', () => {
 
   /**
    * A tenant named Acme Inc owned by `ownerId`, tracked for cleanup.
-   * @param ownerId - The owner.
-   * @returns The tenant.
    */
   async function createTenant(ownerId: string): Promise<Tenant> {
     const tenant = await tenantRepository.create({
@@ -301,7 +269,6 @@ describe('invitations API', () => {
 
   /**
    * An owner with a bearer token, and their tenant.
-   * @returns The owner, their token, and the tenant.
    */
   async function setup(): Promise<{ owner: User; ownerToken: string; tenant: Tenant }> {
     const { user: owner, token: ownerToken } = await createUser()
@@ -312,7 +279,6 @@ describe('invitations API', () => {
   /**
    * A tenant with one pending invitation, and two callers with no
    * membership in it: a signed-in stranger and another tenant's owner.
-   * @returns The tenant, the invitation id and the two outsiders' tokens.
    */
   async function outsiders(): Promise<{
     tenant: Tenant
@@ -369,6 +335,9 @@ describe('invitations API', () => {
         const queued = await waitForInvitationEmail(email)
         expect(queued.userId).toBe(invitee?.id ?? '')
         const [pending] = await invitationRepository.listPending(tenant.id)
+        /**
+         * Matches the notification job for this test's pending invitation.
+         */
         const isThisNotification = (data: NotificationJobData): boolean =>
           data.type === 'tenant_invitation' && data.metadata?.invitationId === pending?.id
         if (isNotified) {
@@ -727,7 +696,10 @@ describe('invitations API', () => {
       await backdateInvitationSend(invitationId)
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFind = TenantInvitationRepository.prototype.findPendingById
-      // A concurrent resend lands after this read: its send stamp is newer than the one read here.
+      /**
+       * Reads the pending invitation, then stamps a newer send time on it, as a resend landing
+       * after the read would.
+       */
       const findThenRace: TenantInvitationRepository['findPendingById'] = async function (
         this: TenantInvitationRepository,
         ...arguments_
@@ -1236,11 +1208,6 @@ describe('invitations API', () => {
 
 /**
  * Invite `email` as `inviter` and return the raw token from the mail.
- * @param slug - The tenant slug.
- * @param token - The inviter's bearer token.
- * @param email - The invited address.
- * @param role - The offered role.
- * @returns The raw accept token.
  */
 async function inviteAs(
   slug: string,
@@ -1256,9 +1223,6 @@ async function inviteAs(
 
 /**
  * Accept `rawToken` as a fresh verified account for `email`.
- * @param rawToken - The raw token.
- * @param email - The invited address.
- * @returns The response.
  */
 async function acceptAs(rawToken: string, email: string): Promise<Response> {
   const invitee = await createTrackedUser({ email })
@@ -1277,8 +1241,6 @@ describe('an invitation outlives its sender', () => {
 
   /**
    * A customer tenant with an owner and a second member holding `role`.
-   * @param role - The second member's role.
-   * @returns The tenant, its owner and the member.
    */
   async function tenantWith(
     role: MembershipRole

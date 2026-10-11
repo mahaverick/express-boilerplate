@@ -20,8 +20,7 @@ afterEach(async () => {
 })
 
 /**
- * One queued message to hang events on, tracked for cleanup.
- * @returns Its id.
+ * Creates a queued message for a test to attach events to, tracked for cleanup.
  */
 async function messageId(): Promise<string> {
   const id = await messages.nextId()

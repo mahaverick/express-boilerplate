@@ -19,8 +19,7 @@ afterEach(async () => {
 })
 
 /**
- * A slug unique to one call.
- * @returns The slug.
+ * A fresh slug per call, so tenants from different tests never collide on the unique slug.
  */
 function uniqueSlug(): string {
   return `onboarding-${randomUUID()}`

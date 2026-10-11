@@ -1,14 +1,13 @@
 /**
- * @file Integration tests for POST /api/v1/auth/verify-email. Every
- * assertion runs against the real per-worker Postgres database — rows
- * are seeded via repository calls (not through POST /auth/register,
- * whose contract may change independently) and cleaned up in afterEach.
+ * @file POST /api/v1/auth/verify-email and POST /api/v1/auth/resend-verification
+ * against the real per-worker Postgres database; created users are deleted in
+ * afterEach. The verify-email tests seed rows through repositories instead of
+ * POST /auth/register, so they do not depend on the registration contract.
  *
- * The identical-response tests are the security core: they pin that a
- * wrong password, an unknown token, and a malformed body all produce
- * byte-identical responses — distinguishable failures would be a
- * token-state oracle, and a distinguishable wrong-password failure
- * would tell whoever holds a link that the address is squatted.
+ * The identical-response test is the security core: a wrong password, an
+ * unknown token and a malformed body must give the same body (and a wrong
+ * password the same status as an unknown token). A failure that differed would
+ * be a token-state oracle.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -39,14 +38,7 @@ const app = createApp()
 const userRepository = new UserRepository()
 const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 
-/**
- * verifyEmail/resendVerification/register enqueue via BullMQ
- * (addNotificationJob for verification mail, addEmailJob directly for
- * the registration-attempt notice), so every mail-delivery assertion in
- * this file needs both a live email Worker and a live notification
- * Worker: a verification email only lands on the "email" queue after
- * the notification worker fans the notification job out to it.
- */
+// A verification mail is queued through addNotificationJob and reaches the email queue only after the notification worker fans it out; the registration-attempt notice goes straight to the email queue. Mail assertions therefore need both workers.
 const worker: Worker<EmailJobData> = startEmailWorker()
 const notificationWorker = startNotificationWorker()
 
@@ -61,23 +53,15 @@ afterAll(async () => {
 const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
- * POST to /api/v1/auth/verify-email with the given token and password.
- * @param token - The raw verification token.
- * @param password - The account password to present.
- * @returns The supertest response.
+ * POSTs a raw verification token and a password to /api/v1/auth/verify-email.
  */
 async function verify(token: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/verify-email').send({ token, password })
 }
 
 /**
- * Seed an unverified user with a hashed password and a live
- * email_verification token.
- *
- * Built from repository calls rather than POST /auth/register so this
- * file does not depend on the registration contract, which may change
- * independently.
- * @returns The user and raw token.
+ * Seeds an unverified user with a hashed password and a live
+ * email_verification token, returning the raw token.
  */
 async function seedUnverifiedUser(): Promise<{ user: { id: string }; token: string }> {
   const user = await userRepository.create({
@@ -132,7 +116,7 @@ describe('POST /api/v1/auth/verify-email', () => {
       .set('X-Request-Id', fixedRequestId)
       .send({ token: 'deadbeef', password: VALID_PASSWORD })
 
-    // No password field at all: without the try/catch around parseBody in the controller, this returns "Validation failed" with fieldErrors and the assertion below fails.
+    // No password field: without the try/catch around parseBody in the controller this would answer "Validation failed" with fieldErrors, and the assertion below would fail.
     const malformed = await request(app)
       .post('/api/v1/auth/verify-email')
       .set('X-Request-Id', fixedRequestId)
@@ -140,7 +124,7 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     expect(malformed.body).toEqual(unknownToken.body)
 
-    // Direct equality, not "both are 4xx": a distinguishable wrong-password failure tells an attacker holding a link that the address is squatted.
+    // Direct equality, not "both are 4xx": a wrong-password answer that differed from an unknown token's would show that the token is live and that the address already has a password someone set, which tells a link holder it is squatted.
     expect(wrongPassword.body).toEqual(unknownToken.body)
     expect(wrongPassword.status).toBe(unknownToken.status)
     expect(wrongPassword.status).toBe(400)
@@ -150,7 +134,7 @@ describe('POST /api/v1/auth/verify-email', () => {
     const { token } = await seedUnverifiedUser()
     await verify(token, 'not-the-right-password')
 
-    // Intended, and documented in SECURITY.md: one link is one attempt, so a leaked link gives an attacker exactly one guess.
+    // By design (SECURITY.md): one link is one attempt, so a leaked link gives an attacker exactly one password guess.
     const retried = await verify(token, VALID_PASSWORD)
     expect(retried.status).toBe(400)
   })
@@ -188,7 +172,7 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     const response = await verify(second.raw, VALID_PASSWORD)
 
-    // markEmailVerified returns undefined here (already verified), and that is success: answering 400 would make a double-click an error.
+    // markEmailVerified returns undefined for an already-verified account, and that is success: answering 400 would make a second valid link an error.
     expect(response.status).toBe(200)
     const after = await userRepository.findById(user.id)
     expect(after?.emailVerifiedAt?.getTime()).toBe(first?.emailVerifiedAt?.getTime())
@@ -209,39 +193,31 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     await verify(token, 'not-the-right-password')
 
-    // The assertion the other tests cannot make: a status code cannot tell you whether the column was written.
+    // A status code cannot show whether the column was written.
     const row = await userRepository.findById(user.id)
     expect(row?.emailVerifiedAt).toBeNull()
   })
 })
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database, or the shared Redis
- * rate-limit counters, may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold or with another address's rate-limit
+ * counters.
  */
 function uniqueEmail(): string {
   return `resend-verification-${randomUUID()}@example.test`
 }
 
 /**
- * POST to /api/v1/auth/resend-verification with the given address.
- * @param email - The address to submit.
- * @returns The supertest response.
+ * POSTs an address to /api/v1/auth/resend-verification.
  */
 async function resend(email: string): Promise<Response> {
   return request(app).post('/api/v1/auth/resend-verification').send({ email })
 }
 
 /**
- * Register a user through the real HTTP endpoint and track it for cleanup.
- *
- * Own copy of auth.test.ts's helper of the same name and shape — that
- * file's own comment explains why each integration file keeps its own
- * rather than sharing one across files.
- * @param overrides - Fields to override on the default registration body.
- * @returns The email used and the created (unverified) user row.
+ * Registers a user through the real HTTP endpoint and tracks the unverified
+ * row for deletion in afterEach.
  */
 async function registerUser(
   overrides: Partial<{ email: string; password: string }> = {}
@@ -257,11 +233,8 @@ async function registerUser(
 }
 
 /**
- * Register a user and mark them verified, so a test only needs a usable
- * account without walking the verification flow. Marking is done here, in
- * the helper — never by weakening resendVerification's own guard.
- * @param overrides - Fields to override on the default registration body.
- * @returns The email used and the verified user row.
+ * Registers a user and marks them verified in SQL, so a test gets a usable
+ * account without walking the verification flow or weakening resendVerification's guard.
  */
 async function registerVerifiedUser(
   overrides: Partial<{ email: string; password: string }> = {}
@@ -274,15 +247,8 @@ async function registerVerifiedUser(
 }
 
 /**
- * Register a fresh user, mark them verified, and log in through the real
- * HTTP endpoints.
- *
- * Own copy of auth-refresh.test.ts's helper of the same name — that file's
- * own comment explains why each integration file keeps its own, and why
- * this one takes `createdIds` as a parameter instead of closing over a
- * describe-scoped array the way `registerUser` above does.
- * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
- * @returns The login response, the email used, and the verified user row.
+ * Registers a fresh user, marks them verified and logs in over HTTP, pushing
+ * the user's id onto `createdIds` for afterEach cleanup.
  */
 async function registerAndLogin(
   createdIds: string[]
@@ -301,12 +267,8 @@ async function registerAndLogin(
 }
 
 /**
- * The exact `name=value` pair for the refresh-token cookie out of a
- * response's raw `Set-Cookie` header. Own copy of auth-refresh.test.ts's
- * helper of the same name — see that file's own comment for why each
- * integration file keeps its own rather than sharing one.
- * @param response - The supertest response.
- * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
+ * The refresh-token cookie's `name=value` pair from a response's `Set-Cookie`
+ * header, or undefined when the cookie was not set.
  */
 function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
@@ -318,13 +280,10 @@ const RESEND_VERIFICATION_IP_KEY_PATTERN = `${redisKey('rl', 'resend-verificatio
 const RESEND_VERIFICATION_EMAIL_KEY_PATTERN = `${redisKey('rl', 'resend-verification-email')}:*`
 
 /**
- * Every Redis key matching a pattern, via SCAN rather than KEYS — the same
- * choice global-setup.ts's own `clearRateLimitCounters` makes, and for the
- * same reason (KEYS blocks the whole server; this may be a developer's own
- * Redis with other data in it). Shared by the cleanup and wiring-proof
- * helpers below.
- * @param pattern - The glob pattern to match.
- * @returns Every matching key.
+ * Every Redis key matching a glob pattern, found with SCAN rather than KEYS,
+ * which blocks the server for the whole keyspace and this may be a
+ * developer's own Redis with other data in it; the same choice as
+ * `clearRateLimitCounters` in global-setup.ts.
  */
 async function redisKeysMatching(pattern: string): Promise<string[]> {
   const client = await getRedis()
@@ -337,20 +296,13 @@ async function redisKeysMatching(pattern: string): Promise<string[]> {
 }
 
 /**
- * Clear the resend-verification IP limiter's counter before every test in
- * this describe block.
- *
- * This is the first genuinely TIGHT (5/hour), IP-ALONE-keyed limiter in
- * this codebase. Every earlier IP-alone limiter (register, logout) is
- * generous, and the one tight limiter that already existed (login) never
- * needs this: its key composes IP WITH the submitted email
- * (`loginRateLimitKey`), so each test's unique address gets its own
- * bucket. Here every request from this suite's one client address shares
- * ONE bucket regardless of address, and Redis is cleared only once, in
- * global setup, for the whole run (tests/helpers/global-setup.ts) — so
- * without this, the sixth call anywhere in this describe block answers 429
- * instead of 202, and the assertion that goes red is often several tests
- * away from the one that actually spent the budget.
+ * Clears the resend-verification IP limiter's counter before each test. The
+ * limiter allows 5 an hour and is keyed on IP alone, so every request from
+ * this suite's one client address shares one bucket whatever the submitted
+ * address. Redis is cleared only once per run, in global setup
+ * (tests/helpers/global-setup.ts), so without this the sixth call in this
+ * describe block would answer 429 instead of 202, and the failing assertion
+ * would often be several tests away from the one that spent the budget.
  */
 async function clearResendVerificationIpLimiter(): Promise<void> {
   const client = await getRedis()
@@ -367,12 +319,7 @@ const RESEND_BODY = {
 }
 
 describe('POST /api/v1/auth/resend-verification', () => {
-  /**
-   * Deliberately no describe-local createdIds/afterEach pair here. The
-   * module-level ones declared above already apply to every test in
-   * this file, and registerUser/registerVerifiedUser below close over
-   * that same array.
-   */
+  // createdIds and afterEach are module-level; registerUser and registerVerifiedUser close over them.
   beforeEach(clearResendVerificationIpLimiter)
 
   it('answers identically for unknown, unverified and already-verified addresses', async () => {
@@ -396,13 +343,7 @@ describe('POST /api/v1/auth/resend-verification', () => {
     expect(response.body).toEqual(RESEND_BODY)
   })
 
-  /**
-   * The positive assertion runs first and polls to completion. By the
-   * time it resolves, the fire-and-forget mail this loop triggered has
-   * either arrived or never will. Ordering the negatives after it
-   * gives an errant send the same window to land before either
-   * negative check starts.
-   */
+  // The positive check runs first, so the negative checks start only after the mail has landed and give an errant send time to arrive.
   it('mails only the unverified address', async () => {
     const unknown = uniqueEmail()
     const { email: unverified } = await registerUser()
@@ -419,12 +360,7 @@ describe('POST /api/v1/auth/resend-verification', () => {
     await assertNoMailpitMessage(verified)
   })
 
-  /**
-   * Synchronization point: resendVerificationMail's send runs after
-   * its revoke, and both are unawaited by the 202 response. Waiting
-   * for the resend mail to actually arrive proves the revoke has
-   * already run before the assertions below.
-   */
+  // resendVerificationMail revokes before it sends, and the 202 response does not wait for either, so the mail's arrival shows the revoke has run.
   it('invalidates the previous link when a new one is sent, and the new one verifies', async () => {
     const { email, user } = await registerUser()
     const first = await issueToken(user.id, 'email_verification', 60_000)
@@ -438,24 +374,20 @@ describe('POST /api/v1/auth/resend-verification', () => {
     const secondToken = /token=([0-9a-f]+)/.exec(detail.Text)?.[1]
     expect(secondToken).toBeDefined()
 
-    // Two live links at once means a token read out of an older mail still works after the user has re-requested. The state single-use exists to prevent that.
+    // Two live links would let a token read out of an older mail keep working after a re-request.
     const oldAttempt = await request(app)
       .post('/api/v1/auth/verify-email')
       .send({ token: first.raw, password: VALID_PASSWORD })
     expect(oldAttempt.status).toBe(400)
 
-    // Not just "the old one is dead". The new one must actually work: a resendVerificationMail with send and revoke swapped would also make the old token fail, and this assertion tells the two apart.
+    // The new link must work too: sending before revoking would revoke the new token along with the old, and only this assertion catches that.
     const newAttempt = await request(app)
       .post('/api/v1/auth/verify-email')
       .send({ token: secondToken ?? '', password: VALID_PASSWORD })
     expect(newAttempt.status).toBe(200)
   })
 
-  /**
-   * Not hypothetical: revokeAllForUser matches on userId alone, so
-   * reaching for it here would log the user out of every device as a
-   * side effect of asking for an email.
-   */
+  // revokeAllForUser matches on userId alone, so using it here would log the user out of every device.
   it('leaves a live refresh token alone when it clears old links', async () => {
     const { response: login, email, user } = await registerAndLogin(createdIds)
     await sql`update users set email_verified_at = null where id = ${user.id}`
@@ -463,7 +395,7 @@ describe('POST /api/v1/auth/resend-verification', () => {
 
     await resend(email)
 
-    // Same synchronization reasoning as the previous test. The refresh token must not be checked until the revoke that could have touched it is known to have already run, or the assertion below would be vacuous.
+    // The mail's arrival shows the revoke has run; checking the refresh token earlier would prove nothing.
     expect(await findMailpitMessages(email)).toHaveLength(1)
 
     const refreshed = await request(app)
@@ -472,12 +404,7 @@ describe('POST /api/v1/auth/resend-verification', () => {
     expect(refreshed.status).toBe(200)
   })
 
-  /**
-   * RateLimit-* headers alone cannot prove this: the second limiter's
-   * headers simply overwrite the first's, so a header check only ever
-   * proves the last limiter in the chain ran. Reading the store
-   * directly is the only way to prove both fired.
-   */
+  // RateLimit-* headers cannot show this: the second limiter's headers overwrite the first's, so only the store shows both limiters counted.
   it('runs both limiters — proven by counters incrementing under both prefixes', async () => {
     const email = uniqueEmail()
 

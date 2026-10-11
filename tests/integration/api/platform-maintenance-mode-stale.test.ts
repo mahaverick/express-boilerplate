@@ -58,7 +58,7 @@ describe('a change that waits for its notices', () => {
     })
     const wait = vi.spyOn(notices, 'waitForNoticeJobs').mockImplementation(() => held)
 
-    // A supertest request is lazy: awaiting it inside an async function is what sends it now.
+    // A supertest request is lazy: awaiting it inside an async function is what sends it.
     const pending = (async () =>
       request(app).put(PATH).set('Authorization', `Bearer ${first.token}`).send({
         mode: 'full',
@@ -94,7 +94,7 @@ describe('a change that waits for its notices', () => {
     })
     const wait = vi.spyOn(notices, 'waitForNoticeJobs').mockImplementation(() => held)
 
-    // A supertest request is lazy: awaiting it inside an async function is what sends it now.
+    // A supertest request is lazy: awaiting it inside an async function is what sends it.
     const pending = (async () =>
       request(app).put(PATH).set('Authorization', `Bearer ${first.token}`).send({
         mode: 'full',

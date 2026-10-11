@@ -1,18 +1,14 @@
 /**
- * @file GET /api/v1/platform/users/:id/timeline and
- * GET /api/v1/platform/tenants/:id/timeline through the real app, against
- * the fake PostHog: the admin gate, the audit of every read (cursor pages
- * and cache hits included) throttled per staff member, target and view,
- * and never for an unconfigured environment or an unknown target, the
- * unconfigured answer, the 502 for every PostHog failure and for a spent
- * budget, the actor join, paging inside one millisecond, a cursor reused
- * under another view, signed rows against forged ones (demoted or dropped,
- * with the cursor still at raw row 100), the `tenant` group type at another
- * index or missing,
- * Redis down, and the per-staff limiter. The timeline is configured for this
- * file through a mocked `getEnv()`, with a toggle for the unconfigured case;
- * the PostHog timeout is shortened, and Redis can be made unreachable,
- * through two more mocks.
+ * @file GET /api/v1/platform/users/:id/timeline and GET /api/v1/platform/tenants/:id/timeline
+ * through the real app, against the fake PostHog: the admin gate, the audit of every read (cursor
+ * pages and cache hits included) throttled per staff member, target and view, and never for an
+ * unconfigured environment or an unknown target, the unconfigured answer, the 502 for every
+ * PostHog failure and for a spent budget, the actor join, paging inside one millisecond, a cursor
+ * reused under another view, signed rows against forged ones (demoted or dropped, with the cursor
+ * still at raw row 100), the `tenant` group type at another index or missing, Redis down, and the
+ * per-staff limiter. The timeline is configured for this file through a mocked `getEnv()`, with a
+ * toggle for the unconfigured case; the PostHog timeout is shortened, and Redis can be made
+ * unreachable, through two more mocks.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -76,9 +72,18 @@ const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
 const { request } = await import('../../helpers/request')
 const { queryAnswer, signedEvent } = await import('../../helpers/timeline-rows')
 
+/**
+ * The fake PostHog server `startFakePosthog` starts.
+ */
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
+/**
+ * One event, as `queryAnswer` takes it to build PostHog's answer.
+ */
 type SeededEvent = Parameters<typeof queryAnswer>[0][number]
 
+/**
+ * A timeline row as the endpoint returns it.
+ */
 interface Row {
   uuid: string
   event: string
@@ -94,6 +99,9 @@ interface Row {
   actor?: { id: string; displayName: string | null } | null
 }
 
+/**
+ * The timeline response; `configured` is false for an unconfigured environment.
+ */
 interface Page {
   configured: boolean
   rows?: Row[]
@@ -110,8 +118,7 @@ const fake: { posthog?: FakePosthog } = {}
 const tenantIds: string[] = []
 
 /**
- * The running fake.
- * @returns It.
+ * The running fake PostHog, failing the test when it is not started.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -120,9 +127,6 @@ function posthog(): FakePosthog {
 
 /**
  * A `$pageview` by `distinctId` at a fixed microsecond timestamp, with a fresh uuid.
- * @param distinctId - Who did it.
- * @param overrides - Any other columns.
- * @returns The seeded event.
  */
 function seeded(distinctId: string, overrides: Partial<SeededEvent> = {}): SeededEvent {
   return {
@@ -136,7 +140,6 @@ function seeded(distinctId: string, overrides: Partial<SeededEvent> = {}): Seede
 
 /**
  * 101 events, one microsecond apart and newest first, so a first page has a next one.
- * @param distinctId - Who did them.
  * @returns The events; the 100th is at 2026-10-04T10:00:42.899901Z.
  */
 function fullPage(distinctId: string): SeededEvent[] {
@@ -155,10 +158,6 @@ function answerWith(events: SeededEvent[]): void {
 
 /**
  * A GET of one timeline.
- * @param token - The staff bearer token.
- * @param path - The path under /api/v1/platform.
- * @param query - The query string.
- * @returns The response.
  */
 function getTimeline(
   token: string,
@@ -172,9 +171,7 @@ function getTimeline(
 }
 
 /**
- * The status of a response.
- * @param pending - The request.
- * @returns Its status.
+ * The status of a request, for a case where only the status is under test.
  */
 async function statusOf(pending: PromiseLike<Response>): Promise<number> {
   const response = await pending
@@ -182,9 +179,7 @@ async function statusOf(pending: PromiseLike<Response>): Promise<number> {
 }
 
 /**
- * The page in a 200 response.
- * @param response - The response.
- * @returns Its data.
+ * The page in a 200 response; fails the test on any other status.
  */
 function pageOf(response: Response): Page {
   expect(response.status).toBe(200)
@@ -193,8 +188,6 @@ function pageOf(response: Response): Page {
 
 /**
  * How many timeline audit entries target an id.
- * @param targetId - The user or tenant id.
- * @returns The count.
  */
 async function timelineAudits(targetId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`
@@ -205,7 +198,6 @@ async function timelineAudits(targetId: string): Promise<number> {
 
 /**
  * A customer tenant with no members, tracked for cleanup.
- * @returns Its id.
  */
 async function createTenant(): Promise<string> {
   const tenant = await tenantRepository.createWithoutOwner({
@@ -285,7 +277,7 @@ describe('a user timeline', () => {
     expect(query?.values).toEqual({ id: subject.id, hours: 168 })
     expect(query?.query).not.toContain(subject.id)
     const sent = posthog().requests.find((request) => request.path.endsWith('/query/'))
-    // PostHog's own cache would otherwise serve a repeated query for hours.
+    // PostHog may otherwise answer a repeated query from its own cache.
     expect(JSON.parse(sent?.body.toString('utf8') ?? '{}')).toMatchObject({
       refresh: 'force_blocking',
     })

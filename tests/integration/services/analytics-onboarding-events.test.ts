@@ -58,10 +58,8 @@ afterAll(async () => {
 })
 
 /**
- * One tenant's `onboarding_step_completed` rows: the reconcile sweeps every
- * tenant in this worker's database, so rows are matched by tenant group.
- * @param tenantId - The tenant.
- * @returns Its rows, oldest first.
+ * One tenant's `onboarding_step_completed` rows, oldest first. The reconcile sweeps every tenant
+ * in this worker's database, so rows are matched by tenant group.
  */
 async function stepRowsOf(tenantId: string): Promise<AnalyticsOutboxRow[]> {
   const rows = await outboxRows()

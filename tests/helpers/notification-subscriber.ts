@@ -10,6 +10,9 @@ import type { Notification } from '@/database/models/notification.model'
 import { redisKey } from '@/services/redis.service'
 import { settle } from './timing'
 
+/**
+ * The shape of the emitter module, so a helper can accept an instance a test imported itself.
+ */
 type EmitterModule = typeof import('@/services/notification-emitter.service')
 
 /**
@@ -55,7 +58,8 @@ export async function countSubscribers(client: RedisClientType): Promise<number>
 }
 
 /**
- * Wait until this process's subscriber hands back a probe published straight to Redis.
+ * Poll until this process's subscriber hands back a probe published straight
+ * to Redis, proving its SUBSCRIBE has landed.
  * @param emitter - The emitter module instance under test.
  * @param getRedis - The same module graph's `getRedis`, used to publish the probe.
  * @param timeoutMs - How long to keep probing.
@@ -69,6 +73,9 @@ export async function waitForNotificationSubscriber(
 ): Promise<void> {
   const probeUserId = `subscriber-probe-${randomUUID()}`
   const probe = { received: false }
+  /**
+   * Records that the probe came back through this process's subscriber.
+   */
   const handler = (): void => {
     probe.received = true
   }

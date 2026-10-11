@@ -33,24 +33,33 @@ afterEach(async () => {
   await deleteTrackedUsers()
 })
 
+/**
+ * A short random tag for one test's emails, so a search by it matches only that test's users.
+ */
 function newTag(): string {
   return `u${randomUUID().slice(0, 8)}`
 }
 
+/**
+ * Creates a tenant owned by `ownerId`, tracked for cleanup.
+ */
 async function tenantOwnedBy(ownerId: string, name = `Acme ${randomUUID()}`): Promise<Tenant> {
   const tenant = await tenantRepository.create({ name, slug: `pu-${randomUUID()}`, ownerId })
   createdTenantIds.push(tenant.id)
   return tenant
 }
 
+/**
+ * Marks a tenant archived and soft-deleted, a state that `listMemberships` lists and that the
+ * membership count leaves out.
+ */
 async function archive(tenantId: string): Promise<void> {
   await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenantId}`
 }
 
 /**
- * Five users whose emails sort a..e under the tag.
- * @param tag - The per-test tag every email starts with.
- * @returns The five emails in sort order.
+ * Creates five users whose emails start with `tag` and sort a..e, and returns the emails in sort
+ * order.
  */
 async function fiveUsers(tag: string): Promise<string[]> {
   // Inserted out of order, so the result order comes from the query, not insertion.
@@ -61,9 +70,7 @@ async function fiveUsers(tag: string): Promise<string[]> {
 }
 
 /**
- * The ids a search returns, in order.
- * @param options - The search options.
- * @returns The users' ids.
+ * Runs `search` and keeps only the ids of the users it found, in order, for filter assertions.
  */
 async function ids(options: Parameters<PlatformUserRepository['search']>[0]): Promise<string[]> {
   const page = await repository.search(options)
