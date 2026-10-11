@@ -110,7 +110,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-check-file": "3.3.2",
     "eslint-plugin-import-x": "4.17.1",
-    "eslint-plugin-jsdoc": "64.5.4",
+    "eslint-plugin-jsdoc": "65.1.0",
     "eslint-plugin-promise": "^7.3.0",
     "eslint-plugin-sonarjs": "4.2.1",
     "eslint-plugin-unicorn": "76.0.0",

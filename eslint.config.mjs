@@ -13,6 +13,7 @@ import sonarjs from 'eslint-plugin-sonarjs'
 import unicorn from 'eslint-plugin-unicorn'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+import jsdocPending from './jsdoc-pending.json' with { type: 'json' }
 import { commentStyleRule } from './scripts/comment-style.mjs'
 
 /**
@@ -25,6 +26,37 @@ const timerPromiseImportBans = ['node:timers/promises', 'timers/promises'].map((
   importNames: ['setTimeout'],
   message: BARE_SLEEP_MESSAGE,
 }))
+
+/**
+ * Every named function, method and class; inline callbacks and constructors
+ * are exempt by construction.
+ */
+const NAMED_FUNCTIONS = [
+  'FunctionDeclaration',
+  'TSDeclareFunction',
+  'ClassDeclaration',
+  'MethodDefinition:not([kind="constructor"]):not([value.body=null])',
+  'TSAbstractMethodDefinition',
+  'VariableDeclarator > ArrowFunctionExpression',
+  'VariableDeclarator > FunctionExpression',
+  'PropertyDefinition > ArrowFunctionExpression',
+]
+/**
+ * Named functions plus interfaces, type aliases and exported consts.
+ */
+const JSDOC_CONTEXTS = [
+  ...NAMED_FUNCTIONS,
+  'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration',
+  'ExportNamedDeclaration[declaration.type="VariableDeclaration"]',
+]
+/**
+ * Files whose comments are not yet converted, keyed by plan task; each
+ * comment PR deletes its key.
+ */
+const PENDING = Object.values(jsdocPending).flat()
+const PENDING_TESTS = PENDING.filter((file) => file.startsWith('tests/'))
+const PENDING_OTHER = PENDING.filter((file) => !file.startsWith('tests/'))
 
 export default tseslint.config(
   {
@@ -150,18 +182,6 @@ export default tseslint.config(
       ],
 
       // Descriptions are required and types are not: types live in TypeScript.
-      'jsdoc/require-jsdoc': [
-        'error',
-        {
-          publicOnly: true,
-          require: { FunctionDeclaration: true, ClassDeclaration: true, MethodDefinition: true },
-          contexts: [
-            'TSInterfaceDeclaration',
-            'TSTypeAliasDeclaration',
-            'ExportNamedDeclaration > VariableDeclaration',
-          ],
-        },
-      ],
       'jsdoc/require-param-description': 'error',
       'jsdoc/require-returns-description': 'error',
       'jsdoc/require-param-type': 'off',
@@ -352,7 +372,6 @@ export default tseslint.config(
   {
     files: ['tests/**/*.ts'],
     rules: {
-      'jsdoc/require-jsdoc': 'off',
       // `.test.`, never `.spec.`, and no `__tests__/` folders.
       'check-file/filename-blocklist': [
         'error',
@@ -417,11 +436,6 @@ export default tseslint.config(
     rules: { 'local/comment-style': 'error' },
   },
   {
-    // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift (same reason tests/** is off above).
-    files: ['scripts/**/*.d.mts'],
-    rules: { 'jsdoc/require-jsdoc': 'off' },
-  },
-  {
     // Lint tooling: its regexes are the tested contract, it is a CLI that prints to the terminal, and its tests import it as a module.
     files: [
       'scripts/history-patterns.mjs',
@@ -450,5 +464,69 @@ export default tseslint.config(
       'unicorn/no-useless-concat': 'off',
     },
   },
+  {
+    // Every named function, method and class carries a JSDoc purpose line; tags only where they add what types cannot.
+    files: ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
+    rules: {
+      'jsdoc/require-jsdoc': [
+        'error',
+        {
+          publicOnly: false,
+          require: { FunctionDeclaration: false },
+          contexts: JSDOC_CONTEXTS,
+          checkConstructors: false,
+          // lint-staged runs eslint --fix, and this fixer inserts blank stubs.
+          enableFixer: false,
+        },
+      ],
+      'jsdoc/require-description': ['error', { contexts: JSDOC_CONTEXTS }],
+      'jsdoc/no-blank-blocks': ['error', { enableFixer: false }],
+      'jsdoc/check-param-names': ['error', { checkDestructured: false }],
+      'jsdoc/check-tag-names': ['error', { typed: true }],
+      'jsdoc/no-types': 'error',
+      'jsdoc/require-param': 'off',
+      'jsdoc/require-returns': 'off',
+    },
+  },
+  {
+    // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift.
+    files: ['scripts/**/*.d.mts'],
+    rules: { 'jsdoc/require-jsdoc': 'off' },
+  },
+  ...(PENDING_OTHER.length > 0
+    ? [
+        {
+          // Unconverted files keep the JSDoc rule they had before the rollout.
+          files: PENDING_OTHER,
+          rules: {
+            'jsdoc/require-jsdoc': [
+              'error',
+              {
+                publicOnly: true,
+                require: {
+                  FunctionDeclaration: true,
+                  ClassDeclaration: true,
+                  MethodDefinition: true,
+                },
+                contexts: [
+                  'TSInterfaceDeclaration',
+                  'TSTypeAliasDeclaration',
+                  'ExportNamedDeclaration > VariableDeclaration',
+                ],
+              },
+            ],
+            'jsdoc/require-description': 'off',
+          },
+        },
+      ]
+    : []),
+  ...(PENDING_TESTS.length > 0
+    ? [
+        {
+          files: PENDING_TESTS,
+          rules: { 'jsdoc/require-jsdoc': 'off', 'jsdoc/require-description': 'off' },
+        },
+      ]
+    : []),
   prettier
 )
