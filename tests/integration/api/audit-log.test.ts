@@ -52,7 +52,8 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * The columns a fixture row sets; the rest default to a system `tenant.updated` entry.
+ * The columns a fixture row sets. Without `actorUserId` the row is a system
+ * entry; the other columns default to a `tenant.updated` action.
  */
 interface SeedRow {
   tenantId: string

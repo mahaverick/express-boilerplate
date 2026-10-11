@@ -690,7 +690,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('refuses a cross-site form POST outright, so it can never set a session cookie', async () => {
-      // Real, registered credentials are used so the 415 proves the request is refused on its encoding, before the controller reads the body. sameSite: 'strict' is not what stops it: that governs when a cookie is sent.
+      // Real, registered credentials are used so the 415 proves the request is refused on its encoding, before the controller reads the body. sameSite: 'strict' is not what stops it: it governs when a cookie is sent, not whether a cross-site response may set one (content-type.middleware.ts).
       const email = uniqueEmail()
       await registerUser({ email })
 

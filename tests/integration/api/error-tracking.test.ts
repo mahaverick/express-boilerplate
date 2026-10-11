@@ -4,12 +4,12 @@
  * tenant resolution) and the real `errorHandler`, on a probe router of
  * failing routes: the 5xx body's `errorId` names the log line and the one
  * `$exception` sent, signed and with GeoIP disabled; the actor's identity and
- * tenant group, or the server's anonymous identity; what is never sent (a 404, a validation 400, a client
- * abort, a timeline 502, a 503 with no cause); a postgres.js unique
- * violation arriving without its row values; and the `/collect` proxy's own
- * failures never reaching the reporter. Error tracking is enabled for this
- * file through a mocked `getEnv()`. The payload assertions run against the
- * reporter built in the error-tracking services.
+ * tenant group, or the server's anonymous identity; what is never sent (a
+ * 404, a validation 400, a client abort, a timeline 502, a 503 with no
+ * cause); a postgres.js unique violation arriving without its row values;
+ * and the `/collect` proxy's own failures never reaching the reporter. Error
+ * tracking is enabled for this file through a mocked `getEnv()`. The payload
+ * assertions run against the reporter built in the error-tracking services.
  */
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
