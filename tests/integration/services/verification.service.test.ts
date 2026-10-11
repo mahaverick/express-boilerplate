@@ -11,8 +11,7 @@ import { markEmailVerified } from '@/services/verification.service'
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * An address unique to each call, so users created by different tests never collide.
  */
 function uniqueEmail(): string {
   return `verification-service-${randomUUID()}@example.test`

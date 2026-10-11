@@ -44,23 +44,29 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 })
 
 /**
- * Wait for one job id to settle on `worker`.
- * @param worker - The running analytics Worker.
- * @param jobId - The job to wait for.
- * @returns Which event fired for it.
+ * Resolves with 'completed' or 'failed' once the job `jobId` settles on the running analytics Worker.
  */
 function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
+    /**
+     * Detaches both listeners and resolves with 'completed' when `jobId` completes.
+     */
     const onCompleted = (job: Job): void => {
       if (job.id !== jobId) return
       cleanup()
       resolve('completed')
     }
+    /**
+     * Detaches both listeners and resolves with 'failed' when `jobId` fails.
+     */
     const onFailed = (job: Job | undefined): void => {
       if (job?.id !== jobId) return
       cleanup()
       resolve('failed')
     }
+    /**
+     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
+     */
     const cleanup = (): void => {
       worker.off('completed', onCompleted)
       worker.off('failed', onFailed)
@@ -151,7 +157,7 @@ describe('analytics.worker', () => {
     const gone = await createTrackedUser()
     await sql`update users set deleted_at = now() where id = ${gone.id}`
     await purgeUser({ userId: owner.id }, gone.id, 'Erasure request, ticket 9003')
-    // The purge queued it an hour out; bring it due.
+    // The purge queues it ANALYTICS_DELETION_DELAY_MS out; bring it due.
     await sql`
       update analytics_deletions set not_before = now() - interval '1 second'
       where distinct_id = ${gone.id}`

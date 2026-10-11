@@ -30,9 +30,8 @@ const deployed: Record<string, string> = {
 }
 
 /**
- * Run the boot checks against a crafted environment.
- * @param source - Raw variables, parsed with parseEnv first.
- * @returns The thrown message, if any, and every warning.
+ * Run the boot checks against a crafted environment: `source` holds raw variables, which
+ * `parseEnv` parses first. Returns the thrown message, if any, and every warning.
  */
 function runChecks(source: Record<string, string>): {
   error: string | undefined
@@ -49,8 +48,8 @@ function runChecks(source: Record<string, string>): {
 }
 
 /**
- * Both timeline variables, set.
- * @returns The key and the project id.
+ * The two variables that must be set together to turn the timeline on: the PostHog personal
+ * API key and the project id.
  */
 function bothTimelineVariables(): Record<string, string> {
   return { POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real', POSTHOG_PROJECT_ID: '12345' }

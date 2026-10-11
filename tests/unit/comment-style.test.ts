@@ -6,10 +6,8 @@ import { commentStyleRule } from '../../scripts/comment-style.mjs'
 const linter = new Linter({ configType: 'flat' })
 
 /**
- * Lint a snippet with only the comment-style rule on.
- * @param code - Source text.
- * @param filename - Decides TS or TSX parsing.
- * @returns The messageIds reported, in order.
+ * Lint a snippet with only the comment-style rule on, and return the messageIds it reports, in
+ * order. `filename` decides TS or TSX parsing.
  */
 function lint(code: string, filename = 'file.ts'): (string | undefined)[] {
   return linter

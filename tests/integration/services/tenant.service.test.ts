@@ -34,8 +34,7 @@ afterEach(async () => {
 })
 
 /**
- * A fresh user, tracked for cleanup.
- * @returns The user's id.
+ * Create a user to act as a tenant owner and track it for the `afterEach` cleanup; resolves with its id.
  */
 async function createUser(): Promise<string> {
   const user = await userRepository.create({ email: `tenant-service-${randomUUID()}@example.test` })
@@ -44,16 +43,14 @@ async function createUser(): Promise<string> {
 }
 
 /**
- * A slug unique to one call.
- * @returns The slug.
+ * A slug unique to each call, so tenants created by different tests never collide.
  */
 function uniqueSlug(): string {
   return `tenant-${randomUUID()}`
 }
 
 /**
- * A repository `update` stand-in that fails the test if it is ever called.
- * @returns Never; always rejects.
+ * A repository `update` stand-in that rejects, so a test fails if the service calls `update` when it must not.
  */
 function refuseWrite(): Promise<never> {
   return Promise.reject(new Error('update must not run'))

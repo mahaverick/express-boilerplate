@@ -1,8 +1,8 @@
 /**
  * @file A rate-limit Store built at import time must not resolve its
- * backend eagerly. `getRedis` is mocked throughout — no real Redis
+ * backend eagerly. `getRedis` is mocked throughout, so no real Redis
  * connection is opened, which is what keeps this a tests/unit/ file
- * rather than tests/integration/. The store's behaviour once it IS backed
+ * rather than tests/integration/. The store's behaviour once it is backed
  * by real Redis is covered separately, against the real thing, in
  * tests/integration/.
  */
@@ -16,12 +16,10 @@ import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 vi.mock('@/services/redis.service', () => ({ getRedis: vi.fn() }))
 
 /**
- * SharedRateLimitStore.init() only ever reads `windowMs` off this
- * (directly, and indirectly via MemoryStore/RedisStore's own `init`) —
- * every other field of the real `Options` type is irrelevant to the store
- * under test. `as unknown as`, not a direct `as`, because this literal is
- * nowhere near a structural superset of the real, much larger `Options`
- * type.
+ * SharedRateLimitStore.init() reads only `windowMs` off this, directly and through
+ * MemoryStore's and RedisStore's own `init`; no other field of the real `Options` type matters
+ * to the store under test. It is cast with `as unknown as` because this literal is far from a
+ * structural superset of `Options`, so a direct `as` is refused.
  */
 const testOptions = { windowMs: 60_000 } as unknown as Parameters<SharedRateLimitStore['init']>[0]
 
@@ -32,8 +30,8 @@ const testOptions = { windowMs: 60_000 } as unknown as Parameters<SharedRateLimi
  * the key) so a test can assert on `totalHits`. `outage.isDown` makes every
  * command reject, the way node-redis does with `disableOfflineQueue` while
  * reconnecting; `outage.isStalled` makes every command never settle, the way
- * it does on a server that is connected and does not answer.
- * @returns The fake client, the raw commands it was sent, and its outage switches.
+ * it does on a server that is connected and does not answer. Returns the fake
+ * client, the raw commands it was sent, and the two outage switches.
  */
 function fakeRedisClient(): {
   client: { sendCommand: Mock }
@@ -62,10 +60,8 @@ function fakeRedisClient(): {
 }
 
 /**
- * Increment a key and read its count straight away: MemoryStore mutates one record in place.
- * @param store - The store under test.
- * @param key - The client key to increment.
- * @returns The key's hit count right after this increment.
+ * Increment `key` on `store` and return its hit count right after that increment: MemoryStore
+ * mutates one record in place, so the count must be read out at once.
  */
 async function hitsAfterIncrement(store: SharedRateLimitStore, key: string): Promise<number> {
   const response = await store.increment(key)
@@ -141,7 +137,7 @@ describe('SharedRateLimitStore', () => {
     commands.length = 0
     const second = await store.increment('client-a')
     expect(second.totalHits).toBe(2)
-    // The Lua scripts are loaded once, at the switch — a second request must not re-run RedisStore.init(), which would mean re-attempting the latch on every request instead of switching at most once.
+    // The Lua scripts load once, at the switch: a second request must not re-run RedisStore.init(), which would mean re-attempting the switch on every request.
     expect(commands.some((command) => command[0] === 'SCRIPT')).toBe(false)
     expect(commands.some((command) => command[0] === 'EVALSHA')).toBe(true)
   })

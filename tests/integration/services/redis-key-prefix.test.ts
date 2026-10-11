@@ -72,10 +72,8 @@ const observed: {
 const clients: { reader?: RedisClientType; subscriber?: RedisClientType } = {}
 
 /**
- * Every key matching a pattern, via SCAN (never KEYS: this Redis is shared).
- * @param client - A connected, non-subscriber client.
- * @param pattern - The glob to match.
- * @returns The matching keys.
+ * Every key matching a glob, read with SCAN and never KEYS because this Redis is shared.
+ * The client must be connected and not in subscriber mode.
  */
 async function scanKeys(client: RedisClientType, pattern = '*'): Promise<string[]> {
   const found: string[] = []
@@ -87,9 +85,7 @@ async function scanKeys(client: RedisClientType, pattern = '*'): Promise<string[
 }
 
 /**
- * Whether every expected keyspace has at least one key under this file's prefix.
- * @param keys - Keys under this file's prefix.
- * @returns True once each keyspace is present.
+ * Whether every expected keyspace has at least one key among `keys`, all of which sit under this file's prefix.
  */
 function hasEveryKeyspace(keys: string[]): boolean {
   return KEYSPACES.every((keyspace) =>

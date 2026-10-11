@@ -1,5 +1,5 @@
 /**
- * @file `maintenanceVerdict` against spec §4.3's tables, mode by mode: the
+ * @file `maintenanceVerdict` against the rule tables, mode by mode: the
  * always-let-through set, the auth routes, reads, writes, the read-only
  * allowlist, OPTIONS, an unknown path, and how a path is matched (HEAD as
  * GET, case, trailing slash, a parameter segment); which routes are
@@ -17,11 +17,8 @@ import {
 } from '@/constants/maintenance-mode.constants'
 
 /**
- * What the gate does with one request in one mode, without the rule.
- * @param mode - The replica's mode.
- * @param method - The request method.
- * @param path - The request path, without the query string.
- * @returns `'allow'`, `MAINTENANCE_MODE_CODE` or `READ_ONLY_MODE_CODE`.
+ * What the gate does with one request in one mode, without the rule that decided it: `'allow'`,
+ * `MAINTENANCE_MODE_CODE` or `READ_ONLY_MODE_CODE`. `path` has no query string.
  */
 function maintenanceVerdict(
   mode: MaintenanceMode,

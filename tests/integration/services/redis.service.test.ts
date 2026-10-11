@@ -30,8 +30,8 @@ describe('redis.service', () => {
    * `getRedis()` reconnects lazily, so without an explicit "closed" state a
    * ping issued after `closeRedis()` would silently open a new socket and
    * report healthy. `closeRedis()` marks the module permanently closed,
-   * matching a real process shutting down, so this must run before any
-   * later test in this file that still needs a working client.
+   * matching a real process shutting down, so no later test in this file can
+   * use a working client.
    */
   it('reports unreachable, without reconnecting, once closed', async () => {
     expect(await isRedisReachable()).toBe(true)

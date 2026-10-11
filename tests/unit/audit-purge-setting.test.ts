@@ -10,9 +10,8 @@ import { describe, expect, it } from 'vitest'
 const SRC = path.resolve(process.cwd(), 'src')
 
 /**
- * Every TypeScript file under src/ whose text contains `needle`.
- * @param needle - The literal to look for.
- * @returns Repo-relative POSIX paths, sorted.
+ * The repo-relative POSIX paths, sorted, of every TypeScript file under src/ whose text
+ * contains the literal `needle`.
  */
 function sourceFilesNaming(needle: string): string[] {
   return fs

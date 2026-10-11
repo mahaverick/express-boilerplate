@@ -1,5 +1,5 @@
 /**
- * @file Pins the onboarding registry to the spec's default steps, the value
+ * @file Pins the onboarding registry's default steps, the value
  * sets the CHECK constraints are built from, and the load-time assertion
  * every registry passes through.
  */
@@ -22,9 +22,7 @@ import {
 import { MAX_REASON_LENGTH } from '@/validators/platform.validators'
 
 /**
- * A valid registry entry, overridable per test.
- * @param overrides - Fields to replace.
- * @returns The step.
+ * A valid onboarding step whose fields a test can override.
  */
 function step(overrides: Partial<OnboardingStep> = {}): OnboardingStep {
   return {

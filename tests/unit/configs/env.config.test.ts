@@ -206,7 +206,7 @@ describe('parseEnv', () => {
 })
 
 describe('getEnv', () => {
-  // Vitest's global setup (tests/helpers/setup-global.ts) loads .env.test into process.env before any test file runs, so this exercises the real memoised parse rather than a hand-built source object.
+  // Vitest's setup file (tests/helpers/setup-global.ts) loads .env.test into process.env before each test file runs, so this exercises the real memoised parse rather than a hand-built source object.
   it('parses process.env and reports the test environment', () => {
     expect(getEnv().NODE_ENV).toBe('test')
     expect(getEnv().APP_ENV).toBe('local')
@@ -218,7 +218,7 @@ describe('getEnv', () => {
 })
 
 describe('getDatabaseUrl', () => {
-  // Vitest's global setup loads .env.test, so DATABASE_URL is already present in process.env here — this is what drizzle.config.ts relies on when only DATABASE_URL (not the full schema) is exported.
+  // That setup file loads .env.test, so DATABASE_URL is already in process.env here; drizzle.config.ts relies on the same when only DATABASE_URL (not the full schema) is exported.
   it('reads DATABASE_URL from process.env without requiring the rest of the schema', () => {
     expect(getDatabaseUrl()).toBe(process.env.DATABASE_URL)
   })

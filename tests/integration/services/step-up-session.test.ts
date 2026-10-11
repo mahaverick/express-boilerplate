@@ -20,9 +20,7 @@ import { requireDurationMs } from '@/utilities/duration.utilities'
 const userRepository = new UserRepository()
 
 /**
- * Every distinct `authenticated_at` in a session, as epoch milliseconds.
- * @param sessionId - The session.
- * @returns The distinct values, oldest first.
+ * Every distinct `authenticated_at` in a session as epoch milliseconds, oldest first; NaN stands for NULL.
  */
 async function authenticatedTimes(sessionId: string): Promise<number[]> {
   const rows = await sql<{ at: Date | null }[]>`
@@ -33,8 +31,7 @@ async function authenticatedTimes(sessionId: string): Promise<number[]> {
 }
 
 /**
- * Move a session's authentication an hour into the past.
- * @param sessionId - The session.
+ * Move a session's `authenticated_at` an hour into the past on every row, so a later reauthentication is distinguishable from the issue time.
  */
 async function ageSession(sessionId: string): Promise<void> {
   await sql`
@@ -52,6 +49,9 @@ describe('session authentication time', () => {
     createdUserIds.length = 0
   })
 
+  /**
+   * Create a user for a test and track it for the `afterEach` cleanup; resolves with its id.
+   */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: `step-up-${randomUUID()}@example.test` })
     createdUserIds.push(user.id)
@@ -110,7 +110,7 @@ describe('session authentication time', () => {
 
     expect(at.getTime()).toBeGreaterThanOrEqual(before - 1000)
     expect(await authenticatedTimes(sessionId)).toEqual([at.getTime()])
-    // The next rotation copies the new time forward.
+    // The next rotation copies the reauthenticated time forward.
     const next = await rotateRefreshToken(rotated.raw)
     expect(next.authenticatedAt?.getTime()).toBe(at.getTime())
   })

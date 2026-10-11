@@ -41,10 +41,8 @@ vi.mock('redis', async (importOriginal) => {
 const silent = { server: net.createServer(), sockets: new Set<net.Socket>() }
 
 /**
- * Whether a promise settles within `ms`, either way.
- * @param operation - The operation under test.
- * @param ms - The bound.
- * @returns `'rejected'`, `'resolved'` or `'hung'`.
+ * Race an operation against a hang budget of `ms`: `'resolved'` or `'rejected'` for how it
+ * settled, `'hung'` when it was still pending at `ms`.
  */
 async function settleWithin(operation: Promise<unknown>, ms: number): Promise<string> {
   const outcome = (async () => {

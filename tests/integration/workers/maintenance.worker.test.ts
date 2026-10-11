@@ -1,8 +1,7 @@
 /**
  * @file A real maintenance Worker picks a retention-purge job off the real
  * Redis and runs it against this worker's Postgres, with the schema's
- * default windows and the real clock. No test file leaves rows older than
- * those windows, so the run deletes nothing another file owns.
+ * default windows and the real clock.
  */
 import type { Job, Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -15,23 +14,29 @@ import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
- * Wait for one job id to settle on `worker`.
- * @param worker - The running maintenance Worker.
- * @param jobId - The job to wait for.
- * @returns Which event fired for it.
+ * Resolves with 'completed' or 'failed' once the job `jobId` settles on the running maintenance Worker.
  */
 function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
+    /**
+     * Detaches both listeners and resolves with 'completed' when `jobId` completes.
+     */
     const onCompleted = (job: Job): void => {
       if (job.id !== jobId) return
       cleanup()
       resolve('completed')
     }
+    /**
+     * Detaches both listeners and resolves with 'failed' when `jobId` fails.
+     */
     const onFailed = (job: Job | undefined): void => {
       if (job?.id !== jobId) return
       cleanup()
       resolve('failed')
     }
+    /**
+     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
+     */
     const cleanup = (): void => {
       worker.off('completed', onCompleted)
       worker.off('failed', onFailed)

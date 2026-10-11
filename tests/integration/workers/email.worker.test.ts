@@ -1,19 +1,18 @@
 /**
  * @file Against the real Redis, Mailpit, and per-worker Postgres: proves
- * the whole path `email.job.ts`'s `addEmailJob` writes into Redis is
- * actually picked up and processed by a real BullMQ Worker
- * (`email.worker.ts`) — enqueue, Worker pulls the job, real `sendMail`,
- * real Mailpit delivery / real `email_logs` row. The PII constraint (the
- * worker must not put PII in the thrown error message) is proven here, not
- * just in `tests/unit/workers/email.worker.test.ts`: the unit test only
- * proves the Error `processEmailJob` throws in-process, not what BullMQ
- * itself wrote to Redis's own `failedReason` field, a second, independent
- * serialization step. Runs under this worker's own `REDIS_KEY_PREFIX`
- * (`tests/helpers/setup-global.ts`), so jobs this file adds never collide
- * with another vitest worker's keyspace. It also proves what the worker
- * does to each email's `email_messages` row: sent, suppressed, failed after
- * every attempt, created for a job queued without one, and never moved
- * back from a status a provider event set first.
+ * that a job `email.job.ts`'s `addEmailJob` writes into Redis is picked up
+ * and processed by a real BullMQ Worker (`email.worker.ts`), which calls the
+ * real `sendMail` and leaves a real Mailpit delivery and `email_logs` row.
+ * The PII constraint (the worker must not put PII in the thrown error
+ * message) is proven here as well as in `tests/unit/workers/email.worker.test.ts`:
+ * the unit test only proves the Error `processEmailJob` throws in-process,
+ * not what BullMQ wrote to Redis's own `failedReason` field, a second,
+ * independent serialization step. Jobs run under this worker's own
+ * `REDIS_KEY_PREFIX` (`tests/helpers/setup-global.ts`), so they never collide
+ * with another vitest worker's keyspace. It also proves what the worker does
+ * to each email's `email_messages` row: sent, suppressed, failed after every
+ * attempt, created for a job queued without one, and never moved back from a
+ * status a provider event set first.
  */
 import { randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
@@ -43,27 +42,21 @@ const emailMessageRepository = new EmailMessageRepository()
 const emailSuppressionRepository = new EmailSuppressionRepository()
 
 /**
- * A Message-ID with its angle brackets, whichever form Mailpit reports it in.
- * @param messageId - The Message-ID as Mailpit's API returns it.
- * @returns `<…>`.
+ * A Message-ID wrapped in angle brackets, whichever form Mailpit reports it in, so it compares with the stored header.
  */
 function bracketed(messageId: string): string {
   return `<${messageId.replaceAll(/^<|>$/g, '')}>`
 }
 
 /**
- * A disposable recipient address, unique to one test.
- * @param label - Names the case, embedded in the address.
- * @returns A unique `@example.test` address.
+ * An `@example.test` address unique to each call; `label` names the case and is embedded in it.
  */
 function uniqueRecipient(label: string): string {
   return `email-worker-${label}-${randomUUID()}@example.test`
 }
 
 /**
- * A real, valid `password_reset` message body for one recipient.
- * @param to - The recipient.
- * @returns The `addEmailJob` payload.
+ * A valid `password_reset` payload for `to`, in the shape `addEmailJob` takes.
  */
 function passwordResetMessage(to: string): Parameters<typeof addEmailJob>[0] {
   return {
@@ -78,49 +71,56 @@ function passwordResetMessage(to: string): Parameters<typeof addEmailJob>[0] {
 }
 
 /**
- * Nodemailer's own `sendMail` is an overloaded method, so a stub needs this
- * cast to stand in for it (same reasoning as
- * `tests/integration/services/mailer.service.test.ts`'s `StubbedSendMail`).
+ * Nodemailer's `sendMail` is overloaded, so a stub needs this type to stand in for it, as
+ * `StubbedSendMail` in `tests/integration/services/mailer.service.test.ts` does.
  */
 type StubbedSendMail = (mailOptions: unknown) => Promise<never>
 
+/**
+ * A `sendMail` stub that rejects with an ECONNECTION error, so every send attempt fails.
+ */
 const rejectWithConnectionError: StubbedSendMail = () => {
   const error = Object.assign(new Error('Connection refused'), { code: 'ECONNECTION' })
   return Promise.reject(error)
 }
 
 /**
- * `updateData` swapped on the prototype to record which attempt scrubbed,
- * declared with a `this` type, as `worker-outage.test.ts` does for Worker.
+ * `updateData` swapped on the prototype to record which attempt scrubbed, declared with a
+ * `this` type as `WorkerInternals` in `worker-outage.test.ts` is for Worker.
  */
 type JobInternals = { updateData: (this: Job, data: unknown) => Promise<void> }
 const jobPrototype = Job.prototype as unknown as JobInternals
 const originalUpdateData = jobPrototype.updateData
 
 /**
- * Wait for one specific job id to reach a terminal state on `worker`.
- * Scoped to a single job id, not "the next completed/failed event", so two
- * tests running their own job through the same shared Worker instance can
- * never resolve each other's promise.
- * @param worker - The Worker to listen on.
- * @param jobId - The job to watch.
- * @returns Which event fired first for that job.
+ * Resolves with `'completed'` or `'failed'`, whichever fires first for the job `jobId` on
+ * `worker`. It is scoped to one job id, not "the next completed or failed event", so two tests
+ * that run jobs through the same shared Worker never resolve each other's promise.
  */
 function waitForJobSettled(
   worker: Worker<EmailJobData>,
   jobId: string
 ): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
+    /**
+     * Detaches both listeners and resolves with 'completed' when `jobId` completes.
+     */
     const onCompleted = (job: Job<EmailJobData>): void => {
       if (job.id !== jobId) return
       cleanup()
       resolve('completed')
     }
+    /**
+     * Detaches both listeners and resolves with 'failed' when `jobId` fails.
+     */
     const onFailed = (job: Job<EmailJobData> | undefined): void => {
       if (job?.id !== jobId) return
       cleanup()
       resolve('failed')
     }
+    /**
+     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
+     */
     const cleanup = (): void => {
       worker.off('completed', onCompleted)
       worker.off('failed', onFailed)
@@ -310,7 +310,7 @@ describe('email.worker', () => {
       'sendMail',
       rejectWithConnectionError as (typeof transporter)['sendMail'],
       async () => {
-        // attempts: 1 — this asserts the terminal failed state, not the retry schedule (emailJobDefaults' own defaults are exercised by inspection, not by waiting through them here).
+        // attempts: 1 asserts the terminal failed state, not the retry count, which the five-failures test above covers.
         const job = await addEmailJob(passwordResetMessage(recipient), 'user-failure-path', {
           attempts: 1,
         })
@@ -335,6 +335,9 @@ describe('email.worker', () => {
   it("keeps the recipient out of BullMQ's failedReason and stacktrace when a lookup before the send fails", async () => {
     const recipient = uniqueRecipient('lookup-failure')
     createdRecipients.push(recipient)
+    /**
+     * A `findActive` stand-in that rejects with an error whose message carries the recipient, as a database error with query parameters would.
+     */
     const failWithAddress = (): Promise<never> =>
       Promise.reject(new Error(`query failed, params: ${recipient}`))
 
@@ -364,6 +367,9 @@ describe('email.worker', () => {
     const recipient = uniqueRecipient('scrub')
     const token = randomUUID()
     const scrubs: { jobId: string | undefined; attemptsMade: number }[] = []
+    /**
+     * `updateData` that records which job and attempt scrubbed, then runs the original.
+     */
     function recordingUpdateData(this: Job, data: unknown): Promise<void> {
       scrubs.push({ jobId: this.id, attemptsMade: this.attemptsMade })
       return originalUpdateData.call(this, data)
@@ -502,9 +508,8 @@ describe('email.worker', () => {
   }, 20_000)
 
   /**
-   * An unlistened 'error' event on an EventEmitter crashes the process, so
-   * this proves the listener is actually attached and routes to the
-   * logger, not merely present in source.
+   * An unlistened 'error' event on an EventEmitter crashes the process, so this proves the
+   * listener is attached and routes to the logger, not merely present in source.
    */
   it("worker.on('error') logs instead of crashing the process", () => {
     const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {
