@@ -293,9 +293,8 @@ function pageCursors(
   const first = rows[0]
   const last = rows.at(-1)
   /**
-   * A row's cursor.
-   * @param row - A row of the page.
-   * @returns Its sort key and id.
+   * The cursor that resumes a keyset page at this row: the `(sortAt, id)` pair
+   * the keyset condition compares against.
    */
   const keyOf = (row: { sortAt: string; id: string }): EmailPageCursor => ({
     sortAt: row.sortAt,
@@ -824,9 +823,10 @@ export class PlatformEmailRepository {
 
   /**
    * Open and click counts over `general`-sender messages created in
-   * `[from, to)` in a `LEFT_SERVER_STATUSES` status. Token emails go through
-   * the transactional sender, whose click tracking is off, so they are left
-   * out of both sides of the rate.
+   * `[from, to)` in a `LEFT_SERVER_STATUSES` status. Only the `general`
+   * sender is counted: token emails go through the transactional sender,
+   * whose click tracking is off, so they can record no click and are left
+   * out of the sent, opened and clicked counts alike.
    * @param from - Inclusive start.
    * @param to - Exclusive end.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -837,11 +837,11 @@ export class PlatformEmailRepository {
     to: Date,
     executor: DbExecutor = db
   ): Promise<EmailEngagementCounts> {
-    // A builder subquery, not raw SQL: drizzle leaves a single-table query's own columns unqualified, which would bind this message id to the event's.
     /**
-     * Count the matched messages that have at least one event of `type`.
-     * @param type - The event type.
-     * @returns The count expression.
+     * Count the matched messages that have at least one event of `type`. The
+     * subquery is a builder query, not raw SQL: drizzle leaves a single-table
+     * query's own columns unqualified, which would bind this message id to the
+     * event's.
      */
     const withEvent = (type: EmailEventType): SQL<number> => {
       const event = executor
@@ -860,8 +860,9 @@ export class PlatformEmailRepository {
   }
 
   /**
-   * Messages created in `[from, to)` in a `LEFT_SERVER_STATUSES` status, grouped by
-   * template or by lowercased recipient domain, most messages first.
+   * Messages created in `[from, to)` in a `LEFT_SERVER_STATUSES` status,
+   * grouped by template or by lowercased recipient domain, most messages
+   * first.
    * @param by - Group by `template` or `domain`.
    * @param from - Inclusive start.
    * @param to - Exclusive end.

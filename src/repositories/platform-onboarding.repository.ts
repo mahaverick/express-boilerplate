@@ -5,8 +5,8 @@
  * derived here, in one SQL shape (`progressQuery`) shared by the funnel, the
  * list, the Overview's stuck count and the tenant tab, from the registry
  * keys the service passes in: a tenant step counts from a tenant-level
- * completion, a member step once any active owner has done it, and a completion whose key left
- * the registry counts for nothing. Raw rows carry timestamps as UTC text
+ * completion, a member step once any active owner has done it, and a
+ * completion whose key left the registry counts for nothing. Raw rows carry timestamps as UTC text
  * (drizzle's postgres-js driver hands timestamps back unparsed), which the
  * mappers turn into Dates.
  */
@@ -375,9 +375,8 @@ function pageCursors(
   cursor: OnboardingPageCursor | undefined
 ): Pick<OnboardingProgressPage, 'nextCursor' | 'prevCursor'> {
   /**
-   * A row's cursor.
-   * @param row - A row of the page.
-   * @returns Its sort key and id.
+   * The cursor that resumes a keyset page at this row: the `(sortAt, id)` pair
+   * the keyset condition compares against.
    */
   const keyOf = (row: RawProgressRow): OnboardingPageCursor => ({ sortAt: row.sort_at, id: row.id })
   const first = rows.at(0)
@@ -745,11 +744,11 @@ export class PlatformOnboardingRepository {
    * @returns One row per tenant.
    */
   async reconcileCandidates(executor: DbExecutor = db): Promise<OnboardingReconcileRow[]> {
-    // Spelled out: drizzle renders a one-table select's columns unqualified, binding them inside.
     /**
-     * The earliest member-access audit entry of `action` in the tenant at or after its onboarding start.
-     * @param action - The audit action to look for.
-     * @returns The correlated subquery, null when there is no such entry.
+     * The earliest member-access audit entry of `action` in the tenant at or
+     * after its onboarding start, or null when there is none. The correlation
+     * is spelled out in SQL: drizzle renders a one-table select's columns
+     * unqualified, binding them inside the subquery.
      */
     const earliestMemberEntry = (action: 'tenant.settings_updated' | 'invitation.created') =>
       sql<Date | null>`(

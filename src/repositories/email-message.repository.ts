@@ -194,9 +194,10 @@ export class EmailMessageRepository {
    * nothing and never waits on a child row another transaction holds; a
    * message whose child was skipped goes on a later run. Takes the batch
    * oldest id first with FOR UPDATE SKIP LOCKED. The batch is an
-   * `IN (subquery … LIMIT)`, so `limit` is a target, not a bound. A newer message that was
-   * resent from one of these has its `resent_from_id` set to NULL by the
-   * foreign key, which waits if a webhook is updating that newer row.
+   * `IN (subquery … LIMIT)`, so `limit` is a target, not a bound. A newer
+   * message that was resent from one of these has its `resent_from_id` set to
+   * NULL by the foreign key, which waits if a webhook is updating that newer
+   * row.
    * @param cutoff - Messages created before this go.
    * @param limit - The target number of rows for one call.
    * @param tx - The batch's transaction.

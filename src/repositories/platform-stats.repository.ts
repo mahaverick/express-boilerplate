@@ -1,8 +1,9 @@
 /**
  * @file Staff-only, cross-tenant aggregates for the Overview. Only
- * `services/platform-*.service.ts` may import this file (an eslint rule). Tenant
- * counts leave out the platform tenant and soft-deleted tenants, and user counts
- * leave out soft-deleted users; staff are users too, so they stay in the user counts.
+ * `services/platform-*.service.ts` may import this file (an eslint rule).
+ * Tenant counts leave out the platform tenant and soft-deleted tenants, and
+ * user counts leave out soft-deleted users; staff are users too, so they stay
+ * in the user counts.
  */
 import { and, count, eq, gte, isNull, lt, ne, sql, type SQL } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
