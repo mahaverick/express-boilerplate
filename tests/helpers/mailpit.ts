@@ -7,12 +7,18 @@ import { settle } from './timing'
 
 const MAILPIT_API = 'http://localhost:8025/api/v1'
 
+/**
+ * One hit in a Mailpit search result.
+ */
 export interface MailpitMessage {
   ID: string
   To: { Address: string }[]
   Subject: string
 }
 
+/**
+ * A message's full content, as Mailpit's message endpoint returns it.
+ */
 export interface MailpitMessageDetail {
   HTML: string
   Text: string
@@ -21,11 +27,10 @@ export interface MailpitMessageDetail {
 }
 
 /**
- * Poll Mailpit's own HTTP API for messages to one recipient, retrying
- * briefly — a real SMTP delivery is not synchronous with Mailpit's search
- * index becoming queryable.
+ * Poll Mailpit for messages to one recipient, up to 30 searches 100 ms apart:
+ * an SMTP delivery is not synchronous with the message becoming searchable.
  * @param recipient - The `To:` address to search for.
- * @returns Every matching message; empty if none arrived within the budget.
+ * @returns Every matching message; empty if none showed up in the polls.
  */
 export async function findMailpitMessages(recipient: string): Promise<MailpitMessage[]> {
   const query = `to:${recipient}`
@@ -39,19 +44,15 @@ export async function findMailpitMessages(recipient: string): Promise<MailpitMes
 }
 
 /**
- * Confirm no message ever arrives for one recipient, within a short budget
- * — the negative counterpart of `findMailpitMessages`. Used to prove a
- * rendering failure never reaches the transport at all: unlike
- * `findMailpitMessages`, this polls the FULL budget every time (there is no
- * "arrived" signal to short-circuit on), so it is used sparingly.
+ * Assert that no message reaches one recipient during 10 searches 100 ms
+ * apart, the negative counterpart of `findMailpitMessages`. Absence has no
+ * event to wait on, so it always polls the whole span; use it sparingly.
  *
- * A single unwaited fetch here would pass whether or not anything is ever
- * going to arrive; see CLAUDE.md for why that shape is a false negative.
- * This loops for the whole budget so a message that lands mid-window — a
- * real risk for a caller racing a fire-and-forget mail send against a
- * negative assertion — still fails it.
- * @param recipient - The `To:` address that must never receive anything.
- * @returns Resolves once the budget has elapsed with nothing found.
+ * A single fetch would pass whether or not mail is still in flight. Polling
+ * the whole span fails the test when a fire-and-forget send lands mid-window.
+ * @param recipient - The `To:` address that must receive nothing.
+ * @returns Resolves once the polls end with nothing found.
+ * @throws {Error} When a message to the recipient shows up.
  */
 export async function assertNoMailpitMessage(recipient: string): Promise<void> {
   const query = `to:${recipient}`
@@ -64,9 +65,8 @@ export async function assertNoMailpitMessage(recipient: string): Promise<void> {
 }
 
 /**
- * Fetch one message's rendered parts and headers by id.
+ * Fetch one message's rendered bodies and sender, to assert on what was sent.
  * @param id - The Mailpit message id.
- * @returns The message's HTML and plain-text bodies, its From address and its Message-ID.
  */
 export async function getMailpitMessage(id: string): Promise<MailpitMessageDetail> {
   const response = await fetch(`${MAILPIT_API}/message/${id}`)
@@ -74,9 +74,9 @@ export async function getMailpitMessage(id: string): Promise<MailpitMessageDetai
 }
 
 /**
- * Empty one recipient's mailbox, so a later assertion on the same address
- * is not confused by an earlier test's mail. Used by any test that
- * registers twice with one address.
+ * Delete the messages to one recipient, so a later assertion on the same
+ * address is not confused by an earlier test's mail. It searches with
+ * `findMailpitMessages`, so it also waits out those polls when nothing is there.
  * @param recipient - The `To:` address to clear.
  */
 export async function drainMailpit(recipient: string): Promise<void> {
@@ -87,9 +87,9 @@ export async function drainMailpit(recipient: string): Promise<void> {
 }
 
 /**
- * Delete one message from Mailpit by id. Best-effort tidiness only, for a
- * mailbox shared across the whole test run — never asserted on, and scoped
- * to one message id so it cannot touch another test's in-flight mail.
+ * Delete one message from Mailpit by id, ignoring failure. The mailbox is
+ * shared across the whole test run, so this is scoped to one id and cannot
+ * touch another test's in-flight mail.
  * @param id - The Mailpit message id.
  */
 export async function deleteMailpitMessage(id: string): Promise<void> {
@@ -100,6 +100,6 @@ export async function deleteMailpitMessage(id: string): Promise<void> {
       body: JSON.stringify({ IDs: [id] }),
     })
   } catch {
-    // Best-effort: see this function's own JSDoc.
+    // A failed delete is ignored: the mailbox is only tidied, never asserted on.
   }
 }

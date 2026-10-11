@@ -9,7 +9,7 @@ import { getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 
 /**
- * The maintenance-mode notification jobs still pending (no Worker runs in the caller's file).
+ * The maintenance-mode notification jobs still waiting, delayed or prioritized on the queue.
  * @returns The jobs.
  */
 export async function pendingMaintenanceNotices(): Promise<Job<NotificationJobData>[]> {

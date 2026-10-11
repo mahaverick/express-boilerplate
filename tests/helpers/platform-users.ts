@@ -56,7 +56,7 @@ export async function createTrackedUser(options: TestUserOptions = {}): Promise<
 }
 
 /**
- * A bearer token for `user` on a random session id (no refresh row).
+ * A bearer token for `user` on a random session id, with no refresh row behind it.
  * @param user - The user.
  * @returns A signed access token.
  */

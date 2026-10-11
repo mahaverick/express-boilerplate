@@ -22,7 +22,7 @@ const POLL_INTERVAL_MS = 25
 const DEFAULT_TIMEOUT_MS = 5000
 
 /**
- * Every job currently on `queue` in a non-failed state, typed as `TData`.
+ * Every job on `queue` that is waiting, active, completed, delayed or prioritized, typed as `TData`.
  * @param queue - The queue to read.
  * @returns The jobs.
  */
@@ -54,14 +54,14 @@ export async function waitForJob<TData>(
 }
 
 /**
- * Assert no job on `queue` matches, once a sentinel added after the action has landed.
+ * Assert that no job on `queue` matches. It first adds and removes a sentinel
+ * job, so every add issued before it has reached Redis when the queue is read.
  *
  * Call it only after observing another job the action enqueues in the same
  * synchronous step as the one that must not exist (every caller waits for the
  * invitation email first), so that job's add was issued before the sentinel's.
  * @param queue - The queue to read. No Worker may consume it.
  * @param isMatch - The job that must not exist.
- * @returns Resolves once the check has passed.
  */
 export async function expectNoJob<TData>(
   queue: Queue,
@@ -126,7 +126,7 @@ export interface QueuedInvitationEmail {
 }
 
 /**
- * Wait for an invitation email to `to` whose token is not one already seen.
+ * Poll the email queue for an invitation email to `to` whose token is not one already seen.
  * @param to - The recipient address.
  * @param excludedTokens - Tokens from earlier emails to skip (e.g. before a resend).
  * @returns The queued email.
@@ -149,8 +149,8 @@ export async function waitForInvitationEmail(
 }
 
 /**
- * Wait for the `verify_email` notification job registration enqueues for
- * `userId`, and return the raw token from its verification link.
+ * Poll the notification queue for the `verify_email` job registration
+ * enqueues for `userId`, and return the raw token from its verification link.
  * @param userId - The registered user.
  * @returns The raw email-verification token.
  */

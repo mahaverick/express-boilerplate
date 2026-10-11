@@ -1,15 +1,15 @@
 /**
  * @file A real Redis outage without touching the shared compose Redis:
  * clients connect through this TCP proxy, and the outage is the proxy
- * resetting every connection. The proxy holds one port for its whole life —
- * re-listening on a hand-picked port could take over another worker's test
- * server on that port.
+ * resetting every connection. The proxy holds one port for its whole life: a
+ * port it gave up could be taken by another worker's test server before it
+ * listened again.
  */
 import net from 'node:net'
 import { settle } from './timing'
 
 /**
- * `'down'` resets every connection; `'silent'` accepts connections and never answers.
+ * `'up'` forwards; `'down'` closes open connections and resets new ones; `'silent'` accepts connections and never answers.
  */
 type ProxyMode = 'up' | 'down' | 'silent'
 
@@ -22,6 +22,10 @@ export class RedisProxy {
   private mode: ProxyMode = 'up'
   port = 0
 
+  /**
+   * Set the mode and drop every open connection, so clients already connected see it.
+   * @param mode - The new mode.
+   */
   private switchTo(mode: ProxyMode): void {
     this.mode = mode
     for (const socket of this.sockets) socket.destroy()
@@ -46,6 +50,9 @@ export class RedisProxy {
       const toRedis = net.connect(Number(upstream.port || 6379), upstream.hostname)
       this.sockets.add(toRedis)
       client.pipe(toRedis).pipe(client)
+      /**
+       * Close both halves of this proxied connection and forget them.
+       */
       const teardown = (): void => {
         client.destroy()
         toRedis.destroy()
@@ -76,7 +83,7 @@ export class RedisProxy {
   }
 
   /**
-   * Reset every open connection, and every new one until `comeBack()`.
+   * Close every open connection and reset each new one until `comeBack()`.
    */
   goDown(): void {
     this.switchTo('down')
@@ -90,14 +97,14 @@ export class RedisProxy {
   }
 
   /**
-   * Forward again. Leaves live connections alone when already up; otherwise drops silent ones.
+   * Forward again. Leaves live connections alone when already up; otherwise drops the open ones.
    */
   comeBack(): void {
     if (this.mode !== 'up') this.switchTo('up')
   }
 
   /**
-   * Reset every connection and stop listening.
+   * Close every connection and stop listening.
    */
   close(): void {
     this.switchTo('down')
