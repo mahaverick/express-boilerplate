@@ -1,9 +1,8 @@
 /**
  * @file The purge gate of audit_logs' trigger (migration 0017): DELETE raises
  * unless the deleting transaction set both `app.audit_purge` to `'on'` and
- * `app.audit_purge_before` past the row's `occurred_at`, and an UPDATE still
- * raises under those settings (the redact exception is in
- * audit-redact-trigger.test.ts). Each setting is tested missing on its own,
+ * `app.audit_purge_before` past the row's `occurred_at`, and an UPDATE raises
+ * even then (the redact exception is in audit-redact-trigger.test.ts). Each setting is tested missing on its own,
  * so a guard of the form `a && b` cannot lose either half unnoticed. Raw SQL
  * throughout.
  */

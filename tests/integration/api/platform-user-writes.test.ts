@@ -55,7 +55,8 @@ function post(token: string, path: string, body: object = {}): Promise<Response>
 }
 
 /**
- * A staff PATCH of one platform user.
+ * A staff PATCH of one platform user, resolving with the raw response so
+ * tests can assert refusals as well as successes.
  */
 function patch(token: string, id: string, body: object): Promise<Response> {
   return request(app)

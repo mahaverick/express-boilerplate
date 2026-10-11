@@ -142,7 +142,7 @@ describe('security headers on a live SSE stream', () => {
   })
 })
 
-// `no-store`, not `no-cache` or `private`, which still keep the body in the browser's disk cache, readable after sign-out; routes with their own policy keep it.
+// Authenticated reads and the responses that carry an access token are `no-store`, not `no-cache` or `private`, which still keep the body in the browser's disk cache, readable after sign-out; routes with their own policy keep it.
 describe('Cache-Control', () => {
   afterEach(async () => {
     await truncateAuditLogs()

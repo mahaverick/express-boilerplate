@@ -124,7 +124,7 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     expect(malformed.body).toEqual(unknownToken.body)
 
-    // Direct equality, not "both are 4xx": a wrong-password answer that differed from an unknown token's would show that a token is live.
+    // Direct equality, not "both are 4xx": a wrong-password answer that differed from an unknown token's would show that the token is live and that the address already has a password someone set, which tells a link holder it is squatted.
     expect(wrongPassword.body).toEqual(unknownToken.body)
     expect(wrongPassword.status).toBe(unknownToken.status)
     expect(wrongPassword.status).toBe(400)
@@ -280,7 +280,8 @@ const RESEND_VERIFICATION_EMAIL_KEY_PATTERN = `${redisKey('rl', 'resend-verifica
 
 /**
  * Every Redis key matching a glob pattern, found with SCAN rather than KEYS,
- * which blocks the server for the whole keyspace; the same choice as
+ * which blocks the server for the whole keyspace and this may be a
+ * developer's own Redis with other data in it; the same choice as
  * `clearRateLimitCounters` in global-setup.ts.
  */
 async function redisKeysMatching(pattern: string): Promise<string[]> {

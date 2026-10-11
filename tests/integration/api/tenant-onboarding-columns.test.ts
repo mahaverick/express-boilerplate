@@ -59,7 +59,7 @@ describe('tenant responses', () => {
       201, 200, 200, 200,
     ])
     /**
-     * The response body typed as the envelope's `data` wrapper.
+     * Reads `data` off a response body that supertest types as `any`.
      */
     const body = (response: typeof created): { data: unknown } => response.body as { data: unknown }
     expectNoOnboardingColumns(body(created).data)

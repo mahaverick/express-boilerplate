@@ -71,7 +71,8 @@ function list(token: string, query: Record<string, string> = {}): Promise<Respon
 }
 
 /**
- * A staff GET of one user's detail.
+ * A staff GET of one user's detail, resolving with the raw response so tests
+ * can assert the 404s as well as the body.
  */
 function detail(token: string, id: string): Promise<Response> {
   return request(app).get(`/api/v1/platform/users/${id}`).set('Authorization', `Bearer ${token}`)

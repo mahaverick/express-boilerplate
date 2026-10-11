@@ -3,10 +3,10 @@
  * reports it to a fake PostHog before it exits 1, and boot raised V8's stack
  * depth to `ERROR_FRAME_LIMIT` first. The child's database and Redis point
  * at port 1, so it reaches no shared service; `tests/helpers/process-fault-preload.ts`
- * throws once boot has installed its listener. This file checks only that the
- * report arrives with its capture point and the boot-time stack depth. A
- * second child faults while PostHog holds the report: during that fatal
- * flush it is already out of rotation, and a SIGTERM then still exits 1.
+ * throws once boot has installed its listener. The first test checks that
+ * the report arrives with its capture point and the boot-time stack depth.
+ * The second faults a child while PostHog holds the report: during that
+ * fatal flush it is already out of rotation, and a SIGTERM then exits 1.
  * Each child binds a port the OS picks (the preload) and prints it, so the
  * test never chooses a port that another process could take first.
  */

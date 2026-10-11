@@ -57,7 +57,7 @@ async function seedUnverifiedUser(): Promise<{ user: { id: string }; token: stri
  *        pnpm exec vitest run tests/integration/api/verify-email-mutation.test.ts                    # green
  *
  * withMutatedModule re-evaluates the module graph between password.utilities
- * and app.ts, including database.service.ts, which opens a new postgres pool
+ * and app.ts, including database.service.ts, which opens a postgres pool
  * (`DB_POOL_MAX`) each time and nothing closes it. Fine for the few calls a
  * mutation proof needs; do not call it in a loop.
  */
