@@ -115,9 +115,7 @@ export const emailLogModel = pgTable(
      */
     errorCode: varchar('error_code', { length: ERROR_CODE_MAX_LENGTH }),
     /**
-     * The message this attempt belongs to. Nullable: a replica older than
-     * this column, or a job queued before it existed, records an attempt
-     * without one.
+     * The message this attempt belongs to, when it has one.
      */
     messageId: varchar('message_id', { length: 36 }).references(() => emailMessageModel.id, {
       onDelete: 'cascade',

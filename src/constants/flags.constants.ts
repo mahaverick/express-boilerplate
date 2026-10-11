@@ -307,8 +307,8 @@ export const FLAG_GROUP_PROPERTY_KEYS: ReadonlySet<string> = new Set([
 export const FLAG_DEFINITIONS_TIMEOUT_MS = 5000
 
 /**
- * The largest definitions body read; a larger one fails the fetch (56 flags
- * measured 28.6 kB).
+ * The largest definitions body read; a larger one fails the fetch. A registry
+ * of dozens of flags is tens of kilobytes, far under this.
  */
 export const FLAG_DEFINITIONS_MAX_BYTES = 2 * 1024 * 1024
 

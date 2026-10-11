@@ -78,7 +78,7 @@ const reason = z.string().min(1).max(500)
 /**
  * The reason on a member or invitation write: present when staff acted
  * through platform access, absent when a member did. Optional rather than
- * nullable, so a member's entry keeps its existing shape.
+ * nullable, so a member's entry carries no `reason` key.
  */
 const staffReason = reason.optional()
 
@@ -103,7 +103,8 @@ const MAX_REMINDER_RECIPIENTS = 1000
 
 /**
  * Every audited action: the kind of record it targets and the strict schema
- * its `metadata` must match. `audit.service.record` rejects anything else.
+ * its `metadata` must match. `audit.service` rejects an entry whose metadata
+ * does not match.
  */
 export const AUDIT_ACTIONS = {
   'tenant.created': {

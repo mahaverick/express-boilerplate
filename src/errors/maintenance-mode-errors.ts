@@ -1,6 +1,6 @@
 /**
  * @file The refusal maintenance mode answers: the gate's for a route the
- * mode closes, and the auth service's for a non-staff sign-in in `full`.
+ * mode closes, and `assertSignInAllowed`'s for a non-staff sign-in in `full`.
  * `errorHandler` (error.middleware.ts) writes it with its own body and
  * `Retry-After`, and neither masks nor logs it: it is not a fault.
  */

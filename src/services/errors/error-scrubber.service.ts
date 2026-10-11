@@ -1,7 +1,8 @@
 /**
- * @file The one rule set that removes personal data and secrets from the
- * text of an error before it leaves the process: an exception's type and
- * value, and each stack frame's filename and function. express-boilerplate
+ * @file The one rule set that removes personal data and secrets from text
+ * before it leaves the process for a third party: an exception's type and
+ * value, a stack frame's filename and function, and the other text callers
+ * pass, such as a log line. express-boilerplate
  * (src/services/errors/error-scrubber.service.ts) and the react and apex
  * clients (src/observability/errors/scrub.ts) hold this file byte for byte,
  * and all three test it against one vector file
@@ -13,8 +14,8 @@
  * every character of the view remembers the span of the original text it
  * stands for (`View`). A secret-named key that an earlier rule swallowed
  * into a placeholder is found again in the original text, and its value is
- * redacted last (`tokenKeyRanges`), so that redaction can never hide the
- * context a rule reads.
+ * redacted after every other rule in the pass (`tokenKeyRanges`), so that
+ * redaction does not hide text a rule reads.
  */
 
 /**
@@ -29,8 +30,8 @@ export const TRUNCATION_MARKER = '…[truncated]'
 
 /**
  * The most characters the rules scan: four times what is kept, so a text
- * the rules shorten still fills the cap, while a pathological input never
- * costs more than a bounded scan.
+ * the rules shorten can still fill the cap, while the input every regex runs
+ * over stays bounded.
  */
 const SCAN_MAX = 4 * SCRUB_VALUE_MAX
 
@@ -46,16 +47,15 @@ const KEY_DETAIL_PATTERN =
 
 /**
  * A value Postgres echoes back from the input: `invalid input syntax for
- * type X: "value"`, `invalid input value for enum X: "value"`, `malformed
- * array literal: "value"` and `date/time field value out of range:
- * "value"`. A doubled
- * quote inside the value does not end it.
+ * type X: "value"`, `invalid input value for enum X: "value"`, `malformed X
+ * literal: "value"` and `date/time field value out of range: "value"`. A
+ * doubled quote inside the value does not end it.
  */
 const PG_INPUT_PATTERN =
   /(invalid input (?:syntax for type|value for enum) [\w." ]+?: |malformed \w+ literal: |date\/time field value out of range: )"(?:[^"]|"")*"/g
 
 /**
- * A number Postgres echoes back in `value "<n>" is out of range for type
+ * The value Postgres echoes back in `value "<n>" is out of range for type
  * X`: the quoted value is replaced and the rest kept.
  */
 const PG_RANGE_PATTERN = /\b(value )"(?:[^"]|"")*"(?= is out of range for type)/g
@@ -67,11 +67,12 @@ const PG_RANGE_PATTERN = /\b(value )"(?:[^"]|"")*"(?= is out of range for type)/
 const JSON_SNIPPET_PATTERN = /(^|[\s(])(?:\.\.\.)?"[\s\S]*?"(?:\.\.\.)? is not valid JSON/gm
 
 /**
- * The credentials in a URL's userinfo: `scheme://user:pass@host`. The
- * scheme and `://` are kept. The userinfo runs to the last `@` before a
- * `/`, `?`, `#` or whitespace, `@` inside it included. A quote ends the
- * userinfo when a delimiter (`,` `:` `;` `}` `]` or whitespace) follows it, so
- * it never spans from one JSON field into the next.
+ * A URL's userinfo, a user and password (`scheme://user:pass@host`) or a
+ * user alone. The scheme and `://` are kept. The userinfo runs to the last
+ * `@` before a `/`, `?`, `#`, `<`, `>` or whitespace, `@` inside it included.
+ * A quote ends the userinfo when a delimiter (`,` `:` `;` `}` `]` or
+ * whitespace) follows it, so it never spans from one JSON field into the
+ * next.
  */
 const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}\]\s]))+@/gi
 
@@ -85,7 +86,9 @@ const QUERY_PATTERN =
   /((?:https?:\/\/|\/)[^\s?"'<>]*|(?<![@\w.-])[\w.-]+(?=\?[^\s"'<>]*=))\?[^\s"'<>]+/g
 
 /**
- * A value this scrubber already wrote, left as it is.
+ * The placeholders this scrubber writes. A key's value that starts with one
+ * (`KEPT_VALUE`) and a URL fragment that is one (`isHarmlessFragment`) are
+ * left as they are.
  */
 const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]`
 
@@ -114,9 +117,10 @@ const HEADING_ANCHOR_PATTERN = /^[a-z]+(?:-[a-z]+)*$/
 /**
  * A whole word, between `-` or the ends of the slug, that marks a fragment
  * as carrying a credential: `token`, `otp`, `pin`, `code`, `key`, `secret`,
- * `state`, `session`, `auth`, `password`, `nonce`, `sig`, `signature`,
- * `credential`, `jwt` or `bearer`, with plural and long forms. Whole words
- * only, so `authentication`, `design` and `keyboard-shortcuts` are kept.
+ * `state`, `session`, `auth`, `pass`, `password`, `passcode`, `passphrase`,
+ * `nonce`, `sig`, `signature`, `credential`, `jwt` or `bearer`, most with a
+ * plural `s`. Whole words only, so `authentication`, `design` and
+ * `keyboard-shortcuts` are kept.
  */
 const KEY_LIKE_WORD_PATTERN =
   /(?:^|-)(?:tokens?|otps?|pins?|codes?|keys?|secrets?|states?|sessions?|auth|pass(?:word|code|phrase)?s?|nonces?|sigs?|signatures?|credentials?|jwt|bearer)(?=-|$)/
@@ -165,19 +169,21 @@ function isHarmlessFragment(fragment: string): boolean {
 const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<>]+/g
 
 /**
- * `Bearer` and the credential after it, in any letter case. Besides a word
- * boundary it may follow a digit or a hex letter (the case-insensitive
- * `[G-Z_]` refuses every other letter and `_`), so one glued to a long hex
- * run is replaced before the hex rule takes the run and `Be` with it.
+ * `Bearer`, in any letter case, and the credential after it, up to
+ * whitespace, a quote, `,` or `;`. It may follow anything but a letter from
+ * `g` to `z` or `_` (the case-insensitive `[G-Z_]`), so one glued to a long
+ * hex run is replaced before the hex rule takes the run and `Be` with it.
  */
 const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
 
 /**
- * HTTP Basic credentials: `Basic` in the case `Basic`, `basic` or `BASIC`, and a base64 value of
- * at least eight characters that holds an uppercase letter, a digit, `+` or
- * `/`, so prose such as `Basic validation failed` is left alone. Like
- * `Bearer`, it may follow a digit or a hex letter directly. A value followed
- * by `=` or `[` is a key (`Basic Credential=[redacted]`), not a credential.
+ * HTTP Basic credentials: `Basic`, `basic` or `BASIC`, whitespace, and a
+ * base64 value of at least eight characters that holds an uppercase letter, a
+ * digit, `+` or `/`. So `Basic validation failed` is left alone, but
+ * capitalised prose (`Basic Authentication required`) is taken. Like
+ * `Bearer`, it may follow anything but a letter from `g` to `z` or `_`. A
+ * value followed by `=` or `[` is a key (`Basic Credential=[redacted]`), not a
+ * credential.
  */
 const BASIC_PATTERN =
   /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
@@ -186,7 +192,8 @@ const BASIC_PATTERN =
  * The separator between a secret-named key and its value: `:`, `=`, `=>`
  * (Node's inspection of a `Map` or `URLSearchParams`), or `:` or `=`
  * encoded for a URL (`%3A`, `%3D`), for HTML (`&#58;`, `&#61;`) or as a
- * JSON escape (`\u003a`, `\u003d`). `=>` is tried first, so `=` never
+ * JSON escape (`\u003a`, `\u003d`). `=>` is tried first, and
+ * `UNQUOTED_VALUE` refuses a value that starts with its `>`, so `=` never
  * takes half of it.
  */
 const KEY_SEPARATOR = String.raw`(?:=>|[:=]|%3[AD]|&#(?:58|61);|\\u003[ad])`
@@ -199,7 +206,9 @@ const KEY_SEPARATOR = String.raw`(?:=>|[:=]|%3[AD]|&#(?:58|61);|\\u003[ad])`
 const KEY_QUOTE = String.raw`(?:\\?["']|%22|\\u00(?:22|27))`
 
 /**
- * The Authorization scheme words kept in front of a replaced credential.
+ * The Authorization scheme words, in any letter case. `AUTH_HEADER_PATTERN`
+ * keeps one in front of the value it replaces; `SCHEMED_PLACEHOLDER_VALUE`
+ * replaces one along with the placeholder after it.
  */
 const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)`
 
@@ -210,9 +219,11 @@ const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NT
 const BARE_WORD = '(?:undefined|null|missing|true|false)'
 
 /**
- * The lookaheads that keep a value: a placeholder, an unquoted bare word
- * that ends there, or a quoted bare word closed by the same quote that
- * opened it (`"null"`, `\"null\"`); `"null\"hunter2"` is not one.
+ * The lookaheads that keep a value: one that starts with a placeholder,
+ * with anything glued to it (`token=[redacted]x` stays as it is); an unquoted
+ * bare word that ends there; or a quoted bare word closed by the same quote
+ * that opened it (`"null"`, `\"null\"`); `"null\"hunter2"` is not one. A
+ * URL-encoded or JSON-escaped quote (`%22null%22`) does not keep it.
  */
 const KEPT_VALUE = [
   `(?!${PLACEHOLDER})`,
@@ -269,9 +280,9 @@ const VALUE_NESTED_SEPARATOR = String.raw`(?:[:=]|=>|%3[AD]|${VALUE_ENCODED_SEPA
  * value (`token: a session="…"`, `token: a pwd = \"…\"`, `token: a pwd =
  * [x, y]`): a quote as `QUOTED_VALUE` takes it (plain, escaped or
  * JSON-escaped, `\u0022` or `\u0027`), to its closing quote or the end of
- * the line; a URL-encoded one (`%22`) to its closing `%22` or the next
- * whitespace; or an array to its first `]`. So a key written inside the value
- * never leaves its value behind.
+ * the line; a URL-encoded one (`%22`) to its closing `%22`, whitespace, a
+ * quote, a backslash or `&`; or an array to its first `]`. So the quoted or
+ * array value of a key written inside the value goes with the value.
  */
 const VALUE_NESTED_QUOTED = String.raw`(?=["'\\%[])(?<=${VALUE_NESTED_SEPARATOR})(?:"(?:[^"\\\n]|\\.)*(?:"|(?=\n|$))|'(?:[^'\\\n]|\\.)*(?:'|(?=\n|$))|\\"(?:(?!\\")[^\n])*(?:\\"|(?=\n|$))|\\'(?:(?!\\')[^\n])*(?:\\'|(?=\n|$))|\\u0022(?:(?!\\u0022)[^\n])*(?:\\u0022|(?=\n|$))|\\u0027(?:(?!\\u0027)[^\n])*(?:\\u0027|(?=\n|$))|%22(?:(?!%22)[^\s"'\\&])*(?:%22)?|${ARRAY_VALUE})`
 
@@ -291,42 +302,47 @@ const VALUE_INNER_UNIT = String.raw`(?:${VALUE_BRACKETED}|${VALUE_NESTED_QUOTED}
 const VALUE_LAST_UNIT = `(?:${VALUE_NESTED_QUOTED}|${VALUE_ENCODED_SEPARATOR}|${VALUE_END_UNIT})`
 
 /**
- * An unquoted value. After a plain `:`, `=` or `=>` it runs to the next field
- * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
- * space-separated multi-word value goes whole, and one holding a delimiter
- * stops there; trailing spaces are kept. A quoted string or array after a
- * plain or encoded separator inside it goes with it (`VALUE_NESTED_QUOTED`),
- * and so does an HTML- or JSON-encoded separator (`&#61;`, `\u003d`), so a
- * key written inside the value never keeps its value. After an
- * encoded separator (`%3D`) it stops at whitespace too, outside such a
- * quoted string. A placeholder an
- * earlier rule wrote inside the value (a URL's `#[fragment]` or `?[query]`)
- * and an address's IP literal are part of it (`VALUE_BRACKETED`), so their
- * `]` never ends the value early. It never
+ * An unquoted value. Directly after a plain `:`, `=` or `=>` (whitespace
+ * between allowed) it runs to the next field delimiter (`,` `;` `&` `}` `)` `]`, a
+ * quote, a backslash or the end of the line), so a space-separated multi-word
+ * value goes whole, and one holding a delimiter stops there; trailing spaces
+ * are kept. A quoted string or array after a plain or encoded separator
+ * inside it goes with it (`VALUE_NESTED_QUOTED`), and so does an HTML- or
+ * JSON-encoded separator (`&#61;`, `\u003d`), so the quoted value of a key
+ * written inside the value goes too. After an encoded separator (`%3D`,
+ * `&#61;`, `\u003d`), or when the value starts with a backslash, it also
+ * stops at whitespace outside such a quoted string (`password=\zq a b`
+ * keeps ` a b`). A placeholder an earlier rule wrote inside the value (a
+ * URL's `#[fragment]` or `?[query]`) and an address's IP literal are part of
+ * it (`VALUE_BRACKETED`), so their `]` never ends the value early. It never
  * starts with the `>` of an `=>`, so `=` cannot take half of it; a `>` after
  * any other separator is a value. Nor does it start with `%22`, the encoded
  * quote `QUOTED_VALUE` handles, nor with a JSON-escaped one; a lone backslash
- * before the value is skipped (`password=\zq…`).
+ * before the value is part of the match (`password=\zq…`).
  */
 const UNQUOTED_VALUE = String.raw`(?!%22)(?!\\u00(?:22|27))\\?(?:(?<=[:=>]\s*)(?!(?<==)>)${VALUE_END_UNIT}(?:${VALUE_INNER_UNIT}*${VALUE_LAST_UNIT})?|(?!(?<==)>)${VALUE_END_UNIT}${VALUE_LAST_UNIT}*)`
 
 /**
- * A quoted value: inside an escaped quote, up to the next escaped quote;
- * inside a plain quote, up to the quote that opened it (the other quote
- * character is part of the value), escaped quotes included; inside a
- * URL-encoded quote (`%22`) or a JSON-escaped one (`\u0022`), up to the next
- * one.
+ * A quoted value: inside an escaped quote, up to the next escaped quote or
+ * the end of the line; inside a plain quote, up to the quote that opened it
+ * or the end of the line (the other quote character is part of the value),
+ * escaped quotes included; inside a URL-encoded quote (`%22`), up to the next
+ * one, whitespace, a quote, a backslash or `&`; inside a JSON-escaped one
+ * (`\u0022`, `\u0027`), up to the next JSON-escaped quote, whitespace or a
+ * quote. The closing quote is not part of it.
  */
 const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)+|(?<=')(?:[^'\\\n]|\\.)+|(?<=%22)(?:(?!%22)[^\s"'\\&])+|(?<=\\u00(?:22|27))(?:(?!\\u00(?:22|27))[^\s"'\\]|\\(?!u00(?:22|27)))+`
 
 /**
- * A header-valued key, Authorization (`authorization`, `auth`,
- * `Proxy-Authorization`) or Cookie (`cookie`, `Set-Cookie`), and its whole
- * value. The key, its separator and a known scheme word are kept
- * (`Authorization: Digest [redacted]`). A quoted value is replaced to its
- * closing quote; an unquoted one to the end of the line, so every parameter
- * of a multi-parameter scheme (Digest, OAuth, AWS), the whole credential of
- * an unknown scheme and every pair of a cookie list go.
+ * A header-valued key, one ending in `authorization`, `auth`, `cookie` or
+ * `cookies` (`Proxy-Authorization`, `Set-Cookie`), and its value. The key,
+ * its separator and a known scheme word are kept (`Authorization: Digest
+ * [redacted]`). A quoted value is replaced to its closing quote; an unquoted
+ * one to the end of the line, so every parameter of a multi-parameter scheme
+ * (Digest, OAuth, AWS), the whole credential of an unknown scheme and every
+ * pair of a cookie list go. A value `KEPT_VALUE` keeps, and a scheme the
+ * Bearer or Basic rule already replaced (`Bearer [token]`), are left with
+ * the rest of the line (`Authorization: Bearer [token] def` keeps ` def`).
  */
 const AUTH_HEADER_PATTERN = new RegExp(
   String.raw`\b([\w-]*?(?:authorization|auth|cookies?)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
@@ -336,43 +352,49 @@ const AUTH_HEADER_PATTERN = new RegExp(
 )
 
 /**
- * The key part of `KV_SECRET_PATTERN`, group 1, which is kept. That rule:
- * a secret-named key, singular or plural, and its value: `password=...`,
- * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
- * `response="..."`, `SAMLResponse=...`, `password%3D...`, `pass_phrase`,
- * `passkey`, `otp_code`, `mfa_code`, `verification_code`, `recovery_code`,
- * `backup_code`, `code_verifier`. `pin` (and `pin_code`, `pincode`, `pin_number`) is a secret
- * key only as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
- * only after `?` or `&` (written plainly, as `&amp;`, or encoded as `%3F` or
- * `%26`), first in a form body (`code=…&`), on a line that
- * names OAuth or authorization before it, or with that word later in the same
- * query or JSON object (an authorization code), so `code: 'ECONNREFUSED'` stays;
- * `key` only before `=` (or `%3D`, `&#61;`, `\u003d`), as a whole word or after `_` or `-` (`MY_KEY`), but
- * not in `primary_key`, `foreign_key`, `sort_key`, `object_key`,
- * `routing_key`, `translation_key` and the like; a compound
- * secret key name (`secret_key`, `secretKey`, `private-key`, `signing_key`,
- * `encryption_key`, `master_key`, `client_key`, `consumer_key`) before any
- * separator, `:` included. A `response` key
- * (any prefix) is a key after `=`, `=>`, `%3D`, `&#61;` or `\u003d`, or after `:` or `=>` with a
- * quoted value; after `:` and an unquoted value it is prose (`Unexpected
- * response: 502`) only when `response` stands alone; a prefixed one
- * (`mfa_response`, `SAMLResponse`) is always a key. A URL fragment the
- * fragment rule replaced (`#[fragment] = …`) counts as a key too, since the
- * fragment may have ended in one. The key and its separator are kept.
- * The value is a quoted string (spaces and escaped quotes included, also
- * inside a JSON string), an array to its `]`, a scheme word with the
- * placeholder the Bearer or Basic rule wrote (`Bearer [token]`, replaced
- * whole), or an unquoted run
- * (`UNQUOTED_VALUE`). A value
- * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
- * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
- * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
+ * The key part of `KV_SECRET_PATTERN`, group 1: a secret-named key, its
+ * separator and the quotes around them, all kept. A secret-named key, in any
+ * letter case, is any run of word characters and `-` that ends in one of
+ * these words or its plural, before any separator, `:` included:
+ * `pass`, `password`, `passwd`, `passphrase`, `passcode`, `passkey`, `pwd`,
+ * `secret`, `token`, `api_key`, `access_key`, a compound key name
+ * (`secret_key`, `secretKey`, `private-key`, `signing_key`,
+ * `encryption_key`, `master_key`, `client_key`, `consumer_key`),
+ * `auth_code`, `authorization_code`, `code_verifier`, `session`, `sid`,
+ * `credential`, `signature`, `sig`, `hmac`, `nonce`, a one-time code name
+ * (`otp_code`, `mfa_code`, `verification_code`, `recovery_code`,
+ * `backup_code`), `jwt` or `otp`. So `compass: north` counts too. Some words
+ * count only in context:
+ * - `pin` (and `pin_code`, `pincode`, `pin_number`) only as a whole word or
+ *   after `_` or `-` (`user_pin`, never `spin`).
+ * - `key` or `keys` only unquoted and before `=` (not `=>`), `%3D`, `&#61;`
+ *   or `\u003d`, with only whitespace between (`key = abc`), as a whole word
+ *   or after `_` or `-` (`MY_KEY`), and not
+ *   after `primary`, `foreign`, `sort`, `partition`, `cache`, `unique`,
+ *   `index`, `s3`, `object`, `routing`, `shard`, `translation` or `i18n` and
+ *   a `_` or `-`.
+ * - `response` with a prefix (`mfa_response`, `SAMLResponse`) always; alone,
+ *   only before `=`, `%3D`, `&#61;` or `\u003d`, or before `:` and a quoted
+ *   value, so `Unexpected response: 502` is prose.
+ * - `code` alone, starting a word or after `%26` or `%3F`, only: after `?`
+ *   or `&` (written plainly, as `&amp;`, or encoded as `%3F` or `%26`);
+ *   before `=`, a value with no whitespace and `&` (`code=…&`); with
+ *   `oauth`, `authorization` or `authorize` earlier on the same line; or with
+ *   one of those words later on the same line and no `{` or `}` between. So
+ *   `code: 'ECONNREFUSED'` stays.
+ * A URL fragment the fragment rule replaced (`#[fragment] = …`) counts as a
+ * key too, since the fragment may have ended in one.
  */
 const KV_SECRET_KEY = String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)`
 
 /**
- * The value grammar of `KV_SECRET_PATTERN`: a kept value fails it; then a
- * quoted value, an array, a scheme with its placeholder, or an unquoted run.
+ * The value grammar of `KV_SECRET_PATTERN`. A value `KEPT_VALUE` keeps (one
+ * that starts with a placeholder, or a bare word such as `undefined`) fails
+ * it, so `token: undefined` stays readable. Otherwise the value is, tried in
+ * this order, a quoted string (spaces and escaped quotes included, also
+ * inside a JSON string), an array to its `]`, a scheme word with the
+ * placeholder the Bearer or Basic rule wrote and the rest of the field
+ * (`Bearer [token]`, replaced whole), or an unquoted run (`UNQUOTED_VALUE`).
  */
 const KV_SECRET_VALUE = `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`
 
@@ -393,8 +415,9 @@ const OAUTH_CONTEXT_PATTERN =
   /grant_type|redirect_uri|client_id|authorization_code|invalid_grant|code[_-]?verifier|oauth/i
 
 /**
- * A `code` key and its value, wherever it stands in the text: the same
- * separators, quotes and values as `KV_SECRET_PATTERN`. Applied only to a
+ * A `code` key that starts a word, and its value, wherever it stands in the
+ * text: the same separators, quotes and values as `KV_SECRET_PATTERN`, except
+ * a scheme with its placeholder (`SCHEMED_VALUE_AT`). Applied only to a
  * text that `OAUTH_CONTEXT_PATTERN` matches, so a `code` in a pretty-printed or
  * nested dump of a token request goes, while `{ code: 'ECONNREFUSED' }` in
  * any other text stays.
@@ -424,30 +447,32 @@ const CODE_KEY_AT = new RegExp(CODE_KEY_PATTERN.source, 'iy')
  * A scheme word and the placeholder an earlier rule wrote for its credential
  * (`SCHEMED_PLACEHOLDER_VALUE`), only at `lastIndex`: a value the OAuth
  * `code` rule runs through, since that rule's own value grammar has no such
- * form and would stop at the scheme word.
+ * form, and after an encoded separator (`code%3DBearer [token]`) its unquoted
+ * value would stop at the scheme word.
  */
 const SCHEMED_VALUE_AT = new RegExp(SCHEMED_PLACEHOLDER_VALUE, 'iy')
 
 /**
  * What may follow the end of a value a later key took over: its closing
- * quote and any text glued to it up to the next field delimiter, only at
- * `lastIndex`.
+ * quote and any text glued to it, up to whitespace or the next field
+ * delimiter, only at `lastIndex`.
  */
 const GLUED_TAIL_AT = new RegExp(String.raw`${KEY_QUOTE}?[^\s"'\\,;&})\]]*`, 'y')
 
 /**
- * Where a key rule's value ends once it runs through later keys: a value
- * that took a later secret-named key's name, separator or opening quote
- * runs on to the end of that key's value as one of `innerKeys` matches it
- * there, then over a closing quote and any text glued to it
- * (`GLUED_TAIL_AT`), and is checked again, so the later key's value is
- * never left in view.
+ * Where a key rule's value ends once it runs through later keys: when one of
+ * `innerKeys` matches at a position inside the value and runs past its end
+ * (the value took that key's name, separator or opening quote), the value
+ * runs on to the end of that match, then over a closing quote and any text
+ * glued to it (`GLUED_TAIL_AT`), and is checked again. So the value of a key
+ * that starts inside this value is replaced with it.
  * @param text - The text being scrubbed.
  * @param valueStart - Where the value starts.
  * @param matchEnd - Where the key rule's own match ends.
  * @param innerKeys - Sticky key rules a later key is looked for with:
  *   `KV_SECRET_AT` and `AUTH_HEADER_AT`, and `CODE_KEY_AT` in a text that
- *   names an OAuth exchange.
+ *   names an OAuth exchange (with `SCHEMED_VALUE_AT` for the `code` rule
+ *   itself).
  * @returns The end of the value, at or after `matchEnd`.
  */
 function runThroughEnd(
@@ -488,8 +513,8 @@ function pairEndAt(sticky: RegExp, text: string, at: number): number {
  * A JSON Web Token: three dot-separated base64url segments, the first a
  * base64 JSON object: `eyJ` (`{"`), or, at nine or more characters, `eyA`
  * (`{ `) or `ew` (`{` and a line break or tab). The signature may be empty
- * (an unsigned token). Like `Bearer`, it may follow a digit or a hex letter
- * directly.
+ * (an unsigned token). Like `Bearer`, it may follow anything but a letter
+ * from `g` to `z` or `_`.
  */
 const JWT_PATTERN = /(?<![G-Zg-z_])e(?:yJ[\w-]+|(?:yA|w[\w-])[\w-]{6,})\.[\w-]+\.[\w-]*/g
 
@@ -502,9 +527,9 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 /**
  * A vendor credential with a known prefix or shape, too short or too plain
  * for the base64 run rule: a Google OAuth client secret (`GOCSPX-`), a
- * Resend API key (`re_`, 16 or more characters with a digit and an uppercase
- * letter, so `re_render` and `re_index_2024_migration` are kept), an AWS access key id (`AKIA`, `ASIA`), a Slack token (`xoxb-`
- * and kin), a Stripe-style live or test key (`sk_live_`, `rk_test_`), a
+ * Resend API key (`re_` and 16 or more characters with a digit and an
+ * uppercase letter, so `re_render` and `re_index_2024_migration` are kept),
+ * an AWS access key id (`AKIA`, `ASIA`), a Slack token (`xoxb-` and kin), a Stripe-style live or test key (`sk_live_`, `rk_test_`), a
  * bare Google API key (`AIza` and 35 more), a Stripe webhook secret
  * (`whsec_`). Applied again after the hex rule, like the PostHog key rule.
  */
@@ -513,10 +538,11 @@ const VENDOR_KEY_PATTERN =
 
 /**
  * An AWS secret access key: exactly 40 base64 characters with at least one
- * `/` or `+`, on its own between non-base64 characters. An `@` after it makes
- * it an email local part, which the email rules replace whole
- * (`SLASHED_SECRET_EMAIL_PATTERN`). `isAwsSecretKey` then tells it from a
- * 40-character path.
+ * `/` or `+`, on its own between non-base64 characters. One followed by `@`
+ * is left to the email rules, which run first and replace it with the
+ * address when they accept the domain (`SLASHED_SECRET_EMAIL_PATTERN`); before
+ * a domain they refuse (`@main`), a key with a `/` and no digit is kept.
+ * `isAwsSecretKey` then tells it from a 40-character path.
  */
 const AWS_SECRET_KEY_PATTERN = /(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+/=@-])/g
 
@@ -654,25 +680,24 @@ const BASE64_RUN_PATTERN = /[\w+/-]{40,}={0,2}/g
 const SECRET_RUN_MIN = 40
 
 /**
- * The share of a slash-containing run's letters that must be uppercase for
- * it to read as base64 rather than a file path.
+ * The share of a run's letters that must be uppercase for a run with a `/`
+ * (or, for `isAwsSecretKey`, a `+`) to read as base64 rather than a file
+ * path.
  */
 const BASE64_UPPERCASE_SHARE = 0.25
 
 /**
- * A run of lowercase words, each at most 20 letters, joined by `-` or `_`:
- * a kebab- or snake-case identifier, never random base64.
+ * Two or more lowercase words, each at most 20 letters, joined by `-` or `_`:
+ * a kebab- or snake-case identifier, which random base64 almost never is.
  */
 const IDENTIFIER_RUN_PATTERN = /^[a-z]{1,20}(?:[-_][a-z]{1,20})+$/
 
 /**
- * Whether an exactly-40-character run with a `/` or `+` is an AWS secret
- * access key rather than a path: at least a quarter of its letters are
- * uppercase. Unlike `isSecretRun`, it needs no digit, so a key without one is
- * caught; a path such as `/app/data/uploads/tenants/avatars/photo1` is almost
- * all lowercase.
- * @param run - The matched run.
- * @returns True when the run should be replaced.
+ * Whether a 40-character run with a `/` or `+` (the callers check the shape)
+ * is an AWS secret access key rather than a path: at least a quarter of its
+ * letters are uppercase. Unlike `isSecretRun`, it needs no digit, so a key
+ * without one is caught; a path such as
+ * `/app/data/uploads/tenants/avatars/photo1` is almost all lowercase.
  */
 function isAwsSecretKey(run: string): boolean {
   const letters = run.replaceAll(/[^A-Za-z]/g, '')
@@ -687,8 +712,6 @@ function isAwsSecretKey(run: string): boolean {
  * holds a digit and at least a quarter of its letters are uppercase: random
  * base64 is half uppercase, and a path such as
  * `/app/src/services/errors/error-scrubber` is almost all lowercase.
- * @param run - The matched run.
- * @returns True when the run should be replaced.
  */
 function isSecretRun(run: string): boolean {
   if (!run.includes('/')) return !IDENTIFIER_RUN_PATTERN.test(run)
@@ -698,11 +721,13 @@ function isSecretRun(run: string): boolean {
 }
 
 /**
- * Whether a run of base64 characters with a `/`, ending in the base64 start
- * of an email address's local part, is a secret: at least 40 characters, and
- * an AWS secret access key (`isAwsSecretKey`, exactly 40 characters of
- * standard base64) or a run `isSecretRun` calls a secret.
- * @param run - The run before the `/` and the local part's leading base64 characters.
+ * Whether a run of base64 characters with a `/` that is part of an email
+ * address is a secret: at least 40 characters, and an AWS secret access key
+ * (`isAwsSecretKey`, exactly 40 characters of standard base64) or a run
+ * `isSecretRun` calls a secret.
+ * @param run - For `SLASHED_SECRET_EMAIL_PATTERN`, the run up to the `/`
+ *   before the local part, then the local part's leading base64 characters;
+ *   for `ADDRESS_SECRET_DOMAIN_PATTERN`, the domain.
  * @returns True when the run and the address are replaced together.
  */
 function isSlashedSecret(run: string): boolean {
@@ -713,10 +738,9 @@ function isSlashedSecret(run: string): boolean {
 
 /**
  * The text the rules scan: at most `SCAN_MAX` characters, and when cut,
- * only up to the last whitespace before the cut, so half a secret is never
- * kept. A cut text with no whitespace is dropped whole.
- * @param value - The raw text.
- * @returns The scanned prefix.
+ * only up to the last whitespace before the cut, so the scan never ends
+ * inside a word, where a cut secret could be too short for its rule. A cut
+ * text with no whitespace in its first `SCAN_MAX` characters is dropped whole.
  */
 function scanned(value: string): string {
   if (value.length <= SCAN_MAX) return value
@@ -770,8 +794,6 @@ interface Edit {
 
 /**
  * The view of an original text, every character standing for itself.
- * @param input - The original text.
- * @returns The view.
  */
 function originalView(input: string): View {
   const view: View = { text: input, from: [], to: [], token: [] }
@@ -790,10 +812,14 @@ function originalView(input: string): View {
  * @param view - The view.
  * @param edits - The edits, sorted by start.
  * @param firstToken - The id the first edit's characters get.
- * @returns The new view.
+ * @returns The view with the edits applied.
  */
 function applyEdits(view: View, edits: readonly Edit[], firstToken: number): View {
   const next: View = { text: '', from: [], to: [], token: [] }
+  /**
+   * Copy one character of `view` into `next` with its span and replacement id.
+   * @param at - Its index in `view`.
+   */
   const keep = (at: number): void => {
     next.text += view.text.charAt(at)
     next.from.push(view.from[at] ?? 0)
@@ -877,18 +903,15 @@ function apply(
 }
 
 /**
- * A rule that replaces the whole match.
- * @param text - The replacement.
- * @returns The replacer.
+ * The replacer for a rule that replaces the whole match with `text`.
  */
 function whole(text: string): () => Replacement {
   return () => ({ offset: 0, text })
 }
 
 /**
- * A rule that keeps its first group and replaces the rest of the match.
- * @param text - The replacement.
- * @returns The replacer.
+ * The replacer for a rule that keeps its first group and replaces the rest
+ * of the match with `text`.
  */
 function afterGroup(text: string): (match: RegExpExecArray) => Replacement {
   return (match) => ({ offset: (match[1] ?? '').length, text })
@@ -922,15 +945,14 @@ function redactRunningThrough(scrub: Scrub, pattern: RegExp, innerKeys: readonly
 const WORD_BREAK_PATTERN = /[\s"'<>]/
 
 /**
- * A placeholder the path-token or key rules wrote, followed in the same word
- * by a `?` or `#`.
+ * A `[redacted]` or `[token]` placeholder (the path-token, Bearer, Basic and
+ * key rules write them) followed in the same word by a `?` or `#`.
  */
 const REDACTED_BEFORE_QUERY_PATTERN = /\[(?:redacted|token)\][^\s"'<>]*[?#]/
 
 /**
  * The runs of characters between word breaks (`WORD_BREAK_PATTERN`).
- * @param text - The text.
- * @returns Each word's start and end.
+ * @returns Each word's start and its end, exclusive.
  */
 function words(text: string): [number, number][] {
   const found: [number, number][] = []
@@ -947,12 +969,11 @@ function words(text: string): [number, number][] {
 
 /**
  * Apply the query and then the fragment rule again to each word in which a
- * value the path-token or key rules replaced now stands before a `?` or `#`
- * (`/x/pwd=[a b]?q=1` became `/x/pwd=[redacted]?q=1`): a space or quote
- * inside the value had kept the path apart from its query, so the first pass
- * left the query, and a second scrub would take it. A replaced query holds no
- * word break, so each such word is the same word for both rules.
- * @param scrub - The scrub.
+ * value replaced with `[redacted]` or `[token]` stands before a `?` or `#`
+ * (`/x/pwd=[a b]?q=1` is `/x/pwd=[redacted]?q=1` at this point): a space or
+ * quote inside the value kept the path apart from its query, so the query
+ * rule left the query, and a second scrub would take it. A replaced query
+ * holds no word break, so each such word is the same word for both rules.
  */
 function rejoinQueries(scrub: Scrub): void {
   if (!REDACTED_BEFORE_QUERY_PATTERN.test(scrub.view.text)) return
@@ -997,8 +1018,9 @@ const KV_SECRET_KEY_AT = new RegExp(KV_SECRET_KEY, 'iy')
 const KV_SECRET_VALUE_AT = new RegExp(KV_SECRET_VALUE, 'iy')
 
 /**
- * How far back from a replacement's end a key that runs out of it may start,
- * which bounds the search; a key whose word starts further back is not found.
+ * How many characters of the original text before a replacement's end a key
+ * that runs out of it may start, which bounds the search; a key that starts
+ * further back is not found.
  */
 const TOKEN_KEY_REACH = 80
 
@@ -1087,6 +1109,11 @@ const LONE_PLACEHOLDER_PATTERN = new RegExp(`^${PLACEHOLDER}$`)
  */
 function redactRanges(scrub: Scrub, ranges: readonly [number, number][]): void {
   const { view } = scrub
+  /**
+   * Whether a view character's original span overlaps one of `ranges`.
+   * @param at - Its index in the view.
+   * @returns True when the character is part of a value to redact.
+   */
   const isCovered = (at: number): boolean =>
     ranges.some(([start, end]) => (view.from[at] ?? 0) < end && (view.to[at] ?? 0) > start)
   const edits: Edit[] = []
@@ -1110,7 +1137,8 @@ function redactRanges(scrub: Scrub, ranges: readonly [number, number][]): void {
 /**
  * Every rule once, in order, then the values of keys found inside
  * replacements.
- * @param input - The text, already cut to `SCAN_MAX`.
+ * @param input - The scanned text (`scanned`), or the text the previous pass
+ *   wrote.
  * @returns The scrubbed text, and whether a key inside a replacement was found.
  */
 function scrubOnce(input: string): { text: string; keyInToken: boolean } {
@@ -1167,8 +1195,7 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
 
 /**
  * The PostHog-key, vendor-credential and AWS secret access key rules, which
- * run once before the hex rule and once after it.
- * @param scrub - The scrub.
+ * run once before the IP, phone and hex rules and once after the hex rule.
  */
 function applyKeyShapes(scrub: Scrub): void {
   apply(scrub, POSTHOG_KEY_PATTERN, whole('[posthog-key]'))
@@ -1179,72 +1206,72 @@ function applyKeyShapes(scrub: Scrub): void {
 }
 
 /**
- * The most times the rules run over a text in which a key inside a
- * replacement was found; each run after the first scrubs the text the last
- * one wrote, and they stop once it no longer changes.
+ * The most times the rules run over a text in whose first pass a key inside
+ * a replacement was found; each run after the first scrubs the text the last
+ * one wrote, and they stop at the first run that leaves it unchanged.
  */
 const PASSES_MAX = 3
 
 /**
- * Remove personal data and secrets from one text, by these rules applied in
- * this order: Postgres `Key (col)=(value)` details keep the columns and lose
- * the value (`([value])`); a value Postgres echoes after `invalid input
- * syntax for type`, `invalid input value for enum`, `malformed ... literal:`
- * or `date/time field value out of range:`, the number in `value "n" is out
- * of range for type`, and the snippet in a V8 `is not valid JSON` error,
- * become `"[value]"`; the userinfo of a URL becomes `[credentials]@`; a
- * URL's, path's or bare word's query string becomes `?[query]`; a fragment,
- * unless a line or heading anchor or a placeholder (`isHarmlessFragment`),
- * becomes `#[fragment]`; the segment after `/reset/`, `/verify/`, `/invite/` or
- * `/accept/` becomes `[token]`; `Bearer <credential>` becomes
- * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's
- * case kept; an Authorization- or Cookie-valued key's value
- * (`authorization`, `auth`, `cookie`, `set-cookie`), after any known scheme
- * word, to its closing quote or the end of the line, and the value, an
- * array included, of a secret-named key, singular or plural (`password`,
- * `passphrase`, `passcode`, `passkey`, `pin`, `otp_code` and the other
- * one-time code names, `token`, `secret`, `api_key`,
- * `access_key`, `secret_key` and the other compound key names, `session`, `sid`,
- * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
- * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
- * `key` before `=`; and every `code` in a text that names an OAuth exchange
- * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`, each of these values (the
- * OAuth `code` one included) that takes a later
- * secret-named, Authorization or Cookie key running on to the end of that
- * key's value (`redactRunningThrough`); a query or fragment that
- * a replaced value now joins to its path is replaced as above
- * (`rejoinQueries`); a JWT becomes `[jwt]`; an
- * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
- * a quoted local part, an IP-literal or single-label domain) becomes
- * `[email]`, together with a secret-looking base64 run joined to its local
- * part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`) or starting at a single-label
- * domain (`ADDRESS_SECRET_DOMAIN_PATTERN`), before the PostHog-key and
- * vendor-credential rules run, so an address whose local part looks like one
- * of those keys goes whole, domain included; a PostHog key (`phc_`, `phx_`,
- * `phs_`) becomes `[posthog-key]` and a vendor credential
- * (`VENDOR_KEY_PATTERN`, or an AWS secret access key) `[secret]`; an
- * IPv4 or IPv6 address becomes `[ip]` and an international phone number
- * `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits
- * becomes `[secret]`, and a PostHog key or vendor credential glued to it is
- * replaced after it; a secret-looking run of 40 or more base64 characters
- * (`isSecretRun`) becomes `[secret]`; the value of a secret-named key that
- * an earlier rule took into its placeholder, read again from the original
- * text, becomes `[redacted]` (`tokenKeyRanges`), and when one does, the rules
- * run again over the result, at most `PASSES_MAX` times in all, until it
- * stops changing; and the result is cut to `SCRUB_VALUE_MAX` characters,
- * ending in `…[truncated]`. A key-named word is replaced even in
- * prose (`Missing token: please log in` becomes `Missing token: [redacted]`):
- * the rule trades some readable text for never leaking a value. Applying it
- * twice gives the same text as applying it once, a placeholder in a URL
- * fragment included (`isHarmlessFragment`), except for contrived inputs that
- * glue a phone number, IP address or hex run to one another, put an address
- * with a quoted local part (`"jane doe"@…`) straight against a URL's or
- * path's query or fragment, end an address with a `.` straight before a
- * query (`jane@example.com.?a=1`), or leave a placeholder in quotes straight
- * before an `@` (a placeholder written by the first pass can open a match for the
- * second, and a replaced quoted address no longer stops a path).
- * @param value - The text: an exception's type or value, or a frame's filename or function.
- * @returns The scrubbed text.
+ * Remove personal data and secrets from one text. The rules run in this
+ * order:
+ * 1. Postgres echoes: a `Key (col)=(value)` detail keeps the columns and
+ *    loses the value (`([value])`); the value after `invalid input syntax for
+ *    type`, `invalid input value for enum`, `malformed … literal:` or
+ *    `date/time field value out of range:`, the quoted value in `value "n" is
+ *    out of range for type`, and the snippet in a V8 `is not valid JSON`
+ *    error become `"[value]"`.
+ * 2. A URL's userinfo becomes `[credentials]@`; the query string of a URL, a
+ *    path, or a bare word whose query holds an `=`, becomes `?[query]`; a
+ *    URL's or path's fragment, unless `isHarmlessFragment` keeps it, becomes
+ *    `#[fragment]`; the segment after `/reset/`, `/verify/`, `/invite/` or
+ *    `/accept/` becomes `[token]`.
+ * 3. `Bearer <credential>` becomes `Bearer [token]`, in that letter case;
+ *    `Basic <base64>` becomes `Basic [token]`, the scheme's case kept.
+ * 4. The value of an Authorization or Cookie key (`AUTH_HEADER_PATTERN`), of
+ *    a secret-named key (`KV_SECRET_PATTERN`) and, in a text that names an
+ *    OAuth exchange (`OAUTH_CONTEXT_PATTERN`), of every `code` key becomes
+ *    `[redacted]`, except a value `KEPT_VALUE` keeps and an Authorization
+ *    value step 3 already replaced (`AUTH_HEADER_PATTERN`). A value that takes a
+ *    later such key runs on to the end of that key's value
+ *    (`redactRunningThrough`). A query or fragment that a replaced value
+ *    joins to its path is then replaced as in step 2 (`rejoinQueries`).
+ * 5. A JWT becomes `[jwt]`; an email address (`EMAIL_PATTERN`) becomes
+ *    `[email]`, together with a secret-looking base64 run joined to its local
+ *    part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`) or forming its domain
+ *    (`ADDRESS_SECRET_DOMAIN_PATTERN`). This runs before the PostHog-key and
+ *    vendor-credential rules, so an address whose local part looks like one
+ *    of those keys goes whole, domain included.
+ * 6. A PostHog key becomes `[posthog-key]` and a vendor credential
+ *    (`VENDOR_KEY_PATTERN`) or AWS secret access key `[secret]`; an IPv4 or
+ *    IPv6 address becomes `[ip]` and an international phone number `[phone]`;
+ *    a run of 32 or more hex digits becomes `[secret]`, and the PostHog,
+ *    vendor and AWS rules run again for a key glued to it; a run of 40 or
+ *    more base64 characters that `isSecretRun` accepts becomes `[secret]`. A
+ *    UUID on its own matches none of these and is kept.
+ * 7. The value of a secret-named key that an earlier rule took into its
+ *    placeholder, found again in the original text (`tokenKeyRanges`),
+ *    becomes `[redacted]`. When there is one, the rules run again over the
+ *    result, at most `PASSES_MAX` times in all.
+ * 8. The result is cut to `SCRUB_VALUE_MAX` characters, ending in
+ *    `…[truncated]`; only the first `SCAN_MAX` characters are scanned.
+ *
+ * A key-named word is replaced even in prose (`Missing token: please log in`
+ * becomes `Missing token: [redacted]`): the rule gives up some readable text
+ * rather than risk keeping a value. Applying it to its own output gives the
+ * same text for every row of the vector file and for a placeholder in a URL
+ * fragment (`isHarmlessFragment`). The second application can change a
+ * result the length cap cut inside a key's value or a placeholder, and
+ * contrived inputs that glue a phone number, IP address or hex run to one
+ * another, put an address with a quoted local part (`"jane doe"@…`) straight
+ * against a URL's or path's query or fragment, end an address with a `.`
+ * straight before a query (`jane@example.com.?a=1`), or leave a placeholder
+ * in quotes straight before an `@` (a placeholder written by the first pass
+ * can open a match for the second, and a replaced quoted address does not
+ * stop a path).
+ * @param value - Text bound for a third party, such as an exception's type or
+ *   value, a stack frame's filename or function, or a log line.
+ * @returns The scrubbed text, at most `SCRUB_VALUE_MAX` characters.
  */
 export function scrubText(value: string): string {
   const input = scanned(value)

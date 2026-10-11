@@ -1,7 +1,7 @@
 /**
  * @file The `audit_logs` table. Append-only: the `audit_logs_immutable`
- * trigger rejects every UPDATE except a staff purge's redaction of the actor
- * columns (migration 0019), and every DELETE outside a retention purge or a
+ * trigger rejects every UPDATE except a staff purge's redaction of
+ * `actor_user_id`, `ip` and `user_agent` (migration 0019), and every DELETE outside a retention purge or a
  * tenant purge. Both foreign keys are RESTRICT, so no cascade reaches it: a
  * purge redacts or deletes first.
  */

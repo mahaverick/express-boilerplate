@@ -1,6 +1,6 @@
 /**
  * @file The in-app notification types and paging limits. The type list has no
- * database CHECK constraint, so a new type needs no migration; the
+ * database CHECK constraint, so adding a type needs no migration; the
  * TypeScript type is its only enforcement.
  */
 

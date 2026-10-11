@@ -64,9 +64,9 @@ export const tenantModel = pgTable(
      */
     isPlatform: boolean('is_platform').notNull().default(false),
     /**
-     * Whether onboarding is tracked for this tenant. False by default, so a
-     * tenant created before onboarding existed stays untracked; both create
-     * paths set it (tenant.repository.ts). Never true for the platform tenant.
+     * Whether onboarding is tracked for this tenant. `TenantRepository` sets
+     * it for every tenant it creates (tenant.repository.ts). Never true for the
+     * platform tenant (`tenants_platform_untracked`).
      */
     onboardingTracked: boolean('onboarding_tracked').notNull().default(false),
     /**

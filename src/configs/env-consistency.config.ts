@@ -116,10 +116,10 @@ function apexCookieDomainProblem(env: Env): string | undefined {
 }
 
 /**
- * Warn when analytics is on outside local and test but no proxy hop is
- * trusted. The analytics proxy forwards `request.ip` to PostHog as the
- * browser's address: with `TRUST_PROXY` false that is the frontend proxy's, so
- * PostHog's GeoIP is wrong and its cookieless hash merges different people.
+ * Warn when analytics is on outside local but no proxy hop is trusted. The
+ * analytics proxy forwards `request.ip` to PostHog as the browser's address:
+ * with `TRUST_PROXY` false that is the frontend proxy's, so PostHog's GeoIP is
+ * wrong and its cookieless hash merges different people.
  * @param env - The validated environment.
  * @param warn - Receives the warning.
  */
@@ -200,7 +200,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
   const apexProblem = apexCookieDomainProblem(env)
   if (apexProblem !== undefined) problems.push(apexProblem)
 
-  // Half a pair sends no auth, so every send to a provider that needs it fails silently.
+  // Half a pair sends no auth, so a provider that requires it refuses every send.
   if ((env.SMTP_USERNAME === undefined) !== (env.SMTP_PASSWORD === undefined)) {
     const [presentName, missingName] =
       env.SMTP_USERNAME === undefined
@@ -221,7 +221,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     else problems.push(message)
   }
 
-  // express-session sends a Secure cookie only when req.secure, which behind TLS needs TRUST_PROXY.
+  // express-session sends a Secure cookie only when it sees the request as TLS (req.secure), which behind a TLS-terminating proxy needs TRUST_PROXY.
   if (
     isCookieSecure(env) &&
     env.GOOGLE_CLIENT_ID !== undefined &&

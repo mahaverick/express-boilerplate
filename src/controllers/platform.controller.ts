@@ -68,7 +68,7 @@ class PlatformController extends BaseController {
   })
 
   /**
-   * `POST /platform/tenants/:id/suspend`.
+   * `POST /platform/tenants/:id/suspend`: suspend an active tenant; its members get 404 on their next request.
    */
   suspendTenant = this.handle(async (request, response) => {
     const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
@@ -81,7 +81,7 @@ class PlatformController extends BaseController {
   })
 
   /**
-   * `POST /platform/tenants/:id/reactivate`.
+   * `POST /platform/tenants/:id/reactivate`: reactivate a suspended tenant.
    */
   reactivateTenant = this.handle(async (request, response) => {
     const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
@@ -94,7 +94,7 @@ class PlatformController extends BaseController {
   })
 
   /**
-   * `POST /platform/tenants/:id/archive`.
+   * `POST /platform/tenants/:id/archive`: archive an active or suspended tenant, which is terminal.
    */
   archiveTenant = this.handle(async (request, response) => {
     const tenantId = parseIdParameter(request.params.id, 'Tenant not found')

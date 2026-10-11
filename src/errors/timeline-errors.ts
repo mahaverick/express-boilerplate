@@ -7,9 +7,10 @@ import { TIMELINE_UNAVAILABLE_CODE } from '@/constants/timeline.constants'
 import { HttpError } from '@/errors/http-error'
 
 /**
- * A 502 with `code: 'TIMELINE_UNAVAILABLE'`: the PostHog query failed, timed
- * out, was refused, answered in an unexpected shape, or was not sent because
- * the hourly budget is spent.
+ * A 502 with `code: 'TIMELINE_UNAVAILABLE'`: the PostHog call failed, timed
+ * out, was refused or answered in an unexpected shape, the project has no
+ * `tenant` group type, or the query was not sent because the hourly budget is
+ * spent.
  */
 export class TimelineUnavailableError extends HttpError {
   /**

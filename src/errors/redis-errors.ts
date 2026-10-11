@@ -1,7 +1,7 @@
 /**
  * @file The error a request-path Redis call fails with when Redis did not
- * answer in time. Every caller already handles a Redis failure (fail open,
- * fall back to memory, skip a dedupe), so a stall takes that same path.
+ * answer in time. It is thrown in place of a Redis failure, so a caller
+ * handles a stall as it handles any other Redis error.
  */
 
 /**

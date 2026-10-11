@@ -53,8 +53,7 @@ export const tenantInvitationModel = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     /**
      * When the invitation was last mailed: set by `createPending` and
-     * `replaceToken`, read by the resend cooldown. Null on a row written
-     * before the column existed, which the cooldown lets through.
+     * `replaceToken`, read by the resend cooldown, which lets a null through.
      */
     lastSentAt: timestamp('last_sent_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

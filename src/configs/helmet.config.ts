@@ -1,18 +1,21 @@
 /**
  * @file Security headers for a JSON-only API: nothing here serves HTML, so the
- * CSP forbids every source and all framing.
+ * CSP allows no source and no framing.
  */
 import type { HelmetOptions } from 'helmet'
 
 /**
- * helmet configuration mounted first in `createApp()` (`src/app.ts`), ahead
- * of `cors` and every route, so no response can be produced without these
- * headers attached. CORP is `same-site`, not `same-origin`: it applies only to
- * no-cors embeds, and keeps one from a sibling-subdomain frontend working;
- * credentialed fetches are gated by CORS alone. HSTS is off: the
- * TLS-terminating edge owns it (the clients' nginx.conf says the same), so an
- * express served straight over TLS with no edge sends none until the
- * operator adds it there.
+ * The options `createApp()` (`src/app.ts`) passes to `helmet()`, which it
+ * mounts first, so the headers are set before `cors` or any route writes a
+ * response.
+ *
+ * `Cross-Origin-Resource-Policy` is `same-site`, not `same-origin`: it only
+ * restricts no-cors loads such as an `<img>` or `<script>` embed, and
+ * `same-site` lets a frontend on a sibling subdomain embed these responses
+ * where `same-origin` would block it. Credentialed fetches are gated by CORS
+ * alone. HSTS is off because the TLS-terminating edge owns it (the clients'
+ * nginx.conf leaves it to the edge too), so an express served straight over
+ * TLS sends none unless the operator adds it.
  */
 export const helmetOptions: HelmetOptions = {
   contentSecurityPolicy: {

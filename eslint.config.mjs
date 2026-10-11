@@ -1,6 +1,6 @@
 /**
- * @file The flat ESLint config. A rule is disabled only for a stated semantic
- * reason, never for a count of existing violations; each block says why.
+ * @file The flat ESLint config: the shared rule sets first, then path-scoped
+ * overrides. A comment above an override gives the reason it differs.
  */
 import path from 'node:path'
 import js from '@eslint/js'
@@ -13,10 +13,12 @@ import sonarjs from 'eslint-plugin-sonarjs'
 import unicorn from 'eslint-plugin-unicorn'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+import jsdocPending from './jsdoc-pending.json' with { type: 'json' }
 import { commentStyleRule } from './scripts/comment-style.mjs'
 
 /**
- * Test timing (tests/**): every real-time wait goes through tests/helpers/timing.ts.
+ * The message for the test-only bans on bare sleeps; a real-time wait in a
+ * test goes through `waitUntil` or `settle` in tests/helpers/timing.ts.
  */
 const BARE_SLEEP_MESSAGE =
   'No bare sleeps in tests. Wait on a condition with waitUntil (tests/helpers/timing.ts), use vi.useFakeTimers(), or, when nothing can be observed, settle(ms, reason).'
@@ -25,6 +27,37 @@ const timerPromiseImportBans = ['node:timers/promises', 'timers/promises'].map((
   importNames: ['setTimeout'],
   message: BARE_SLEEP_MESSAGE,
 }))
+
+/**
+ * Every named function, method and class; inline callbacks and constructors
+ * are exempt by construction.
+ */
+const NAMED_FUNCTIONS = [
+  'FunctionDeclaration',
+  'TSDeclareFunction',
+  'ClassDeclaration',
+  'MethodDefinition:not([kind="constructor"]):not([value.body=null])',
+  'TSAbstractMethodDefinition',
+  'VariableDeclarator > ArrowFunctionExpression',
+  'VariableDeclarator > FunctionExpression',
+  'PropertyDefinition > ArrowFunctionExpression',
+]
+/**
+ * Named functions plus interfaces, type aliases and exported consts.
+ */
+const JSDOC_CONTEXTS = [
+  ...NAMED_FUNCTIONS,
+  'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration',
+  'ExportNamedDeclaration[declaration.type="VariableDeclaration"]',
+]
+/**
+ * Files whose comments are not yet converted, keyed by plan task; each
+ * comment PR deletes its key.
+ */
+const PENDING = Object.values(jsdocPending).flat()
+const PENDING_TESTS = PENDING.filter((file) => file.startsWith('tests/'))
+const PENDING_OTHER = PENDING.filter((file) => !file.startsWith('tests/'))
 
 export default tseslint.config(
   {
@@ -55,12 +88,10 @@ export default tseslint.config(
     },
     plugins: { 'check-file': checkFile, 'import-x': importX },
     /**
-     * import-x settings. `import-x/extensions` must list .ts or no-cycle
-     * silently never parses a TypeScript file. The resolver's own
-     * `extensions` must too, or all four import-x rules silently skip every
-     * .ts import. Its tsconfig path must be absolute: a relative one makes
-     * aliased (`@/`) imports resolve to relative paths, which never equal the
-     * absolute filename no-cycle compares against, so no-cycle never fires on them.
+     * import-x settings. The resolver's `extensions` must list .ts, or the
+     * import-x rules skip every .ts import and neither no-cycle nor the
+     * restricted-paths zones fire. Its tsconfig path must be absolute: with a
+     * relative one, no-cycle misses cycles through aliased (`@/`) imports.
      */
     settings: {
       'import-x/extensions': ['.ts', '.tsx', '.cts', '.mts', '.js', '.jsx', '.cjs', '.mjs'],
@@ -150,18 +181,6 @@ export default tseslint.config(
       ],
 
       // Descriptions are required and types are not: types live in TypeScript.
-      'jsdoc/require-jsdoc': [
-        'error',
-        {
-          publicOnly: true,
-          require: { FunctionDeclaration: true, ClassDeclaration: true, MethodDefinition: true },
-          contexts: [
-            'TSInterfaceDeclaration',
-            'TSTypeAliasDeclaration',
-            'ExportNamedDeclaration > VariableDeclaration',
-          ],
-        },
-      ],
       'jsdoc/require-param-description': 'error',
       'jsdoc/require-returns-description': 'error',
       'jsdoc/require-param-type': 'off',
@@ -329,8 +348,8 @@ export default tseslint.config(
     extends: [tseslint.configs.disableTypeChecked],
   },
   /**
-   * No test file lives under src/. The custom `errorMessage` is required:
-   * without it, check-file validates the map's values as globs too.
+   * No test file lives under src/. The custom `errorMessage` replaces the
+   * default one, which would print the map's glob values as its suggestion.
    */
   {
     files: ['src/**/*.ts'],
@@ -352,7 +371,6 @@ export default tseslint.config(
   {
     files: ['tests/**/*.ts'],
     rules: {
-      'jsdoc/require-jsdoc': 'off',
       // `.test.`, never `.spec.`, and no `__tests__/` folders.
       'check-file/filename-blocklist': [
         'error',
@@ -417,12 +435,7 @@ export default tseslint.config(
     rules: { 'local/comment-style': 'error' },
   },
   {
-    // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift (same reason tests/** is off above).
-    files: ['scripts/**/*.d.mts'],
-    rules: { 'jsdoc/require-jsdoc': 'off' },
-  },
-  {
-    // Lint tooling: its regexes are the tested contract, it is a CLI that prints to the terminal, and its tests import it as a module.
+    // Lint tooling: its regexes are the tested contract, lint-docs.mjs is a CLI that runs git by name and prints to the terminal, and tests import these files as modules.
     files: [
       'scripts/history-patterns.mjs',
       'scripts/comment-style.mjs',
@@ -442,7 +455,7 @@ export default tseslint.config(
     },
   },
   {
-    // Its test doubles share lint-docs.mjs's own interface names (exists, docRefProblems) and its own filename mirrors the module under test.
+    // Its filename mirrors lint-docs.mjs and it imports docRefProblems from it, one test double is named exists, and a filename is concatenated on purpose so lint:docs does not read it as a citation.
     files: ['tests/unit/lint-docs.test.ts'],
     rules: {
       'unicorn/name-replacements': 'off',
@@ -450,5 +463,69 @@ export default tseslint.config(
       'unicorn/no-useless-concat': 'off',
     },
   },
+  {
+    // Every named function, method and class carries a JSDoc purpose line; tags only where they add what types cannot.
+    files: ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
+    rules: {
+      'jsdoc/require-jsdoc': [
+        'error',
+        {
+          publicOnly: false,
+          require: { FunctionDeclaration: false },
+          contexts: JSDOC_CONTEXTS,
+          checkConstructors: false,
+          // lint-staged runs eslint --fix, and this fixer inserts blank stubs.
+          enableFixer: false,
+        },
+      ],
+      'jsdoc/require-description': ['error', { contexts: JSDOC_CONTEXTS }],
+      'jsdoc/no-blank-blocks': ['error', { enableFixer: false }],
+      'jsdoc/check-param-names': ['error', { checkDestructured: false }],
+      'jsdoc/check-tag-names': ['error', { typed: true }],
+      'jsdoc/no-types': 'error',
+      'jsdoc/require-param': 'off',
+      'jsdoc/require-returns': 'off',
+    },
+  },
+  {
+    // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift.
+    files: ['scripts/**/*.d.mts'],
+    rules: { 'jsdoc/require-jsdoc': 'off' },
+  },
+  ...(PENDING_OTHER.length > 0
+    ? [
+        {
+          // Unconverted files keep the JSDoc rule they had before the rollout.
+          files: PENDING_OTHER,
+          rules: {
+            'jsdoc/require-jsdoc': [
+              'error',
+              {
+                publicOnly: true,
+                require: {
+                  FunctionDeclaration: true,
+                  ClassDeclaration: true,
+                  MethodDefinition: true,
+                },
+                contexts: [
+                  'TSInterfaceDeclaration',
+                  'TSTypeAliasDeclaration',
+                  'ExportNamedDeclaration > VariableDeclaration',
+                ],
+              },
+            ],
+            'jsdoc/require-description': 'off',
+          },
+        },
+      ]
+    : []),
+  ...(PENDING_TESTS.length > 0
+    ? [
+        {
+          files: PENDING_TESTS,
+          rules: { 'jsdoc/require-jsdoc': 'off', 'jsdoc/require-description': 'off' },
+        },
+      ]
+    : []),
   prettier
 )

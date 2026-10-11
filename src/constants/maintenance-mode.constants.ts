@@ -1,6 +1,6 @@
 /**
  * @file The fixed values of maintenance mode: its modes, header, timings,
- * text bounds and error codes. Everything new is named `maintenance-mode`;
+ * text bounds and error codes. This feature's names use `maintenance-mode`;
  * the `maintenance` queue (the retention purge) is unrelated.
  */
 
@@ -44,11 +44,11 @@ export const MAINTENANCE_MODE_NOTICE_WAIT_MS = 10_000
 export const MAINTENANCE_ACTOR_PLACEHOLDER = 'A staff member'
 
 /**
- * How old a change into `full` must be before a reload pauses the queues:
- * the changing request pauses them itself once its notices
- * are out, and a reload inside this window must neither pause them before
- * that nor resume them after. Equal to `MAINTENANCE_MODE_NOTICE_WAIT_MS`,
- * the notice wait's own deadline.
+ * How old a change into `full` must be before a reload pauses the queues.
+ * The changing request pauses them itself once its notices are out, and a
+ * reload inside this window must neither pause them before that nor resume
+ * them after. Equal to `MAINTENANCE_MODE_NOTICE_WAIT_MS`, the notice wait's
+ * own deadline.
  */
 export const MAINTENANCE_MODE_PAUSE_GRACE_MS = 10_000
 
@@ -106,12 +106,12 @@ export interface MaintenanceRouteRule {
  * The customer routes Apex calls outside `/platform/*` (its tenant,
  * members, invitations and Staff pages, leaving a tenant, a staff member's
  * own profile, password and other sessions, and accepting an invitation), as
- * `METHOD path`. Platform staff pass the gate on these in
- * both modes; everyone else is refused as on any route. Every one sits
- * behind `requireAuth`, which runs the staff check.
+ * `METHOD path`. Platform staff pass the gate on these in both modes;
+ * everyone else is refused as on any route. Every one sits behind
+ * `requireAuth`, which runs the staff check.
  * `tests/unit/routes/maintenance-mode-gates.test.ts` compares this list with
  * the calls in `tests/fixtures/apex-api-calls.json`, copied from apex; when
- * apex calls a new customer route, that fixture and this list change together.
+ * apex calls another customer route, that fixture and this list change together.
  */
 export const MAINTENANCE_STAFF_ROUTES: readonly string[] = [
   'PATCH /api/v1/profile',
@@ -220,7 +220,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('POST', '/api/v1/auth/login'),
   letThrough('GET', '/api/v1/auth/google'),
   letThrough('GET', '/api/v1/auth/google/callback'),
-  // Sessions are kept in both modes.
+  // Session upkeep and sign-in methods: let through in both modes.
   letThrough('POST', '/api/v1/auth/refresh'),
   letThrough('POST', '/api/v1/auth/logout'),
   letThrough('POST', '/api/v1/auth/reauthenticate'),

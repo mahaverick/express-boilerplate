@@ -53,11 +53,11 @@ export function mailTransportOptions(
  * (mailer.service.ts) sets each message's `from` from its template's sender
  * class, and a `MailMessage` has no `from` for a caller to set. `requireTLS`
  * is on outside `APP_ENV=local` (`requiresSmtpTls`), keyed on APP_ENV rather
- * than SMTP_HOST because compose
- * can reach Mailpit by another name; it sits on the literal, not behind a
- * spread, because `sonarjs/no-clear-text-protocols` cannot see through a
- * spread call. The return type is annotated because `ReturnType<>` of the
- * overloaded `createTransport` resolves to the `any`-typed catch-all.
+ * than SMTP_HOST because compose can reach Mailpit by another name; it sits
+ * on the literal, not behind a spread, because
+ * `sonarjs/no-clear-text-protocols` cannot see through a spread call. The
+ * return type is annotated because `ReturnType<>` of the overloaded
+ * `createTransport` resolves to the `any`-typed catch-all.
  * @returns The shared SMTP transporter.
  */
 export const getMailTransporter: () => Transporter<SMTPTransport.SentMessageInfo> = (() => {

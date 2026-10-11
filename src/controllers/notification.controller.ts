@@ -84,7 +84,7 @@ class NotificationController extends BaseController {
 
   /**
    * `PATCH /notifications/read-all`: mark every one of the authenticated
-   * user's currently-unread notifications read, in a single statement.
+   * user's unread notifications read, in a single statement.
    */
   markAllRead = this.handle(async (request, response) => {
     const count = await markAllRead(authenticatedUserId(request))
@@ -107,8 +107,8 @@ class NotificationController extends BaseController {
 
   /**
    * `GET /notifications/preferences`: the authenticated user's full
-   * notification preference matrix — every known notification type, with
-   * defaults already resolved for any type the user has never explicitly set.
+   * notification preference matrix: every notification type the user may see,
+   * with defaults resolved for any type the user has never explicitly set.
    */
   getPreferences = this.handle(async (request, response) => {
     const preferences = await getPreferences(authenticatedUserId(request))
@@ -121,8 +121,9 @@ class NotificationController extends BaseController {
    *
    * `updatePreferencesSchemaFor` (notification.validators.ts) is the only gate
    * on which `notificationType` values reach `upsert`: a type outside
-   * `CONFIGURABLE_NOTIFICATION_TYPES` (currently every type) fails with a
-   * per-field 400.
+   * `CONFIGURABLE_NOTIFICATION_TYPES` (empty, since every type is
+   * non-disableable), or a staff-only type for a caller who is not staff,
+   * fails with a per-field 400.
    */
   updatePreferences = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

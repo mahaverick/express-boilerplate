@@ -7,33 +7,31 @@ import { isAnalyticsEnabled, isFlagsEnabled, isTimelineEnabled } from '@/configs
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
-// Static, unlike `@/server`: constructing the logger is lazy and calls no getEnv().
+// Static, unlike `@/server`: importing the logger calls no getEnv().
 import { logger } from '@/services/logger.service'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 
 /**
- * Start listening and wire graceful shutdown.
+ * Start the server and wire shutdown, fault handling and workers.
  *
  * `@/server` and the worker supervisor are imported dynamically: `@/server`
  * reaches database.service.ts, which calls `getEnv()` at module scope, so a
  * static import would throw on a bad environment before `main()` could
  * report it, and a static worker import would load BullMQ into processes
- * that never start workers. The forced-exit backstop and the once-only guard
- * live in `createShutdownHandler` (lifecycle.service.ts). `process.exit` is
- * passed in as a callback from the two places that begin shutdown (the
- * server 'error' listener and the fault and signal handlers' `shutdown`),
- * each with a `unicorn/no-process-exit` exception. Fatal errors (unhandled rejection,
- * uncaught exception, a server 'error' at bind or after listening) go
- * through the same handler with exit code 1. An unhandled rejection or an
- * uncaught exception first marks shutdown (readiness answers 503), is
+ * that never start workers.
+ *
+ * Fatal errors (unhandled rejection, uncaught exception, a server 'error')
+ * go through the shutdown handler with exit code 1. An unhandled rejection or
+ * an uncaught exception first marks shutdown (readiness answers 503), is
  * reported to error tracking and logged with the same `errorId`, and the
  * report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` before shutdown
- * begins; a SIGTERM or SIGINT during that flush still exits 1. With flags
- * enabled, the flag snapshot's first load completes before the server
- * listens, so the first request already sees it; its start never rejects
- * and does not wait for the pub/sub subscription. The maintenance-mode
- * store's first read completes before the server listens too, the same way,
- * so no request is served under a mode this replica has not tried to read.
+ * begins; a SIGTERM or SIGINT during that flush still exits 1.
+ *
+ * The flag snapshot (when flags are enabled) finishes a first load before the
+ * server listens, so the first request already sees it. The maintenance-mode
+ * store does too, so the first request is not served without a mode this
+ * replica has tried to read. Neither start rejects, and neither waits for its
+ * pub/sub subscription.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
@@ -71,7 +69,7 @@ async function boot(): Promise<void> {
   onMaintenanceModeReload((snapshot) => {
     void reconcileQueuePause(snapshot)
   })
-  // Never rejects: a failed first read starts the replica open and the backstop retries.
+  // Never rejects: after a failed first read the replica serves `off` until a reload succeeds.
   await startMaintenanceModeStore()
 
   // Filled in once the workers start; shutdown reads it only when it runs.
@@ -118,9 +116,9 @@ async function boot(): Promise<void> {
 }
 
 /**
- * Validate the environment and its cross-field rules, then hand off to `boot()`.
- * First it raises V8's stack depth (10 frames by default) to the frames
- * error tracking keeps, so a reported stack is not cut at 10.
+ * Entrypoint: raise V8's stack depth (10 frames by default) to the frames
+ * error tracking keeps, so a reported stack is not cut at 10; validate the
+ * environment and its cross-field rules; then hand off to `boot()`.
  */
 function main(): void {
   // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth; Node runs only on V8

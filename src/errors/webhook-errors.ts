@@ -13,7 +13,7 @@ export type WebhookSignatureFailure =
   'missing_headers' | 'malformed_headers' | 'stale_timestamp' | 'signature_mismatch'
 
 /**
- * A webhook request that the provider did not sign, or signed too long ago.
+ * A webhook request whose signature check failed.
  */
 export class WebhookSignatureError extends Error {
   /**

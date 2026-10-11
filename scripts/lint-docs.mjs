@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * @file lint:docs — history phrasing in markdown and in # comments of config
- * files, broken relative links and anchors in markdown, and code that cites a
- * doc file that does not exist.
+ * @file The lint:docs check, over every tracked or untracked, non-ignored
+ * file: history phrasing in markdown (except CHANGELOG.md) and in the #
+ * comments of config and shell files, relative links and anchors in markdown
+ * that do not resolve, and code that cites an upper-case `.md` file missing
+ * from the repo root.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -18,7 +20,9 @@ const LINK =
 const DOC_REF = /\b([A-Z][A-Z0-9_-]*\.md)\b/g
 
 /**
- * GitHub's anchor for a heading.
+ * A heading's anchor as GitHub derives it: lowercased, HTML tags removed,
+ * then everything but letters, digits, whitespace, `-` and `_` removed, and
+ * each whitespace character a `-`.
  * @param heading - Heading text without the leading #s.
  * @returns The anchor, without #.
  */
@@ -32,7 +36,8 @@ export function slugify(heading) {
 }
 
 /**
- * Every anchor a markdown file defines, duplicates numbered the way GitHub does.
+ * The heading anchors a markdown file defines outside code fences, a repeated
+ * one numbered `-1`, `-2` and so on, as GitHub does.
  * @param markdown - File contents.
  * @returns Anchors without #.
  */
@@ -56,6 +61,8 @@ export function anchors(markdown) {
 }
 
 /**
+ * The text after a line's first `#` that starts the line or follows
+ * whitespace, skipping a `#!` shebang.
  * @param line - One line of a config file.
  * @returns The text of its # comment, or null when it has none.
  */
@@ -65,7 +72,7 @@ function hashComment(line) {
 }
 
 /**
- * History phrasing, line by line.
+ * Each line in which `findHistory` finds history phrasing.
  * @param file - Path for the report.
  * @param text - File contents.
  * @param root0 - Options.
@@ -83,7 +90,10 @@ export function historyProblems(file, text, { hashComments }) {
 }
 
 /**
- * Relative links and anchors that do not resolve.
+ * Relative links and anchors in a markdown file that do not resolve. Text
+ * between a pair of triple backticks and a single-line backtick span are
+ * skipped (a `~~~` fence is not), and so is any link with a URL scheme; an
+ * anchor is checked only on a link to a markdown file.
  * @param file - Repo-relative path of the markdown file.
  * @param text - Its contents.
  * @param exists - Whether a repo-relative path exists.
@@ -116,7 +126,8 @@ export function linkProblems(file, text, exists, readAnchors) {
 }
 
 /**
- * Doc files cited in code that do not exist at the repo root.
+ * Upper-case `.md` file names cited in a code file that do not exist at the
+ * repo root.
  * @param file - Path for the report.
  * @param text - File contents.
  * @param exists - Whether a repo-relative path exists.
@@ -138,13 +149,19 @@ function pathExists(repoRelativePath) {
 }
 
 /**
- * Check every tracked and untracked, non-ignored file in the current repo.
+ * Check every tracked and untracked, non-ignored file in the current repo;
+ * print each problem and exit 1 when there is any.
  */
 function main() {
   const files = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], { encoding: 'utf8' })
     .split('\n')
     .filter((file) => file && fs.existsSync(file))
   const cache = new Map()
+  /**
+   * A markdown file's anchors, read from disk once per path.
+   * @param repoRelativePath - Path relative to the repo root.
+   * @returns Anchors without #.
+   */
   const readAnchors = (repoRelativePath) => {
     if (!cache.has(repoRelativePath)) {
       cache.set(repoRelativePath, anchors(fs.readFileSync(repoRelativePath, 'utf8')))

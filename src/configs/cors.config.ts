@@ -2,18 +2,18 @@ import type { CorsOptions } from 'cors'
 import { isAllowedOrigin } from '@/utilities/origin.utilities'
 
 /**
- * How this API answers a browser's cross-origin questions.
+ * How this API answers a browser's cross-origin requests and preflights.
  *
  * `credentials: true` is the reason `origin` can never be `'*'`: the CORS
- * spec forbids the pair, and a browser discards the response rather than
- * warning about it. No `methods` list: `cors`'s default covers every verb
- * this API registers and cannot drift as routes are added. `X-Request-Id` is
+ * spec forbids the pair, and a browser blocks a credentialed response that
+ * grants `*`. No `methods` list: `cors`'s default (GET, HEAD, PUT, PATCH,
+ * POST, DELETE) covers every verb the routes register. `X-Request-Id` is
  * exposed so a cross-origin client can report the id this API logs;
- * `Maintenance-Mode` and `Retry-After` so it can read the maintenance mode
- * every response carries and when to retry a maintenance 503.
- * `traceparent` and `X-POSTHOG-SESSION-ID` are set by the frontends' own
- * axios interceptor, so a cross-origin frontend can link a server event to
- * its trace and its browser session.
+ * `Maintenance-Mode` so it can read the mode the maintenance gate stamps on
+ * each response that reaches it, and `Retry-After` so it can read when to
+ * retry a refused request. `traceparent` and `X-POSTHOG-SESSION-ID` are sent by the
+ * frontends' own axios interceptor, so a cross-origin frontend can link a
+ * server event to its trace and its browser session.
  */
 export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
@@ -22,7 +22,7 @@ export const corsOptions: CorsOptions = {
     callback(null, isAllowedOrigin(origin))
   },
   credentials: true,
-  // Without Last-Event-ID a cross-origin SSE client silently loses replay on reconnect.
+  // Not CORS-safelisted: left out, the preflight would fail an SSE reconnect that sends Last-Event-ID.
   allowedHeaders: [
     'Authorization',
     'Content-Type',
@@ -31,7 +31,7 @@ export const corsOptions: CorsOptions = {
     'X-POSTHOG-SESSION-ID',
   ],
   exposedHeaders: ['X-Request-Id', 'Maintenance-Mode', 'Retry-After'],
-  // Chrome caps preflight caching at 600s; Authorization makes every call preflight.
+  // Authorization is not CORS-safelisted, so every authenticated call needs a preflight; this lets the browser reuse the answer for 10 minutes.
   maxAge: 600,
   optionsSuccessStatus: 204,
 }
