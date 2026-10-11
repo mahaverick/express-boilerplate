@@ -21,7 +21,7 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 
 /**
- * Returns an address no other row shares, for a user the test inserts.
+ * Returns an address no other test row shares, for a user the test creates.
  */
 function uniqueEmail(): string {
   return `tx-${randomUUID()}@example.test`

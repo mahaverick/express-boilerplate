@@ -16,7 +16,8 @@ import {
 import type { NormalizedEmailEvent } from '@/types/email-webhook'
 
 /**
- * The slice of the environment the adapter registry reads, for `appEnv`.
+ * The slice of the environment the adapter registry reads, for `appEnv`;
+ * it omits `RESEND_WEBHOOK_SECRET`.
  */
 function envFor(appEnv: AppEnv) {
   return { APP_ENV: appEnv, FAKE_EMAIL_WEBHOOK_SECRET: 'fake-webhook' }

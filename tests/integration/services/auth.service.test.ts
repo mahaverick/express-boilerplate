@@ -28,7 +28,7 @@ const realEnv = getEnv()
 const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
- * Returns an address no other test row shares, for a user the test registers or seeds.
+ * Returns an address no other test row shares, for a user the test creates.
  */
 function uniqueEmail(): string {
   return `auth-service-${randomUUID()}@example.test`

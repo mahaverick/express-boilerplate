@@ -47,7 +47,7 @@ const OUTAGE_MS = 1500
 const RETRY_SETTLE_MS = 2000
 // One capped retry delay, then one connect attempt.
 const RECOVERY_TIMEOUT_MS = RECONNECT_DELAY_CAP_MS + REDIS_CONNECT_TIMEOUT_MS
-// The close claim: prompt, never stuck behind the retry backoff. Under REDIS_CONNECT_TIMEOUT_MS (5 s), the longest a close could wait on a connect.
+// The close claim: prompt, never stuck behind the retry backoff. 10x the whole test's measured p99 (399 ms).
 const PROMPT_CLOSE_BUDGET_MS = 4000
 const FAILED_TO_START = 'Notification subscriber failed to start'
 const PUBLISH_FAILED =
@@ -73,7 +73,7 @@ const emitter = { onNotification, offNotification }
 type LogMethod = (message: string, meta?: Record<string, unknown>) => void
 
 /**
- * The notification emitter module, as a fresh copy of it is loaded.
+ * The module type of a freshly loaded emitter.
  */
 type EmitterModule = typeof import('@/services/notification-emitter.service')
 
@@ -267,7 +267,7 @@ describe('notification pub/sub survives a Redis outage', () => {
     const fourth = fakeNotification({ userId })
     const logWarn = vi.fn<LogMethod>()
     /**
-     * Counts the logged publish-failure warnings.
+     * Counts the publish-failure warnings `logWarn` received.
      */
     const publishWarnings = (): number =>
       logWarn.mock.calls.filter(([message]) => message === PUBLISH_FAILED).length

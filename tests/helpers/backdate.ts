@@ -24,7 +24,7 @@ export async function backdateUpdatedAt(
   table: BackdatableTable,
   key: { column: 'id' | 'tenant_id'; value: string }
 ): Promise<Date> {
-  // drizzle(sql) installs identity parsers on the shared client, so this raw query gets updated_at back as text, not a Date.
+  // drizzle hands timestamps back unparsed on the shared client, so this raw query gets updated_at as text, not a Date.
   const [row] = await sql<{ updated_at: string }[]>`
     update ${sql(table)} set updated_at = updated_at - interval '1 second'
     where ${sql(key.column)} = ${key.value}

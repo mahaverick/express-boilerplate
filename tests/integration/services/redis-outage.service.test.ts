@@ -39,7 +39,8 @@ const OUTAGE_MS = 1500
  * The longest a reachability probe may take while Redis is down or silent. A
  * probe that waited on Redis would not settle while it stays that way, so this
  * only has to separate "answered promptly" from "never"; `isRedisReachable`
- * itself waits at most REDIS_REQUEST_DEADLINE_MS, far below it.
+ * itself waits at most REDIS_REQUEST_DEADLINE_MS, far below it, and
+ * `isQueueReachable` answers at once while a queue connection is not ready.
  */
 const PROBE_BOUND_MS = 5000
 

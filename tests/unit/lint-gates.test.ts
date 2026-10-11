@@ -103,19 +103,18 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
 
 /**
  * This suite's own timeout, in place of the global test timeout
- * (vitest.config.ts). Only the two cold tests (first `lintText`, first
- * `lintFiles`, building the real TS program the no-cycle fixtures need) are
- * slow, since both ESLint instances above are module-scoped and reused by
- * every later test. Run right after `pnpm lint && pnpm build`, the sequence
- * CI runs, those two cold tests slow down a great deal: parallel vitest
- * workers, v8 coverage instrumentation, and a just-finished `tsc` all
- * compete for the CPU while ESLint type-checks the project from cold. It is
- * this variance that made the file flaky, not the mean. The value is a
- * ceiling for a hung ESLint program build, not a speed claim: it sits an
- * order of magnitude above a cold run on an idle machine and well above the
- * slowest cold run under CI-style CPU contention, so only a hang trips it.
- * Raising the global timeout instead would hide a real slowdown anywhere
- * else in the suite.
+ * (vitest.config.ts). On an idle machine the two cold tests (first
+ * `lintText`, first `lintFiles`, building the real TS program the no-cycle
+ * fixtures need) run in ~1.1-1.5 s each, and every later test in each group
+ * costs 7-40 ms, since both ESLint instances above are module-scoped and
+ * reused. Run right after `pnpm lint && pnpm build`, the sequence CI runs,
+ * those same two cold tests were observed at 20.2 s and once at 61 s:
+ * parallel vitest workers, v8 coverage instrumentation, and a just-finished
+ * `tsc` all compete for the CPU while ESLint type-checks the project from
+ * cold. It is this variance that made the file flaky, not the mean, so the
+ * timeout is generous (2x the worst contended run observed here) rather
+ * than tuned close to it. Raising the global timeout instead would hide a
+ * real slowdown anywhere else in the suite.
  */
 const LINT_GATE_TIMEOUT_MS = 120_000
 

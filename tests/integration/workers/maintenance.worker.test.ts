@@ -23,7 +23,7 @@ import { waitForLoggedCall } from '../../helpers/queue-jobs'
 function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
     /**
-     * Settles the wait with 'completed' for `jobId`.
+     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
      */
     const onCompleted = (job: Job): void => {
       if (job.id !== jobId) return
@@ -31,7 +31,7 @@ function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' |
       resolve('completed')
     }
     /**
-     * Settles the wait with 'failed' for `jobId`.
+     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
      */
     const onFailed = (job: Job | undefined): void => {
       if (job?.id !== jobId) return

@@ -5,8 +5,8 @@
  * limiter (RATE_LIMITER_MARK on one of its handlers) or is named on
  * ALLOWLIST with a reason. Express 5 has no `app._router`; `app.router`
  * is a lazy getter (application.js) over the standalone `router`
- * package. Express's type declarations describe its layers as the older
- * `ILayer` (a `regexp`, a `handle` with no `.stack`), which does not match
+ * package. Express's type declarations describe its layers as `ILayer`
+ * (a `regexp`, a `handle` with no `.stack`), which does not match
  * router@2's layers, hence the local shapes and the one cast.
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
@@ -57,8 +57,7 @@ interface DiscoveredRoute {
  * recursing into mounted sub-routers. A sub-router is any layer whose
  * `.handle` itself carries a `.stack` array — the shape `Router()` always
  * returns (router@2.2.0's own factory), regardless of which feature router
- * built it. `methods` holds the lowercase HTTP methods to collect, and
- * `into` is the accumulator, mutated in place.
+ * built it. `methods` holds the lowercase HTTP methods to collect.
  */
 function collectRoutes(
   stack: RouterStackLayer[],

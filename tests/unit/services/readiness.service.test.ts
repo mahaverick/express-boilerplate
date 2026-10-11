@@ -48,7 +48,7 @@ function heldCheck(): {
 }
 
 /**
- * A check that resolves true at once.
+ * A readiness check that passes immediately, standing in for a healthy dependency.
  */
 function answersAtOnce(): Promise<boolean> {
   return Promise.resolve(true)

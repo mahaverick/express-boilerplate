@@ -61,7 +61,7 @@ function waitForJobSettled(
 ): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
     /**
-     * Settles the wait with 'completed' for `jobId`.
+     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
      */
     const onCompleted = (job: Job<NotificationJobData>): void => {
       if (job.id !== jobId) return
@@ -69,7 +69,7 @@ function waitForJobSettled(
       resolve('completed')
     }
     /**
-     * Settles the wait with 'failed' for `jobId`.
+     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
      */
     const onFailed = (job: Job<NotificationJobData> | undefined): void => {
       if (job?.id !== jobId) return

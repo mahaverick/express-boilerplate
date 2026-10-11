@@ -41,8 +41,8 @@ const DENYLIST_FAILURE = 'session denylist write failed after revocation'
 /**
  * A password change hashes with bcrypt before its user lock, which is
  * CPU-bound, so the waiter probe's deadline starts at the lock; this
- * bounds the whole probe. 12 s plus setup and teardown stays under the 20 s
- * test timeout.
+ * bounds the whole probe. 12 s plus setup and teardown (under 3 s on a
+ * starved CPU) stays under the 20 s test timeout.
  */
 const REVOKER_PROBE_BOUND_MS = 12_000
 
@@ -145,7 +145,7 @@ function holdAfterRevoke(
     await release
   }
   /**
-   * `revokeAllForUser` followed by `holdIfArmed`.
+   * `revokeAllForUser` that then pauses at the race's hold point when armed.
    */
   const holdingAll: typeof realAll = async function (this: UserTokenRepository, ...parameters) {
     const ids = await realAll.apply(this, parameters)
@@ -153,7 +153,7 @@ function holdAfterRevoke(
     return ids
   }
   /**
-   * `revokeAllForUserExceptSession` followed by `holdIfArmed`.
+   * `revokeAllForUserExceptSession` that then pauses at the race's hold point when armed.
    */
   const holdingExcept: typeof realExcept = async function (
     this: UserTokenRepository,
@@ -164,7 +164,7 @@ function holdAfterRevoke(
     return ids
   }
   /**
-   * `revokeAllForSession` followed by `holdIfArmed`.
+   * `revokeAllForSession` that then pauses at the race's hold point when armed.
    */
   const holdingSession: typeof realSession = async function (
     this: UserTokenRepository,
@@ -528,7 +528,7 @@ async function raceTwoLogins(
   const calls = { update: 0, lockById: 0 }
 
   /**
-   * Pauses the login named `second`, the first to reach its `lastLoggedInAt` update, until
+   * Pauses the race's second login, the first to reach its `lastLoggedInAt` update, until
    * released.
    */
   const pausingUpdate: typeof realUpdate = async function (this: UserRepository, ...parameters) {

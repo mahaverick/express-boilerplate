@@ -74,7 +74,7 @@ async function loginAround(
 }
 
 /**
- * Counts a user's refresh-token rows, which a refused login must leave at zero.
+ * Counts a user's refresh-token rows, zero after a refused sign-in, one after an allowed one.
  */
 async function refreshRows(userId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`

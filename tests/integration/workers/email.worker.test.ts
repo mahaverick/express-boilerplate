@@ -103,7 +103,7 @@ function waitForJobSettled(
 ): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
     /**
-     * Settles the wait with 'completed' for `jobId`.
+     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
      */
     const onCompleted = (job: Job<EmailJobData>): void => {
       if (job.id !== jobId) return
@@ -111,7 +111,7 @@ function waitForJobSettled(
       resolve('completed')
     }
     /**
-     * Settles the wait with 'failed' for `jobId`.
+     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
      */
     const onFailed = (job: Job<EmailJobData> | undefined): void => {
       if (job?.id !== jobId) return
@@ -368,7 +368,7 @@ describe('email.worker', () => {
     const token = randomUUID()
     const scrubs: { jobId: string | undefined; attemptsMade: number }[] = []
     /**
-     * `updateData` that records which job and attempt scrubbed, then runs the original.
+     * Records which job and attempt scrubbed, for the assertions below.
      */
     function recordingUpdateData(this: Job, data: unknown): Promise<void> {
       scrubs.push({ jobId: this.id, attemptsMade: this.attemptsMade })

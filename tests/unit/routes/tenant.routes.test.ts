@@ -22,7 +22,7 @@ interface RouteLayer {
 
 /**
  * The handlers mounted for one lowercase method and a route path exactly as
- * mounted, in mount order.
+ * mounted, in mount order; throws when the router has no such route.
  */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   // Express's published types omit `route.methods`, which the runtime layer has.

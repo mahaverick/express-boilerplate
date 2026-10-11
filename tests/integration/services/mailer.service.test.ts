@@ -191,7 +191,7 @@ describe('sendMail', () => {
   /**
    * `renderForMessage`'s switch (`mailer.service.ts`) has one case per
    * template, and the other tests exercise it through `'password_reset'`
-   * only. This drives `email_verification`, `password_reset` and
+   * and the unknown-key default. This drives `email_verification`, `password_reset` and
    * `registration_attempt` through the real `sendMail`, one call per template
    * (not a loop over a mixed-shape array, which would need an `any` to pair
    * each `templateKey` with its own variables type; the discriminated union
@@ -580,7 +580,8 @@ describe('sendMail', () => {
   /**
    * The failure-path half of the leak proof (the success path, a caller
    * passing a raw `errorCode` directly to `record()`, is covered in
-   * `tests/integration/repositories/email-log-error-code-shape-mutation.test.ts`):
+   * `tests/integration/repositories/email-log.repository.test.ts`, with its mutation proof in
+   * `email-log-error-code-shape-mutation.test.ts`):
    * a transport rejection whose own message embeds a raw token and the
    * rendered body, the realistic shape of an SMTP rejection that echoes
    * content back, must never reach the table. `extractErrorCode`

@@ -44,7 +44,8 @@ vi.mock('@/configs/analytics.config', () => ({
 }))
 
 /**
- * The slice of a BullMQ Worker that the supervisor calls: `close`.
+ * The one Worker method the supervisor calls, so a fake need not implement the rest of
+ * BullMQ's Worker.
  */
 interface FakeWorker {
   close: ReturnType<typeof vi.fn>

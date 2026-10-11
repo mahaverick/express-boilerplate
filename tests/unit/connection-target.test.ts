@@ -22,7 +22,7 @@ const compose = read('docker-compose.yml')
 const envTest = read('.env.test')
 
 /**
- * The host-side port docker-compose.yml publishes for the compose service `service`, as a string.
+ * The host-side port docker-compose.yml publishes for the compose service `service`.
  *
  * It reads the named service's own block rather than grepping the whole file for a port
  * number: a bare search for "5433" would be satisfied by the header comment that explains the
@@ -30,7 +30,8 @@ const envTest = read('.env.test')
  *
  * It parses line by line rather than with one multiline regex: the obvious
  * `/^\s*ports:.*?['"](\d+):(\d+)['"]/m` is flagged by sonarjs/super-linear-regex as
- * backtracking-prone. The same rule rules out matching the `ports:` mapping line itself
+ * backtracking-prone (it puts two lazy quantifiers next to each other). The same rule rules out
+ * matching the `ports:` mapping line itself
  * (`['[<bind-address>:]<host>:<container>', ...]`) with a `(\d+):(\d+)` pattern, so it splits
  * on `:` and takes the segment before the always-last container port, whether or not a bind
  * address prefixes it.
@@ -55,7 +56,7 @@ const composeHostPort = (service: string): string => {
 }
 
 /**
- * The port, as a string, that the URL in .env.test's `key` (such as DATABASE_URL) points at.
+ * The port that the URL in .env.test's `key` (such as DATABASE_URL) points at.
  */
 const envTestPort = (key: string): string => {
   const line = envTest.split(/\r?\n/).find((candidate) => candidate.startsWith(`${key}=`))

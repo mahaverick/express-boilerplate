@@ -34,7 +34,7 @@ describe('queue unreachable', () => {
   it('isQueueReachable() resolves false within a few seconds instead of hanging', async () => {
     const startedAt = Date.now()
     await expect(queueService.isQueueReachable()).resolves.toBe(false)
-    // Giving up costs the three pre-ready retry delays (0.2, 0.4, 0.6 s); a hang would take about 4 x REDIS_CONNECT_TIMEOUT_MS (20 s).
+    // The claim: it gives up instead of retrying forever. Giving up costs the three pre-ready retry delays (0.2 + 0.4 + 0.6 s); 14 s is 10x the measured p99 (1303 ms).
     expect(Date.now() - startedAt).toBeLessThan(14_000)
   }, 20_000)
 

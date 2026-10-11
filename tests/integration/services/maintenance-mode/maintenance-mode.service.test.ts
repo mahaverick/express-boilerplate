@@ -49,7 +49,7 @@ function googleProfile(email: string): GoogleProfile {
 }
 
 /**
- * Counts a user's `user_tokens` rows, which a refused sign-in must leave at zero.
+ * Counts a user's `user_tokens` rows, zero after a refused sign-in, one after an allowed one.
  */
 async function sessionsOf(userId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`

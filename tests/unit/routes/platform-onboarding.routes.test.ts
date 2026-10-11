@@ -14,8 +14,8 @@ import {
 } from '@/routes/platform-onboarding.routes'
 
 /**
- * A router layer as these tests read it: a route's path, methods and handler
- * stack.
+ * A router layer as router@2 builds it. Express's published types describe an
+ * older layer shape, so the tests declare the part they read.
  */
 interface RouteLayer {
   route?: {

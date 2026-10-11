@@ -47,7 +47,7 @@ function uniqueEmail(): string {
  * SQL text (see `BaseRepository.touched`), never this process's `Date.now()`.
  * So the one `<=` comparison in `claimToken` is the only reader of the faked
  * clock in the window. The mutation lives inside one `await`, and vitest's
- * `pool: 'forks'` runs one test file at a time per worker process, so no
+ * `pool: 'forks'` runs each test file in its own process, so no
  * other file's assertions see it.
  *
  * Two tests, matching `token-reuse-mutation.test.ts`:

@@ -143,7 +143,8 @@ function entriesIn(
 }
 
 /**
- * Walks an app's router stack and returns its entries.
+ * An app's route entries, read through a cast because Express's types do not
+ * describe `app.router`'s stack.
  */
 function entriesOf(app: Express): WalkedEntry[] {
   return entriesIn((app as unknown as { router: { stack: StackLayer[] } }).router.stack, '')

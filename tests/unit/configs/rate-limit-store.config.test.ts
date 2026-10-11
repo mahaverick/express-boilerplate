@@ -18,8 +18,8 @@ vi.mock('@/services/redis.service', () => ({ getRedis: vi.fn() }))
 /**
  * SharedRateLimitStore.init() reads only `windowMs` off this, directly and through
  * MemoryStore's and RedisStore's own `init`; no other field of the real `Options` type matters
- * to the store under test. It is cast with `as unknown as` because this literal is far from a
- * structural superset of `Options`, so a direct `as` is refused.
+ * to the store under test. The literal is deliberately partial, which `as unknown as` marks;
+ * a direct `as` would also compile.
  */
 const testOptions = { windowMs: 60_000 } as unknown as Parameters<SharedRateLimitStore['init']>[0]
 

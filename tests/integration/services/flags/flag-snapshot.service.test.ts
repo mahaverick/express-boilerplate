@@ -331,7 +331,7 @@ describe('start() and stop() while the subscriber never finishes its handshake',
       expect(Date.now() - stopping).toBeLessThan(500)
       await waitUntil(() => silent.accepted[0]?.destroyed, {
         message: 'the connected subscriber is closed by stop()',
-        // Well inside the 5 s handshake deadline, which would otherwise close it.
+        // Well inside REDIS_CONNECT_TIMEOUT_MS (5 s), the handshake deadline that would otherwise close it; measured in ms.
         timeout: 1000,
       })
     } finally {

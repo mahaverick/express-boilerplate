@@ -170,7 +170,7 @@ describe('configurePassport', () => {
     ).toBeDefined()
   })
 
-  // The pass-through verify function: no database lookup, `done` called with the raw profile unchanged; account linking is decided in the callback route (`resolveGoogleUser`).
+  // The pass-through verify function: no database lookup, `done` called with the raw profile unchanged; account linking is the callback route's policy (`resolveGoogleUser`, google-auth.service.ts).
   it('passthroughGoogleProfile hands the raw profile straight to done, with no error', () => {
     vi.mocked(getEnv).mockReturnValue({
       ...baseEnv,

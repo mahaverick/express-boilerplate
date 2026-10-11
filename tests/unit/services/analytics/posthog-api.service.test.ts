@@ -90,9 +90,8 @@ describe('posthogProjectPath', () => {
 })
 
 /**
- * Creates the multivariate flag `key` through the fake, with one variant per
- * entry of `percentages` (its rollout), asking `posthogApi` to read the error
- * body. Resolves with how the call ended.
+ * Creates the multivariate flag `key` with one variant per rollout percentage in
+ * `percentages`; settles as `posthogApi` does, whether it resolves or rejects.
  */
 function createSplitFlag(key: string, percentages: number[]): Promise<unknown> {
   return posthogApi(

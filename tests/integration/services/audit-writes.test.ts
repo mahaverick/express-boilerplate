@@ -70,8 +70,7 @@ afterAll(async () => {
 })
 
 /**
- * Returns an address no other row in this worker's database shares, so a seeded user never
- * collides on the unique email.
+ * Returns an address no other test row shares, for a user the test creates.
  */
 function uniqueEmail(): string {
   return `audit-writes-${randomUUID()}@example.test`
@@ -558,7 +557,7 @@ describe('invitation.resent', () => {
 
 /**
  * A stored address whose domain is no hostname (the invite validator
- * rejects these; a row stored before the validator existed can hold one) must not block a resend
+ * rejects these, but a stored row can hold one) must not block a resend
  * or a revoke: the audit entry records a null domain.
  */
 describe('an invitation whose stored domain is no hostname', () => {

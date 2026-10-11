@@ -126,9 +126,8 @@ function buildRequest(overrides: { slug?: string; user?: AuthenticatedUser } = {
 }
 
 /**
- * A `next` spy whose recorded argument reads as `unknown` rather than `any`,
- * with a reader for the argument of its most recent call. Mirrors `mockNext`
- * in tests/integration/middlewares/auth.middleware.test.ts.
+ * A `next` spy whose recorded argument reads as `unknown` rather than `any`.
+ * Mirrors `mockNext` in tests/integration/middlewares/auth.middleware.test.ts.
  */
 function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   const spy = vi.fn<(error?: unknown) => void>()

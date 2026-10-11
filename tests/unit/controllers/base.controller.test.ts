@@ -23,7 +23,7 @@ class ProbeController extends BaseController {
 }
 
 /**
- * A handler that fails before it returns a promise.
+ * A handler that throws synchronously, so no promise is returned.
  */
 function throwSync(): void {
   throw new Error('sync failure')

@@ -284,7 +284,7 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // Age the session past the ceiling, read from the same environment as the code so the test tracks `SESSION_ABSOLUTE_TTL`.
     const absoluteTtlMs = parseDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
     if (absoluteTtlMs === undefined) throw new Error('SESSION_ABSOLUTE_TTL is unparseable')
-    // An ISO string, not a Date: `drizzle(sql)` replaces the shared client's timestamp serializers with a pass-through, so a bare Date bound in a raw `sql` query throws.
+    // An ISO string, not a Date: drizzle hands a raw `Date` in a raw `sql` query to postgres-js unserialised, and the query fails.
     const startedAt = new Date(Date.now() - absoluteTtlMs - 60_000).toISOString()
     await sql`
       update user_tokens set session_started_at = ${startedAt}::timestamptz

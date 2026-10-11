@@ -145,7 +145,7 @@ describe('the failure streaks', () => {
       new Error('Connection is closed.')
     )
     /**
-     * Counts the logged duplicate-cleanup warnings.
+     * Counts the duplicate-cleanup warnings logged, to show a failing streak logs once.
      */
     const dedupeWarnings = (): number =>
       warn.mock.calls.filter(([message]) => message === DEDUPE_WARNING).length
@@ -164,7 +164,7 @@ describe('the failure streaks', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     vi.spyOn(getEmailQueue(), 'isPaused').mockRejectedValue(new Error('Connection is closed.'))
     /**
-     * Counts the logged pause-failure warnings.
+     * Counts the pause-check warnings logged, to show a failing streak logs once.
      */
     const pauseWarnings = (): number =>
       warn.mock.calls.filter(([message]) => message === PAUSE_WARNING).length

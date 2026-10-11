@@ -10,9 +10,9 @@ const redis = {
   exists: vi.fn<(key: string) => Promise<number>>(),
 }
 
-// Written out rather than built with redisKey, so the test pins the key shape itself.
 /**
- * The Redis key a denial of `session-abc` is stored under.
+ * The Redis key a denial of `session-abc` is stored under. Written out rather than built with
+ * redisKey, so the test pins the key shape itself.
  */
 const deniedKey = (): string => `${getEnv().REDIS_KEY_PREFIX}:denylist:session:session-abc`
 
