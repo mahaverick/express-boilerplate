@@ -1,17 +1,4 @@
 {
-  "X09": [
-    "src/services/audit.service.ts",
-    "src/services/auth.service.ts",
-    "src/services/database.service.ts",
-    "src/services/domain-events.service.ts",
-    "src/services/email-message.service.ts",
-    "src/services/email-webhook-fake.service.ts",
-    "src/services/email-webhook-resend.service.ts",
-    "src/services/email-webhook.service.ts",
-    "src/services/errors/error-counters.service.ts",
-    "src/services/errors/error-event.service.ts",
-    "src/services/errors/error-reporter.service.ts"
-  ],
   "X10": [
     "src/services/flags/flag-context.service.ts",
     "src/services/flags/flag-counters.service.ts",

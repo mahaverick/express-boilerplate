@@ -7,8 +7,9 @@
  * rotates). Implemented with node:crypto rather than the `svix` package:
  * the scheme is these few lines, and a dependency would bring its own tree
  * under the repository's 3-day release-age rule. The timestamp must be within
- * five minutes either side of now, which bounds a replay; `svix-id` is the
- * event's deduplication key.
+ * five minutes either side of now, which limits how long a captured request
+ * can be replayed; `svix-id` is the event's deduplication key (unique per
+ * provider in `email_events`).
  */
 import { createHmac } from 'node:crypto'
 import type { IncomingHttpHeaders } from 'node:http'
@@ -47,18 +48,17 @@ const RESEND_SECRET_PREFIX = 'whsec_'
  */
 const PROVIDER_SUPPRESSED_DETAIL = 'PROVIDER_SUPPRESSED'
 
-// The width of email_events.provider_event_id; Svix ids are `msg_` and base62.
+// The width of email_events.provider_event_id; the characters are word characters and `-`.
 const SVIX_ID_PATTERN = /^[\w-]{1,128}$/
 const SVIX_TIMESTAMP_PATTERN = /^\d{1,12}$/
 const SIGNATURE_VERSION = 'v1'
 
 /**
- * The Resend event types this app tracks. Every other type is counted as
- * ignored: `email.sent`, `email.scheduled`, `email.received`, and every
- * family that is not `email.*` (`domain.*`, `contact.*`, `suppression.*`,
- * `topic.*`, `inbox.*`). `email.suppressed` is a failed send, not a local
- * suppression: Resend already blocked it, and the local list is fed only by
- * hard bounces and complaints.
+ * The Resend event types this app tracks. Every other type, such as
+ * `email.sent` or any non-`email.*` family, is counted as ignored.
+ * `email.suppressed` is a failed send, not a local suppression: Resend
+ * already blocked it, and the local list is fed only by hard bounces and
+ * complaints.
  */
 const RESEND_EVENT_TYPES: ReadonlyMap<string, EmailEventType> = new Map([
   ['email.delivered', 'delivered'],
@@ -72,11 +72,15 @@ const RESEND_EVENT_TYPES: ReadonlyMap<string, EmailEventType> = new Map([
 ])
 
 /**
- * The fields of a Resend email event this adapter reads. `data.click`
- * (the clicked URL) and every free-text message are never read.
+ * The `type` and `subType` of `data.bounce`, the only bounce fields read.
  */
 const bounceSchema = z.object({ type: z.string().optional(), subType: z.string().optional() })
 const dataSchema = z.object({ message_id: z.string(), bounce: bounceSchema.optional() })
+
+/**
+ * The fields of a Resend email event this adapter reads. `data.click`
+ * (the clicked URL) and every free-text message are not read.
+ */
 const resendEventSchema = z.object({
   type: z.string(),
   created_at: z.iso.datetime({ offset: true }),
@@ -87,7 +91,7 @@ const resendEventSchema = z.object({
  * One header's single value.
  * @param headers - The request headers.
  * @param name - A lowercase header name.
- * @returns The value, or undefined when absent or repeated.
+ * @returns The value (a repeated header arrives joined with `, `), or undefined when absent.
  */
 function singleHeader(headers: IncomingHttpHeaders, name: string): string | undefined {
   const value = headers[name]
@@ -120,8 +124,8 @@ function v1Signatures(header: string): Buffer[] {
 }
 
 /**
- * The event type and details of a Resend bounce, suppression or other
- * tracked event.
+ * The bounce kind and detail to store for a Resend event: set for a bounce
+ * and for `email.suppressed`, empty for the other tracked types.
  * @param type - The tracked type the Resend type maps to.
  * @param resendType - Resend's own type.
  * @param bounce - `data.bounce`, when present.
@@ -136,7 +140,7 @@ function detailsFor(
   if (type !== 'bounced') return {}
   const detail = upperSnakeDetail(bounce?.subType)
   return {
-    // Only Permanent is a hard bounce; Transient and Undetermined may still deliver.
+    // Only Permanent is a hard bounce; any other or missing type is soft and does not suppress.
     bounceKind: bounce?.type === 'Permanent' ? 'hard' : 'soft',
     ...(detail !== undefined && { detail }),
   }
@@ -145,7 +149,7 @@ function detailsFor(
 /**
  * Build the Resend adapter.
  * @param options - Its configuration.
- * @param options.secret - `RESEND_WEBHOOK_SECRET`; undefined disables the adapter.
+ * @param options.secret - `RESEND_WEBHOOK_SECRET`; undefined or empty disables the adapter.
  * @param options.now - The clock, in milliseconds; injectable for tests.
  * @returns The adapter.
  */

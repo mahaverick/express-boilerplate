@@ -1,13 +1,13 @@
 /**
  * @file Provider webhooks: the adapter registry and the one place their
- * events reach the tracking tables. Every request is verified, parsed and
- * applied in one transaction: each event is matched to its message by
+ * events reach the tracking tables. Every request is verified and parsed,
+ * then applied in one transaction: each event is matched to its message by
  * Message-ID header, stored once per provider event id, moves the message's
  * status only upwards (`EmailMessageRepository.advanceStatus`), and a hard
- * bounce or complaint suppresses the address. A provider's retry of a
- * request that failed part-way is therefore applied exactly once. Each
- * stored event is also written to the analytics outbox in the same
- * transaction, in a savepoint that never fails the request.
+ * bounce or complaint suppresses the address. A request that failed
+ * part-way rolls back whole, so the provider's retry applies each event
+ * once. Each stored event is also written to the analytics outbox in the
+ * same transaction, in a savepoint whose failure is logged, not thrown.
  */
 import type { IncomingHttpHeaders } from 'node:http'
 import { getEnv, isFakeEmailWebhookAllowed, type Env } from '@/configs/env.config'
@@ -53,11 +53,11 @@ const emailSuppressionRepository = new EmailSuppressionRepository()
 
 /**
  * What one webhook request did. `received` is every event in the body;
- * each lands in exactly one of `ignored` (a type this app does not track, or a malformed event: a missing
- * field, a non-object item or an unusable Message-ID header),
- * `unmatched` (no message has its Message-ID), `duplicate` (this provider
- * event id was stored before) and `processed`. `byType` counts the
- * processed events by type.
+ * each lands in exactly one of `ignored` (a type this app does not track,
+ * or a malformed event: a missing field, a non-object item or an unusable
+ * Message-ID header), `unmatched` (no message has its Message-ID),
+ * `duplicate` (this provider event id was stored before) and `processed`.
+ * `byType` counts the processed events by type.
  */
 export interface EmailWebhookResult {
   received: number
@@ -285,7 +285,8 @@ async function applyEvent(
  * @param rawBody - The exact body bytes, as the provider signed them.
  * @param headers - The request headers.
  * @returns The request's counts.
- * @throws {HttpError} 401 `INVALID_SIGNATURE`; 400 `INVALID_PAYLOAD`; any database error rolls back every event in the request.
+ * @throws {HttpError} 401 `INVALID_SIGNATURE`; 400 `INVALID_PAYLOAD`. Any database error rolls
+ * back every event in the request.
  */
 export async function processEmailWebhook(
   adapter: EmailWebhookAdapter,

@@ -1,7 +1,8 @@
 /**
- * @file The one writer and reader of `audit_logs`. `record` validates an entry's
+ * @file Writes and lists `audit_logs` entries. Every write validates the entry's
  * metadata against its action's strict schema and throws on a mismatch, so a bad
- * entry fails its caller's transaction instead of being dropped.
+ * entry fails its caller (and rolls back the caller's transaction) instead of
+ * being dropped.
  */
 import {
   AUDIT_ACTIONS,
@@ -41,7 +42,7 @@ export type AuditEntry = {
   [TAction in AuditAction]: {
     action: TAction
     /**
-     * The signed-in user who acted, or `'system'` for a script.
+     * The user who acted, or `'system'` when no user did.
      */
     actor: Actor | 'system'
     access: AuditAccess
@@ -52,11 +53,10 @@ export type AuditEntry = {
 }[AuditAction]
 
 /**
- * Validate an entry and insert it, with request metadata from the ALS, then
- * forward it to the analytics outbox (`enqueueAuditAnalytics`), which never
- * throws and, inside a transaction, writes in a savepoint of its own. The
- * request id, IP and user agent are cut to their column widths in
- * audit-log.model.ts.
+ * Validate an entry and insert it with the current request's id, IP and user
+ * agent, cut to their column widths, then forward it to the analytics outbox
+ * (`enqueueAuditAnalytics`), which logs its own failure instead of throwing
+ * and, inside a transaction, writes in a savepoint.
  * @param entry - The entry to validate and insert.
  * @param executor - Where to insert.
  * @returns The inserted row.
@@ -107,7 +107,7 @@ export async function record(entry: AuditEntry, tx: DbTransaction): Promise<Audi
 
 /**
  * Record a staff visit to a tenant at most once per hour per user and
- * tenant. A Redis failure skips the dedupe, never the write.
+ * tenant. A Redis failure skips the dedupe and still writes.
  * @param actor - The staff user.
  * @param tenantId - The tenant they opened.
  * @param platformRole - Their platform role, the access they used.
@@ -257,7 +257,7 @@ export async function recordFlagsEvaluateView(
 }
 
 /**
- * Log a failed release.
+ * Log that a dedupe key could not be released.
  * @param error - The failure.
  */
 function logUnreleasedDedupeKey(error: unknown): void {

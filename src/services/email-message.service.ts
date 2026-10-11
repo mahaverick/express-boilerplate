@@ -1,9 +1,10 @@
 /**
  * @file The `email_messages` row that tracks one logical email: created
  * before its job is enqueued (in the caller's transaction when it has one),
- * or by the worker for a job queued before tracking existed, and moved
- * forward by the email worker. Stored variables are only the template's
- * `previewVariables`, so no token reaches the row; a stored link carries none.
+ * or by the worker for a job queued without one, and moved forward by the
+ * email worker. Stored variables are only the template's `previewVariables`,
+ * and a template may not list a name ending in `Url` or `Token` there, so no
+ * token link is stored.
  */
 import { getEnv } from '@/configs/env.config'
 import type { EmailMessage } from '@/database/models/email-message.model'
@@ -56,7 +57,8 @@ function storedVariables(message: MailMessage): Record<string, string> {
  * @param message - The email.
  * @param userId - The account it is for; `''` when there is none, stored as NULL.
  * @param origin - The caller's context and fixed job id, if any.
- * @param executor - Where to run the queries: a transaction, so the row commits with the caller's own writes. Defaults to the pool.
+ * @param executor - Where to run the queries: pass a transaction so the row commits with the
+ * caller's own writes. Defaults to the pool.
  * @returns The message row.
  * @throws {Error} Whatever the id read or the insert throws.
  */
@@ -118,8 +120,8 @@ export async function markMessageSuppressed(id: string): Promise<void> {
 }
 
 /**
- * Record that a message left this server. A `delivered` (or later) status
- * from a faster webhook is kept.
+ * Record that a message left this server. A status of higher rank from a
+ * faster webhook, such as `delivered`, is kept.
  * @param id - The message.
  * @returns Resolves once the row is written.
  */
