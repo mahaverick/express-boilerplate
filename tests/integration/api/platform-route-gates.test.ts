@@ -240,7 +240,7 @@ const ROUTES: readonly GateRow[] = [
     target: 'tenant',
   },
   { method: 'get', path: '/me/flags', minRole: 'viewer', requiresStepUp: false },
-  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, and it is neither audited nor logged as a staff write.
+  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, so the route takes no step-up; it is neither audited nor logged as a staff write.
   {
     method: 'post',
     path: '/me/flags/exposures',
