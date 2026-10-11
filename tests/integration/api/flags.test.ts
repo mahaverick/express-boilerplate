@@ -53,12 +53,18 @@ const { createTrackedStaff, createTrackedUser, deleteTrackedUsers, tokenFor } =
 const { clearFlagKeys } = await import('../../helpers/flag-redis')
 const { request } = await import('../../helpers/request')
 
+/**
+ * A controller response envelope, narrowed to the fields these tests read.
+ */
 interface Envelope<T> {
   data: T
   message: string
   errors?: Record<string, string[]>
 }
 
+/**
+ * The `data` of a flags read: client flag values by key, and when they were evaluated.
+ */
 interface FlagsPayload {
   flags: Record<string, boolean | string>
   evaluatedAt: string

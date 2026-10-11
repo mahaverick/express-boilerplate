@@ -1,14 +1,10 @@
 /**
- * @file Integration tests for POST /api/v1/auth/forgot-password and
- * POST /api/v1/auth/reset-password, against the real per-worker
- * Postgres database and the real compose Redis — same conventions as
- * tests/integration/api/auth.test.ts and
- * tests/integration/api/verification.test.ts: every email used here is
- * unique to this run, every row created is deleted in afterEach, and
- * both the "email" and "notification" BullMQ workers run for the whole
- * file so forgotPassword's `addNotificationJob` call actually reaches
- * Mailpit (see those two files' own comments for why both workers, not
- * just one, are required).
+ * @file POST /api/v1/auth/forgot-password and POST /api/v1/auth/reset-password
+ * against the real per-worker Postgres database and the real compose Redis.
+ * Every email is unique to the run and every row is deleted in afterEach. The
+ * "email" and "notification" BullMQ workers both run for the whole file, so
+ * forgotPassword's `addNotificationJob` call reaches Mailpit: the
+ * notification worker fans the job out to the email queue.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -87,10 +83,10 @@ const VALID_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database, or the shared Redis
- * rate-limit counters, may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email, unique to this call, so it cannot collide with rows
+ * another test in this worker's database holds or with the shared Redis
+ * rate-limit counters.
+ * @returns The email.
  */
 function uniqueEmail(): string {
   return `forgot-password-${randomUUID()}@example.test`
@@ -144,12 +140,10 @@ async function login(email: string, password: string): Promise<Response> {
 }
 
 /**
- * The exact `name=value` pair for the refresh-token cookie out of a
- * response's raw `Set-Cookie` header. Own copy of
- * auth-refresh.test.ts's/verification.test.ts's helper of the same name —
- * each integration file keeps its own rather than sharing one.
+ * The refresh cookie's `name=value` pair from a response's `Set-Cookie`
+ * header, to send back on a later request.
  * @param response - The supertest response.
- * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
+ * @returns The pair, or undefined if the cookie was not set.
  */
 function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
@@ -158,10 +152,8 @@ function refreshCookiePair(response: Response): string | undefined {
 }
 
 /**
- * Issue a raw `password_reset` token for a user directly through the token
- * utility, bypassing the mailed flow — fast, and independent of the
- * forgot-password controller's own contract for every test that only needs
- * a live token to act on.
+ * Issue a raw `password_reset` token for a user directly, bypassing the
+ * mailed flow, for the tests that only need a live token to act on.
  * @param userId - The user the token belongs to.
  * @param ttlMs - How long the token is valid for, in milliseconds. Defaults to 60s; pass a negative value to seed an already-expired token.
  * @returns The raw token.
@@ -180,11 +172,9 @@ afterEach(async () => {
 })
 
 /**
- * Seed a user directly through the repository, with a hashed password and
- * (by default) already verified — mirrors auth.test.ts's
- * `registerVerifiedUser` in spirit, built from repository calls rather than
- * through `POST /auth/register` so this file does not depend on that
- * endpoint's own contract.
+ * Seed a user through the repository with a hashed password, verified by
+ * default. It does not go through `POST /auth/register`, so this file does
+ * not depend on that endpoint's contract.
  * @param isVerified - Whether to mark the seeded user's email verified. Defaults to true.
  * @returns The created (and re-read) user row and the email used.
  */
@@ -204,9 +194,8 @@ async function seedUser(isVerified = true): Promise<{ user: User; email: string 
 }
 
 /**
- * Every Redis key matching a pattern, via SCAN rather than KEYS — same
- * choice, and same reason, as verification.test.ts's own copy of this
- * helper (KEYS blocks the whole server).
+ * Every Redis key matching a pattern, via SCAN rather than KEYS, which
+ * blocks the whole server.
  * @param pattern - The glob pattern to match.
  * @returns Every matching key.
  */
@@ -231,14 +220,11 @@ async function clearRateLimiterKeys(pattern: string): Promise<void> {
 }
 
 /**
- * Both forgot-password's IP limiter (5/hour) and reset-password's IP
- * limiter (10/15min) are keyed on IP alone, and this suite's every
- * request shares one client address. Without clearing before every
- * test, a test several places away from the one that actually spends
- * either budget is the one that goes red. The email-keyed
- * forgot-password limiter needs no clearing: every test uses a fresh,
- * unique address (`uniqueEmail`), so it never shares a bucket with
- * another test regardless.
+ * forgot-password's IP limiter (5/hour) and reset-password's IP limiter
+ * (10/15min) are keyed on IP alone, and every request in this suite shares
+ * one client address. Without clearing before every test, a test far from
+ * the one that spends either budget is the one that goes red. forgot-password
+ * has no per-address limiter, so nothing else needs clearing.
  */
 beforeEach(async () => {
   await clearRateLimiterKeys(`${redisKey('rl', 'forgot-password-ip')}:*`)
@@ -269,7 +255,7 @@ describe('POST /api/v1/auth/forgot-password', () => {
     const registered = await forgotPassword(email)
     const unknown = await forgotPassword(uniqueEmail())
 
-    // Direct equality, not "both are 2xx" — the whole point of Ruling G.
+    // Direct equality, not "both are 2xx": identical replies are what stop the endpoint revealing which addresses have accounts.
     expect(registered.status).toBe(unknown.status)
     expect(registered.body).toEqual(unknown.body)
     expect(registered.status).toBe(202)
@@ -373,7 +359,7 @@ describe('POST /api/v1/auth/reset-password', () => {
   it('refuses an access token issued before the reset, once the reset completes', async () => {
     const { user, email } = await seedUser()
 
-    // The real login flow, not a fabricated session id: the denylist denies by presence, so a token carrying an unknown sid would never be denied and this assertion would pass vacuously.
+    // The real login flow, not a fabricated session id: the reset denies the sids of the sessions it revokes, so a token carrying an unknown sid would never be denied and the 401 below could not happen.
     const loginResponse = await login(email, VALID_PASSWORD)
     const accessToken = envelopeOf<{ accessToken: string }>(loginResponse).data?.accessToken
     expect(accessToken).toBeDefined()
@@ -570,10 +556,9 @@ describe('POST /api/v1/auth/reset-password', () => {
   })
 
   /**
-   * Seeded directly: a Google sign-in rejects an unverified
-   * Google email outright (403 email_not_verified), so seedUser plus
-   * direct repository calls are what construct this state for the
-   * test.
+   * Seeded directly: a Google sign-in rejects an unverified Google email
+   * outright (403 email_not_verified), so this state can only be built with
+   * seedUser and repository calls.
    */
   it('drops Google links from a never-verified account on reset, so a squatter’s Google identity no longer resolves to it', async () => {
     const { user, email } = await seedUser(false)

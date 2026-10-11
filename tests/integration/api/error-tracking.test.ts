@@ -3,8 +3,8 @@
  * (request id, request context, route template, PostHog session, auth,
  * tenant resolution) and the real `errorHandler`, on a probe router of
  * failing routes: the 5xx body's `errorId` names the log line and the one
- * `$exception` sent, signed and with GeoIP disabled; the actor's identity and tenant group, or the server's
- * anonymous identity; what is never sent (a 404, a validation 400, a client
+ * `$exception` sent, signed and with GeoIP disabled; the actor's identity and
+ * tenant group, or the server's anonymous identity; what is never sent (a 404, a validation 400, a client
  * abort, a timeline 502, a 503 with no cause); a postgres.js unique
  * violation arriving without its row values; and the `/collect` proxy's own
  * failures never reaching the reporter. Error tracking is enabled for this
@@ -59,6 +59,9 @@ const { createTrackedUser, deleteTrackedUsers, tokenFor } =
   await import('../../helpers/platform-users')
 const { request } = await import('../../helpers/request')
 
+/**
+ * The fake PostHog this file reports to.
+ */
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
 
 const FLUSH_DEADLINE_MS = 5000
@@ -76,7 +79,7 @@ function posthog(): FakePosthog {
 }
 
 /**
- * The barrier the client-abort test waits on: resolved by the probe app's error handler.
+ * The barrier the client-abort tests wait on: resolved by the probe app's error handler.
  */
 const handled: { resolve: ((status: number) => void) | undefined } = { resolve: undefined }
 

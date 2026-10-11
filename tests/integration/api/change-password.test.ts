@@ -1,16 +1,11 @@
 /**
- * @file Integration tests for POST /api/v1/auth/change-password,
- * against the real per-worker Postgres database and the real compose
- * Redis — same conventions as tests/integration/api/forgot-password.test.ts
- * (mail/worker setup) and tests/integration/api/auth.test.ts
- * (login/token mechanics). Both the "email" and "notification" BullMQ
- * workers run for the whole file, so the controller's
- * `addNotificationJob` call actually reaches Mailpit. Most tests sign
- * a bearer token directly with `signAccessToken`
- * (tests/integration/api/profile.test.ts's own approach) rather than
- * going through POST /auth/login, since they are about what happens
- * after authentication — the one exception is the "revokes every other
- * session" test below (see its own JSDoc).
+ * @file POST /api/v1/auth/change-password against the real per-worker
+ * Postgres database and the real compose Redis. The "email" and
+ * "notification" BullMQ workers run for the whole file, so the controller's
+ * `addNotificationJob` call reaches Mailpit. Most tests sign a bearer token
+ * directly with `signAccessToken`, as profile.test.ts does, instead of
+ * logging in, since they are about what follows authentication. The "revokes
+ * every other session" test is the exception (see its JSDoc).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -58,10 +53,10 @@ const CURRENT_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 
 /**
- * A disposable email, unique to one test run — avoids colliding with rows
- * any other test in this worker's shared database, or the shared Redis
- * rate-limit counters, may be holding onto.
- * @returns An email guaranteed unique to this call.
+ * A disposable email, unique to this call, so it cannot collide with rows
+ * another test in this worker's database holds or with the shared Redis
+ * rate-limit counters.
+ * @returns The email.
  */
 function uniqueEmail(): string {
   return `change-password-${randomUUID()}@example.test`
@@ -95,10 +90,8 @@ afterEach(async () => {
 })
 
 /**
- * Create a disposable, already-verified user with a real, hashed password,
- * and sign an access token for it directly — see this file's header
- * comment for why most tests here do not need a real login to exercise
- * `POST /auth/change-password` itself.
+ * Create a verified user with a real hashed password, and sign an access
+ * token for it directly (the file header says why most tests skip login).
  * @param email - The address to create the user with. Defaults to a fresh unique address.
  * @returns The created (and re-read) user row and a valid bearer token for it.
  */
@@ -117,9 +110,8 @@ async function createUserWithPassword(
 }
 
 /**
- * Create a disposable, already-verified, FEDERATED-ONLY user — no
- * `passwordHash` at all, the Google-only shape CLAUDE.md's OAuth section
- * documents — and sign an access token for it directly.
+ * Create a verified, federated-only user, with no `passwordHash` as a
+ * Google-only account has, and sign an access token for it directly.
  * @returns The created (and re-read) user row and a valid bearer token for it.
  */
 async function createFederatedUser(): Promise<{ user: User; token: string }> {
@@ -161,9 +153,7 @@ async function login(email: string, password: string): Promise<Response> {
 }
 
 /**
- * GET /api/v1/profile as a probe for whether a bearer token still works —
- * the same technique tests/integration/api/auth.test.ts's own
- * reset-password revocation test uses.
+ * GET /api/v1/profile as a probe for whether a bearer token still works.
  * @param token - The access token to probe with.
  * @returns The supertest response.
  */
@@ -202,14 +192,11 @@ describe('POST /api/v1/auth/change-password', () => {
   })
 
   /**
-   * The assertion that proves the design. Both tokens below must come
-   * from real logins, not a fabricated session id:
-   * `revokeAllForUserExceptSession`'s denial only has an existing
-   * `user_tokens` row to act on for a session that a real login
-   * actually created. A fabricated `randomUUID()` session id has no
-   * such row, is never denied by anything, and would make this
-   * assertion pass whether or not the endpoint under test does
-   * anything at all.
+   * Both tokens must come from real logins, not a fabricated session id:
+   * the revocation acts on the `user_tokens` rows a login created and denies
+   * those sessions' ids. A fabricated `randomUUID()` session id has no such
+   * row and is never denied, so session B's token would keep working and the
+   * test could not go green.
    */
   it('revokes every other session, but leaves the session that made the change working', async () => {
     const email = uniqueEmail()
@@ -373,7 +360,7 @@ async function changePasswordWithCookie(bearer: string, cookie?: string): Promis
  * own session. Sessions here are issued with `issueRefreshToken`, so each has
  * a real `user_tokens` row to revoke and deny. The refresh cookie the browser
  * sends on this route names the caller's chain; without a usable one the
- * whole session is spared, as before.
+ * whole session is spared.
  */
 describe('POST /api/v1/auth/change-password and a grace sibling', () => {
   it('ends the sibling chain when the caller presents its refresh cookie, and keeps the caller', async () => {

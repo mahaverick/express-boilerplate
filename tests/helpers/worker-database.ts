@@ -39,13 +39,11 @@ export function testDatabaseUrlForWorker(baseUrl: string, workerId: number): str
  * database, so every module that reads it (`database.service.ts`, via
  * `getEnv()`) connects to a database no other worker ever touches.
  *
- * Idempotent across multiple test files in the same worker PROCESS:
- * `process.env` persists across files in one worker (only the module
- * registry resets between files — see `tests/helpers/setup-global.ts`), so
- * this stashes the untouched base URL once, under a fixed key, and always
- * recomputes `DATABASE_URL` from that stashed base. Recomputing from
- * whatever `DATABASE_URL` currently holds would double-suffix it on the
- * second file in the same worker.
+ * Safe to call twice in one process: it stashes the untouched base URL once,
+ * under a fixed key, and always recomputes `DATABASE_URL` from that stash.
+ * Recomputing from whatever `DATABASE_URL` holds would suffix the name twice
+ * if a process ran the setup again, as one that shares a worker across test
+ * files would.
  */
 export function useWorkerDatabase(): void {
   if (process.env[BASE_DATABASE_URL_KEY] === undefined && process.env.DATABASE_URL !== undefined) {

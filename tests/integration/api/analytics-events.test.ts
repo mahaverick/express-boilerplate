@@ -55,7 +55,13 @@ const { testRefreshCookie } = await import('../../helpers/refresh-cookie')
 const { request } = await import('../../helpers/request')
 const { waitUntil } = await import('../../helpers/timing')
 
+/**
+ * The fake PostHog that records what the drainer sends.
+ */
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
+/**
+ * One event as the fake PostHog recorded it in a batch.
+ */
 type BatchEvent = FakePosthog['batches'][number][number]
 
 const PASSWORD = 'correct horse battery staple'

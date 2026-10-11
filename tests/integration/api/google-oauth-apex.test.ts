@@ -15,17 +15,28 @@ import { agent } from '../../helpers/request'
 const APEX = 'http://localhost:5174'
 const WEB = 'http://localhost:5173'
 
+/**
+ * Skips the OAuth2 dance and succeeds with a fixed profile, so the callback runs over real HTTP.
+ */
 class FakeGoogleSuccessStrategy implements passport.Strategy {
   name = GOOGLE_STRATEGY_NAME
 
   constructor(readonly profile: GoogleProfile) {}
 
+  /**
+   * Succeed with the fixed profile without contacting Google.
+   */
   authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
     // eslint-disable-next-line unicorn/no-undeclared-class-members -- passport injects `success` onto the per-request instance (see google-oauth.test.ts).
     this.success(this.profile as unknown as Express.User)
   }
 }
 
+/**
+ * A verified Google profile for `email`, shaped as passport-google-oauth20 returns it.
+ * @param email - The profile's address.
+ * @returns The profile.
+ */
 function profileFor(email: string): GoogleProfile {
   const id = randomUUID()
   const now = Math.floor(Date.now() / 1000)

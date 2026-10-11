@@ -1,9 +1,7 @@
 /**
  * @file The opposite env state from google-oauth.test.ts: no Google
- * credentials at all (this repo's actual .env.test default), left
- * untouched here. See the describe block below for why this cannot be
- * a second describe in that file instead, and why it depends on that
- * file's own env cleanup.
+ * credentials at all, which is this repo's `.env.test` default and is left
+ * untouched here.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -13,23 +11,12 @@ import { request } from '../../helpers/request'
 const app = createApp()
 
 /**
- * Could not be a second `describe` block in google-oauth.test.ts
- * instead: `getEnv()` memoises the first environment it parses for
- * this worker process's whole lifetime, so once GOOGLE_CLIENT_ID has
- * been set once, nothing short of `vi.resetModules()` (with its own
- * real cost — see tests/helpers/mutate.ts) could make a later test in
- * that file observe it unset again.
- *
- * Depends on google-oauth.test.ts cleaning up after itself:
- * `process.env` persists across test files within one forked worker
- * process (`useWorkerDatabase`'s JSDoc in tests/helpers/worker-database.ts),
- * so this file's "unset" premise only holds because that file
- * stubs GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET with `vi.stubEnv` and
- * restores them in `afterAll(() => vi.unstubAllEnvs())` rather than
- * leaving a raw `process.env` assignment behind. If that file is ever
- * changed to mutate `process.env` directly, this file can start
- * failing (or silently stop testing what it claims to) purely from run
- * order.
+ * Not a second `describe` in google-oauth.test.ts: `getEnv()` memoises the
+ * first environment it parses for the life of a process, so once
+ * GOOGLE_CLIENT_ID has been set there, nothing short of `vi.resetModules()`
+ * (with its own cost, see tests/helpers/mutate.ts) would let a later test see
+ * it unset. Vitest runs each test file in its own process, so this file
+ * starts from the unmodified test env.
  */
 describe('GET /api/v1/auth/google (Google OAuth not configured)', () => {
   it('answers 404 — the route is never mounted without GOOGLE_CLIENT_ID', async () => {

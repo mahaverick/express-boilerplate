@@ -92,11 +92,22 @@ afterEach(async () => {
   createdIds.length = 0
 })
 
+/**
+ * An app built under the real env with `overrides` laid over it.
+ * @param overrides - The env values the test needs.
+ * @returns The app.
+ */
 function appWith(overrides: Partial<Env>): ReturnType<typeof createApp> {
   vi.mocked(getEnv).mockReturnValue({ ...realEnv, ...overrides })
   return createApp()
 }
 
+/**
+ * Every Set-Cookie line a response sends for one cookie name, in order.
+ * @param response - The response.
+ * @param name - The cookie name.
+ * @returns The lines.
+ */
 function cookieLines(response: Response, name: string): string[] {
   const lines = response.headers['set-cookie'] as string[] | undefined
   return lines?.filter((line) => line.startsWith(`${name}=`)) ?? []
@@ -114,6 +125,12 @@ function cookieLine(response: Response, name: string): string | undefined {
   return lines.find((line) => ANY_DOMAIN.test(line)) ?? lines[0]
 }
 
+/**
+ * The `name=value` pair of a Set-Cookie line, to send back as a Cookie header.
+ * @param line - The Set-Cookie line.
+ * @returns The pair.
+ * @throws {Error} When there is no line.
+ */
 function cookiePair(line: string | undefined): string {
   const pair = line?.split(';', 1)[0]
   if (!pair) throw new Error('expected a Set-Cookie line to replay')
@@ -174,6 +191,10 @@ async function tokenState(
   return row
 }
 
+/**
+ * A verified user whose password is `PASSWORD`.
+ * @returns The user's address.
+ */
 async function createVerifiedUser(): Promise<string> {
   const email = `cookie-attributes-${randomUUID()}@example.test`
   const user = await userRepository.create({ email, passwordHash: await hashPassword(PASSWORD) })
@@ -182,6 +203,11 @@ async function createVerifiedUser(): Promise<string> {
   return email
 }
 
+/**
+ * A verified Google profile for `email`, shaped as passport-google-oauth20 returns it.
+ * @param email - The profile's address.
+ * @returns The profile.
+ */
 function googleProfile(email: string): GoogleProfile {
   const id = randomUUID()
   const nowSeconds = Math.floor(Date.now() / 1000)
@@ -214,6 +240,9 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
 
   constructor(readonly profile: GoogleProfile) {}
 
+  /**
+   * Succeed with the fixed profile without contacting Google.
+   */
   authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
     // eslint-disable-next-line unicorn/no-undeclared-class-members -- passport injects `success` onto the per-request instance (StrategyCreatedStatic).
     this.success(this.profile as unknown as Express.User)
@@ -224,7 +253,6 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
  * The refresh cookie's name follows the deployment: refreshToken
  * without COOKIE_SECURE, __Host-refreshToken (Path=/) when secure
  * with no COOKIE_DOMAIN, __Secure-refreshToken when secure with one.
- * A refresh answered 401 clears the cookie it read, and nothing else.
  */
 describe('refresh cookie: name, path and domain per deployment', () => {
   it.each([
@@ -593,7 +621,8 @@ describe('refresh cookie: Google callback with an unprefixed cookie', () => {
 
 /**
  * express-session gets no `proxy` option, so it sends a Secure cookie
- * only when req.secure is true (express-session index.js, issecure).
+ * only when req.secure is true or the socket is TLS (express-session
+ * index.js, issecure).
  * The Secure cases therefore run with TRUST_PROXY=1 and
  * X-Forwarded-Proto: https, and one test pins the drop when that
  * header is missing.
