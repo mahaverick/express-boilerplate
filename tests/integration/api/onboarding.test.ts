@@ -108,7 +108,7 @@ function stepOf(view: TenantOnboardingView, key: string): TenantOnboardingView['
 }
 
 /**
- * The response's error `code`.
+ * The response's error `code`, to tell refusals apart by code rather than by status alone.
  */
 function codeOf(response: Response): unknown {
   return (response.body as { code?: unknown }).code

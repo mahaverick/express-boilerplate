@@ -83,10 +83,9 @@ const VALID_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 
 /**
- * A disposable email, unique to this call, so it cannot collide with rows
- * another test in this worker's database holds or with the shared Redis
- * rate-limit counters.
- * @returns The email.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold or with another test's per-address mail
+ * cooldown in Redis.
  */
 function uniqueEmail(): string {
   return `forgot-password-${randomUUID()}@example.test`
@@ -224,7 +223,8 @@ async function clearRateLimiterKeys(pattern: string): Promise<void> {
  * (10/15min) are keyed on IP alone, and every request in this suite shares
  * one client address. Without clearing before every test, a test far from
  * the one that spends either budget is the one that goes red. forgot-password
- * has no per-address limiter, so nothing else needs clearing.
+ * has no per-address limiter, and its per-address mail cooldown never collides
+ * because every test uses a fresh address (`uniqueEmail`).
  */
 beforeEach(async () => {
   await clearRateLimiterKeys(`${redisKey('rl', 'forgot-password-ip')}:*`)

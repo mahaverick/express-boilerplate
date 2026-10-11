@@ -33,7 +33,8 @@ const CONCURRENT_CLAIMS = 2
 const HOUR_MS = 60 * 60 * 1000
 
 /**
- * A fresh `@example.test` address per call, so no two invitations in a test share an email.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in
+ * this worker's database hold.
  */
 function uniqueEmail(): string {
   return `invitation-repo-${randomUUID()}@example.test`

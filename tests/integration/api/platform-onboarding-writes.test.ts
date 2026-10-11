@@ -111,7 +111,7 @@ async function sentNow(token: string, tenantId: string): Promise<Response> {
 }
 
 /**
- * The response's error `code`.
+ * The response's error `code`, to tell refusals apart by code rather than by status alone.
  */
 function codeOf(response: Response): string | undefined {
   return (response.body as ApiEnvelope<unknown>).code

@@ -242,7 +242,8 @@ class SseConnection {
 }
 
 /**
- * A disposable email, unique to one call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `notification-stream-${randomUUID()}@example.test`
@@ -828,8 +829,9 @@ describe('GET /api/v1/notifications/stream', () => {
 
   /**
    * requireAuth rejects a denied session only at connect and never runs again on a connection
-   * already open; this controller has no connect-time check of its own (the "refuses to open a
-   * stream for an already-denied session" test below covers that path). The heartbeat is the only
+   * already open; this controller runs no denylist check of its own at connect (its only
+   * connect-time check is requireSessionId; the "refuses to open a stream for an already-denied
+   * session" test below covers the denied path). The heartbeat is the only
    * thing that recurs on an open SSE connection, so it is the only place a revoked session can be
    * caught, and this test proves that closes the stream.
    */

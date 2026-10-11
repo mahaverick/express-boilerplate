@@ -73,8 +73,6 @@ const userRepository = new UserRepository()
 
 /**
  * The `data` of a 200 response.
- * @param response - The response.
- * @returns The page of entries.
  * @throws {Error} When the body carries no data.
  */
 function pageOf(response: Response): AuditPage {
@@ -85,8 +83,6 @@ function pageOf(response: Response): AuditPage {
 
 /**
  * A body without its per-request `requestId`, so two bodies can be compared.
- * @param body - A parsed response body.
- * @returns A copy with `requestId` removed.
  */
 function withoutRequestId(body: unknown): Record<string, unknown> {
   const copy = { ...(body as Record<string, unknown>) }
@@ -98,10 +94,6 @@ const YEAR_ZERO_CURSOR = encodeCursor({ occurredAt: '0000-01-01T00:00:00.000Z', 
 
 /**
  * Read a tenant's audit log as the bearer of `token`.
- * @param slug - The tenant's slug.
- * @param token - The caller's access token.
- * @param query - Query parameters to send.
- * @returns The pending request.
  */
 function readTenantLog(slug: string, token: string, query: Record<string, string> = {}) {
   return request(app)
@@ -112,9 +104,6 @@ function readTenantLog(slug: string, token: string, query: Record<string, string
 
 /**
  * Read the platform-wide audit log as the bearer of `token`.
- * @param token - The caller's access token.
- * @param query - Query parameters to send.
- * @returns The pending request.
  */
 function readPlatformLog(token: string, query: Record<string, string> = {}) {
   return request(app)
@@ -125,8 +114,6 @@ function readPlatformLog(token: string, query: Record<string, string> = {}) {
 
 /**
  * Insert one audit row directly, so timestamps and system actors are exact.
- * @param row - The columns to set.
- * @returns The new row's id.
  */
 async function insertRow(row: SeedRow): Promise<string> {
   const isSystem = row.actorUserId === undefined
@@ -166,8 +153,6 @@ describe('audit-log reads', () => {
 
   /**
    * Create a tracked user and sign a bearer token for it.
-   * @param names - The user's first and last name, if any.
-   * @returns The user and the token.
    */
   async function createUser(
     names: { firstName?: string; lastName?: string } = {}
@@ -182,7 +167,6 @@ describe('audit-log reads', () => {
 
   /**
    * Create a tracked tenant owned by a fresh user.
-   * @returns The tenant, its owner and the owner's token.
    */
   async function createTenant(): Promise<{ tenant: Tenant; ownerToken: string; owner: User }> {
     const { user, token } = await createUser()
@@ -197,9 +181,6 @@ describe('audit-log reads', () => {
 
   /**
    * A bearer token for a fresh user added to `tenant` with `role`.
-   * @param tenant - The tenant to join.
-   * @param role - The membership role.
-   * @returns The token.
    */
   async function memberToken(tenant: Tenant, role: MembershipRole): Promise<string> {
     const { user, token } = await createUser()
@@ -209,8 +190,6 @@ describe('audit-log reads', () => {
 
   /**
    * Create a tracked user with platform role `role`, named Sam Staff.
-   * @param role - The platform role.
-   * @returns The user and the token.
    */
   async function staff(role: MembershipRole): Promise<{ user: User; token: string }> {
     const created = await createUser({ firstName: 'Sam', lastName: 'Staff' })

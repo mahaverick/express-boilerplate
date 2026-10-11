@@ -28,7 +28,8 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
- * A fresh `@example.test` address per call, so users from different tests never share an email.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `tenant-repo-${randomUUID()}@example.test`

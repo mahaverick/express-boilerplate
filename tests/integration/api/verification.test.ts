@@ -200,8 +200,9 @@ describe('POST /api/v1/auth/verify-email', () => {
 })
 
 /**
- * A throwaway email unique to this call, so it cannot collide with rows in
- * this worker's shared database or with another address's rate-limit counters.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold or with another address's rate-limit
+ * counters.
  */
 function uniqueEmail(): string {
   return `resend-verification-${randomUUID()}@example.test`

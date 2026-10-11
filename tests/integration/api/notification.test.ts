@@ -77,7 +77,8 @@ function b64(value: unknown): string {
 }
 
 /**
- * A disposable email, unique to one call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `notification-api-${randomUUID()}@example.test`

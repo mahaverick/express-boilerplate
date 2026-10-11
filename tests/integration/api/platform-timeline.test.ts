@@ -171,7 +171,7 @@ function getTimeline(
 }
 
 /**
- * Awaits a pending request and returns only its status.
+ * The status of a request, for a case where only the status is under test.
  */
 async function statusOf(pending: PromiseLike<Response>): Promise<number> {
   const response = await pending

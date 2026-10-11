@@ -32,8 +32,8 @@ function stateOf(location: string | undefined): string | undefined {
 }
 
 /**
- * A disposable email unique to one call, so rows other tests in this worker's database hold never
- * collide.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `google-oauth-${randomUUID()}@example.test`
@@ -44,8 +44,7 @@ function uniqueEmail(): string {
  * `done()`, which is what `completeGoogleSignIn` (google-auth.service.ts) receives. The fields the
  * account-linking code reads (`id`, `emails[0].value`, `emails[0].verified`,
  * `_json.email_verified`) can be overridden; every other field is a plausible constant.
- * @param overrides.jsonEmailVerified - Defaults to `emailVerified`, so a test sets it only to make the two disagree.
- * @param overrides.includeEmails - False omits `emails`, the "Google shared no email" case.
+ * @param overrides - Fields to replace. `jsonEmailVerified` defaults to `emailVerified`, so a test sets it only to make the two disagree; `includeEmails: false` omits `emails`, the "Google shared no email" case.
  */
 function googleProfile(
   overrides: {
@@ -89,8 +88,9 @@ function googleProfile(
  * `passport.use` overwrites a registration, so a test swaps this in and the `afterEach` below calls
  * `configurePassport()` to restore the real one.
  *
- * It is the only way to observe the response cookie's `sameSite: 'lax'`: the account-linking tests
- * call `completeGoogleSignIn` directly and the failure-path tests never reach a success.
+ * In this file it is the only way to reach the callback's success path, where the response cookie's
+ * `sameSite: 'lax'` and the `lastLoggedInAt` write can be observed: the account-linking tests call
+ * `completeGoogleSignIn` directly and the failure-path tests never reach a success.
  */
 class FakeGoogleSuccessStrategy implements passport.Strategy {
   name = GOOGLE_STRATEGY_NAME
@@ -116,8 +116,8 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
  * restored in `afterAll`. The values are fake: passport's Google strategy builds the redirect URL
  * locally, so nothing here calls Google. `getEnv()` memoises the first environment it parses for
  * the life of the worker process, so once `beforeAll` has run with the variable set, no later test
- * in this file could see it unset without `vi.resetModules()`, which would discard
- * database.service.ts's live postgres pool. That is why the "disabled" state lives in its own file.
+ * in this file could see it unset without `vi.resetModules()`, which re-evaluates
+ * database.service.ts and opens a second postgres pool that nothing closes. That is why the "disabled" state lives in its own file.
  */
 describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   let app: ReturnType<typeof CreateApp>
@@ -157,7 +157,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   })
 
   /**
-   * Puts the variables back to their prior (unset) values rather than deleting the keys.
+   * Restores the variables' prior state; both were unset, so vitest deletes them.
    */
   afterAll(() => {
     vi.unstubAllEnvs()

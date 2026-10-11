@@ -28,10 +28,9 @@ const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
- * A disposable email, unique to this call, so it cannot collide with rows
- * another test in this worker's database holds or, for the rate-limit tests
- * below, with keys in the shared Redis.
- * @returns The email.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold or, for the rate-limit tests below, with
+ * keys in the shared Redis.
  */
 function uniqueEmail(): string {
   return `auth-refresh-${randomUUID()}@example.test`
@@ -520,7 +519,6 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       const email = uniqueEmail()
       /**
        * One login with a wrong password for this test's address.
-       * @returns The pending request.
        */
       const attempt = (): Test =>
         request(app).post('/api/v1/auth/login').send({ email, password: 'wrong-password' })

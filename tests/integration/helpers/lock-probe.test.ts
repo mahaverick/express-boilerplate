@@ -69,7 +69,7 @@ describe('pollUntil', () => {
   it('never polls past its whole bound once the clock starts', async () => {
     const started = deferred()
     /**
-     * Starts the clock 200 ms in, leaving little of the 400 ms whole bound.
+     * Starts the clock 200 ms in, so the 5000 ms clock would end past the 400 ms whole bound.
      */
     const startClock = async (): Promise<void> => {
       await settle(200, 'start the clock close to the whole bound')

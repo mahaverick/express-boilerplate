@@ -2,9 +2,9 @@
  * @file Proves that without the `purpose` predicate in `claimOnce`'s single
  * atomic statement, a token minted for one purpose can be claimed as another:
  * here a password-reset token is claimed as an email verification. The same
- * gap would let a verification token, which proves only mailbox access, be
- * spent as a password reset, which stores a new password for the account, so
- * mailbox access alone would be enough to set the account's password. The
+ * gap would let a verification link, valid for 24h and mailed without a
+ * reset request, be spent as a reset link, outside the 1h window
+ * `PASSWORD_RESET_TTL` keeps reset links to. The
  * always-green proof of this lives in
  * `tests/integration/repositories/user-token.repository.test.ts` and
  * `tests/integration/services/session.service.test.ts`; this file exists to
@@ -29,7 +29,8 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * A fresh `@example.test` address per call, so users from different tests never share an email.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `claim-purpose-mutation-${randomUUID()}@example.test`

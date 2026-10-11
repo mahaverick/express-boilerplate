@@ -49,7 +49,7 @@ async function insertTenant(): Promise<string> {
 /**
  * Inserts one onboarding completion with raw SQL and returns its id. Unset
  * columns are SQL NULL, except `stepKey` (`configure_settings`) and `source`
- * (`auto`); `userId` is set only for a member step.
+ * (`auto`); pass `userId` only for a member step.
  */
 async function insertCompletion(row: {
   tenantId: string

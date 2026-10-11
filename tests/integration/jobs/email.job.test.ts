@@ -38,8 +38,9 @@ function uniqueRecipient(): string {
 }
 
 /**
- * A real invitation message: its accept link carries `token`, and
- * `inviterName` is another person's name that must never be stored.
+ * A real invitation message, built from the template with the most variables:
+ * its accept link carries `token`, and `inviterName` is another person's name
+ * that must never be stored.
  */
 function invitationMessage(to: string, token: string): MailMessage {
   return {

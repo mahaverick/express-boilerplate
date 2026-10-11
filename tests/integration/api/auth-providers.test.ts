@@ -61,8 +61,8 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 }
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-providers-${randomUUID()}@example.com`

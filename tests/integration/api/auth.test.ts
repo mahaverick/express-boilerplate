@@ -44,8 +44,9 @@ const { name: REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH } = tes
  * verification mail, `addEmailJob` directly for the registration-attempt
  * notice) instead of sending mail in the request. Nothing in a request
  * processes them, so without live Workers every `findMailpitMessages`
- * assertion would find nothing. The notification worker is needed too: a
- * verification email reaches the "email" queue only after it fans the
+ * assertion would find nothing and every `assertNoMailpitMessage`-shaped
+ * assertion would pass for the wrong reason. The notification worker is needed
+ * too: a verification email reaches the "email" queue only after it fans the
  * notification job out. One Worker of each kind serves the whole file, since
  * constructing one opens a real connection and BullMQ blocking commands.
  */
@@ -121,9 +122,8 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 }
 
 /**
- * A disposable email, unique to this call, so it cannot collide with rows
- * another test in this worker's database holds.
- * @returns The email.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-api-${randomUUID()}@example.test`
@@ -163,7 +163,6 @@ async function login(
 async function registrationAttemptNotices(recipient: string): Promise<number> {
   /**
    * The notices stored for the recipient so far.
-   * @returns The count.
    */
   const count = async (): Promise<number> => {
     const [row] = await sql<{ count: number }[]>`
@@ -519,7 +518,8 @@ describe('POST /api/v1/auth/register and /login', () => {
      * would answer differently from the free one and the oracle test
      * above must go red. Disguises that 409 as a 422 on
      * UserRepository.prototype via withMutatedMethod; no source files
-     * touched.
+     * touched. The first register succeeds; the second hits the mutated 422,
+     * which proves the oracle.
      */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'MUTATION PROOF: an unrecognised unique violation on the taken branch is detected as an oracle',
@@ -545,7 +545,6 @@ describe('POST /api/v1/auth/register and /login', () => {
 
         await withMutatedMethod(UserRepository.prototype, 'create', mutatedCreate, async () => {
           const taken = uniqueEmail()
-          // First register succeeds (no duplicate yet).
           const firstResponse = await request(app)
             .post('/api/v1/auth/register')
             .send({ email: taken, password: VALID_PASSWORD })
@@ -553,7 +552,6 @@ describe('POST /api/v1/auth/register and /login', () => {
           if (firstUser) createdIds.push(firstUser.id)
           expect(firstResponse.status).toBe(202)
 
-          // Second register hits the mutated 422, proving the oracle.
           const secondResponse = await request(app)
             .post('/api/v1/auth/register')
             .send({ email: taken, password: VALID_PASSWORD })

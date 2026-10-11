@@ -211,7 +211,7 @@ describe('POST /api/v1/auth/reauthenticate', () => {
     expect((response.body as { code?: string }).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
-  // Over HTTP requireAuth refuses an inactive account first; this calls the service's own check directly.
+  // Over HTTP requireAuth refuses an inactive account first; this calls the service's own check directly, which covers an account deactivated after requireAuth loaded it.
   it.each([
     ['deactivated', 'update users set active = false where id = $1'],
     ['soft-deleted', 'update users set deleted_at = now() where id = $1'],

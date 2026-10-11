@@ -27,8 +27,8 @@ import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 const userRepository = new UserRepository()
 
 /**
- * A throwaway email unique to this call, so it cannot collide with rows other
- * tests hold in this worker's shared database.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-middleware-${randomUUID()}@example.test`

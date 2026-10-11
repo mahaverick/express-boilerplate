@@ -45,7 +45,8 @@ afterAll(async () => {
 const STAFF_REASON = 'Customer asked us to, ticket 4411'
 
 /**
- * A disposable email, unique to one call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `platform-access-${randomUUID()}@example.test`
@@ -98,7 +99,8 @@ async function roleOf(tenant: Tenant, target: User): Promise<string | undefined>
 }
 
 /**
- * A pending viewer invitation sent by `inviter`, mailed a day ago.
+ * A pending viewer invitation sent by `inviter`, with its last send backdated
+ * so a resend is not refused for being too soon; returns its id.
  */
 async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string> {
   const invitation = await new TenantInvitationRepository().createPending({

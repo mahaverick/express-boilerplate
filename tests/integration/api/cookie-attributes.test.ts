@@ -95,7 +95,6 @@ afterEach(async () => {
 /**
  * An app built under the real env with `overrides` laid over it.
  * @param overrides - The env values the test needs.
- * @returns The app.
  */
 function appWith(overrides: Partial<Env>): ReturnType<typeof createApp> {
   vi.mocked(getEnv).mockReturnValue({ ...realEnv, ...overrides })
@@ -106,7 +105,6 @@ function appWith(overrides: Partial<Env>): ReturnType<typeof createApp> {
  * Every Set-Cookie line a response sends for one cookie name, in order.
  * @param response - The response.
  * @param name - The cookie name.
- * @returns The lines.
  */
 function cookieLines(response: Response, name: string): string[] {
   const lines = response.headers['set-cookie'] as string[] | undefined
@@ -128,7 +126,6 @@ function cookieLine(response: Response, name: string): string | undefined {
 /**
  * The `name=value` pair of a Set-Cookie line, to send back as a Cookie header.
  * @param line - The Set-Cookie line.
- * @returns The pair.
  * @throws {Error} When there is no line.
  */
 function cookiePair(line: string | undefined): string {
@@ -193,7 +190,6 @@ async function tokenState(
 
 /**
  * A verified user whose password is `PASSWORD`.
- * @returns The user's address.
  */
 async function createVerifiedUser(): Promise<string> {
   const email = `cookie-attributes-${randomUUID()}@example.test`
@@ -206,7 +202,6 @@ async function createVerifiedUser(): Promise<string> {
 /**
  * A verified Google profile for `email`, shaped as passport-google-oauth20 returns it.
  * @param email - The profile's address.
- * @returns The profile.
  */
 function googleProfile(email: string): GoogleProfile {
   const id = randomUUID()

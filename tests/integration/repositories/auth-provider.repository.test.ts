@@ -16,8 +16,8 @@ const authProviderRepository = new AuthProviderRepository()
 const userRepository = new UserRepository()
 
 /**
- * A fresh `@example.test` address per call, so the unique (provider, providerId) pair of an email
- * row never collides across tests.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `auth-provider-repo-${randomUUID()}@example.test`

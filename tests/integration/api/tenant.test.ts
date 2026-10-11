@@ -86,7 +86,8 @@ function expectTenantNotFound(response: Response): void {
 }
 
 /**
- * A throwaway email unique to this call.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold.
  */
 function uniqueEmail(): string {
   return `tenant-api-${randomUUID()}@example.test`
@@ -478,7 +479,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // slug is not one of updateTenantSchema's fields, so it is stripped; the row is read back with raw SQL, independent of the repository under test.
+    // Mass assignment: slug is not one of updateTenantSchema's fields, so it is stripped; the row is read back with raw SQL, independent of the repository under test.
     it('ignores slug even when supplied, and the stored row proves it', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -1150,7 +1151,7 @@ describe('/api/v1/tenants', () => {
         'lockOwners',
         heldLockOwners,
         async () => {
-          // Promise.resolve starts the request: supertest sends nothing until it is awaited.
+          // Promise.resolve starts the request: supertest sends only once something calls its `then`.
           const deleting = Promise.resolve(
             request(app)
               .delete(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)

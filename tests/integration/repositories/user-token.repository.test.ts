@@ -24,7 +24,8 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * A fresh `@example.test` address per call, so users from different tests never share an email.
+ * A disposable email unique to this call, so it cannot collide with rows other tests in this
+ * worker's database hold.
  */
 function uniqueEmail(): string {
   return `user-token-repo-${randomUUID()}@example.test`
@@ -59,7 +60,7 @@ function refreshRow(userId: string, sessionId: string) {
 }
 
 /**
- * A row's `revokedAt`, read by its hash: null while live, undefined when there is no such row.
+ * A row's `revokedAt`, read by its hash: null until it is revoked, undefined when there is no such row.
  */
 async function revokedAtOf(tokenHash: string): Promise<Date | null | undefined> {
   const row = await userTokenRepository.findByHash(tokenHash)
@@ -221,9 +222,9 @@ describe('UserTokenRepository', () => {
   /**
    * The `purpose` predicate keeps a token minted for one purpose from being
    * spent as another (SECURITY.md): a password-reset token as an email
-   * verification, or a verification token, which proves only mailbox access,
-   * as a password reset, which stores a new password for the account, so
-   * mailbox access alone would be enough to set the account's password.
+   * verification, or a verification link, valid for 24h and mailed without a
+   * reset request, as a reset link, outside the 1h window `PASSWORD_RESET_TTL`
+   * keeps reset links to.
    */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()

@@ -14,7 +14,7 @@ import { vi } from 'vitest'
  *
  * A plain property assignment, not `vi.spyOn`: there is no mock state to
  * reconcile with the vitest config, which sets neither `restoreMocks` nor
- * `mockReset`. A caller that wants call tracking passes `vi.fn(implementation)`
+ * `mockReset`, and no typing of a generic method key to fight. A caller that wants call tracking passes `vi.fn(implementation)`
  * and reads its `.mock.calls`.
  * @param target - The object carrying the method, typically an exported class's `.prototype`.
  * @param methodName - The method to replace.

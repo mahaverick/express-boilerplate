@@ -6,8 +6,8 @@
  * the personal key, under `/api/projects/<id>/`: `query/` (answered by
  * `respondToQuery`), `groups_types/` (from `groupTypes`, with `groupTypesStatus`),
  * `persons/bulk_delete/` (with `bulkDeleteStatus`) and `feature_flags/`
- * (GET pages `featureFlags`; POST creates one after the fake's own
- * validation, unless `onFeatureFlagCreate`'s responder answers first);
+ * (GET pages `featureFlags`; POST creates one after the fake's copy of
+ * PostHog's validation, unless `onFeatureFlagCreate`'s responder answers first);
  * any other `/api/projects/` path, one without its trailing slash included,
  * answers 404. It serves `/flags/definitions` from `flagDefinitions`,
  * answering 304 with an empty body when `If-None-Match` names the current
@@ -202,7 +202,8 @@ export interface FakePosthog {
    */
   beforeFlagDefinitions: (() => Promise<void>) | undefined
   /**
-   * Replace the definitions and give them a fresh ETag.
+   * Replace the definitions and give them a fresh ETag, as PostHog does on
+   * every flag change.
    */
   setFlagDefinitions: (body: unknown) => void
   /**
@@ -228,7 +229,8 @@ export interface FakePosthog {
    */
   onFeatureFlagCreate: (responder: FeatureFlagCreateResponder | undefined) => void
   /**
-   * Whether a create without tags is refused with a 400 (true at start).
+   * Whether a create without tags is refused with a 400, as a PostHog project
+   * that requires tags answers (true at start).
    */
   requireFeatureFlagTags: boolean
   /**
@@ -303,7 +305,7 @@ function bulkDeleteOf(body: Buffer): FakePosthogBulkDelete {
 }
 
 /**
- * The 202 body the fake answers a bulk delete with: every count equals the ids
+ * PostHog's 202 answer to a bulk delete, which the fake copies: every count equals the ids
  * sent, except events and recordings, which count only when the request asked.
  * @param deletion - The recorded request.
  * @param deletionErrors - The `deletion_errors` list to answer with.
@@ -493,7 +495,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
   /**
    * One page of `GET feature_flags/`, paged by `limit` (100 by default, at
    * most `featureFlagsPageLimit`) and `offset`, with `next` and `previous` as
-   * full URLs.
+   * full URLs, as PostHog sends them.
    * @param path - The request path with its query string.
    * @returns What to answer.
    */
@@ -531,8 +533,8 @@ export async function startFakePosthog(): Promise<FakePosthog> {
   }
 
   /**
-   * Answer `POST feature_flags/`: the test's responder first, then the fake's
-   * checks in this order: a required tag, variant rollouts summing to 100,
+   * Answer `POST feature_flags/`: the test's responder first, then PostHog's
+   * checks, in its order: a required tag, variant rollouts summing to 100,
    * then a unique key. A created flag is appended to `featureFlags` and
    * answered 201.
    * @param body - The request body.

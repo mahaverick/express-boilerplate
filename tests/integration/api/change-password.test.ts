@@ -53,10 +53,9 @@ const CURRENT_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 
 /**
- * A disposable email, unique to this call, so it cannot collide with rows
- * another test in this worker's database holds or with the shared Redis
- * rate-limit counters.
- * @returns The email.
+ * A disposable email unique to this call, so it cannot collide with rows other
+ * tests in this worker's database hold or with the shared Redis rate-limit
+ * counters.
  */
 function uniqueEmail(): string {
   return `change-password-${randomUUID()}@example.test`

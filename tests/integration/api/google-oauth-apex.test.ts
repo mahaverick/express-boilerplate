@@ -35,7 +35,6 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
 /**
  * A verified Google profile for `email`, shaped as passport-google-oauth20 returns it.
  * @param email - The profile's address.
- * @returns The profile.
  */
 function profileFor(email: string): GoogleProfile {
   const id = randomUUID()
