@@ -175,7 +175,7 @@ export async function autoJoinSafely(
 ): Promise<void> {
   if (!isPlatformEmailDomain(user.email, domains)) return
   /**
-   * One auto-join attempt inside the transaction or savepoint it is given.
+   * The unit run in a savepoint or a transaction of its own, so a failure stays contained.
    */
   const join = (tx: DbTransaction): Promise<UserMembership | undefined> =>
     autoJoin(user, tx, domains)

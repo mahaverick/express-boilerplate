@@ -308,7 +308,7 @@ async function lockStaffPair(
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user to mail.
  * @returns The target's platform role, or null when not staff.
- * @throws {HttpError} 404 when the actor lost staff access; 403 when the target outranks them.
+ * @throws {HttpError} 404 when the actor is not a platform admin or owner; 403 when the target outranks them.
  */
 async function assertMayMail(actor: Actor, targetUserId: string): Promise<MembershipRole | null> {
   const [actorRole, targetRole] = await Promise.all([

@@ -63,8 +63,8 @@ export interface RetentionResult {
 }
 
 /**
- * One table's purge: its window, how to delete one batch, and an optional
- * hook that sees the total.
+ * One table's purge rule, which `runRule` drives batch by batch and
+ * `runRetentionPurge` runs in order.
  */
 interface RetentionRule {
   table: string
