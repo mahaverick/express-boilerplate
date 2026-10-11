@@ -28,7 +28,9 @@ export interface PasswordChangedVariables {
 }
 
 /**
- * How email tracking treats this template. No token, so the general sender. Never resent: a second copy would report a password change that did not happen.
+ * How email tracking treats this template. No token, so the general sender.
+ * Never resent: a second copy would report a password change that did not
+ * happen.
  */
 export const PASSWORD_CHANGED_TEMPLATE_META: EmailTemplateMeta<PasswordChangedVariables> = {
   senderClass: 'general',

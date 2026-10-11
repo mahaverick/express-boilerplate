@@ -5,7 +5,7 @@
  * actor's current role against the target's (on the platform tenant, the staff
  * rule: an owner may act on another owner); check the last-owner rule (active
  * owners on the platform tenant); write; revoke the pending invitations the
- * member can no longer stand behind; audit.
+ * member's remaining role cannot stand behind; audit.
  */
 import type { AuditAccess } from '@/constants/audit.constants'
 import {
@@ -43,7 +43,8 @@ const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 
 /**
- * The roles that a member holding `role` can no longer offer.
+ * The roles a member holding `role` cannot offer: the offers revoked when a
+ * member's authority drops to `role`.
  * @param role - The member's role.
  * @returns Every role `canActorGrantRole` refuses to `role`.
  */
@@ -197,14 +198,14 @@ export function assertStaffReasonGiven(access: TenantAccess, options: StaffReaso
 
 /**
  * Lock the actor's access to the tenant (owners, then memberships, then the
- * platform membership) and return it as it is now. The route's
- * `requireRole` saw an earlier read.
+ * platform membership) and return it as locked. The route's `requireRole`
+ * saw an earlier read.
  * @param actor - The signed-in user acting on the tenant.
  * @param tenantId - The tenant.
  * @param minimum - The lowest role the route admits.
  * @param executor - The transaction to hold the locks in.
  * @returns The actor's current effective role, at least `minimum`, and how they reached the tenant.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when their role is now below `minimum`.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 `Insufficient permissions` when their role is below `minimum`.
  */
 export async function lockActorRole(
   actor: Actor,
@@ -219,7 +220,7 @@ export async function lockActorRole(
 
 /**
  * Lock the actor's access and the target's membership, in the same lock
- * order, and return both as they are now.
+ * order, and return both as locked.
  * @param actor - The signed-in user acting on the tenant.
  * @param tenantId - The tenant.
  * @param targetUserId - The member being changed or removed.
@@ -227,7 +228,7 @@ export async function lockActorRole(
  * @param mode - `'update'` when the caller deletes the target's membership.
  * @param executor - The transaction to hold the locks in.
  * @returns The actor's current effective role, how they reached the tenant, and the target's membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when their role is now below `minimum`; 404 `member_not_found` (message `Member not found`) when the target is not a member.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 `Insufficient permissions` when their role is below `minimum`; 404 `member_not_found` (message `Member not found`) when the target is not a member.
  */
 async function lockActorAndTarget(
   actor: Actor,
@@ -288,7 +289,7 @@ export interface MembershipWriteOptions extends StaffReasonOption {
  */
 function modifyRuleFor(options: MembershipWriteOptions): typeof canActorModifyTarget {
   if (options.isPlatformTenant !== true) return canActorModifyTarget
-  // Leaving, or changing one's own role, keeps the customer rule; the platform rule never covers oneself.
+  // Removing oneself or changing one's own role keeps the customer rule: the platform rule excludes self.
   return (actorRole, targetRole, isSelf) =>
     isSelf
       ? canActorModifyTarget(actorRole, targetRole, true)
@@ -355,7 +356,7 @@ async function assertOwnerRemainsFor(
  * @param role - The new role.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff change.
  * @returns The updated membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is not an owner or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function changeRole(
   actor: Actor,
@@ -425,7 +426,7 @@ export async function changeRole(
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff removal.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function removeMember(
   actor: Actor,

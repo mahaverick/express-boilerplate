@@ -33,10 +33,10 @@ const RESET_PATH = 'reset-password'
 const INVITATION_ACCEPT_PATH = 'invitations/accept'
 
 /**
- * The name a template greets an unnamed user by. `firstName` is optional
- * at registration but REQUIRED by every template — requireEmailVariables
- * throws on a missing one and sendMail catches that into a 'failed' log
- * row, so without a fallback the mail silently never arrives.
+ * The name a template greets an unnamed user by. `firstName` is optional at
+ * registration but required by every template that greets the user by name:
+ * requireEmailVariables throws on a missing one and sendMail records that as
+ * a failed delivery, so without a fallback the mail never arrives.
  */
 export const MISSING_FIRST_NAME_FALLBACK = 'there'
 
@@ -47,10 +47,11 @@ export const INVALID_VERIFICATION_TOKEN_MESSAGE = 'Invalid or expired verificati
 
 /**
  * Build an absolute frontend URL for one page, carrying a raw token. Links
- * point at the frontend (WEB_URL), whose page POSTs the token to this API: a
- * GET link that acted by itself would put the token in a query string this
- * server logs, and a mail scanner following links could spend it.
- * @param pagePath - The frontend page, relative to WEB_URL.
+ * point at a frontend (`frontendUrl`), whose page POSTs the token to this
+ * API: a GET link that acted by itself would put the token in a query string
+ * that access logs along the way record, and a mail scanner following links
+ * could spend it.
+ * @param pagePath - The frontend page, relative to `webUrl`.
  * @param rawToken - The raw token, never its hash.
  * @param webUrl - The frontend origin.
  * @returns The absolute URL with `token` as a query parameter.
@@ -193,7 +194,7 @@ export async function verifyEmail(token: string, password: string): Promise<void
     throw new HttpError(INVALID_VERIFICATION_TOKEN_MESSAGE, 400)
   }
 
-  // Already verified is success: a double-clicked link must not be an error.
+  // Already verified is success: a valid link for a verified account is not an error.
   const verifiedNow = await markEmailVerified(user.id)
   // Revoke the other links, or a token read out of an older mail still works.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')

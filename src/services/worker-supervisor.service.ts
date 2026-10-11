@@ -1,9 +1,8 @@
 /**
  * @file Starts the email, notification and maintenance Workers, and the
- * analytics Worker when analytics or the PostHog personal API key is
- * enabled, and keeps them on a live
- * connection, replacing them whenever their connection gives up before its
- * first 'ready' (see `startWorkers`).
+ * analytics Worker when analytics or the PostHog timelines are enabled, and
+ * keeps them on a live connection, replacing them whenever their connection
+ * gives up before its first 'ready' (see `startWorkers`).
  */
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
@@ -34,6 +33,10 @@ export interface SupervisedWorkers {
   close: () => Promise<void>
 }
 
+/**
+ * One set of Workers and the connection they started on, so a lost
+ * connection is matched to the generation it ends.
+ */
 interface WorkerGeneration {
   connection: IORedis | undefined
   workers: Worker[]
@@ -84,12 +87,20 @@ export function startWorkers(): SupervisedWorkers {
   }
   const retiring = new Set<Promise<void>>()
 
+  /**
+   * Close discarded Workers in the background, tracked until they settle so
+   * `close()` can wait for them.
+   */
   const retire = (workers: Worker[]): void => {
     const closing = closeLostWorkers(workers)
     retiring.add(closing)
     void closing.finally(() => retiring.delete(closing))
   }
 
+  /**
+   * Make a new generation current on the queue connection and register the
+   * schedules; on a throw, retire the Workers it had started and rethrow.
+   */
   const startGeneration = (): void => {
     const generation: WorkerGeneration = { connection: undefined, workers: [] }
     supervisor.generation = generation

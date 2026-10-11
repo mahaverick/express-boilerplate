@@ -27,29 +27,32 @@ export type DenyOutcome = 'denied' | 'pending' | 'failed'
 const DENY_FAILED_MESSAGE = 'Could not deny session; access tokens stay valid until they expire'
 
 /**
- * Mark a session's access tokens as no longer honoured.
+ * Stop honouring a session's access tokens.
  *
  * The entry's TTL is `ACCESS_TOKEN_TTL`, starting at denial, so it needs no
- * sweeper and always outlives the token it targets, which was minted earlier.
+ * sweeper and outlives every token of the session minted before it.
  *
- * Best-effort: a Redis outage or FLUSHALL drops every entry, and the database
- * has no record of access tokens to fall back on. It closes the ordinary case,
- * a logout leaving a usable credential behind for up to `ACCESS_TOKEN_TTL`.
+ * Best-effort: a flush or a restart without persistence drops every entry,
+ * the read fails open while Redis is down or stalled, and the database has no
+ * record of access tokens to fall back on. It closes the ordinary case, a
+ * logout leaving a usable credential behind for up to `ACCESS_TOKEN_TTL`.
  *
- * It never rethrows. Every revocation in session.service.ts calls this after
- * its database write, and a Redis blip must not turn one into a 500: the
- * database revocation is the half that ends the session.
+ * It never rethrows. Every revocation in session.service.ts reaches it after
+ * its database write, directly or through `denySessionsAfterCommit`, and a
+ * Redis blip must not turn one into a 500: the database revocation is the
+ * half that ends the session.
  *
  * It waits at most `REDIS_REQUEST_DEADLINE_MS`, connect included, and
- * ignores the stall cooldown (`waitForRedisWrite`): a deny is always sent,
- * and one Redis has not answered by the deadline stays in flight to land when
- * Redis answers on the same connection, logged at warn. If it then fails (the
- * connection dropped, say), the loss is logged at `error` as
+ * ignores the stall cooldown (`waitForRedisWrite`): a deny is always sent. A
+ * write that fails before the deadline is logged at warn. One Redis has not
+ * answered by the deadline stays in flight, logged at warn, to land when
+ * Redis answers on the same connection. If it then fails (the connection
+ * dropped, say), the loss is logged at `error` as
  * `session denylist write failed after revocation`, with the user id when the
  * caller gave one.
  * @param sessionId - The session whose access tokens should stop working.
  * @param userId - The session's user, when the caller knows it, for the late-failure log.
- * @returns 'denied' once the entry is written; 'pending' when it is still in flight at the deadline; 'failed' once a failure is logged. Never rejects.
+ * @returns 'denied' once the entry is written; 'pending' when it is still in flight at the deadline; 'failed' when it failed before the deadline, logged at warn. Never rejects.
  */
 export async function denySession(sessionId: string, userId?: string): Promise<DenyOutcome> {
   try {
@@ -83,7 +86,8 @@ export async function denySession(sessionId: string, userId?: string): Promise<D
 /**
  * Whether a session's access tokens have been revoked.
  *
- * Fails open: when Redis is unreachable it logs a warning and returns false.
+ * Fails open: when Redis is unreachable, stalled past the deadline or in its
+ * stall cooldown (`withRedisDeadline`), it logs a warning and returns false.
  * Failing closed would fail every authenticated request whenever Redis
  * hiccups, a far larger outage than the window the denylist closes.
  * @param sessionId - The session claimed by the token being checked.

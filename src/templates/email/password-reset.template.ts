@@ -28,7 +28,9 @@ export interface PasswordResetVariables {
 }
 
 /**
- * How email tracking treats this template. Its link carries a token, so it mails from the transactional sender; a resend re-runs staff password setup, which sends this or `account_setup`, whichever applies then.
+ * How email tracking treats this template. Its link carries a token, so it
+ * mails from the transactional sender; a resend re-runs staff password setup,
+ * which sends this or `account_setup`, whichever applies then.
  */
 export const PASSWORD_RESET_TEMPLATE_META: EmailTemplateMeta<PasswordResetVariables> = {
   senderClass: 'transactional',

@@ -28,7 +28,9 @@ export interface RegistrationAttemptVariables {
 }
 
 /**
- * How email tracking treats this template. No token, so the general sender. Never resent: a second copy would report a registration attempt that did not happen.
+ * How email tracking treats this template. No token, so the general sender.
+ * Never resent: a second copy would report a registration attempt that did
+ * not happen.
  */
 export const REGISTRATION_ATTEMPT_TEMPLATE_META: EmailTemplateMeta<RegistrationAttemptVariables> = {
   senderClass: 'general',

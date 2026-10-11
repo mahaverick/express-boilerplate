@@ -29,7 +29,13 @@ const tenantRepository = new TenantRepository()
 const tenantSettingsRepository = new TenantSettingsRepository()
 const userMembershipRepository = new UserMembershipRepository()
 
+/**
+ * The tenant columns a PATCH may write; a key left out leaves its column alone.
+ */
 type TenantUpdateValues = Partial<Pick<NewTenant, 'name' | 'description' | 'logo' | 'website'>>
+/**
+ * The settings columns a PATCH may write; a null `metadata` clears it.
+ */
 type SettingsUpdateValues = Partial<{
   timezone: string
   locale: string
@@ -77,7 +83,7 @@ function toSettingsUpdateValues(input: UpdateTenantSettingsInput): SettingsUpdat
  * both mean "no value"; objects (the jsonb `metadata` column) compare by
  * content, not identity.
  * @param submitted - The value the PATCH body carries.
- * @param stored - The value the row holds now.
+ * @param stored - The value the row holds.
  * @returns True when writing `submitted` would leave the column as it is.
  */
 function isSameValue(submitted: unknown, stored: unknown): boolean {
@@ -89,7 +95,7 @@ function isSameValue(submitted: unknown, stored: unknown): boolean {
  * write and its audit entry. The audit entry lists the names only, never the
  * values.
  * @param values - The columns the body supplied.
- * @param current - The row as it is now.
+ * @param current - The row as read in this transaction.
  * @returns The differing columns' values, and their names sorted.
  */
 function changedFields<TValues extends object>(
@@ -158,7 +164,7 @@ export async function listForUser(
  * One tenant's row.
  * @param tenantId - The tenant.
  * @returns The tenant.
- * @throws {HttpError} 404, when the tenant no longer exists.
+ * @throws {HttpError} 404, when the tenant is gone.
  */
 export async function getTenant(tenantId: string): Promise<Tenant> {
   const tenant = await tenantRepository.findById(tenantId)
@@ -177,7 +183,7 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The tenant after the update.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access or the tenant is gone; 403 `Insufficient permissions` when the actor is now below admin.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access or the tenant is gone; 403 `Insufficient permissions` when the actor is below admin.
  */
 export async function updateTenant(
   actor: Actor,
@@ -214,7 +220,7 @@ export async function updateTenant(
  */
 export interface TenantMemberRow {
   /**
-   * The membership row itself (role, timestamps, ids).
+   * The membership row itself.
    */
   membership: MembershipWithUser['membership']
   /**
@@ -266,7 +272,7 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The settings after the update.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when the actor is now below admin; 404 when no settings row exists.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 `Insufficient permissions` when the actor is below admin; 404 when no settings row exists.
  */
 export async function updateSettings(
   actor: Actor,

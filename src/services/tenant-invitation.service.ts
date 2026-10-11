@@ -1,10 +1,11 @@
 /**
- * @file Invitations to join a tenant: invite, list, resend, revoke, preview, accept.
- * Multi-step writes run in one transaction with their audit entry, and every
- * query inside one goes through its `tx`. Audit metadata carries the address's
- * domain only; mail and the in-app notification are
- * enqueued after the write commits, fire-and-forget. A teammate invitation
- * and a claimed accept emit their domain event after commit.
+ * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
+ * accept. Multi-step writes run in one transaction with their audit entry,
+ * and every query inside one goes through its `tx`. Audit metadata carries
+ * the address's domain, never the address. Mail and the in-app notification
+ * are enqueued after the write commits, and a failed enqueue is logged,
+ * never thrown. A teammate invitation and an accept that adds a membership
+ * emit their domain event after commit.
  */
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
@@ -65,8 +66,8 @@ export const PLATFORM_OWNER_INVITATION_MESSAGE =
 const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
 
 /**
- * Error code: the token is unknown, expired, revoked, already used, or for
- * a deleted tenant. One code for all of them, on purpose.
+ * Error code: the token is unknown, expired, revoked, already used, or for a
+ * tenant that is deleted or not active. One code for all of them, on purpose.
  */
 export const INVITATION_INVALID_CODE = 'invitation_invalid'
 
@@ -138,7 +139,7 @@ export interface InvitationPreview {
 }
 
 /**
- * The outcome of an accept: the tenant and the role the user now holds in it.
+ * The outcome of an accept: the tenant and the role the user holds in it.
  */
 export interface AcceptedInvitation {
   tenant: { name: string; slug: string }
@@ -362,7 +363,7 @@ async function tenantForMessages(
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
  * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the tenant or the address has had its share of the day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function invite(
   actor: Actor,
@@ -564,7 +565,7 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the tenant or the address has had its share of the day's invitation mail; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,
@@ -651,7 +652,7 @@ export async function resend(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `reason` when staff revoke through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function revoke(
   actor: Actor,
@@ -756,8 +757,8 @@ async function acceptedEarlierBy(
  * finds the user already a member, or a repeat accept, emits nothing.
  * @param rawToken - The raw token from the link.
  * @param userId - The signed-in user.
- * @returns The tenant and the role the user now holds (an existing membership's role is kept).
- * @throws {HttpError} 404 `invitation_invalid`; 403 `invitation_email_mismatch` when the address differs; 403 `invitation_email_unverified` when it matches but is unverified; 401 when the account is gone.
+ * @returns The tenant and the role the user holds (an existing membership's role is kept).
+ * @throws {HttpError} 404 `invitation_invalid`; 403 `invitation_email_mismatch` when the address differs; 403 `invitation_email_unverified` when it matches but is unverified; 401 when the account is gone or inactive.
  */
 export async function accept(rawToken: string, userId: string): Promise<AcceptedInvitation> {
   const tokenHash = hashToken(rawToken)

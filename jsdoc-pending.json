@@ -1,24 +1,4 @@
 {
-  "X13": [
-    "src/services/session-denylist.service.ts",
-    "src/services/session.service.ts",
-    "src/services/status-read.service.ts",
-    "src/services/tenant-access.service.ts",
-    "src/services/tenant-invitation.service.ts",
-    "src/services/tenant-membership.service.ts",
-    "src/services/tenant.service.ts",
-    "src/services/verification.service.ts",
-    "src/services/worker-supervisor.service.ts",
-    "src/templates/email/account-setup.template.ts",
-    "src/templates/email/email-template-meta.template.ts",
-    "src/templates/email/email-verification.template.ts",
-    "src/templates/email/maintenance-mode-changed.template.ts",
-    "src/templates/email/onboarding-reminder.template.ts",
-    "src/templates/email/password-changed.template.ts",
-    "src/templates/email/password-reset.template.ts",
-    "src/templates/email/registration-attempt.template.ts",
-    "src/templates/email/tenant-invitation.template.ts"
-  ],
   "X14": [
     "src/types/actor.ts",
     "src/types/analytics.ts",
