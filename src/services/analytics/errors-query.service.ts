@@ -1,8 +1,8 @@
 /**
  * @file The two HogQL queries of the staff Errors views: a user's error
  * issues and a tenant's. The query text is fixed; the id and the window
- * travel as HogQL placeholders in `values`. The one token written into the
- * text at run time is the `tenant` group type's index, checked to be an
+ * travel as HogQL placeholders in `values`. The one non-constant token
+ * written into the text is the `tenant` group type's index, checked to be an
  * integer from 0 to 4 first. Rows are grouped by PostHog's issue id; every
  * column describing the most recent event is taken with
  * `argMax(column, (timestamp, uuid))`, so all of them come from one event

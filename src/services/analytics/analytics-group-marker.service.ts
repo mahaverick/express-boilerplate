@@ -7,8 +7,8 @@
  * whatever arrives at PostHog last carries the latest committed state, in
  * whatever order the markers were written or retried. Two Worker replicas
  * whose drains overlap can deliver an older resolved marker after a newer
- * one; the next marker for that tenant corrects it. A tenant with no row (purged) gets its
- * name cleared and its status set to `purged`.
+ * one; the next marker for that tenant corrects it. A tenant with no row
+ * (purged) gets its name cleared and its status set to `purged`.
  */
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -52,7 +52,7 @@ function groupSetOf(tenant: TenantGroupSnapshot | undefined): TenantGroupSet {
 /**
  * Give every tenant `$groupidentify` in a claimed batch the tenant's current
  * `$group_set`, read in one query for the batch's distinct tenants. A
- * `$group_set` stored by an older release is replaced, never sent. Every
+ * `$group_set` already stored on the row is replaced, never sent. Every
  * other row is returned unchanged, and a batch with no marker runs no query.
  * @param rows - The claimed rows, in send order.
  * @param executor - Where to read the tenants. Defaults to the pool.

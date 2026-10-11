@@ -24,8 +24,8 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * The port is a parameter because `getEnv()` is memoised and already parsed
  * by the time a test runs, so setting `process.env.APP_PORT` would not
  * change it. A bind failure (EADDRINUSE, EACCES) logs one line and sets exit
- * code 1; index.ts owns the exit, since `unicorn/no-process-exit` allows
- * `process.exit` only inside a `process.on` callback.
+ * code 1; index.ts owns the exit, so every exit path goes through its shared
+ * once-guard.
  * @param port - Port to bind. Defaults to the configured one. Pass 0 to let the
  *   OS pick a free port, which is what makes the lifecycle test safe in parallel.
  * @returns The server, listening once its 'listening' event fires.
@@ -50,9 +50,9 @@ export function startServer(port: number = getEnv().APP_PORT): Server {
  * Stop accepting connections, drain, then close dependencies.
  *
  * Order matters. Readiness flips to 503 first, then open SSE streams are
- * ended, since they would otherwise hold `server.close()` open forever. Then
- * the socket closes, so no new request finds a closed pool. Connections still
- * open after `SERVER_DRAIN_TIMEOUT_MS` are force-closed.
+ * ended, since they would otherwise hold `server.close()` open until the
+ * force-close. Then the socket closes, so no new request finds a closed pool.
+ * Connections still open after `SERVER_DRAIN_TIMEOUT_MS` are force-closed.
  *
  * The Workers close next, before the shared dependencies, because
  * `Worker#close()` lets the in-flight job finish and that job needs the

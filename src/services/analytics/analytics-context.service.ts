@@ -9,7 +9,8 @@ import type { AnalyticsContext } from '@/types/analytics'
 /**
  * The current analytics context: the active span's trace and span ids when
  * its context is valid, the request's PostHog session id when the browser
- * sent one, and the request's authenticated user id. Outside a request and a span, it is empty.
+ * sent one, and the request's authenticated user id. Outside a request and a
+ * span, it is empty.
  * @returns The context; absent fields are omitted, never undefined.
  */
 export function currentAnalyticsContext(): AnalyticsContext {

@@ -3,7 +3,7 @@
  * Each result row is read by position (`TIMELINE_SELECT_COLUMNS`), and no
  * value is trusted: a column of the wrong type reads as absent, and only the
  * `TIMELINE_PROP_KEYS` properties with a string, number or boolean value
- * reach `props`. Nothing else PostHog holds leaves the server.
+ * reach `props`. No other event property leaves the server.
  *
  * Anyone with the public project key can send PostHog an event, so the
  * server fields are trusted only on a row whose signature verifies. In this

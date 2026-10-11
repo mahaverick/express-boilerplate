@@ -3,9 +3,10 @@
  * action: inside a transaction every write runs in its own savepoint, so a
  * failed insert rolls back only itself and the caller's transaction stays
  * usable; on the pool it is a plain insert. Either way a failure is logged
- * at warn and swallowed. The one exception is `enqueueAnalyticsOrThrow`,
- * for the groups backfill, which runs in no user's action and reports
- * whether it queued every row. Nothing here calls PostHog; the drainer does.
+ * at warn and swallowed. The exception is `enqueueAnalyticsOrThrow`, for a
+ * caller that handles the failure itself: the groups backfill, which runs
+ * in no user's action and reports whether it queued every row, and
+ * experiment exposure. Nothing here calls PostHog; the drainer does.
  */
 import { PgTransaction } from 'drizzle-orm/pg-core'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'

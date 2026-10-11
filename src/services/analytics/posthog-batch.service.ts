@@ -1,8 +1,9 @@
 /**
- * @file The one call that sends server events to PostHog: `POST <POSTHOG_HOST>/batch/`
- * with `fetch`, classified as acknowledged, retryable or rejected. Not
- * posthog-node: its capture resolves on a 500, so it cannot tell the drainer
- * whether a batch landed. It imports no database module, so it opens no pool.
+ * @file The one call that sends server events to PostHog:
+ * `POST <POSTHOG_HOST>/batch/` with `fetch`, classified as acknowledged,
+ * retryable or rejected. Not posthog-node: its capture only queues an event,
+ * so it cannot tell the drainer whether a batch landed. It imports no
+ * database module, so it opens no pool.
  */
 import { getEnv } from '@/configs/env.config'
 import {
@@ -31,8 +32,8 @@ export interface PosthogBatchEvent {
 
 /**
  * How PostHog answered a batch: `ack` (2xx, every event accepted), `retry`
- * (no answer, a timeout, 429, 5xx or an endpoint-level 4xx: send the same events again later) or
- * `rejected` (any other 4xx: the batch itself is refused, and sending it
+ * (no answer, a timeout, 429, 5xx or an endpoint-level 4xx: send the same
+ * events again later) or `rejected` (any other 4xx: the batch itself is refused, and sending it
  * again unchanged would be refused again).
  */
 export type SendResult =
@@ -53,8 +54,8 @@ export const ENDPOINT_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 4
  * browser forged through the collect proxy. It also sets `$geoip_disable`,
  * overriding any stored value: the request comes from this server's
  * address, so PostHog's GeoIP would otherwise place the person in the data
- * centre. Both are added to the wire event only, at send time, so rows
- * queued before either existed get them too; the outbox row is not changed.
+ * centre. Both are added to the wire event only, at send time, so every
+ * queued row gets them whenever it was written; the outbox row is not changed.
  * Every server event goes through here: the drain's rows and the error
  * reporter's `$exception` events.
  * @param row - The claimed outbox row, its markers already resolved.
@@ -99,7 +100,8 @@ export function classifyStatus(status: number): SendResult {
  * A network error, an abort or the timeout is a `retry`, never a throw, so a
  * PostHog outage never fails the caller. The response body is discarded
  * unread, so the connection returns to `fetch`'s pool.
- * @param events - The events, at most `ANALYTICS_DRAIN_BATCH_SIZE`.
+ * @param events - The events: the drainer sends at most `ANALYTICS_DRAIN_BATCH_SIZE`,
+ *   the error reporter at most `ERROR_FLUSH_BATCH`.
  * @param options - Request options.
  * @param options.signal - Aborts the request; defaults to a `ANALYTICS_SEND_TIMEOUT_MS` timeout.
  * @returns How PostHog answered.

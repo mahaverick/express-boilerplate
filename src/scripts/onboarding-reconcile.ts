@@ -1,13 +1,14 @@
 /**
- * @file `pnpm onboarding:reconcile`: re-complete the default automatic
- * onboarding steps of every tracked, started tenant from what members
- * provably did (`reconcileOnboarding`, platform-onboarding.service.ts),
+ * @file `pnpm onboarding:reconcile`: re-complete the automatic tenant
+ * onboarding steps of every live, tracked, started customer tenant from what
+ * members provably did (`reconcileOnboarding`, platform-onboarding.service.ts),
  * each dated when it happened, for when a subscriber failed after its
  * request committed. Staff actions through platform access never count.
  * Best effort: it reads the audit log, so an entry pruned under
- * `RETENTION_AUDIT_LOGS_DAYS` leaves no trace. Prints counts only, never a
- * tenant or an address. It registers the analytics forwarder, so each
- * restored step reaches the analytics outbox as a server app's would.
+ * `RETENTION_AUDIT_LOGS_DAYS` leaves no trace (a join falls back to its
+ * membership row). Prints counts only, never a tenant or an address. It
+ * registers the analytics forwarder, so each restored step reaches the
+ * analytics outbox as a server app's would.
  */
 import { fileURLToPath } from 'node:url'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'

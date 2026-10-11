@@ -1,9 +1,9 @@
 /**
- * @file The only two HogQL queries the server sends PostHog: a user's
- * timeline and a tenant's. The query text is fixed; every id, the range and
- * the cursor travel as HogQL placeholders in `values`. The one token written
- * into the text at run time is the `tenant` group type's index, checked to be
- * an integer from 0 to 4 first. Also how a failed PostHog call is logged.
+ * @file The two HogQL queries of the staff timelines: a user's timeline and
+ * a tenant's. The query text is fixed; every id, the range and the cursor
+ * travel as HogQL placeholders in `values`. The one non-constant token
+ * written into the text is the `tenant` group type's index, checked to be an
+ * integer from 0 to 4 first. Also how a failed PostHog call is logged.
  */
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
 import {
@@ -117,7 +117,7 @@ export interface TimelineQueryParameters {
 /**
  * The fixed HogQL of one timeline page and its placeholder values.
  *
- * Rows newer than the range, older than the cursor when there is one, and not
+ * Rows within the range, older than the cursor when there is one, and not
  * in `TIMELINE_EXCLUDED_EVENTS`; `key` also leaves out every `$` event.
  * Newest first by `(timestamp, uuid)`, and one row more than a page, which
  * only says whether another page exists. No `limit … by uuid`: PostHog may
