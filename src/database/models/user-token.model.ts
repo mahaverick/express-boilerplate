@@ -87,8 +87,8 @@ export const userTokenModel = pgTable(
      * `markSessionReauthenticated` (session.service.ts), so a rotation or a
      * grace-window sibling minted from any row carries the new time. Signed
      * into access tokens as `auth_time` for `requireRecentAuth`
-     * (auth.middleware.ts). Null outside `'refresh'`, and on rows written
-     * before migration 0018.
+     * (auth.middleware.ts). Null outside `'refresh'`. Null on a refresh row
+     * leaves the claim out, which step-up routes treat as stale.
      */
     authenticatedAt: timestamp('authenticated_at', { withTimezone: true }),
     /**

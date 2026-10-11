@@ -1,11 +1,11 @@
 /**
- * @file The HTTP error class: an error that carries the status and message
- * the client receives.
+ * @file The HTTP error class: an error that carries the status the client
+ * receives and a message `errorHandler` shows on a 4xx.
  */
 
 /**
- * An error carrying the HTTP status the client should receive, with a message
- * chosen to be shown to the client.
+ * An error carrying the HTTP status the client should receive. Its message is
+ * shown to the client on a 4xx; `errorHandler` masks a 5xx's.
  */
 export class HttpError extends Error {
   /**

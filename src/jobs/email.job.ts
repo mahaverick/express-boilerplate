@@ -44,8 +44,8 @@ export type EmailJobOptions = Partial<JobsOptions> & { context?: EmailContext }
  * `removeOnFail: { age: 7 * 24 * 3600 }`: failed jobs stay 7 days so an
  * operator can inspect `failedReason`. The token stays only while retries
  * are pending: once the job will not be retried, the worker replaces every
- * link, token and address value with `[redacted]` (`recordPermanentFailure`,
- * job-failure.job.ts).
+ * `…Url` and `…Token` value, and every address key's value, with
+ * `[redacted]` (`recordPermanentFailure`, job-failure.job.ts).
  */
 export const emailJobDefaults: JobsOptions = {
   priority: JobPriority.high,

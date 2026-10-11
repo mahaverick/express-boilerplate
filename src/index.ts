@@ -27,10 +27,11 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` before shutdown
  * begins; a SIGTERM or SIGINT during that flush still exits 1.
  *
- * The flag snapshot (when flags are enabled) and the maintenance-mode store
- * each finish a first load before the server listens, so the first request
- * is not served without a mode this replica has tried to read. Neither start
- * rejects, and neither waits for its pub/sub subscription.
+ * The flag snapshot (when flags are enabled) finishes a first load before the
+ * server listens, so the first request already sees it. The maintenance-mode
+ * store does too, so the first request is not served without a mode this
+ * replica has tried to read. Neither start rejects, and neither waits for its
+ * pub/sub subscription.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {

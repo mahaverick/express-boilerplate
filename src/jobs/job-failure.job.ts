@@ -37,10 +37,11 @@ const ADDRESS_KEYS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Whether a key's whole value is replaced: a link, token or address key's
- * is, whatever its type (a string, a list, an object, nested any depth), so
- * an address in an unexpected shape fails closed instead of surviving
- * under a key no rule names.
+ * Whether a key's whole value is replaced: a key ending in `Url` or
+ * `Token`, or an address key, has its value replaced whatever its type (a
+ * string, a list, an object, nested any depth), so an address in an
+ * unexpected shape fails closed instead of surviving under a key no rule
+ * names.
  * @param key - The key.
  * @returns True when the value becomes `'[redacted]'`.
  */
