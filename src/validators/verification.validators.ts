@@ -1,8 +1,8 @@
 /**
  * @file Verify-email and resend-verification bodies. Verify requires the
  * account's password as well as the token, so a link holder cannot verify an
- * address someone else registered. Neither applies the registration password
- * policy: like login, this compares against a stored hash, and a policy would
+ * address someone else registered. Its password carries no registration
+ * policy: like login, it is compared against a stored hash, and a policy would
  * answer differently for a password that was legal when it was set.
  */
 import { z } from 'zod'

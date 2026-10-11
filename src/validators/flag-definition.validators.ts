@@ -1,11 +1,11 @@
 /**
  * @file The shape of PostHog's `/flags/definitions` body, and the parse
  * into the snapshot express evaluates from. The body is untrusted input:
- * unknown flag-level fields are stripped (PostHog adds them often), a flag
- * that fails the schema is kept as `malformed` so it is never evaluated, and
- * every construct the evaluator cannot reproduce exactly marks the flag
- * unsupported (`detectUnsupported`), so it answers its registry fallback
- * instead of a half-evaluated value.
+ * unknown flag-level fields are stripped (PostHog adds them often), a keyed
+ * flag that fails the schema is kept as `malformed` so it is never evaluated,
+ * and a construct the evaluator does not reproduce marks the flag unsupported
+ * (`detectUnsupported`), so it answers its registry fallback instead of a
+ * half-evaluated value.
  */
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
@@ -46,8 +46,6 @@ const TRAIT_PROPERTY_KEYS: PropertyKeySets = {
 
 /**
  * A set's members in a fixed order, so the fingerprint ignores declaration order.
- * @param keys - The keys.
- * @returns Them, sorted.
  */
 function sortedKeys(keys: ReadonlySet<string>): string[] {
   return [...keys].toSorted((a, b) => a.localeCompare(b, 'en'))
@@ -60,11 +58,6 @@ function sortedKeys(keys: ReadonlySet<string>): string[] {
  * may name, sorted, and the parser version. A stored snapshot whose
  * fingerprint differs from the running one was parsed by other rules, so
  * the definitions job fetches it again without `If-None-Match`.
- * @param entries - The registry; defaults to `FLAGS`.
- * @param parserVersion - The parser version; defaults to `FLAG_PARSER_VERSION`.
- * @param propertyKeys - The allowed property keys; defaults to the traits'.
- * @param propertyKeys.person - The person property keys.
- * @param propertyKeys.group - The group property keys.
  * @returns The first 16 hex characters of the sha256.
  */
 export function flagRegistryFingerprint(
@@ -143,10 +136,9 @@ const KNOWN_FILTER_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * The condition keys the evaluator knows. `sort_key` and `description` are
- * stored for display only (PostHog's UI strips `sort_key` on save, so it
- * comes from other writers; `description` is `null` once cleared). They are
- * listed so a flag saved in the UI stays supported; any other key may change
- * what the condition matches, so it fails closed.
+ * stored for display only; they are listed so a flag carrying them stays
+ * supported. Any other key may change what the condition matches, so it fails
+ * closed.
  */
 const KNOWN_CONDITION_KEYS: ReadonlySet<string> = new Set([
   'properties',
@@ -318,14 +310,13 @@ export interface ParsedSnapshot {
    */
   fingerprint?: string
   /**
-   * Every flag that is not deleted, by key, registered or not.
+   * Every keyed flag that is not deleted, by key, registered or not.
    */
   flags: Record<string, ParsedDefinition>
 }
 
 /**
  * A construct on the flag itself, before its conditions are read.
- * @param definition - The definition.
  * @returns The construct, or undefined.
  */
 function flagLevelConstruct(definition: FlagDefinitionJson): UnsupportedConstruct | undefined {
@@ -348,7 +339,6 @@ function flagLevelConstruct(definition: FlagDefinitionJson): UnsupportedConstruc
  * A condition or property key the evaluator does not know. The schema keeps
  * such keys rather than stripping them, so a flag is never evaluated as if a
  * setting PostHog applies were absent.
- * @param definition - The definition.
  * @returns `unknown_field`, or undefined.
  */
 function fieldConstruct(definition: FlagDefinitionJson): UnsupportedConstruct | undefined {
@@ -417,7 +407,6 @@ function propertyConstruct(
 
 /**
  * A condition variant that names no variant of the flag.
- * @param definition - The definition.
  * @returns `malformed`, or undefined.
  */
 function variantConstruct(definition: FlagDefinitionJson): UnsupportedConstruct | undefined {
@@ -434,11 +423,9 @@ function variantConstruct(definition: FlagDefinitionJson): UnsupportedConstruct 
 }
 
 /**
- * Where the definition disagrees with its registry entry: aggregation
- * against `scope` (null for `user`, the tenant index for `tenant`), or the
- * presence of variants against `kind`.
- * @param definition - The definition.
- * @param entry - The registry entry.
+ * Where the definition disagrees with its registry entry: whether it
+ * aggregates on a group type against `scope` (`tenant` does, `user` does
+ * not), or the presence of variants against `kind`.
  * @returns `scope_drift` or `kind_drift`, or undefined.
  */
 function registryConstruct(
@@ -453,16 +440,17 @@ function registryConstruct(
 }
 
 /**
- * The first construct of spec §4.5 that keeps a flag from being evaluated:
- * flag-level settings (experience continuity, device bucketing, evaluation
- * contexts, an unknown `filters` key, early access), then a group
+ * The first construct that keeps a flag from being evaluated:
+ * flag-level settings (experience continuity, a non-default bucketing
+ * identifier, evaluation contexts, an unknown `filters` key, early access), then a group
  * aggregation that is not the tenant's, then each property (cohort, flag
  * dependency, unknown type or operator, `is_not_set`, a key outside the
  * traits), then an unknown condition or property key (after the property
  * checks, so a cohort or flag dependency with its own extra keys is named as
  * such), then a stray condition variant, then disagreement with the
- * registry entry. Date and semver operators are supported, but no trait
- * holds a date or a version, so a condition using one is refused by its key.
+ * registry entry. The date and semver operators are accepted, but no trait
+ * holds a date or a version, so a condition that needs one names a key
+ * outside the traits and is refused as `property_key`.
  * @param definition - The validated definition.
  * @param entry - Its registry entry, or undefined for a flag the code does
  *   not declare (no scope or kind check).
@@ -492,7 +480,6 @@ export function detectUnsupported(
 
 /**
  * Whether a value is a plain object.
- * @param value - Anything.
  * @returns True for a non-null, non-array object.
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -501,7 +488,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The snapshot entry of a flag that failed the schema, when it at least has a key.
- * @param item - The raw flag.
  * @returns A `malformed` entry, or undefined for one with no key or marked deleted.
  */
 function malformedDefinition(item: unknown): ParsedDefinition | undefined {

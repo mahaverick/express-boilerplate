@@ -23,8 +23,6 @@ const MAX_SEARCH_QUERY_LENGTH = 100
 
 /**
  * Postgres text can't hold NUL, so a value carrying one would fail in the query.
- * @param value - The string to check.
- * @returns Whether `value` has no NUL character.
  */
 function hasNoNul(value: string): boolean {
   return !value.includes('\0')
@@ -38,7 +36,7 @@ const platformTenantCursorSchema = z
   .strict()
 
 /**
- * The trimmed search text both staff searches take. Whitespace alone is a
+ * The trimmed search text every staff search takes. Whitespace alone is a
  * 400 rather than a match-everything search.
  */
 export const searchQueryField = z
@@ -49,7 +47,7 @@ export const searchQueryField = z
   .refine(hasNoNul, 'q must not contain a NUL character.')
 
 /**
- * Page size for both staff searches: 1–50, 20 by default.
+ * Page size for the staff searches: 1–50, 20 by default.
  */
 export const pageLimitField = z.coerce
   .number()
@@ -106,7 +104,8 @@ const MAX_TIMELINE_CURSOR_LENGTH = 512
  * `GET /platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline`
  * query: the window (7 days), the view (everything) and the opaque `before`
  * cursor of a later page. The cursor is decoded by the timeline service,
- * which answers 400 for one it did not issue. Unknown keys are ignored.
+ * which answers 400 for one that is not shaped like those it issues. Unknown
+ * keys are ignored.
  */
 export const platformTimelineQuerySchema = z.object({
   range: z.enum(TIMELINE_RANGES).default(TIMELINE_DEFAULT_RANGE),
@@ -116,7 +115,8 @@ export const platformTimelineQuerySchema = z.object({
 
 /**
  * `GET /platform/flags/evaluate` query: the user, an optional tenant the
- * user belongs to, and the app whose client slice the result is read for.
+ * user belongs to (none for `apex`), and the app whose client slice the
+ * result is read for.
  */
 export const platformFlagsEvaluateQuerySchema = z.object({
   userId: z.uuid(),
@@ -200,11 +200,10 @@ const idParameterSchema = z.uuid()
 
 /**
  * A route's `:id` as a uuid, or a 404 with `notFoundMessage`: a malformed id
- * answers like an unknown one, so ids can't be probed by format.
+ * answers like an unknown one, so the answer does not reveal the id's format.
  * @param raw - `request.params.id` as Express supplies it.
  * @param notFoundMessage - The 404's message, e.g. 'Tenant not found'.
  * @param notFoundCode - The 404's code, when the unknown-id answer carries one, so the malformed id answers with it too.
- * @returns The id.
  * @throws {HttpError} 404 when `raw` is not a uuid.
  */
 export function parseIdParameter(

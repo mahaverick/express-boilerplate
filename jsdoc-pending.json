@@ -1,27 +1,4 @@
 {
-  "X15": [
-    "src/validators/audit.validators.ts",
-    "src/validators/auth.validators.ts",
-    "src/validators/cursor.validators.ts",
-    "src/validators/flag-definition.validators.ts",
-    "src/validators/flags.validators.ts",
-    "src/validators/invitation.validators.ts",
-    "src/validators/maintenance-mode.validators.ts",
-    "src/validators/notification.validators.ts",
-    "src/validators/onboarding.validators.ts",
-    "src/validators/parse.validators.ts",
-    "src/validators/platform-email.validators.ts",
-    "src/validators/platform-onboarding.validators.ts",
-    "src/validators/platform.validators.ts",
-    "src/validators/profile.validators.ts",
-    "src/validators/safe-text.validators.ts",
-    "src/validators/tenant.validators.ts",
-    "src/validators/verification.validators.ts",
-    "src/workers/analytics.worker.ts",
-    "src/workers/email.worker.ts",
-    "src/workers/maintenance.worker.ts",
-    "src/workers/notification.worker.ts"
-  ],
   "X16": [
     "tests/helpers/analytics-invitation.ts",
     "tests/helpers/analytics-outbox.ts",

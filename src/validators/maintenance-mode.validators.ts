@@ -20,7 +20,6 @@ const CONFIRM_MAX_LENGTH = 32
  * characters after trimming (`\r\n` becomes `\n`); other control
  * characters and bidi overrides are refused.
  * @param field - The field's name, for the messages.
- * @returns The schema.
  */
 function maintenanceText(field: string) {
   return z.preprocess(
@@ -38,10 +37,9 @@ function maintenanceText(field: string) {
 }
 
 /**
- * `PUT /platform/maintenance-mode`: the new mode, the customer message,
- * the internal reason (`null` clears a stored one on a save that keeps the
- * mode; absent keeps it), the version the caller read, and the typed
- * environment name. Strict, so no other field rides along.
+ * `PUT /platform/maintenance-mode` body. `reason: null` clears the stored
+ * reason on a save that keeps the mode; leaving it out keeps it. `confirm`
+ * is the typed environment name. Strict, so no other field rides along.
  */
 export const changeMaintenanceModeBody = z.strictObject({
   mode: z.enum(MAINTENANCE_MODES),

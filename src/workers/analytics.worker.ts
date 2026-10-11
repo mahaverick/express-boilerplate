@@ -4,7 +4,8 @@
  * analytics-deletion.job.ts schedules and the feature flag definitions
  * fetch that flag-definitions.job.ts schedules, one job at a time whatever
  * `WORKER_CONCURRENCY` says, so this Worker never has two of its jobs
- * talking to PostHog at once. Two replicas may; each job's claim keeps their rows apart.
+ * talking to PostHog at once. Two replicas may; the drain and the deletion
+ * tick each claim their rows, so two never take the same ones.
  */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
@@ -47,9 +48,10 @@ export async function processAnalyticsJob(job: Job): Promise<void> {
 }
 
 /**
- * Start the analytics worker. A drain or deletion tick has one attempt, so
- * every failed tick is a final failure and is reported to error tracking;
- * the reporter's throttle bounds a run of failing ticks.
+ * Start the Worker for the analytics queue. Every analytics job has one
+ * attempt (`analyticsDrainJobDefaults`), so every failed one is a final
+ * failure and is reported to error tracking; the reporter's throttle bounds a
+ * run of failing ticks. The 'failed' handler never rejects.
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startAnalyticsWorker(): Worker {

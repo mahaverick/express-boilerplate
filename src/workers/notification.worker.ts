@@ -27,8 +27,8 @@ const preferenceRepository = new NotificationPreferenceRepository()
 
 /**
  * `metadata` with its top-level `variables` key removed, if it had one. A raw
- * token lives in `email.variables`; nothing upstream is trusted to have kept
- * it out of `metadata`, so this is where that is enforced before Postgres.
+ * token lives in `email.variables`, and `metadata` is stored in Postgres, so a
+ * copy of that key is dropped here as a backstop. Nothing else is scrubbed.
  * @param metadata - The job's own metadata, exactly as received.
  * @returns `metadata` without its top-level `variables` key; nested keys are kept.
  */
@@ -41,7 +41,6 @@ function metadataWithoutVariables(metadata: Record<string, unknown>): Record<str
 /**
  * The job's id, which both idempotency keys are built from.
  * @param job - The notification job.
- * @returns `job.id`.
  * @throws {Error} When the job has no id, which BullMQ never does for a processed job.
  */
 function idOf(job: Pick<Job<NotificationJobData>, 'id'>): string {
@@ -90,7 +89,7 @@ export function emailJobIdFor(job: Pick<Job<NotificationJobData>, 'id' | 'timest
  * The row is emitted only after its insert commits, so a live stream never
  * shows a notification that `GET /api/v1/notifications` or a replay cannot.
  * @param job - The BullMQ job to process; `job.data` is a `NotificationJobData`.
- * @returns Resolves once both channels have been handled; rejects when either the insert or the email enqueue fails, so BullMQ retries.
+ * @returns Resolves once both channels have been handled.
  * @throws {Error} Whatever `createOnce` or `addEmailJob` throws, uncaught, so BullMQ retries.
  */
 export async function processNotificationJob(job: Job<NotificationJobData>): Promise<void> {
@@ -137,7 +136,10 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
 }
 
 /**
- * Start the notification worker.
+ * Start the Worker for the notification queue, running up to
+ * `WORKER_CONCURRENCY` jobs at once. The 'failed' handler never rejects: a
+ * retryable failure logs a warning, and the last attempt calls
+ * `recordPermanentFailure`.
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startNotificationWorker(): Worker<NotificationJobData> {

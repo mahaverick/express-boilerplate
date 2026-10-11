@@ -24,7 +24,6 @@ const emailCursorSchema = z.strictObject({
  * service turns an inclusive `to` into an exclusive end one day later, which
  * must still be a four-digit year.
  * @param name - The query field's name, for its messages.
- * @returns The field schema.
  */
 function utcDayField(name: string) {
   return z.iso

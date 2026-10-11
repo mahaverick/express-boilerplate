@@ -16,8 +16,8 @@ import { cursorField, isoInstantField } from '@/validators/cursor.validators'
  * The notifications cursor's decoded shape: the last row's `createdAt` (as
  * `encodeNotificationCursor` writes it, from `toISOString()` at millisecond
  * precision) and `id`. `createdAt` must be a real instant in year 0001 or
- * later: Postgres has no year 0, so `0000-…` would pass the format check and
- * then fail the `::timestamptz` cast as a 500.
+ * later (see `isoInstantField`), or the `::timestamptz` cast would fail as a
+ * 500.
  */
 const notificationCursorSchema = z
   .object({
@@ -50,15 +50,14 @@ export const notificationIdSchema = z.object({
 /**
  * Notification types no preference may be written for: the write-side mirror
  * of `NON_DISABLEABLE_EMAIL_TYPES` (notification-preference.repository.ts),
- * kept in sync by hand. That set is module-private and decides delivery at
- * read time whatever a row says; this one stops a `PUT` from storing a toggle
- * the settings UI would show but the repository would ignore. Two reasons
- * apply, plus a listing-only third: `verify_email` and
+ * kept in sync by hand. The repository ignores a stored email toggle for
+ * these types when it decides delivery; this set stops a `PUT` from storing
+ * one the settings UI would show. `verify_email` and
  * `password_reset_requested` would lock the user out if disabled;
  * `password_changed` must not be silenceable by someone who has taken the
- * account over; `tenant_invitation` has no email on the notification path
- * and is listed to keep the two sets the same; and `maintenance_mode_changed`
- * must reach every owner and admin.
+ * account over; `maintenance_mode_changed` must reach every platform owner
+ * and admin; `tenant_invitation` has no email on the notification path and is
+ * listed only to keep the two sets the same.
  */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'verify_email',
@@ -71,7 +70,8 @@ const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
 /**
  * Notification types whose preferences `PUT /api/v1/notifications/preferences`
  * accepts. Every type is non-disableable, so the list is empty and that route
- * answers 400 for every entry; `preferenceEntrySchema` is its only reader.
+ * answers 400 for every entry; `updatePreferencesSchemaFor` is its only
+ * reader.
  */
 const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
   (type) => !NON_DISABLEABLE_NOTIFICATION_TYPES.has(type)
@@ -81,7 +81,6 @@ const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
  * The notification types that exist for a caller: every type for platform
  * staff, all but the staff-only ones for everyone else.
  * @param isStaff - Whether the caller holds a platform membership.
- * @returns The types.
  */
 function notificationTypesFor(isStaff: boolean): readonly string[] {
   const staffOnly: readonly string[] = STAFF_ONLY_NOTIFICATION_TYPES
@@ -99,10 +98,12 @@ function notificationTypesFor(isStaff: boolean): readonly string[] {
  * invalid-enum text. A staff-only type is not configurable for a caller who
  * cannot see it, whatever `CONFIGURABLE_NOTIFICATION_TYPES` holds.
  * @param isStaff - Whether the caller holds a platform membership.
- * @returns The schema.
  */
 export function updatePreferencesSchemaFor(isStaff: boolean) {
   const visibleTypes = notificationTypesFor(isStaff)
+  /**
+   * Whether a type is visible to this caller and has a preference that may be written.
+   */
   const isConfigurable = (type: string): boolean =>
     visibleTypes.includes(type) &&
     (CONFIGURABLE_NOTIFICATION_TYPES as readonly string[]).includes(type)

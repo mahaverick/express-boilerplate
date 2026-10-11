@@ -5,8 +5,8 @@
  * overrides and isolates, zero-width spaces, the word joiner, the byte order
  * mark) and no line or paragraph separator, all invisible or misleading in a
  * browser. The two joiners some scripts and emoji need are allowed inside a
- * word or emoji sequence only. A search query, cursor or token is never
- * rendered back, so each field opts in.
+ * word or emoji sequence only. Each field opts in; values that are not
+ * stored and rendered, such as a search query, cursor or token, do not use it.
  */
 
 /**
@@ -20,8 +20,8 @@ const FORBIDDEN_CONTROL = /\p{Cc}/u
 /**
  * Unicode `Cf` (every bidi mark, override and isolate, U+200B-U+200D, U+2060,
  * U+FEFF, U+061C, the soft hyphen and the emoji tag characters) plus U+2028
- * and U+2029 (`Zl`/`Zp`). A lookalike name differs from the real one only by
- * one of these, so a direction mark inside a name is refused too.
+ * and U+2029 (`Zl`/`Zp`). An invisible character lets a lookalike name pass
+ * for the real one, so a direction mark inside a name is refused too.
  */
 const INVISIBLE_FORMAT = /[\p{Cf}\u{2028}\u{2029}]/u
 /**
@@ -29,10 +29,11 @@ const INVISIBLE_FORMAT = /[\p{Cf}\u{2028}\u{2029}]/u
  * Persian and Indic words) between two letters or marks, and U+200D (ZWJ,
  * Indic conjuncts and emoji sequences) after a letter, mark, pictograph or
  * skin-tone modifier and before a letter, mark or pictograph. U+FE0F, the
- * emoji presentation selector, is a mark (`Mn`). A ZWJ is also allowed, in
- * Malayalam's older chillu spelling, after a virama at a word's end. A joiner
- * beside a space, punctuation, another joiner or a non-letter, non-mark,
- * non-pictograph character stays refused, and so does one with nothing beside it.
+ * emoji presentation selector, is a mark (`Mn`). A ZWJ is also allowed after
+ * a letter and a Malayalam virama (the older chillu spelling), whatever
+ * follows it. Any other joiner stays refused: beside a space, punctuation,
+ * another joiner or a non-letter, non-mark, non-pictograph character, or with
+ * nothing beside it.
  */
 const IN_WORD_JOINER =
   /(?<=[\p{L}\p{M}])\u{200C}(?=[\p{L}\p{M}])|(?<=[\p{L}\p{M}\p{Extended_Pictographic}\p{Emoji_Modifier}])\u{200D}(?=[\p{L}\p{M}\p{Extended_Pictographic}])|(?<=\p{L}\u{0D4D})\u{200D}/gu

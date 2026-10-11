@@ -19,7 +19,7 @@ import { runRetentionPurge } from '@/services/retention.service'
  * Process one maintenance job. Exported for unit testing.
  * @param job - The job; only its name is read.
  * @returns Resolves once every retention rule has run without error.
- * @throws {Error} When a rule failed, naming each, after every rule has run, so BullMQ retries.
+ * @throws {Error} When a rule failed, naming each failed table, after every rule has run, so BullMQ retries.
  * @throws {UnrecoverableError} For a job name this worker has no handler for.
  */
 export async function processMaintenanceJob(job: Job): Promise<void> {
@@ -34,7 +34,9 @@ export async function processMaintenanceJob(job: Job): Promise<void> {
 }
 
 /**
- * Start the maintenance worker.
+ * Start the Worker for the maintenance queue, one purge at a time. The
+ * 'failed' handler never rejects: a retryable failure logs a warning, and the
+ * last attempt calls `recordPermanentFailure`.
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startMaintenanceWorker(): Worker {

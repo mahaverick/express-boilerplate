@@ -1,6 +1,6 @@
 /**
  * @file The staff onboarding queries and the step-key route parameter.
- * `ONBOARDING_RANGES` is separate from the Overview's `STATS_RANGES`, and
+ * `ONBOARDING_RANGES` is separate from `STATS_RANGES`, and the funnel
  * defaults to 30 days.
  */
 import { z } from 'zod'
@@ -16,8 +16,9 @@ import { directionField, pageLimitField } from '@/validators/platform.validators
 export const STEP_NOT_FOUND_MESSAGE = 'Onboarding step not found'
 
 /**
- * Its code: the value of `ONBOARDING_STEP_NOT_FOUND_CODE` (onboarding.service.ts),
- * restated because a validator imports no service; a unit test pins the two equal.
+ * The error code of that 404: the value of `ONBOARDING_STEP_NOT_FOUND_CODE`
+ * (onboarding.service.ts), restated because a validator imports no service; a
+ * unit test pins the two equal.
  */
 export const STEP_NOT_FOUND_CODE = 'onboarding_step_not_found'
 
@@ -39,7 +40,7 @@ export const onboardingFunnelQuerySchema = z.object({
 
 /**
  * `GET /platform/onboarding/tenants` query string: one state (stuck unless
- * asked otherwise) and SP2 keyset paging. `direction=prev` needs a cursor.
+ * asked otherwise) and keyset paging. `direction=prev` needs a cursor.
  */
 export const onboardingTenantSearchSchema = z
   .object({
@@ -67,7 +68,6 @@ export type OnboardingTenantSearchQuery = z.infer<typeof onboardingTenantSearchS
  * A route's `:key` as a registry step key, or a 404: an unknown key answers
  * like a malformed one.
  * @param raw - `request.params.key` as Express supplies it.
- * @returns The key.
  * @throws {HttpError} 404 when `raw` names no registry step.
  */
 export function parseStepKeyParameter(raw: unknown): string {

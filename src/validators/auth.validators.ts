@@ -1,9 +1,9 @@
 /**
- * @file Auth request bodies. Every string field is capped at the width of the
- * column it is written to (the `MAX_*_LENGTH` constants user.model.ts also
- * uses): an over-long value would otherwise reach Postgres as a 22001 and
- * answer 500 instead of 400. `password` is stored only as its fixed-width
- * bcrypt hash.
+ * @file Auth request bodies. Email and name fields are capped at the width of
+ * the column they are written to (the `MAX_*_LENGTH` constants user.model.ts
+ * also uses): an over-long value would otherwise reach Postgres as a 22001
+ * and answer 500 instead of 400. A password is capped in bytes instead
+ * (`MAX_PASSWORD_BYTES`), because only its bcrypt hash is stored.
  */
 import { z } from 'zod'
 import {
@@ -21,8 +21,8 @@ import { safeText } from '@/validators/safe-text.validators'
  * checks the format before any transform chained after it, so it would
  * reject surrounding whitespace, and the cap would measure the untrimmed
  * value. The validated value is the one inserted, which keeps it agreeing
- * with the `lower(email)` unique index. The one email policy, shared by every
- * auth schema.
+ * with the `lower(email)` unique index. The one email policy: every schema
+ * that takes an address builds on it.
  */
 export const emailSchema = z
   .string()
