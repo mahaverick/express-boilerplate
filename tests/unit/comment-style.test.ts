@@ -53,6 +53,15 @@ describe('local/comment-style', () => {
       '/**\n * `passport.use(name, strategy)` simply overwrites whatever was previously\n * registered under that name.\n */\nexport const a = 1\n',
     ],
     [
+      '"stream" as a word',
+      '/** Opens the notification stream for one user. */\nexport const a = 1\n',
+    ],
+    [
+      '"SPA" and a spaced standard id',
+      '/** The SPA shell follows NIST SP 800-63B. */\nexport const a = 1\n',
+    ],
+    ['"I18n" as a word', '/** Formats a date for the I18n layer. */\nexport const a = 1\n'],
+    [
       '"previously issued to"',
       '/** Revokes the token previously issued to this session. */\nexport const a = 1\n',
     ],
@@ -94,6 +103,11 @@ describe('local/comment-style', () => {
     ['previously stored in', '// the key previously stored in Redis\nexport const a = 1\n'],
     ['previously defined in', '// was previously defined in both places\nexport const a = 1\n'],
     ['previously set to', '// the flag previously set to true\nexport const a = 1\n'],
+    ['a sub-project id', '// SP5a rollout asks for this\nexport const a = 1\n'],
+    ['a sub-project step id', '/** Shipped in SP3-1. */\nexport const a = 1\n'],
+    ['a ruling id', '// ruling I17\nexport const a = 1\n'],
+    ['a lane number', '// Lane 2 owns this\nexport const a = 1\n'],
+    ['a stream number', '// Stream 5 hardening\nexport const a = 1\n'],
   ])('rejects history: %s', (_name, code) => {
     expect(lint(code)).toEqual(['history'])
   })

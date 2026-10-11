@@ -15,10 +15,14 @@ const HISTORY_WORDS =
   /\b(?:task|stream|lane|wave)[ -]\d+[a-z]?\b|\btask-\d+-[\w-]+\.md\b|\bbefore this fix\b|\ba later (?:task|stream|wave|pr)\b|\bpreviously\b(?![\s*]+(?:passed[\s*]+to|registered[\s*]+under|issued[\s*]+to)\b)/i
 
 /**
- * Audit and ledger ids: prefixes H, M, E, X, R or NF directly followed by
- * digits, or P/C followed by a hyphen and digits (case-sensitive).
+ * Audit, ruling and sub-project ids (case-sensitive): prefixes H, M, E, X, R
+ * or NF directly followed by digits and an optional letter; I directly
+ * followed by digits only, so a word such as I18n passes; P/C followed by a
+ * hyphen and digits; E followed by a hyphen and T or W; and SP followed by a
+ * digit, an optional letter a to e, and an optional hyphen and digit.
  */
-const HISTORY_IDS = /\b(?:NF|H|M|E|X|R)\d{1,2}[a-z]?\b|\b[PC]-\d{1,2}\b|\bE-[TW]\b/
+const HISTORY_IDS =
+  /\b(?:NF|H|M|E|X|R)\d{1,2}[a-z]?\b|\bI\d{1,2}\b|\bSP\d[a-e]?(?:-\d)?\b|\b[PC]-\d{1,2}\b|\bE-[TW]\b/
 
 /**
  * The history phrase a piece of prose holds: the first `HISTORY_WORDS`
