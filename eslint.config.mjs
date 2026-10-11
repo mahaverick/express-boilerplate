@@ -1,6 +1,6 @@
 /**
- * @file The flat ESLint config. A rule is disabled only for a stated semantic
- * reason, never for a count of existing violations; each block says why.
+ * @file The flat ESLint config: the shared rule sets first, then path-scoped
+ * overrides. A comment above an override gives the reason it differs.
  */
 import path from 'node:path'
 import js from '@eslint/js'
@@ -17,7 +17,8 @@ import jsdocPending from './jsdoc-pending.json' with { type: 'json' }
 import { commentStyleRule } from './scripts/comment-style.mjs'
 
 /**
- * Test timing (tests/**): every real-time wait goes through tests/helpers/timing.ts.
+ * The message for the test-only bans on bare sleeps; a real-time wait in a
+ * test goes through `waitUntil` or `settle` in tests/helpers/timing.ts.
  */
 const BARE_SLEEP_MESSAGE =
   'No bare sleeps in tests. Wait on a condition with waitUntil (tests/helpers/timing.ts), use vi.useFakeTimers(), or, when nothing can be observed, settle(ms, reason).'
@@ -87,12 +88,10 @@ export default tseslint.config(
     },
     plugins: { 'check-file': checkFile, 'import-x': importX },
     /**
-     * import-x settings. `import-x/extensions` must list .ts or no-cycle
-     * silently never parses a TypeScript file. The resolver's own
-     * `extensions` must too, or all four import-x rules silently skip every
-     * .ts import. Its tsconfig path must be absolute: a relative one makes
-     * aliased (`@/`) imports resolve to relative paths, which never equal the
-     * absolute filename no-cycle compares against, so no-cycle never fires on them.
+     * import-x settings. The resolver's `extensions` must list .ts, or the
+     * import-x rules skip every .ts import and neither no-cycle nor the
+     * restricted-paths zones fire. Its tsconfig path must be absolute: with a
+     * relative one, no-cycle misses cycles through aliased (`@/`) imports.
      */
     settings: {
       'import-x/extensions': ['.ts', '.tsx', '.cts', '.mts', '.js', '.jsx', '.cjs', '.mjs'],
@@ -349,8 +348,8 @@ export default tseslint.config(
     extends: [tseslint.configs.disableTypeChecked],
   },
   /**
-   * No test file lives under src/. The custom `errorMessage` is required:
-   * without it, check-file validates the map's values as globs too.
+   * No test file lives under src/. The custom `errorMessage` replaces the
+   * default one, which would print the map's glob values as its suggestion.
    */
   {
     files: ['src/**/*.ts'],
@@ -436,7 +435,7 @@ export default tseslint.config(
     rules: { 'local/comment-style': 'error' },
   },
   {
-    // Lint tooling: its regexes are the tested contract, it is a CLI that prints to the terminal, and its tests import it as a module.
+    // Lint tooling: its regexes are the tested contract, lint-docs.mjs is a CLI that runs git by name and prints to the terminal, and tests import these files as modules.
     files: [
       'scripts/history-patterns.mjs',
       'scripts/comment-style.mjs',
@@ -456,7 +455,7 @@ export default tseslint.config(
     },
   },
   {
-    // Its test doubles share lint-docs.mjs's own interface names (exists, docRefProblems) and its own filename mirrors the module under test.
+    // Its filename mirrors lint-docs.mjs and it imports docRefProblems from it, one test double is named exists, and a filename is concatenated on purpose so lint:docs does not read it as a citation.
     files: ['tests/unit/lint-docs.test.ts'],
     rules: {
       'unicorn/name-replacements': 'off',

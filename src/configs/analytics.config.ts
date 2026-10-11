@@ -1,13 +1,13 @@
 /**
- * @file Whether analytics and the staff timelines are on, where PostHog's
- * assets and app live, and the PostHog deep links staff open, as pure
- * functions of the validated environment. Without `POSTHOG_PROJECT_KEY`
- * analytics is inert: no outbox row is written, the drainer never starts and
- * the collect proxy answers 503. Without `POSTHOG_PERSONAL_API_KEY` and
- * `POSTHOG_PROJECT_ID` the timelines answer "not configured". Error tracking
- * also needs `ERROR_TRACKING_ENABLED`. Feature flags need
- * `POSTHOG_FEATURE_FLAGS_KEY` with the project key; without both every flag
- * answers its registry fallback.
+ * @file Whether analytics, the staff timelines, error tracking and feature
+ * flags are on, where PostHog's assets and app live, and the PostHog deep
+ * links staff open, as pure functions of the validated environment. Without
+ * `POSTHOG_PROJECT_KEY` analytics is inert: no outbox row is written, no
+ * drain runs and the collect proxy answers 503. The timelines answer "not
+ * configured" unless both `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`
+ * are set. Error tracking also needs `ERROR_TRACKING_ENABLED`. Feature flags
+ * need `POSTHOG_FEATURE_FLAGS_KEY` and the project key; with either missing,
+ * every flag answers its registry fallback.
  */
 import { getEnv, type Env } from '@/configs/env.config'
 

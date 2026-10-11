@@ -17,7 +17,9 @@ export interface DatabaseClientOptions {
 }
 
 /**
- * Build the postgres.js pool options from the validated environment.
+ * The postgres.js options for the process-wide pool: `idle_timeout` and
+ * `connect_timeout` are fixed, in seconds, and `statement_timeout` (ms) is
+ * sent only when `DB_STATEMENT_TIMEOUT_MS` is above 0.
  * @param env - The database slice of the validated environment.
  * @returns Options for `postgres(url, options)`.
  */

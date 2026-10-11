@@ -33,17 +33,14 @@ export function isGoogleOAuthEnabled(): boolean {
 }
 
 /**
- * The Google strategy's verify function: a deliberate pass-through.
+ * The Google strategy's verify function: a deliberate pass-through that hands
+ * the raw Google profile to Passport as the "user" and ignores both tokens.
  *
  * No database lookup: the callback route's account-linking policy
  * (`resolveGoogleUser`, google-auth.service.ts) needs the raw profile,
  * which reaches that route's custom `passport.authenticate` callback. The
  * profile never becomes `request.user`: the callback authenticates with
  * `session: false`, so Passport never calls `req.login()` with it.
- * @param _accessToken - Google's OAuth access token. Unused: nothing here calls the Google API again.
- * @param _refreshToken - Google's OAuth refresh token. Unused, for the same reason.
- * @param profile - The authenticated user's Google profile.
- * @param done - Passport's completion callback; called with the profile itself as the "user".
  */
 function passthroughGoogleProfile(
   _accessToken: string,
@@ -82,7 +79,7 @@ export function configurePassport(): void {
         clientSecret: env.GOOGLE_CLIENT_SECRET,
         callbackURL: `${env.APP_URL}/api/v1/auth/google/callback`,
         scope: ['profile', 'email'],
-        // CSRF protection: needs the OAuth session mounted before passport on both routes.
+        // Checks the callback's state against the one kept in the OAuth session (login CSRF defence), so that session must be mounted before passport on both routes.
         state: true,
       },
       passthroughGoogleProfile
@@ -120,16 +117,16 @@ function oauthSessionCookieName(env: {
 }
 
 /**
- * The shared Redis client's type.
+ * The type of the shared Redis client that `getRedis()` resolves.
  */
 type RedisClient = Awaited<ReturnType<typeof getRedis>>
 
 /**
  * The client connect-redis is given: the commands it sends while a request
  * waits (`get`, `set`, `expire` for a touch, `del` for a destroy) run under
- * `withRedisDeadline`, so a stalled Redis fails the OAuth request
- * (express-session passes the error to `next`) instead of holding it. Every
- * other property is the client's own, bound to it.
+ * `withRedisDeadline`, so a stalled Redis fails the OAuth request through
+ * express-session's error path instead of holding it. Every other property
+ * is the client's own, bound to it.
  * @param client - The shared client.
  * @returns A view of the client with those four commands bounded.
  */
@@ -165,8 +162,10 @@ function boundedSessionClient(client: RedisClient): RedisClient {
 }
 
 /**
- * Build the `express-session` options once a Redis client is available.
- * @param client - A connected (or connecting-but-queuing) node-redis client.
+ * The `express-session` options for the OAuth round-trip: a session lasts 5
+ * minutes in Redis under the app's key prefix, and one no route wrote to is
+ * never saved.
+ * @param client - The shared Redis client.
  * @returns Options for `express-session`'s `session()` factory.
  */
 function buildOAuthSessionOptions(client: RedisClient): SessionOptions {
@@ -209,6 +208,10 @@ function buildOAuthSessionOptions(client: RedisClient): SessionOptions {
 export function createOAuthSessionMiddleware(): RequestHandler {
   let middlewarePromise: Promise<RequestHandler> | undefined
 
+  /**
+   * Wait for the shared Redis client and build the real session middleware on it.
+   * @returns The `express-session` middleware.
+   */
   async function buildMiddleware(): Promise<RequestHandler> {
     const client = await withRedisDeadline(() => getRedis(), 'OAuth session store')
     return session(buildOAuthSessionOptions(client))

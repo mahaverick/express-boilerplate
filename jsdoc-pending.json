@@ -1,21 +1,4 @@
 {
-  "X01": [
-    "drizzle.config.ts",
-    "eslint.config.mjs",
-    "prettier.config.mjs",
-    "src/app.ts",
-    "src/configs/analytics.config.ts",
-    "src/configs/cors.config.ts",
-    "src/configs/database.config.ts",
-    "src/configs/env-consistency.config.ts",
-    "src/configs/env.config.ts",
-    "src/configs/helmet.config.ts",
-    "src/configs/mailer.config.ts",
-    "src/configs/passport.config.ts",
-    "src/configs/rate-limit-store.config.ts",
-    "vitest.config.ts",
-    "vitest.unit.config.ts"
-  ],
   "X02": [
     "src/constants/analytics.constants.ts",
     "src/constants/audit.constants.ts",

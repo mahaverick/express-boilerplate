@@ -50,12 +50,13 @@ function hasNoQueryOrFragment(value: string): boolean {
 
 /**
  * Every variable this app reads. `.describe()` text is what `pnpm env:example`
- * and `pnpm env:table` publish. URL fields use `z.url({ protocol: /^https?$/ })`,
- * not `z.httpUrl()`, which requires a dotted public hostname and so rejects
- * `localhost` and Docker service names. No object-level `.refine()`: it would
- * break `getDatabaseUrl()`'s `.pick()`, so cross-field rules live in
- * `assertEnvConsistent` (env-consistency.config.ts). Placeholder secrets are
- * required, so a missing one fails at boot by name.
+ * and `pnpm env:table` publish. HTTP URL fields use
+ * `z.url({ protocol: /^https?$/ })`, not `z.httpUrl()`, which requires a
+ * dotted public hostname and so rejects `localhost` and Docker service names.
+ * No object-level `.refine()`: it would break `getDatabaseUrl()`'s `.pick()`,
+ * so cross-field rules live in `assertEnvConsistent`
+ * (env-consistency.config.ts). `JWT_ACCESS_SECRET` and `SESSION_SECRET` have
+ * no default, so a missing one fails at boot by name.
  */
 const EnvSchema = z.object({
   /**
@@ -229,8 +230,8 @@ const EnvSchema = z.object({
     ),
 
   /**
-   * Replaces a per-address limiter on forgot-password, which anyone who
-   * knows an address could spend to deny its owner their reset mail.
+   * Not a per-address rate limit on forgot-password, which anyone who knows
+   * an address could spend to deny its owner their reset mail.
    */
   PASSWORD_RESET_MAIL_COOLDOWN: z
     .string()
@@ -306,7 +307,7 @@ const EnvSchema = z.object({
    * every IP-keyed limiter shares one bucket, but no header can bypass them.
    * `true` is refused because X-Forwarded-For is client-written, so trusting
    * every hop gives each request a fresh rate-limit bucket; a hop count or an
-   * address list covers every legitimate use.
+   * address list trusts only the proxies in front of this app.
    */
   TRUST_PROXY: z
     .string()
@@ -490,9 +491,9 @@ const EnvSchema = z.object({
     ),
 
   /**
-   * Optional: absent leaves analytics inert. No outbox rows are written, the
-   * drainer never starts, and /api/v1/collect answers 503
-   * (analytics.config.ts `isAnalyticsEnabled`).
+   * Optional: absent leaves analytics inert. No outbox rows are written, no
+   * drain runs, and /api/v1/collect answers 503 (analytics.config.ts
+   * `isAnalyticsEnabled`).
    */
   POSTHOG_PROJECT_KEY: z
     .string()
@@ -547,8 +548,8 @@ const EnvSchema = z.object({
       'Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.'
     ),
   /**
-   * Optional: without it and POSTHOG_PROJECT_ID the staff timelines answer
-   * "not configured" and queued person deletions wait
+   * Optional: without both it and POSTHOG_PROJECT_ID the staff timelines
+   * answer "not configured" and queued person deletions wait
    * (analytics.config.ts `isTimelineEnabled`).
    */
   POSTHOG_PERSONAL_API_KEY: z
@@ -665,8 +666,8 @@ const EnvSchema = z.object({
     ),
 
   /**
-   * Per process, beside the per-user cap: without it enough verified
-   * accounts could hold every connection a proxy in front has.
+   * Per process, beside the per-user cap: without it enough accounts could
+   * hold every connection a proxy in front has.
    */
   SSE_MAX_STREAMS_TOTAL: z.coerce
     .number()
@@ -899,7 +900,7 @@ export function logFormat(env: Pick<Env, 'LOG_FORMAT' | 'APP_ENV'>): 'json' | 'p
 
 /**
  * Whether SMTP must upgrade to TLS rather than only negotiating it when the
- * server offers it. Off on local only, where Mailpit cannot speak TLS.
+ * server offers it. Off on local only, where compose's Mailpit offers no TLS.
  * @param env - The APP_ENV slice of the validated environment.
  * @returns True on every APP_ENV but `local`.
  */

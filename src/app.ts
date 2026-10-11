@@ -1,6 +1,6 @@
 /**
- * @file The Express application, built without listening, workers or other
- * side effects, so tests can import it; server.ts owns the socket.
+ * @file The Express application, built without listening or starting workers,
+ * so tests can import it; server.ts owns the socket.
  */
 import cors from 'cors'
 import express, { type Express } from 'express'
@@ -29,7 +29,8 @@ import { createReadinessProbe } from '@/services/readiness.service'
 import { isRedisReachable } from '@/services/redis.service'
 
 /**
- * Build the Express application.
+ * Build the Express application, for `server.ts` to listen on and for tests
+ * to call directly.
  *
  * `trust proxy` comes from TRUST_PROXY because it decides what `request.ip`,
  * and so every IP-keyed rate limiter, sees: off behind a proxy, every client
@@ -38,9 +39,8 @@ import { isRedisReachable } from '@/services/redis.service'
  * at boot. `/health` stays shallow so a database blip never restarts a
  * healthy process; `/health/ready` checks every dependency, each within
  * `READINESS_CHECK_DEADLINE_MS`, since failing it only removes the pod from
- * rotation. It also registers the domain-event
- * subscribers (`registerOnboardingSubscribers`, `registerAnalyticsSubscribers`),
- * which is idempotent.
+ * rotation. It also registers the domain-event subscribers, which is
+ * idempotent, so a process may build the app more than once.
  * @returns A configured app with no listening socket.
  */
 export function createApp(): Express {
@@ -54,10 +54,10 @@ export function createApp(): Express {
 
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
 
-  // Security: first, so every response, including preflights, 404s and errors, gets the headers.
+  // First, so the headers are already set when a preflight, a 404 or an error response is written.
   app.use(helmet(helmetOptions))
 
-  // Before requestId and the body parsers: an allowed preflight ends here; a disallowed one gets no grant header.
+  // Before requestId and the body parsers: an allowed preflight ends here; a disallowed origin gets no grant header and the request carries on.
   app.use(cors(corsOptions))
 
   app.use(requestId)
