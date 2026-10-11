@@ -180,9 +180,11 @@ function clearHostOnlyPlainRefreshCookie(request: Request, response: Response, e
  * (SECURITY.md: Bearer access tokens plus `SameSite` cookies, no CSRF
  * middleware). It assumes the frontend and this API share a registrable
  * domain (eTLD+1). A deployment that splits them across different registrable
- * domains would need `'lax'` plus a CSRF token, since `'strict'` would then
- * never send this cookie back at all. `setOAuthRefreshTokenCookie` is the
- * one caller that passes `'lax'`.
+ * domains would need `SameSite=None; Secure` plus a CSRF token: refresh and
+ * logout would then be cross-site `fetch` POSTs, and a browser sends a `'lax'`
+ * cookie only on top-level safe navigations, so `'lax'` withholds it just as
+ * `'strict'` does. `setOAuthRefreshTokenCookie` is the one caller that passes
+ * `'lax'`.
  * @param request - The request, checked for a host-only plain cookie to clear.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
@@ -438,8 +440,8 @@ class AuthController extends BaseController {
    * password, behind `requireAuth`. The session making this request is spared
    * (`request.sessionId`): only the chain its refresh cookie names, when the
    * browser sent a live one (`readRefreshTokenCookie`, current name only), or
-   * else the whole session. A token without a session id spares nothing. See `changePassword` in auth.service.ts for the
-   * order and the failure design.
+   * else the whole session. A token without a session id spares nothing. See
+   * `changePassword` in auth.service.ts for the order and the failure design.
    */
   changePassword = this.handle(async (request, response) => {
     const input = parseBody(changePasswordSchema, request.body)

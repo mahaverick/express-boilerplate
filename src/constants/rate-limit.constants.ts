@@ -164,8 +164,9 @@ export function authenticatedUserRateLimitKey(request: Request): string {
  * The key `emailWebhook`'s limiter counts requests by: the `:provider` path
  * segment alone, never the IP. The `emailWebhook` budget is sized for one
  * provider's whole bounce storm, so keying by provider gives each provider
- * that budget instead of sharing one across all of them. The route checks that the provider is enabled before this
- * limiter runs, so the key space is the enabled adapters.
+ * that budget instead of sharing one across all of them. The route checks that
+ * the provider is enabled before this limiter runs, so the key space is the
+ * enabled adapters.
  * @param request - The incoming request.
  * @returns The provider name, or an empty string when the route has none.
  */

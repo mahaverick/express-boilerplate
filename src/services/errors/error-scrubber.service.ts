@@ -69,9 +69,10 @@ const JSON_SNIPPET_PATTERN = /(^|[\s(])(?:\.\.\.)?"[\s\S]*?"(?:\.\.\.)? is not v
 /**
  * A URL's userinfo, a user and password (`scheme://user:pass@host`) or a
  * user alone. The scheme and `://` are kept. The userinfo runs to the last
- * `@` before a `/`, `?`, `#`, `<`, `>` or whitespace, `@` inside it included. A quote ends the
- * userinfo when a delimiter (`,` `:` `;` `}` `]` or whitespace) follows it, so
- * it never spans from one JSON field into the next.
+ * `@` before a `/`, `?`, `#`, `<`, `>` or whitespace, `@` inside it included.
+ * A quote ends the userinfo when a delimiter (`,` `:` `;` `}` `]` or
+ * whitespace) follows it, so it never spans from one JSON field into the
+ * next.
  */
 const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}\]\s]))+@/gi
 

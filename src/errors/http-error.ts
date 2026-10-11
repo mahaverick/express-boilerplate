@@ -5,7 +5,8 @@
 
 /**
  * An error carrying the HTTP status the client should receive. Its message is
- * shown to the client on a 4xx; `errorHandler` masks a 5xx's.
+ * shown to the client on a 4xx; `errorHandler` masks a 5xx's, except a
+ * `MaintenanceModeError`'s, which is the owner's own text.
  */
 export class HttpError extends Error {
   /**
