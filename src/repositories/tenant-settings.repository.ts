@@ -24,7 +24,7 @@ export type UpdateTenantSettingsInput = Partial<Omit<NewTenantSettings, 'tenantI
  * Query access to the `tenant_settings` table: read and update the one
  * settings row a tenant has. There is no `create` here — the row is
  * created exactly once, atomically alongside its tenant, by
- * `TenantRepository.create` (tenant.repository.ts).
+ * `TenantRepository.create` or `createWithoutOwner` (tenant.repository.ts).
  */
 export class TenantSettingsRepository {
   /**
@@ -46,8 +46,8 @@ export class TenantSettingsRepository {
 
   /**
    * Find the settings row for one tenant and lock it (`SELECT … FOR NO KEY
-   * UPDATE`) for the rest of the transaction. Nothing deletes a settings row
-   * or changes its key. Lock order: after the access locks
+   * UPDATE`) for the rest of the transaction. The weaker lock is enough
+   * because nothing changes the row's key. Lock order: after the access locks
    * `lockTenantAccess` takes (tenant-access.service.ts).
    * @param tenantId - The tenant whose settings to lock.
    * @param executor - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.

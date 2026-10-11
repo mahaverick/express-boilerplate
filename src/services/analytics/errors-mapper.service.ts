@@ -2,11 +2,11 @@
  * @file PostHog Errors-query rows to error issues, read by position
  * (`ERRORS_SELECT_COLUMNS`). No value is trusted: a column of the wrong type
  * reads as absent, and a row without a UUID-shaped issue id, a count, both
- * timestamps, a uuid or a distinct id is dropped. Anyone with the public project key can
- * send a `$exception`, so the most recent event's `server_sig` is verified
- * here, by the one rule the signer uses (`signedFieldsOf`), never in HogQL;
- * and its type and message are scrubbed again, since a forged event can
- * carry anything.
+ * timestamps, a uuid or a distinct id is dropped. Anyone with the public
+ * project key can send a `$exception`, so the most recent event's
+ * `server_sig` is verified here, by the one rule the signer uses
+ * (`signedFieldsOf`), never in HogQL; and its type and message are scrubbed
+ * again, since a forged event can carry anything.
  */
 import {
   isAnalyticsSignatureValid,

@@ -34,15 +34,14 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * sibling page could otherwise send them a body-less POST with the cookie
  * attached. `/change-password` and `/sessions/revoke-others` read the cookie
  * too, but only to narrow what they spare; they authenticate with the bearer
- * token, which a browser never attaches cross-site, so they need no Origin
- * check.
+ * token, which a browser never attaches on its own, so no other page can make
+ * it send one and they need no Origin check.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;
  * it is idempotent. On both routes the limiter runs before `oauthSession`, so
  * an over-budget caller gets a 429 before a session is written to Redis. Both
- * share one `oauthSession` instance, since the callback reads the `state` the
- * redirect wrote.
+ * share one `oauthSession` instance, so the session middleware is built once.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
 export function createAuthRouter(): Router {

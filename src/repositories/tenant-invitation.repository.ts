@@ -504,15 +504,18 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * Delete up to `limit` invitations whose latest of expiry, acceptance and
+   * Delete about `limit` invitations whose latest of expiry, acceptance and
    * revocation is before `cutoff`. `greatest` ignores NULLs, so a pending
    * invitation counts from its expiry. No index: the table holds one row per
    * invite, so the daily scan is cheap.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Rows older than this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

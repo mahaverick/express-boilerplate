@@ -8,8 +8,8 @@ import { requestContextStore, type RequestContext } from '@/services/request-con
 
 /**
  * Wrap the rest of the request in an AsyncLocalStorage context carrying the
- * request-id, client address and user agent. Runs immediately after the
- * requestId middleware in the chain.
+ * request-id, client address and user agent. Runs after the requestId
+ * middleware, which sets `request.id`.
  * @param request - The request (with `id` already set by requestId middleware).
  * @param _response - Unused.
  * @param next - Passes control into the ALS context.

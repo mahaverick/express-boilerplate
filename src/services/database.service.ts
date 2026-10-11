@@ -1,7 +1,7 @@
 /**
  * @file One postgres client for the process. `postgres` pools internally, so a
  * second client means a second pool and double the configured connection
- * budget, which shows up only under load, as "too many connections".
+ * budget, which can show up only under load, as "too many connections".
  */
 import { PgTransaction } from 'drizzle-orm/pg-core'
 import { drizzle } from 'drizzle-orm/postgres-js'
@@ -60,7 +60,7 @@ export type DbExecutor = typeof db | DbTransaction
  * transaction reuses it directly — no savepoint — so an outer rollback
  * always takes an inner write with it.
  * @param function_ - The work to run against a transaction handle.
- * @param executor - An existing transaction to reuse, or the pool (default) to open a new transaction in.
+ * @param executor - An existing transaction to reuse, or the pool (default) to open a new one on.
  * @returns Whatever function_ resolves to.
  */
 export function withTransaction<T>(

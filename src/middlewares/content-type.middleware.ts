@@ -1,8 +1,8 @@
 /**
- * @file `requireJsonContentType`, a CSRF control mounted on the auth router,
- * every mutating tenant route and both invitation routes: it stops a
- * cross-site HTML form from reaching those routes with a body this API
- * parses.
+ * @file `requireJsonContentType`, a CSRF control mounted router-wide on the
+ * auth router and on every mutating route of the tenant, invitation, platform
+ * and flags routers: it stops a cross-site HTML form from reaching those
+ * routes with a body this API parses.
  */
 import { type NextFunction, type Request, type Response } from 'express'
 import { HttpError } from '@/errors/http-error'

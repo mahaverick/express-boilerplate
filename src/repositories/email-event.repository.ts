@@ -52,12 +52,16 @@ export class EmailEventRepository {
   }
 
   /**
-   * Delete up to `limit` events whose message was created before `cutoff`:
-   * the group's retention is dated by the message, not the event. Takes the
-   * batch oldest id first with FOR UPDATE SKIP LOCKED on the events only, so
-   * a message row a webhook is updating is never waited on.
+   * Delete about `limit` events whose message was created before `cutoff`:
+   * retention is dated by the message, not the event. Takes the batch oldest
+   * id first (ids are time-ordered `uuidv7`) with FOR UPDATE SKIP LOCKED on
+   * the events only, so a message row a webhook is updating is never waited
+   * on.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Events of messages created before this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

@@ -194,8 +194,9 @@ export interface EmailStatusDayRow {
 }
 
 /**
- * Messages from the `general` sender that left the server, and how many of
- * them have at least one opened and one clicked event.
+ * Messages from the `general` sender that are neither `queued` nor
+ * `suppressed`, and how many of them have an opened event and how many a
+ * clicked event.
  */
 export interface EmailEngagementCounts {
   sent: number
@@ -204,8 +205,8 @@ export interface EmailEngagementCounts {
 }
 
 /**
- * Per-key counts for the health tables, over messages that were attempted
- * (`queued` and `suppressed` excluded).
+ * Per-key counts for the health tables, over the `LEFT_SERVER_STATUSES`
+ * statuses (`queued` and `suppressed` excluded).
  */
 export interface EmailBreakdownCounts {
   key: string
@@ -215,8 +216,9 @@ export interface EmailBreakdownCounts {
 }
 
 /**
- * The statuses of a message that left this server: everything but `queued`
- * and `suppressed`.
+ * The statuses the health counts include: everything but `queued` and
+ * `suppressed`. A `failed` message counts even when it failed at enqueue and
+ * so never reached a provider.
  */
 const LEFT_SERVER_STATUSES: readonly EmailMessageStatus[] = [
   'sent',
@@ -290,6 +292,10 @@ function pageCursors(
 ): Pick<KeysetPage<unknown>, 'nextCursor' | 'prevCursor'> {
   const first = rows[0]
   const last = rows.at(-1)
+  /**
+   * The cursor that resumes a keyset page at this row: the `(sortAt, id)` pair
+   * the keyset condition compares against.
+   */
   const keyOf = (row: { sortAt: string; id: string }): EmailPageCursor => ({
     sortAt: row.sortAt,
     id: row.id,
@@ -380,6 +386,10 @@ function userOrNull(row: {
   }
 }
 
+/**
+ * The columns a message query selects: the message without its stored
+ * variables, the user and tenant join columns, and the cursor's sort key.
+ */
 const messageColumns = {
   id: emailMessageModel.id,
   recipient: emailMessageModel.recipient,
@@ -493,7 +503,7 @@ function messageFilters(options: PlatformEmailSearchOptions): SQL[] {
 }
 
 /**
- * Messages created in `[from, to)` that left this server.
+ * Messages created in `[from, to)` in a `LEFT_SERVER_STATUSES` status.
  * @param from - Inclusive start.
  * @param to - Exclusive end.
  * @returns The condition.
@@ -813,9 +823,10 @@ export class PlatformEmailRepository {
 
   /**
    * Open and click counts over `general`-sender messages created in
-   * `[from, to)` that left this server. Token emails go through the
-   * transactional sender, whose tracking stays off, so they are left out of
-   * both sides of the rate.
+   * `[from, to)` in a `LEFT_SERVER_STATUSES` status. Only the `general`
+   * sender is counted: token emails go through the transactional sender,
+   * whose click tracking is off, so they can record no click and are left
+   * out of the sent, opened and clicked counts alike.
    * @param from - Inclusive start.
    * @param to - Exclusive end.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -826,7 +837,12 @@ export class PlatformEmailRepository {
     to: Date,
     executor: DbExecutor = db
   ): Promise<EmailEngagementCounts> {
-    // A builder subquery, not raw SQL: drizzle leaves a single-table query's own columns unqualified, which would bind this message id to the event's.
+    /**
+     * Count the matched messages that have at least one event of `type`. The
+     * subquery is a builder query, not raw SQL: drizzle leaves a single-table
+     * query's own columns unqualified, which would bind this message id to the
+     * event's.
+     */
     const withEvent = (type: EmailEventType): SQL<number> => {
       const event = executor
         .select({ id: emailEventModel.id })
@@ -844,8 +860,9 @@ export class PlatformEmailRepository {
   }
 
   /**
-   * Messages created in `[from, to)` that left this server, grouped by
-   * template or by lowercased recipient domain, most messages first.
+   * Messages created in `[from, to)` in a `LEFT_SERVER_STATUSES` status,
+   * grouped by template or by lowercased recipient domain, most messages
+   * first.
    * @param by - Group by `template` or `domain`.
    * @param from - Inclusive start.
    * @param to - Exclusive end.

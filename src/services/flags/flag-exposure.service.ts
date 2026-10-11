@@ -1,11 +1,12 @@
 /**
  * @file Experiment exposure, recorded by the server only (a browser hook
  * reports to express, which re-evaluates): one `$feature_flag_called`
- * outbox row per session, tenant, flag and recorded response, for every
- * user, opted out of browser analytics or not. A held-out user is recorded
- * as PostHog's `holdout-<id>`, never the control arm. Only a matched
- * condition or a holdout is part of the experiment; every other evaluation
- * records nothing. The dedupe fails open: when Redis fails the exposure is
+ * outbox row per session (per user in a worker), tenant, flag and recorded
+ * response while its dedupe key lives, for every user, opted out of browser
+ * analytics or not. A held-out user is recorded as PostHog's
+ * `holdout-<id>`, never the control arm. Only a matched condition or a
+ * holdout is part of the experiment; every other evaluation records
+ * nothing. The dedupe fails open: when Redis fails the exposure is
  * recorded, since a duplicate is harmless and a lost exposure is not. For
  * the same reason a failed outbox insert releases the dedupe key it
  * claimed, so the next report records.
@@ -45,12 +46,13 @@ const ACTOR_HASH_LENGTH = 32
 
 /**
  * The Redis key that deduplicates one exposure:
- * `flags:exp:<sha256(session id, or 'worker:' and the user id) cut to 32
- * hex>:<tenant id or '->:<flag key>:<recorded response>`.
+ * `<prefix>:flags:exp:<actor>:<tenant id, or '-' without one>:<flag key>:<response>`,
+ * where the actor is the session id (or `worker:` and the user id) hashed
+ * with SHA-256 and cut to 32 hex characters.
  * @param context - The evaluation context.
  * @param key - The flag key.
  * @param response - The recorded response.
- * @returns The key, in this deployment's namespace.
+ * @returns The key.
  */
 export function exposureDedupeKey(context: FlagContext, key: string, response: string): string {
   const actor = createHash('sha256')
@@ -119,9 +121,9 @@ async function didReleaseDedupeKey(key: string): Promise<boolean> {
  * response is `evaluation.holdoutVariant ?? evaluation.value`, always a
  * string for a multivariate flag. Nothing is recorded for an evaluation
  * that is neither `condition_match` nor `holdout`, or while analytics is
- * off. Never throws: when the outbox insert fails, the dedupe key is
- * released (best effort) and a warn names the flag, the error type and
- * whether the key was released.
+ * off. A Redis or outbox failure does not reject: when the outbox insert
+ * fails, the dedupe key is released (best effort) and a warn names the flag,
+ * the error type and whether the key was released.
  * @param context - The evaluation context (the user, the tenant, the session).
  * @param key - The experiment's key.
  * @param evaluation - The server's own evaluation of it, never a client's value.

@@ -3,11 +3,12 @@
  * exception list `@posthog/core`'s `ErrorPropertiesBuilder` builds with the
  * node stack parser, scrubbed by `scrubText`, its fingerprint for the
  * throttle, and the signed batch event with the release, the request or job,
- * the trace and the acting user and tenant. It reads only an error's name,
- * message, stack frames and `cause`, and a thrown non-Error object's class
- * name, never its keys: a Postgres error's `detail`, `query`,
- * `parameters` and `where`, an `HttpError`'s `errors`, and a failed query's
- * bound parameters are never read.
+ * the trace and the acting user and tenant. An event carries only an
+ * error's name, message, stack frames and `cause` chain. A thrown object
+ * that is not an `Error` contributes its class name, or the first `Error`
+ * it holds, never its keys or other values. A Postgres error's `detail`,
+ * `query`, `parameters` and `where`, an `HttpError`'s `errors`, and a failed
+ * query's bound parameters are not carried.
  */
 import {
   createStackParser,
@@ -126,7 +127,8 @@ function isErrorValue(value: unknown): value is Error {
  * The stack frame lines of an error, without the message lines a stack
  * starts with: only lines with a real V8 frame's shape
  * (`isStackFrameLine`) after the message (`frameLineIndexesOf`), so a
- * message line such as `    at <secret>` is never sent as a frame.
+ * frame-shaped line inside a message that starts the stack, as V8 writes
+ * it, is not sent as a frame.
  * @param error - The error.
  * @returns The `at …` lines, possibly none.
  */
@@ -157,7 +159,7 @@ function constructorNameOf(value: object): string | undefined {
 }
 
 /**
- * An error's name: its own `name`, else its constructor's, else `Error`.
+ * An error's `name`, else its constructor's name, else `Error`.
  * @param error - The error.
  * @returns The name.
  */
@@ -171,7 +173,7 @@ function nameOf(error: Error): string {
  * An error's message as an event may carry it. A failed query's message
  * embeds its bound parameters, and its SQL text can carry inlined literals,
  * so neither is kept: the message is `Failed query`. A message that throws
- * when read is `[unreadable error]`.
+ * when read is `[unreadable error]`; one that is not a string is empty.
  * @param error - The error.
  * @returns The message.
  */
@@ -182,8 +184,8 @@ function messageOf(error: Error): string {
 }
 
 /**
- * The first own property of a plain object that holds an `Error`, which
- * the builder would otherwise coerce in the object's place.
+ * The first own enumerable value of an object that is an `Error`, so that
+ * `readable` copies it instead of the builder reading it as it is.
  * @param value - A non-`Error` object.
  * @returns The `Error`, or undefined.
  */
@@ -201,6 +203,7 @@ function nestedErrorOf(value: object): Error | undefined {
  */
 class ReadableError extends Error {
   /**
+   * Builds the copy, whose whole stack is `frames`.
    * @param name - The original error's name.
    * @param message - Its message, as `messageOf` keeps it.
    * @param frames - Its frame lines.
@@ -215,7 +218,7 @@ class ReadableError extends Error {
 
 /**
  * The `Error` a thrown value stands for: the value itself, or the first
- * `Error` a plain object holds.
+ * `Error` an object holds.
  * @param value - Anything thrown.
  * @returns The error, or undefined when there is none.
  */
@@ -238,9 +241,9 @@ const NON_ERROR_CLASS_NAMES: ReadonlySet<string> = new Set(['Object', 'Function'
 
 /**
  * A copy of a thrown value that holds no `Error`. An object becomes an
- * error named for its class (`Error` for a plain object or a function) with a fixed
- * value, because its keys can be user input (a parsed body, a map keyed by
- * address) and are never read. An object that throws when asked anything
+ * error named for its class (`Error` for a plain object or a function) with
+ * a fixed value, because its keys can be user input (a parsed body, a map
+ * keyed by address) and are not copied. An object whose `in` check throws
  * (a hostile Proxy) becomes `[unreadable error]`. A primitive is returned
  * as it is.
  * @param value - Anything thrown that `errorIn` found no `Error` in.
@@ -263,9 +266,9 @@ function readableNonError(value: unknown): unknown {
 /**
  * A copy of a thrown value the builder can read safely. An `Error` (or an
  * object holding one) becomes a fresh `Error` carrying only its name, its
- * message (`messageOf`), its frame lines and, up to `ERROR_CAUSE_DEPTH`
- * links, its `cause` copied the same way. Each part is read through
- * `readSafely`, so a getter that throws costs that part, not the event.
+ * message (`messageOf`), its frame lines and its `cause` copied the same
+ * way, in a chain of at most `ERROR_CAUSE_DEPTH` errors. Each part is read
+ * through `readSafely`, so a getter that throws costs that part, not the event.
  * Anything else is copied by `readableNonError`.
  * @param value - Anything thrown.
  * @param depth - How many links precede this one.
@@ -285,9 +288,8 @@ function readable(value: unknown, depth: number): unknown {
 }
 
 /**
- * Whether a frame is the app's own code. The parser already marks native,
- * relative and `node_modules` frames as not; a `node:` frame and any path
- * through `node_modules` are not either.
+ * Whether a frame is the app's own code: the parser's `in_app`, and not a
+ * `node:` frame or a path containing `node_modules`.
  * @param frame - A parsed frame.
  * @returns True for an app frame.
  */
@@ -341,7 +343,7 @@ function sentException(exception: Exception): Exception {
  * The scrubbed exception list of a thrown value: the value and its `cause`
  * chain, at most `ERROR_CAUSE_DEPTH` exceptions.
  * @param error - Anything thrown.
- * @param isHandled - Whether something caught it; recorded in each exception's mechanism.
+ * @param isHandled - Whether something caught it; recorded in the first exception's mechanism.
  * @returns The exceptions, the thrown value first.
  */
 export function exceptionListOf(error: unknown, isHandled = true): Exception[] {
@@ -412,8 +414,8 @@ function originOf(context: ErrorContext): Record<string, unknown> {
 }
 
 /**
- * Build one signed `$exception` event. `source` is `error`, so the signature
- * covers it with the uuid, the distinct id and `$groups.tenant`.
+ * Build one signed `$exception` event. `source` is `error`, and the
+ * signature covers it with the uuid, event, distinct id and `$groups.tenant`.
  * @param error - Anything thrown.
  * @param context - Where it was caught.
  * @param errorId - The event uuid: the `errorId` logs and responses carry.

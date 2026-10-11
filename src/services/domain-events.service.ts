@@ -1,6 +1,6 @@
 /**
  * @file The in-process domain-event seam. A service calls `emitDomainEvent`
- * after its own transaction commits (no after-commit hook exists), and awaits
+ * after its own transaction commits (drizzle has no after-commit hook), and awaits
  * it: every subscriber has run by the time the request answers, so a client
  * that refetches sees what they did. A failing subscriber is logged and never
  * fails the emitter or the subscribers after it. Subscribers are registered
@@ -27,7 +27,7 @@ const subscribers = new Map<DomainEventType, Set<StoredHandler>>()
 /**
  * Subscribe a handler to one event type. Subscribing the same function twice
  * keeps one subscription, so building the app more than once in a process
- * (every test file does) never runs a handler twice.
+ * (as tests do) never runs a handler twice.
  * @param type - The event type.
  * @param handler - Called with each event of that type, in subscription order.
  */
@@ -46,7 +46,8 @@ export function subscribeDomainEvent<TType extends DomainEventType>(
  * that throws or rejects is logged at error and skipped.
  * @param event - The event.
  * @param options - How the actor reached the tenant.
- * @param options.access - `'platform'` for an action taken through platform access; defaults to `'member'`.
+ * @param options.access - `'platform'` for an action taken through platform
+ *   access; defaults to `'member'`.
  * @returns Resolves once every subscriber has settled; never rejects.
  */
 export async function emitDomainEvent(

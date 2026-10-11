@@ -1,8 +1,8 @@
 /**
- * @file Renders, sends and records one email. `sendMail` never lets a send
- * failure reach its caller: register, resend-verification and forgot-password
- * answer identically whether or not the address exists, and a propagated failure
- * would turn an SMTP outage into an account-enumeration oracle.
+ * @file Renders, sends and records one email. `sendMail` does not reject for a
+ * render or send failure: it records the attempt in `email_logs` and returns
+ * `'sent'` or `'failed'`, which the email worker reads to decide whether
+ * BullMQ retries.
  */
 import { getEnv } from '@/configs/env.config'
 import { getMailTransporter } from '@/configs/mailer.config'
@@ -65,8 +65,8 @@ const emailLogRepository = new EmailLogRepository()
  *
  * There is no `subject`, `text` or `html`: `renderForMessage` produces them, so
  * a caller has no message field to put a token into. The one gap is
- * `variables.appName`, a plain string interpolated into the registration-attempt
- * subject. Do not add caller-supplied `subject`/`text`/`html` back.
+ * `variables.appName`, a plain string every template interpolates into its
+ * subject. Keep caller-supplied `subject`/`text`/`html` out of this type.
  */
 export type MailMessage =
   | {
@@ -170,12 +170,13 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
 
 /**
  * The nodemailer `.code` a rejected send carries, or `UNKNOWN_ERROR_CODE`
- * when there isn't one shaped like a code.
+ * when there is no string `.code`.
  *
  * Reads only `.code`, never `.message` or `.response`: a rejecting SMTP server
  * can quote the refused body back, and the templates put a reset or
- * verification URL in that body. The `error_code` column's CHECK is a backstop,
- * not what this relies on.
+ * verification URL in that body. The code is not shape-checked here: the
+ * repository replaces a wrong-shaped one, and the `error_code` column's CHECK
+ * backs that up.
  * @param error - Whatever the transport call rejected with.
  * @returns The extracted code, or `UNKNOWN_ERROR_CODE`.
  */
@@ -233,8 +234,8 @@ export function redactedMailErrorForLog(error: unknown): unknown {
 
 /**
  * Record one delivery attempt, never letting a failure to record escape: the
- * mail has already gone out or failed, and a 500 would make the caller retry
- * and, after a success, send a second email.
+ * mail has already gone out or failed, and a throw would fail the job, so
+ * BullMQ would retry it and, after a success, send a second email.
  *
  * A failed insert is logged at `logger.error` through `redactedForLog`
  * (postgres-errors.ts), because its bound parameters include the recipient's
@@ -250,16 +251,14 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
 }
 
 /**
- * Render, send, and record the outcome of one email. Never rejects for any
- * failure nodemailer or rendering produces (see this file's JSDoc for why). Not
- * absolute: the catch reads properties off the error and calls the logger, so
- * a poisoned getter or a broken log stream could still escape.
+ * Render, send, and record the outcome of one email. Does not reject for any
+ * failure nodemailer or rendering produces (see this file's JSDoc for why).
+ * Not absolute: the catch reads properties off the error and calls the
+ * logger, so a poisoned getter or a broken log stream could still escape.
  *
- * Rendering runs inside the same try as the transport call. A template
- * variable present only for a registered user would otherwise throw outside
- * the catch and turn "does this address have an account?" into a 500-vs-200
- * question; a render throw is recorded as a failed delivery with
- * `UNKNOWN_ERROR_CODE`, like a transport rejection.
+ * Rendering runs inside the same try as the transport call, so a render
+ * throw is recorded as a failed delivery with `UNKNOWN_ERROR_CODE`, like a
+ * transport rejection, instead of escaping.
  *
  * The From address follows the template's sender class
  * (`EMAIL_TEMPLATE_META`, `senderFor`), never the caller: a token email
@@ -272,7 +271,7 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * error; every attempt is in `email_logs`, and resend-verification lets them retry.
  * @param message - The email to render and send.
  * @param delivery - The tracked message this attempt belongs to. Without it, nodemailer generates the Message-ID and the attempt row has no `message_id`.
- * @returns `'sent'` or `'failed'`, reflecting the recorded `email_logs` status — resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded. Callers that need to decide whether to retry (e.g. `email.worker.ts`) read this; callers that don't can ignore it.
+ * @returns `'sent'` or `'failed'`, the attempt's status. Resolves once the send has been attempted and the outcome recorded, even if recording failed. `email.worker.ts` reads it to decide whether to retry.
  */
 export async function sendMail(
   message: MailMessage,
@@ -281,7 +280,7 @@ export async function sendMail(
   const messageId = delivery?.messageId
   let entry: NewEmailLog
   try {
-    // Inside the try: a render throw must not reveal which branch an enumeration-sensitive caller took.
+    // Inside the try: a render throw is recorded as a failed delivery, like a transport rejection.
     const rendered = renderForMessage(message)
     const from = senderFor(EMAIL_TEMPLATE_META[rendered.templateKey].senderClass, getEnv())
     const info = await getMailTransporter().sendMail({

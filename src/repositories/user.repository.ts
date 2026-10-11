@@ -13,9 +13,9 @@ import { db, type DbExecutor, type DbTransaction } from '@/services/database.ser
 
 /**
  * Query access to the `users` table: lookup by id or email, creation,
- * update, soft-delete, and the purge of a soft-deleted user. Every lookup excludes a soft-deleted user by
- * default — see `BaseRepository.scope`, which `findByEmail` below is built
- * on so it can never drift from `findById`'s soft-delete behaviour.
+ * update, soft-delete, and the purge of a soft-deleted user. Lookups by id or
+ * email exclude a soft-deleted user by default: `findByEmail` is built on
+ * `BaseRepository.scope`, so it cannot drift from `findById`'s behaviour.
  */
 export class UserRepository extends BaseRepository<(typeof userModel)['_']['config']> {
   /**

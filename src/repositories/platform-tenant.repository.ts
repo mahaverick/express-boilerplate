@@ -1,7 +1,8 @@
 /**
  * @file Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
- * import this file (an eslint rule); every query excludes the platform tenant;
- * soft-deleted tenants appear only when archived and asked for.
+ * import this file (an eslint rule); every query excludes the platform tenant.
+ * `searchAll` lists soft-deleted tenants only when archived and asked for;
+ * `findDetail` returns a tenant in any lifecycle state.
  */
 import { and, count, desc, eq, gt, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import type { PageDirection } from '@/constants/platform.constants'
@@ -44,8 +45,7 @@ export interface PlatformTenantPage {
 
 /**
  * The search's inputs. `q` is matched as a literal substring. `states`
- * defaults to active and suspended, `direction` to next, so callers written
- * before either existed read exactly what they read before.
+ * defaults to active and suspended, `direction` to next.
  */
 export interface PlatformTenantSearchOptions {
   limit: number

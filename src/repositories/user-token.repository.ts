@@ -89,11 +89,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Atomically claim a not-yet-revoked token row of one purpose: sets
    * `revokedAt` and `consumedAt`, and returns the row, but only if it was
-   * still live — meaning `revokedAt IS NULL`, and NOTHING ELSE — for that
-   * exact purpose, the instant this statement ran. A second, concurrent
-   * call for the same hash — including a genuine reuse attempt racing a
-   * legitimate rotation, or a claim for the wrong purpose — gets undefined,
-   * never the same row twice.
+   * still live (`revokedAt IS NULL`, not soft-deleted, and no other
+   * condition) for that exact purpose, the instant this statement ran. A
+   * second, concurrent call for the same hash, including a genuine reuse
+   * attempt racing a legitimate rotation, or a claim for the wrong purpose,
+   * gets undefined, never the same row twice.
    *
    * The check and the write are one statement, so Postgres picks the single
    * winner; a read-then-write would let two concurrent presentations both see
@@ -133,7 +133,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Whether a token row was consumed within the last `ms` milliseconds, judged by Postgres's own clock — never the app's — so the window can't drift with clock skew between the two.
+   * Whether a token row was consumed within the last `ms` milliseconds, judged
+   * by Postgres's own clock, never the app's, so the window can't drift with
+   * clock skew between the two.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param ms - The window's length, in milliseconds.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -380,10 +382,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * The sessions of a user, other than one, that hold a live refresh token:
    * unrevoked (a rotation's claim revokes the row it spends), unexpired, and
    * started after `startedAfter`, the absolute lifetime rotation enforces.
-   * Read under the user row lock, it is the set a following
+   * Read under the user row lock, it is the sessions a following
    * `revokeAllForUserExceptSession` or `revokeAllForUserExceptToken` ends
-   * that a person would call signed in; a lapsed session either also revokes
-   * is not among them, and neither is a sibling in the excluded session.
+   * that a person would call signed in. A lapsed session, which either
+   * revoker also ends, is not among them, and neither is a sibling in the
+   * excluded session.
    * @param userId - The user whose sessions are read.
    * @param sessionId - The one session id to leave out.
    * @param startedAfter - A live session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
@@ -444,11 +447,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * user's sessions, provided that session still has a live refresh token
    * (not revoked, not expired, not soft-deleted) in a session started after
    * `startedAfter`. Rows already rotated away are updated too: a grace-window
-   * replay copies its sibling's time from the row presented. One UPDATE whose EXISTS carries the liveness check, so the
-   * statement locks through `lockedIds` in id order like the revokers
-   * (user-token-lock-order.test.ts plans it). Lock the user row FOR NO KEY
-   * UPDATE first, so a rotation holding it FOR SHARE commits its new row
-   * before this statement and the row is included.
+   * replay copies its sibling's time from the row presented. One UPDATE whose
+   * EXISTS carries the liveness check, so the statement locks through
+   * `lockedIds` in id order like the revokers (user-token-lock-order.test.ts
+   * plans it). Lock the user row FOR NO KEY UPDATE first, so a rotation
+   * holding it FOR SHARE commits its new row before this statement and the
+   * row is included.
    * @param userId - The session's user; another user's session matches nothing.
    * @param sessionId - The session (rotation-chain) id.
    * @param startedAfter - The live token's session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
@@ -475,7 +479,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Delete up to `limit` token rows past retention: expired before `cutoff`,
+   * Delete about `limit` token rows past retention: expired before `cutoff`,
    * or revoked before it without ever being used. A rotated-away row stays
    * until it expires: reuse detection needs it while it can still be
    * presented. Soft-deleted rows go too, so this doesn't use `scope`. A kept
@@ -486,8 +490,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * can come back short while matching rows remain. The foreign key's update
    * of a kept row is an ordinary write and does wait on a lock a request
    * holds on that row.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Rows older than this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

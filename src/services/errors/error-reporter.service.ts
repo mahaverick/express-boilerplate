@@ -1,14 +1,14 @@
 /**
- * @file The server error reporter: `reportError` checks the global cap,
- * then builds, scrubs, throttles and queues one `$exception` synchronously
- * and returns its id; the queue
- * is sent to PostHog through `sendBatch` every `ERROR_FLUSH_INTERVAL_MS`, or
- * at once when `ERROR_FLUSH_BATCH` events wait, one request at a time
- * outside a deadline flush (`flushErrorReports`), and
+ * @file The server error reporter: `reportError` checks the global cap, then
+ * builds, scrubs, throttles and queues one `$exception` synchronously and
+ * returns its id. The queue is sent to PostHog through `sendBatch` every
+ * `ERROR_FLUSH_INTERVAL_MS`, or at once when `ERROR_FLUSH_BATCH` events wait,
+ * one request at a time outside a deadline flush (`flushErrorReports`), and
  * backs off while PostHog asks to retry. It is in memory, not the outbox,
  * because errors often happen while the database is down, and it never
- * depends on Redis, which only counts outcomes. Nothing here throws, and
- * nothing here reports its own failures, so the reporter cannot recurse.
+ * depends on Redis, which only counts outcomes. A failure inside the
+ * reporter is caught (logged at most once a minute, counted, or turned into
+ * a retry), never reported, so the reporter cannot recurse.
  */
 import type { Exception } from '@posthog/core/error-tracking'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
@@ -145,7 +145,8 @@ function kindOf(value: unknown): string {
  * it is. A database query error is reduced to its query first
  * (`redactedForLog`), as the logger does, so its bound values are never
  * stringified. The text goes under `detail`, not `message`: `message` is the
- * logger's own message key and would be shadowed by the log line's message.
+ * logger's own message key, so a `message` field would collide with the log
+ * line's message.
  * A value that throws when read (a `query` getter) gives `unknown` and
  * `[unreadable]`, so the caller's `catch` never throws.
  * @param error - What was thrown.
@@ -199,8 +200,8 @@ function isGlobalCapReached(now: number): boolean {
  * Whether one more event with this fingerprint may be sent: at most
  * `ERROR_FINGERPRINT_PER_MINUTE` per fingerprint and `ERROR_GLOBAL_PER_MINUTE`
  * in all in any rolling minute. An allowed event is counted in both windows.
- * A fingerprint with no event in the last minute is forgotten, so the map
- * holds at most `ERROR_GLOBAL_PER_MINUTE` live entries.
+ * Once the map holds more than `ERROR_GLOBAL_PER_MINUTE` fingerprints, those
+ * with no event in the last minute are forgotten, so it stays about that size.
  * @param fingerprint - The event's fingerprint.
  * @param now - The current epoch millisecond.
  * @returns True when the event may be queued.
@@ -328,8 +329,7 @@ function settleSent(sent: SentBatch | undefined, generation: number): FlushOutco
 }
 
 /**
- * Start one flush unless one is in flight, the single flight every other
- * send waits on.
+ * Start one flush, or return the one already in flight.
  * @param timeoutMs - How long its request may take.
  * @param shouldScheduleNext - Whether to schedule the next flush when it
  *   ends; a deadline flush schedules its own.
@@ -427,10 +427,10 @@ function report(error: unknown, context: ErrorContext): Report {
 /**
  * Report an unexpected error to PostHog Error Tracking. Synchronous: it
  * checks the global cap, then builds, scrubs, throttles and queues the
- * event, and returns before any I/O; past the global cap the event is not
- * built at all. The id is minted first, so it is returned also when error
- * tracking is off, the event is throttled, or building it failed; it then
- * names a log line, not an event. Never throws: a failure inside is logged
+ * event, and returns without waiting for any I/O; past the global cap the
+ * event is not built at all. The id is minted first, so it is returned also
+ * when error tracking is off, the event is throttled, or building it failed;
+ * it then names a log line, not an event. Never throws: a failure inside is logged
  * at `warn` at most once a minute and never reported. A call made while
  * another is running (a getter on the error that reports) returns an id and
  * queues nothing.
@@ -502,6 +502,10 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs
   const run = { isExpired: false }
   const { generation } = state
+  /**
+   * Sends batches until the queue is empty, a send asks to retry, the deadline
+   * passes or a reset ends the flush.
+   */
   const drain = async (): Promise<void> => {
     while (!run.isExpired && generation === state.generation) {
       const { inFlight } = state
@@ -540,8 +544,9 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
  * Whether `errorHandler` reports an error it answers with a 5xx. A
  * non-`HttpError` (an unexpected throw) always is. An `HttpError` is a
  * deliberate response, reported only when it wraps a `cause`, the fault
- * behind it. A `TimelineUnavailableError` never is: PostHog is the thing
- * that is down, and its thrower already logged why. Below 500, nothing is.
+ * behind it. A `TimelineUnavailableError` never is: PostHog could not be
+ * asked or did not answer usably, and its thrower already logged why. Below 500,
+ * nothing is.
  * @param error - The error `errorHandler` received.
  * @param status - The status it resolved.
  * @returns True when the error is reported.

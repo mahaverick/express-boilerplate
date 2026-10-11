@@ -187,17 +187,21 @@ export class EmailMessageRepository {
   }
 
   /**
-   * Delete up to `limit` messages created before `cutoff` that no longer
+   * Delete about `limit` messages created before `cutoff` that no longer
    * have an event or an attempt row. The retention job deletes those first
    * (`EmailEventRepository.purgeForMessagesCreatedBefore`,
    * `EmailLogRepository.purgeCreatedBefore`), so this delete cascades to
    * nothing and never waits on a child row another transaction holds; a
    * message whose child was skipped goes on a later run. Takes the batch
-   * oldest id first with FOR UPDATE SKIP LOCKED. A newer message that was
-   * resent from one of these has its `resent_from_id` set to NULL by the
-   * foreign key, which waits if a webhook is updating that newer row.
+   * oldest id first with FOR UPDATE SKIP LOCKED.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * A newer message that was resent from one of these has its `resent_from_id`
+   * set to NULL by the foreign key, which waits if a webhook is updating that
+   * newer row.
    * @param cutoff - Messages created before this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

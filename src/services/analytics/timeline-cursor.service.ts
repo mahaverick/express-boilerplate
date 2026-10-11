@@ -11,8 +11,9 @@ import { decodeCursor, encodeCursor } from '@/utilities/cursor.utilities'
 
 /**
  * An ISO 8601 timestamp with up to six fractional digits and a `Z` or a
- * numeric offset of at most 14 hours, as PostHog returns `timestamp`. Hours,
- * minutes and seconds are in range; the day is checked by `isRealTimelineT`.
+ * numeric offset whose hours run from 00 to 14, as PostHog returns
+ * `timestamp`. Hours, minutes and seconds are in range; the day is checked by
+ * `isRealTimelineT`.
  */
 const CURSOR_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?(Z|[+-](0\d|1[0-4]):[0-5]\d)$/

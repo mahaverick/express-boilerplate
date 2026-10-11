@@ -1,13 +1,12 @@
 /**
  * @file The terminal error handler. It writes the envelope
- * `{ success, message, statusCode, code?, errors?, errorId? }`, plus `mode`
- * and `since` on a maintenance-mode 503 (see
- * ARCHITECTURE.md for why not RFC 9457). `errors` is field-level validation
- * detail; `code` is one stable token a client branches on, kept separate so
- * the two never collide. Every 5xx carries an `errorId`, which its log line
- * carries too; a 5xx the capture rule (`shouldCaptureHttpError`) admits is
- * also reported to error tracking under that id and recorded, scrubbed, on
- * the active span.
+ * `{ success, message, statusCode, code?, errors?, errorId?, requestId }`,
+ * plus `mode` and `since` on a maintenance-mode 503 (see ARCHITECTURE.md for
+ * why not RFC 9457). `errors` is field-level validation detail; `code` is one
+ * stable token a client branches on, kept separate so the two never collide.
+ * Every 5xx response except a maintenance refusal carries an `errorId`; a
+ * 5xx the capture rule (`shouldCaptureHttpError`) admits is also reported to
+ * error tracking under that id and recorded, scrubbed, on the active span.
  */
 import { STATUS_CODES } from 'node:http'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
@@ -55,9 +54,8 @@ const CLIENT_ABORT_CODES: ReadonlySet<string> = new Set([
  * body 413) with the status on `.status` and `.statusCode`; honouring it
  * keeps a client mistake out of the 5xx log.
  *
- * Deliberately narrow: only an integer in 400-499 is honoured. A 5xx from a
- * foreign error is NOT trusted — it would skip the masking below and could
- * leak an internal message — and anything else falls through to 500.
+ * Deliberately narrow: only an integer in 400-499 is honoured. A 5xx or any
+ * other status from a foreign error is not trusted and yields undefined.
  * @param error - The thrown or forwarded error.
  * @returns The status in 400-499, or undefined.
  */
@@ -188,7 +186,7 @@ export function errorHandler(
   }
 
   const httpError = error instanceof HttpError ? error : undefined
-  // A character Postgres cannot store came from the client: a 400, masked and unlogged like any 4xx.
+  // A character Postgres cannot store came from the client: a 400, masked and unlogged like any 4xx (except a value-free warn for 22P05, below).
   const statusCode =
     httpError?.statusCode ??
     clientStatusOf(error) ??
@@ -230,9 +228,10 @@ export function errorHandler(
 /**
  * Resolve the client-facing message for a resolved status.
  *
- * HttpError's message is always exposed — that is the class's contract, it
- * is constructed with a message chosen for the client. Everything else is
- * masked at 5xx and vetted at 4xx.
+ * Every status of 500 or above is masked, whatever the error; a maintenance
+ * refusal never gets here (`errorHandler` answers it first). Below 500, an
+ * `HttpError`'s message is shown, since it is written for the client; any
+ * other error's is vetted by `clientMessageOf`.
  * @param error - The thrown or forwarded error.
  * @param httpError - The same error when it is an HttpError.
  * @param statusCode - The already-resolved status.

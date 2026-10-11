@@ -1,9 +1,12 @@
 /**
  * @file Email-and-password authentication. An unknown email and a wrong password
- * get the same status, body and bcrypt cost (`getDummyHash`), so neither content
- * nor timing reveals a registered address. Work that runs after the reply
- * (register's mail, requestPasswordReset) never rejects: a rejection on one branch
- * only would be an enumeration oracle.
+ * get the same status and body and each pay one bcrypt comparison (`getDummyHash`),
+ * so status and body do not tell a registered address from an unregistered one, and
+ * the timing matches while stored hashes use the current `BCRYPT_COST`. Work that
+ * runs after the reply (register's mail, requestPasswordReset) never rejects: the
+ * controller does not await it, so a rejection would be unhandled and treated as a
+ * process fault (index.ts), and on one branch only that would tell a free address
+ * from a taken one.
  */
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
@@ -102,8 +105,8 @@ export interface AuthProvidersResult {
  * register it, at most once per `REGISTRATION_ATTEMPT_NOTICE_COOLDOWN` per
  * address (`didClaimMailCooldown`; skipped when Redis is down, since it is only
  * a notice). The holder may have been soft-deleted since the insert failed;
- * then the fallback name is used and the job's correlation id is `''`, which
- * is stored as `email_messages.user_id` NULL (and used in logs).
+ * then the fallback name is used and the job's user id is `''`, which is
+ * stored as `email_messages.user_id` NULL.
  * @param email - The address that was submitted.
  */
 async function sendRegistrationAttemptMail(email: string): Promise<void> {
@@ -389,14 +392,16 @@ export async function requestPasswordReset(email: string, app: FrontendApp = 'we
  * Reset a password with a token from the mailed link.
  *
  * Any claim failure (unknown, wrong purpose, used, expired) and a deleted
- * account answer the same 400. Every token is revoked first, on its own:
- * a failed write then still leaves no session alive, and every purpose goes,
- * so older reset links die too. The user row is then locked, the hash
- * stored and the tokens revoked again in one transaction. That second revoke
- * catches a session a login or refresh created after the first: either it committed
- * before the lock and is revoked here, or it waited on the lock and sees the
- * new state. Those sessions are denied after commit; if Redis refuses, the
- * reset stands and one error line is logged.
+ * account answer the same 400. Every token is revoked first, on its own, so
+ * every refresh token that existed is already revoked if the write fails, and
+ * every purpose goes, so older reset links die too. A rotation already in
+ * flight can still mint a successor, which only the locked pass below revokes.
+ * The user row is then locked, the hash stored and the tokens revoked again in
+ * one transaction. That second revoke catches a session a login or refresh
+ * created after the first: either it committed before the lock and is revoked
+ * here, or it waited on the lock and sees the new state. Those sessions are
+ * denied after commit; if Redis refuses, the reset stands and one error line
+ * is logged.
  * @param input - The validated `{ token, password }` body.
  * @returns Resolves once the password is stored.
  * @throws {HttpError} 400 'Invalid or expired reset link.'
@@ -443,20 +448,22 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  * revoked sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL.
  *
  * Without a session id (no `sid` claim) every session is revoked, the
- * caller's included — that token cannot be told apart from a stolen one.
+ * caller's included, because there is no session to spare.
  *
  * When the request presented the caller's live refresh cookie, only that
- * chain is spared: a sibling a grace-window replay minted in the caller's
+ * token's row is spared: a sibling a grace-window replay minted in the caller's
  * session is revoked too (`revokeSessionRows`). Its access tokens share the
  * caller's `sid`, so they are not denied and last until ACCESS_TOKEN_TTL. No
- * Origin check is needed: the route authenticates with a bearer token a
- * browser never attaches cross-site, and the cookie only narrows what is
+ * Origin check is needed: the route authenticates with a bearer token, which
+ * a browser never attaches on its own, and the cookie only narrows what is
  * spared.
  * @param userId - The authenticated caller's id.
  * @param currentSessionId - The session to spare, when the token carried one.
  * @param input - The validated `{ currentPassword, newPassword }` body.
- * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only the caller's own chain when it names it.
- * @returns Resolves once the password is stored; the notification is not awaited, so a mail failure never fails a change that already committed. The mail carries no secret.
+ * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only that token's row when it is the caller's live refresh token.
+ * @returns Resolves once the password is stored. The notification is not
+ *   awaited, so a mail failure never fails a change that already committed;
+ *   the mail carries no secret.
  * @throws {HttpError} 401 when the account is gone; 400 for federated-only, a wrong current password, or no change.
  */
 export async function changePassword(
@@ -581,12 +588,12 @@ async function recordReauthentication(
  * and sign a new access token carrying it. The refresh token is untouched,
  * since the session is the same.
  *
- * A wrong password is a 400, never a 401: every client signs out on a
- * non-expiry 401 that carried a token, and a mistyped password must not end
- * the session. A success and a wrong password are audited
- * (`auth.reauthenticated`): a success in the transaction that moves the
- * time, a wrong password in a transaction of its own, since the refusal
- * writes nothing else. A token without a session, an account gone or
+ * A wrong password is a 400, never a 401: the clients sign out on a 401 that
+ * carried a token unless it is an expiry or a reauth-required one, and a
+ * mistyped password must not end the session. A success and a wrong password
+ * are audited (`auth.reauthenticated`): a success in the transaction that
+ * moves the time, a wrong password in a transaction of its own, since the
+ * refusal writes nothing else. A token without a session, an account gone or
  * inactive, a passwordless account and a rate-limited attempt are refused
  * before any audit write. A correct password on a session that ended is
  * refused by `markSessionReauthenticated` before the success entry is

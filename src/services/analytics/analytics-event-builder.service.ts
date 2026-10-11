@@ -1,9 +1,10 @@
 /**
  * @file Every PII rule of the analytics pipeline, in one place: pure
  * functions from an audit row, a product domain event or a stored email
- * event to the outbox rows sent to PostHog. Every property key is snake_case; every
- * server event carries `source`, `access`, `app: 'api'`, the tenant group
- * when there is one, and the trace and browser session that caused it.
+ * event to the outbox rows sent to PostHog. Every property key is snake_case.
+ * Every server event except a tenant `$groupidentify` marker carries
+ * `source`, `access`, `app: 'api'`, the tenant group when there is one, and
+ * the trace that caused it and, when it is the actor's, the browser session.
  * `scrubPiiProperties` drops banned keys and address-shaped values from the
  * event's own properties as a backstop; `$set`, `$set_once` and `$groups`
  * are built here from fixed fields and are not inspected. A tenant
@@ -199,8 +200,8 @@ export function auditEventName(action: AuditAction): string {
 
 /**
  * The event-specific properties of an audit row: its target, its metadata
- * in snake_case without `reason` (as `has_reason`), `name` and `slug`, and, for a
- * staff onboarding completion, the `how` and `required` every
+ * in snake_case without `reason` (as `has_reason`), `name` and `slug`, and,
+ * for a staff onboarding completion, the `how` and `required` every
  * `onboarding_step_completed` carries.
  * @param entry - The inserted audit row.
  * @returns The properties, not yet scrubbed.

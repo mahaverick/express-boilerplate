@@ -4,8 +4,8 @@
  * `persons/bulk_delete/` request with no pool connection held, asking
  * PostHog to delete the persons with their events and recordings. A row
  * leaves the table only once PostHog has queued its deletion, so a PostHog
- * outage of any length only delays it. Inert while the personal API key is
- * not configured: the rows wait.
+ * outage of any length only delays it. Inert while the personal API key or
+ * the project id is not configured: the rows wait.
  */
 import { isTimelineEnabled } from '@/configs/analytics.config'
 import {
@@ -134,9 +134,9 @@ function logFailure(
  * `POST persons/bulk_delete/` with `delete_events` and `delete_recordings`.
  * A 2xx with an empty `deletion_errors` deletes every claimed row, an id
  * PostHog does not know included. Anything else (another status, a timeout,
- * a network error, a non-empty `deletion_errors`) keeps every row, counts a
- * failure and backs it off (`markFailed`), and logs once: at `error` when a
- * row was purged more than a day ago, otherwise at `warn`.
+ * a network error, a non-empty or missing `deletion_errors`) keeps every
+ * row, counts a failure and backs it off (`markFailed`), and logs once: at
+ * `error` when a row was purged more than a day ago, otherwise at `warn`.
  *
  * A batch of several ids that PostHog answers with a non-empty
  * `deletion_errors` says some id was rejected but not which, and backing the

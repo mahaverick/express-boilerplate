@@ -170,8 +170,9 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   `enqueueAuditAnalytics` for an audit entry** (`analytics-outbox.service.ts`),
   never the repository directly: they are the savepoint
   inside a transaction and the `try`/`catch` on the pool that keep a failed
-  insert from failing the user's action. `enqueueAnalyticsOrThrow` is for
-  the groups backfill only, which no user's action waits on.
+  insert from failing the user's action. `enqueueAnalyticsOrThrow` is only
+  for a caller that handles the failure itself: the groups backfill and flag
+  exposure (`flag-exposure.service.ts`, which releases its dedupe key).
 - **Never store `$group_set` in the outbox.** A `$groupidentify` row is a
   marker (`buildTenantGroupIdentify`); the drainer reads the tenant when it
   sends it (`resolveGroupMarkers`). A stored snapshot, retried or sent late,

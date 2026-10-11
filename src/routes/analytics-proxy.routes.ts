@@ -30,22 +30,26 @@ const ANALYTICS_UNCONFIGURED = {
 } as const
 
 /**
- * How long PostHog may take to answer before the proxy gives up with a 504.
- * Without a bound, an upstream that accepts a connection and never answers
- * would hold the client's socket and the upstream's open indefinitely.
+ * How long the upstream connection may sit idle before the proxy gives up with
+ * a 504. Without a bound, an upstream that accepts a connection and never
+ * answers would hold the client's socket and the upstream's open indefinitely.
  */
 const UPSTREAM_TIMEOUT_MS = 30_000
 
 /**
- * Prepare the upstream request: drop the browser's credentials, and name the
- * client and the origin it addressed by what Express resolved under
- * `trust proxy`.
+ * Prepare the upstream request: drop the browser's credentials, name the
+ * client address and protocol by what Express resolved under `trust proxy`,
+ * and pass on the `Host` header and local port this server received, neither
+ * of which `trust proxy` resolves.
  *
- * The refresh cookie is `__Host-refreshToken` with `Path=/`, so the browser
- * sends it here too; PostHog must never receive it, nor a bearer token.
+ * The refresh cookie has `Path=/` when `COOKIE_SECURE` is on and
+ * `COOKIE_DOMAIN` is unset (`__Host-refreshToken`), so the browser sends it
+ * here too; PostHog must never receive it, nor a bearer token.
  * The `X-Forwarded-*` headers are replaced, not appended to: `xfwd` only adds
  * the ones the client did not send, which would let any client choose the
  * address PostHog geolocates.
+ * httpxy, which http-proxy-middleware runs on, skips this hook for a request
+ * that carries `Expect`, which browsers never send.
  * @param proxyRequest - The request about to go upstream.
  * @param request - The incoming request.
  */
@@ -64,8 +68,9 @@ function prepareUpstreamRequest(proxyRequest: ClientRequest, request: Request): 
 }
 
 /**
- * Strip what the upstream must not decide on this origin: cookies (a
- * `Set-Cookie` here could overwrite the refresh cookie, which is `Path=/`) and
+ * Strip what the upstream must not decide on this origin: cookies (the
+ * upstream's `Set-Cookie` lands on the API's origin and can name any path, so
+ * it could overwrite or shadow the refresh cookie) and
  * `Access-Control-*` (the app's `cors` middleware already granted or withheld
  * this origin, and an upstream `*` would replace its grant).
  * @param proxyResponse - The upstream's response, before it reaches the client.
@@ -81,8 +86,9 @@ function sanitizeUpstreamResponse(proxyResponse: IncomingMessage): void {
 /**
  * Log an upstream failure at warn. A plugin rather than an `on.error`
  * handler: http-proxy-middleware drops its own error response (504 for a
- * refused or reset connection or a timeout, 500 otherwise) when `on.error`
- * is set, and the client would wait forever.
+ * refused, reset or timed-out connection or an unresolvable host, 502 for a
+ * malformed upstream response, 500 otherwise) when `on.error` is set, and the
+ * client would wait forever.
  */
 const logUpstreamFailures = definePlugin<Request, Response>((proxyServer) => {
   proxyServer.on('error', (error) => {
@@ -95,10 +101,11 @@ const logUpstreamFailures = definePlugin<Request, Response>((proxyServer) => {
  * `xfwd` makes the `X-Forwarded-*` headers present, which
  * `prepareUpstreamRequest` then overwrites; the `User-Agent` is passed
  * through, so PostHog attributes the browser and OS correctly. An upstream
- * failure or a silent upstream past `timeoutMs` is logged and answered 504 by
- * http-proxy-middleware.
+ * failure is logged and answered by http-proxy-middleware: 504 for a refused,
+ * reset or timed-out connection or an unresolvable host, including an
+ * upstream silent for `timeoutMs` before it answers. Once the response has started, it is cut off instead.
  * @param target - The upstream base URL, including any path prefix.
- * @param timeoutMs - How long the upstream may take to answer.
+ * @param timeoutMs - How long the upstream connection may sit idle.
  * @returns The middleware.
  */
 function proxyTo(
@@ -137,8 +144,8 @@ function answerUnconfigured(_request: Request, response: Response): void {
 /**
  * Build the analytics proxy. The hosts are read once, here: a change needs
  * a restart, like every other variable.
- * @param timeoutMs - How long the upstream may take to answer; tests pass a
- *   short one.
+ * @param timeoutMs - How long the upstream connection may sit idle; tests pass
+ *   a short one.
  * @returns A router mounted at `/api/v1/collect` by app.ts.
  */
 export function createAnalyticsProxyRouter(timeoutMs = UPSTREAM_TIMEOUT_MS): Router {

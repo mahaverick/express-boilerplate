@@ -34,8 +34,8 @@ const emailMessageRepository = new EmailMessageRepository()
 
 /**
  * One fake event as `pnpm email:fire-event` sends it. `messageId` is the
- * Message-ID header in `<…>` form, as Resend's `data.message_id` is.
- * Anything that fails this shape is counted as ignored.
+ * Message-ID header, with or without its `<…>`. Anything that fails this
+ * shape is counted as ignored.
  */
 const fakeEventSchema = z.object({
   id: z.string().min(1).max(128),
@@ -59,7 +59,7 @@ export function fakeEmailWebhookSignature(rawBody: Buffer, secret: string): stri
  * One header's single value.
  * @param headers - The request headers.
  * @param name - A lowercase header name.
- * @returns The value, or undefined when absent or repeated.
+ * @returns The value (Node joins a repeated custom header such as `x-fake-signature` with `, `), or undefined when absent.
  */
 function singleHeader(headers: IncomingHttpHeaders, name: string): string | undefined {
   const value = headers[name]

@@ -1,11 +1,10 @@
 /**
- * @file Evaluates one registered flag for one context from the snapshot,
- * exactly as PostHog's flags service does (8,200 of 8,200 cases matched in
- * the planning probe; the golden fixtures pin them). It reads no clock
- * beyond what core's relative-date matching uses, and its only I/O is a warn
- * log when core throws something other than an inconclusive match. It never
- * throws: every case it cannot evaluate answers the registry fallback with
- * a `fallback:` reason.
+ * @file Evaluates one registered flag for one context from the snapshot, as
+ * PostHog's flags service does; the golden fixtures pin captured cases. It
+ * reads no clock beyond what core's relative-date matching uses, and its only
+ * I/O is a warn log when core throws something other than an inconclusive
+ * match. It never throws: every case it cannot evaluate answers the registry
+ * fallback with a `fallback:` reason.
  */
 import {
   getFeatureFlagHash,
@@ -99,7 +98,7 @@ export function isInconclusiveMatchError(error: unknown): boolean {
 
 /**
  * The values a person property is matched against: the person traits and
- * the implicit `distinct_id` (a trait of that name would win, as in PostHog).
+ * the implicit `distinct_id` (a trait of that name would win).
  * @param context - The context.
  * @returns The values.
  */
@@ -223,7 +222,8 @@ function bucketingValueOf(
 
 /**
  * Evaluate a definition once its bucketing value is known: holdout first,
- * then the conditions in array order, the first match winning.
+ * then the conditions in array order, the first that matches and is in
+ * rollout winning.
  * @param entry - The registry entry.
  * @param raw - The definition.
  * @param snapshot - The snapshot, for the matching version.
@@ -275,19 +275,20 @@ async function evaluateBucketed(
 }
 
 /**
- * Evaluate one registered flag (spec §4.4). In order: not configured, no
+ * Evaluate one registered flag. In order: not configured, no
  * snapshot, missing from PostHog, unsupported and inactive each serve the
  * fallback. Bucketing follows the definition's aggregation (distinct id,
  * or the tenant group key for the snapshot's tenant index; no tenant serves
- * `fallback:no_tenant`). A holdout match serves the fallback with
- * `holdoutVariant`. Then conditions are walked in array order: every
+ * `fallback:no_tenant`, any other group index `fallback:unsupported`). A
+ * holdout match serves the fallback with `holdoutVariant`. Then conditions are walked in array order: every
  * property must match and the bucketing hash must be within the rollout; a
  * multivariate match takes the condition's variant override when it names a
  * flag variant, otherwise core's variant. A variant the registry does not
  * declare serves `fallback:unsupported` and calls `onUnknownVariant`. No
  * match serves the fallback with `out_of_rollout` when some condition's
- * properties matched, else `no_condition_match`. A value core cannot read
- * serves `fallback:inconclusive`.
+ * properties matched, else `no_condition_match`. Any error thrown while
+ * evaluating serves `fallback:inconclusive`; one other than core's
+ * inconclusive match is also logged at warn.
  * @param entry - The registry entry.
  * @param snapshot - The current snapshot, or null when there is none.
  * @param context - The context.

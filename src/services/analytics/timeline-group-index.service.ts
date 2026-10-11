@@ -1,8 +1,8 @@
 /**
  * @file The index PostHog gave the `tenant` group type, read once from
- * `groups_types/` and kept for the life of the process. SP5a's rollout asks
- * for index 0, but nothing enforces it. A missing type is not kept, so the
- * next request asks again once an operator adds it.
+ * `groups_types/` and kept for the life of the process. The README asks for
+ * index 0, but nothing enforces it. A missing type is not kept, so the next
+ * request asks again once an operator adds it.
  */
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { posthogApi, posthogProjectPath } from '@/services/analytics/posthog-api.service'

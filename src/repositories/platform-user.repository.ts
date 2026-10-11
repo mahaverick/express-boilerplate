@@ -2,9 +2,9 @@
  * @file Staff-only, cross-tenant reads of users. Only
  * `services/platform-*.service.ts` may import this file (an eslint rule).
  * Reads exclude soft-deleted users unless a caller asks for them (the
- * `deleted` search status, `findRecord`'s `includeDeleted`); membership
- * counts and lists never include the platform tenant, whose membership is
- * reported as the platform role.
+ * `deleted` search status, `findRecord`'s `includeDeleted`). The membership
+ * count and `listMemberships` leave out the platform tenant, whose membership
+ * is reported as `platformRole`.
  */
 import {
   and,
@@ -184,8 +184,8 @@ function keyOf(row: { sortEmail: string; id: string }): PlatformUserCursor {
 }
 
 /**
- * The search's filters, before the cursor: soft-delete scope (by `status`),
- * `q`, `active`, `verified` and `staff`.
+ * The search's filters, before the cursor: soft-delete scope and `active`
+ * (both from `status`), `q`, `verified` and `staff`.
  * @param options - The search's inputs.
  * @param platformRoleQuery - The correlated platform-role subquery, for the staff filter.
  * @returns The conditions to AND together.

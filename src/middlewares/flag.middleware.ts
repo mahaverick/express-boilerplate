@@ -2,8 +2,9 @@
  * @file `requireFlag`, the route gate for a boolean feature flag. A closed
  * gate answers exactly the unknown-route 404, so a response never reveals
  * that a flag or its route exists. The value comes from the request's
- * memoised evaluation (`evaluateForRequest`), the same one the read
- * endpoints serve, and a gate read never records exposure.
+ * memoised evaluation (`evaluateForRequest`), the same evaluation the flag
+ * reads serve, so a gate agrees with the flag the client sees; it records no
+ * exposure.
  */
 import type { NextFunction, Request, Response } from 'express'
 import { flagEntry, type BooleanFlagKey } from '@/constants/flags.constants'
@@ -57,6 +58,12 @@ function isNotFound(error: unknown): boolean {
  */
 export function requireFlag(key: BooleanFlagKey, shouldBeOn = true): FlagGateHandler {
   const isTenantScoped = flagEntry(key).scope === 'tenant'
+  /**
+   * Answer 404 unless the flag evaluates to `shouldBeOn`; `requireFlag`'s handler.
+   * @param request - The request, after `requireAuth` (and `resolveTenant` for a tenant-scoped flag).
+   * @param _response - Unused.
+   * @param next - Continues the chain, or receives the 404 or the evaluation's failure.
+   */
   const gate = async (request: Request, _response: Response, next: NextFunction): Promise<void> => {
     try {
       if (isTenantScoped && request.principal === undefined) {
@@ -71,7 +78,7 @@ export function requireFlag(key: BooleanFlagKey, shouldBeOn = true): FlagGateHan
       }
       next()
     } catch (error) {
-      // A user the evaluation cannot find (deleted since `requireAuth`) is a closed gate, not a revealing 404 of its own.
+      // A user the evaluation cannot find (deleted since `requireAuth`) closes the gate with the same 404, not an error with its own message.
       next(isNotFound(error) ? new HttpError('Not found', 404) : error)
     }
   }

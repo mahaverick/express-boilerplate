@@ -24,9 +24,9 @@ import { tenantGroupTypeIndex } from '@/services/analytics/timeline-group-index.
 const USAGE = 'Usage: pnpm flags:sync [-- --dry-run]'
 
 /**
- * The tag every created flag carries. Projects can require one (the probe
- * project refuses an untagged create with 400), and it marks the flags the
- * registry owns.
+ * The tag every created flag carries. Projects can require one (the project
+ * used for live probes refuses an untagged create), and it marks the flags
+ * the registry owns.
  */
 export const FLAG_SYNC_TAG = 'code-registry'
 
