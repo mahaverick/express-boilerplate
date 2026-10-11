@@ -1,11 +1,11 @@
 /**
  * @file Staff-only, cross-tenant onboarding reads. Only
  * `services/platform-*.service.ts` may import this file (an eslint rule);
- * every query leaves out the platform tenant. Progress is derived here, in
- * one SQL shape (`progressQuery`) shared by the funnel, the list, the
- * Overview's stuck count and the tenant tab, from the registry keys the
- * service passes in: a tenant step counts from its tenant row, a member
- * step once any active owner has done it, and a completion whose key left
+ * the queries that choose tenants leave out the platform tenant. Progress is
+ * derived here, in one SQL shape (`progressQuery`) shared by the funnel, the
+ * list, the Overview's stuck count and the tenant tab, from the registry
+ * keys the service passes in: a tenant step counts from a tenant-level
+ * completion, a member step once any active owner has done it, and a completion whose key left
  * the registry counts for nothing. Raw rows carry timestamps as UTC text
  * (drizzle's postgres-js driver hands timestamps back unparsed), which the
  * mappers turn into Dates.
@@ -41,9 +41,10 @@ export interface OnboardingProgressOptions {
 
 /**
  * One tenant's derived onboarding progress. `doneKeys` are the registry
- * steps done at tenant level; `lastProgressAt` is the latest of `startedAt`
- * and their completions; `completedAt` is set once every required step is
- * done.
+ * steps that count as done for the tenant (a tenant step, or a member step an
+ * active owner did); `lastProgressAt` is the latest of `startedAt` and their
+ * completions; `completedAt` is set once onboarding has started and every
+ * required step is done.
  */
 export interface OnboardingProgressRow {
   id: string
@@ -254,13 +255,13 @@ function toProgressRow(row: RawProgressRow): OnboardingProgressRow {
 /**
  * The common table expressions every progress read starts with, ending in
  * `progress` (one row per tenant `scope` selects) and `steps` (one row per
- * tenant and step done at tenant level, with whether staff completed it).
+ * tenant and step that counts as done for it, with whether staff completed it).
  * `scope` is a condition on `tenants t`; the platform tenant is always left
  * out. The rules are `deriveOnboardingState`'s (onboarding.service.ts):
  * last progress is the latest of the start and the counted completions; a
  * tenant is complete once started with every required step done, at the
- * latest of the start and those steps' completions; and stuck once its last
- * progress is at or before `stuckBefore`.
+ * latest of the start and those steps' completions; and stuck, when not
+ * complete or dismissed, once its last progress is at or before `stuckBefore`.
  * @param scope - Which tenants to read.
  * @param options - The registry keys and the stuck cut-off.
  * @returns The `with …` clause.
@@ -373,6 +374,11 @@ function pageCursors(
   direction: PageDirection,
   cursor: OnboardingPageCursor | undefined
 ): Pick<OnboardingProgressPage, 'nextCursor' | 'prevCursor'> {
+  /**
+   * A row's cursor.
+   * @param row - A row of the page.
+   * @returns Its sort key and id.
+   */
   const keyOf = (row: RawProgressRow): OnboardingPageCursor => ({ sortAt: row.sort_at, id: row.id })
   const first = rows.at(0)
   const last = rows.at(-1)
@@ -464,9 +470,9 @@ export class PlatformOnboardingRepository {
 
   /**
    * A keyset page of the active, tracked tenants in one state, sorted on
-   * `(sort timestamp, id)`: the last progress for `stuck` (oldest first, so
-   * the longest stuck lead), otherwise when onboarding started, or the
-   * tenant was created while it awaits an owner (newest first).
+   * `(sort timestamp, id)` in the order `isAscending` gives. The sort
+   * timestamp is the last progress for `stuck`, otherwise when onboarding
+   * started, or when the tenant was created while it awaits an owner.
    * `direction: 'prev'` reads the rows before `cursor` and returns them in
    * display order.
    * @param options - State, order, page size, direction, cursor, registry keys and stuck cut-off.
@@ -740,6 +746,11 @@ export class PlatformOnboardingRepository {
    */
   async reconcileCandidates(executor: DbExecutor = db): Promise<OnboardingReconcileRow[]> {
     // Spelled out: drizzle renders a one-table select's columns unqualified, binding them inside.
+    /**
+     * The earliest member-access audit entry of `action` in the tenant at or after its onboarding start.
+     * @param action - The audit action to look for.
+     * @returns The correlated subquery, null when there is no such entry.
+     */
     const earliestMemberEntry = (action: 'tenant.settings_updated' | 'invitation.created') =>
       sql<Date | null>`(
         select min(entry.occurred_at) from audit_logs entry

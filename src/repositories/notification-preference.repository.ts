@@ -14,17 +14,15 @@ import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor } from '@/services/database.service'
 
 /**
- * Which channel a notification can be delivered on. Matches
- * `notificationPreferenceModel`'s two boolean columns — `'email'` reads/
- * writes `emailEnabled`, `'in_app'` reads/writes `inAppEnabled`.
+ * Which channel a notification can be delivered on: `'email'` is the
+ * `emailEnabled` column of `notificationPreferenceModel`, `'in_app'` the
+ * `inAppEnabled` column.
  */
 export type NotificationChannel = 'email' | 'in_app'
 
 /**
- * One notification type's resolved channel preferences, with defaults
- * already filled in for a type that has no row — the shape
- * `NotificationPreferenceRepository.getFullMatrix` returns one of, per
- * type.
+ * One notification type's channel preferences, with defaults filled in
+ * for a type the user has no row for.
  */
 interface NotificationPreferenceMatrixEntry {
   /**
@@ -42,10 +40,8 @@ interface NotificationPreferenceMatrixEntry {
 }
 
 /**
- * `NotificationPreferenceRepository.getFullMatrix`'s return shape: every
- * known notification type, exactly once, with its resolved channel
- * preferences — never just the subset a user happens to have an explicit
- * row for.
+ * What `NotificationPreferenceRepository.getFullMatrix` returns: every known
+ * notification type exactly once, including types the user has no row for.
  */
 export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 
@@ -69,18 +65,17 @@ const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
 ])
 
 /**
- * Query access to the `notification_preferences` table: read a user's
- * explicit preference rows, upsert one, resolve whether a specific
- * channel is currently enabled for a type (accounting for the opt-out
- * default and the non-disableable email exception), and resolve the full
- * per-type matrix a settings UI would render.
+ * Query access to `notification_preferences`: read a user's explicit rows,
+ * upsert one, decide whether a channel is enabled for a type (applying the
+ * opt-out default and the non-disableable email types), and resolve the
+ * per-type matrix a settings UI renders.
  */
 export class NotificationPreferenceRepository {
   /**
-   * Every explicit preference row a user has — NOT the full matrix. A user
-   * who has never touched their settings has zero rows here even though
-   * every channel is, in effect, enabled for them; use `getFullMatrix` for
-   * "every type, with defaults filled in".
+   * Every explicit preference row a user has, not the full matrix. A user
+   * who has never changed a setting has no rows here although every channel
+   * is enabled for them; use `getFullMatrix` for every type with defaults
+   * filled in.
    * @param userId - The user whose preference rows to fetch.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Every row this user has explicitly set, in no particular guaranteed order.
@@ -93,9 +88,8 @@ export class NotificationPreferenceRepository {
   }
 
   /**
-   * Create or replace one user's preference row for one notification type,
-   * via `onConflictDoUpdate` on the composite primary key, so it never raises
-   * a 23505.
+   * Create or replace one user's preference row for one notification type.
+   * The upsert targets the composite primary key, so it never raises a 23505.
    * @param userId - The user this preference belongs to.
    * @param notificationType - The notification type this preference governs.
    * @param data - The two channel toggles to set.

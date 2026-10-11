@@ -89,7 +89,7 @@ export class NotificationRepository {
    * as an ISO string cast to `timestamptz`: drizzle hands a raw `Date` in a
    * `sql` template to postgres-js unserialised, and the query fails.
    * @param userId - The notification owner. Every returned row belongs to this user.
-   * @param options - `limit` (page size) and an optional `cursor` — the last row of the previous page, to resume after.
+   * @param options - `limit` (page size) and an optional `cursor`, the last row of the previous page, to resume after.
    * @param options.limit - How many notifications to return on this page.
    * @param options.cursor - The last row of the previous page, or undefined to fetch the first page.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -207,12 +207,13 @@ export class NotificationRepository {
   }
 
   /**
-   * Delete up to `limit` notifications read before `cutoff`.
+   * Delete about `limit` notifications read before `cutoff`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
-   * can come back short while matching rows remain.
+   * can come back short while matching rows remain. The batch is an
+   * `IN (subquery … LIMIT)`, so `limit` is a target, not a bound.
    * @param cutoff - Rows read before this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The target number of rows for one call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -229,12 +230,13 @@ export class NotificationRepository {
   }
 
   /**
-   * Delete up to `limit` unread notifications created before `cutoff`.
+   * Delete about `limit` unread notifications created before `cutoff`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
-   * can come back short while matching rows remain.
+   * can come back short while matching rows remain. The batch is an
+   * `IN (subquery … LIMIT)`, so `limit` is a target, not a bound.
    * @param cutoff - Unread rows created before this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The target number of rows for one call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

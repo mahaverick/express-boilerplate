@@ -1,18 +1,4 @@
 {
-  "X06": [
-    "src/repositories/email-log.repository.ts",
-    "src/repositories/email-message.repository.ts",
-    "src/repositories/email-suppression.repository.ts",
-    "src/repositories/maintenance-mode.repository.ts",
-    "src/repositories/notification-preference.repository.ts",
-    "src/repositories/notification.repository.ts",
-    "src/repositories/onboarding-completion.repository.ts",
-    "src/repositories/platform-email.repository.ts",
-    "src/repositories/platform-onboarding.repository.ts",
-    "src/repositories/platform-stats.repository.ts",
-    "src/repositories/platform-tenant.repository.ts",
-    "src/repositories/platform-user.repository.ts"
-  ],
   "X07": [
     "src/repositories/tenant-invitation.repository.ts",
     "src/repositories/tenant-settings.repository.ts",
