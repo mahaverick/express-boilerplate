@@ -3,8 +3,8 @@
  * (`maintenance_mode_state`) is the source of truth; a change publishes
  * `reload` on `redisKey('maintenance-mode')`, and every replica rereads the
  * row on that message, on a subscriber reconnect, and every
- * `MAINTENANCE_MODE_RELOAD_INTERVAL_MS` whatever happens (the backstop). No
- * request reads Postgres or Redis for the mode: the gate reads `get()`.
+ * `MAINTENANCE_MODE_RELOAD_INTERVAL_MS` whatever happens (the backstop). The
+ * gate reads `get()`, not Postgres or Redis.
  *
  * A row whose version is not above the copy's is ignored once the copy is
  * known, so overlapping reloads never roll the state back. A replica whose
@@ -71,7 +71,7 @@ export function snapshotOf(row: MaintenanceModeStateRow): MaintenanceModeSnapsho
 /**
  * A short, value-free label for a failed reload: the error's code when it
  * has one (`ECONNREFUSED`, a Postgres SQLSTATE), its own or its cause's,
- * otherwise its class name. Never the message, which can quote a value.
+ * otherwise its `name`. Never the message, which can quote a value.
  * @param error - The failure.
  * @returns The label.
  */
@@ -95,8 +95,8 @@ export type MaintenanceModeReloadListener = (snapshot: MaintenanceModeSnapshot) 
 export interface MaintenanceModeStore {
   /**
    * Read the row, start the backstop, and begin subscribing in the
-   * background. Never rejects: a failed first read leaves the store open
-   * and unknown, and the backstop retries it.
+   * background. Never rejects: a failed first read leaves the store serving
+   * `off` and unknown, and the backstop retries it.
    */
   start: () => Promise<void>
   /**
@@ -155,6 +155,10 @@ export function createMaintenanceModeStore(
     isClosed: false,
   }
 
+  /**
+   * Call every listener with the current snapshot, once the mode is known. A
+   * listener that throws is logged and does not stop the others.
+   */
   const notify = (): void => {
     if (!state.snapshot.known) return
     for (const listener of listeners) {
@@ -166,6 +170,11 @@ export function createMaintenanceModeStore(
     }
   }
 
+  /**
+   * Read the row, apply it under the version rule and notify the listeners.
+   * A failed read keeps the last known snapshot and records its label; it
+   * never rejects, and a read finishing after `stop()` changes and says nothing.
+   */
   const reload = async (): Promise<void> => {
     if (state.isClosed) return
     try {
@@ -196,6 +205,11 @@ export function createMaintenanceModeStore(
     notify()
   }
 
+  /**
+   * Connect the subscriber and listen for `reload` messages, reloading on
+   * every reconnect. A failure is logged and leaves no subscriber, so the
+   * backstop tries again.
+   */
   const subscribe = async (): Promise<void> => {
     if (state.isClosed || state.subscriber) return
     const client = createRedisClient()
@@ -225,6 +239,10 @@ export function createMaintenanceModeStore(
     }
   }
 
+  /**
+   * Run `subscribe` unless one is already running; concurrent callers share it.
+   * @returns Resolves when that `subscribe` has finished.
+   */
   const ensureSubscriber = (): Promise<void> => {
     state.subscribing ??= (async () => {
       try {

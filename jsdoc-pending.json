@@ -1,16 +1,4 @@
 {
-  "X11": [
-    "src/services/maintenance-mode/maintenance-mode-notices.service.ts",
-    "src/services/maintenance-mode/maintenance-mode-queues.service.ts",
-    "src/services/maintenance-mode/maintenance-mode-store.service.ts",
-    "src/services/maintenance-mode/maintenance-mode.service.ts",
-    "src/services/notification-emitter.service.ts",
-    "src/services/notification.service.ts",
-    "src/services/onboarding.service.ts",
-    "src/services/platform-email.service.ts",
-    "src/services/platform-errors.service.ts",
-    "src/services/platform-flags.service.ts"
-  ],
   "X12": [
     "src/services/platform-onboarding.service.ts",
     "src/services/platform-purge.service.ts",

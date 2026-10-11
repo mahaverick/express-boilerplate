@@ -1,9 +1,9 @@
 /**
  * @file Onboarding: the single writer of completions (`completeOnboardingStep`),
  * the derived state every reader shares (`deriveOnboardingState`), the
- * customer's view and writes, and the domain-event subscriber that completes
- * `auto` steps. Actions staff take through platform access never count as
- * customer progress, and only members write through the customer API.
+ * customer's view and writes, and the domain-event subscribers that complete
+ * `auto` steps. An event from an action staff took through platform access
+ * never completes a step, and only members write through the customer API.
  */
 import { getEnv } from '@/configs/env.config'
 import {
@@ -143,7 +143,10 @@ function isOnboardingStarted(
  * @param input - The tenant, the member for a member step, the step, and who recorded it.
  * @param executor - Where to run the queries. Defaults to the pool.
  * @returns The new completion, or undefined when the step was already complete.
- * @throws {HttpError} 404 `onboarding_step_not_found` for an unknown key; 409 `member_step` for a member step with no member; 409 `scope_mismatch` for a tenant step with a member; 400 for a staff completion with no reason; 404 when the tenant is gone; 409 `not_tracked` when its onboarding is untracked or waits for its first owner.
+ * @throws {HttpError} 404 `onboarding_step_not_found` for an unknown key; 409 `member_step` for
+ * a member step with no member; 409 `scope_mismatch` for a tenant step with a member; 400 for a
+ * staff completion with no reason; 404 when the tenant is gone; 409 `not_tracked` when its
+ * onboarding is untracked or waits for its first owner.
  */
 export async function completeOnboardingStep(
   input: CompleteOnboardingStepInput,
@@ -208,11 +211,11 @@ export interface DerivedOnboarding {
   requiredDone: number
   requiredTotal: number
   /**
-   * When the last required step completed; null until complete.
+   * The later of the clock's start and the last required step's completion; null until complete.
    */
   completedAt: Date | null
   /**
-   * The latest counted completion, or the clock's start when later; null before it starts.
+   * The latest counted completion, or the clock's start when later; null when neither exists.
    */
   lastProgressAt: Date | null
   /**
@@ -324,7 +327,7 @@ function stateOf(
  * The state as a customer sees it: `stuck` and `awaiting_owner` are staff
  * concepts. A stuck tenant is in progress; one awaiting its owner is not
  * tracked yet, so a member who joined before the owner sees no checklist
- * (its writes answer 409 `not_tracked` until the owner accepts).
+ * (a step write answers 409 `not_tracked` until the owner accepts).
  * @param state - The derived state.
  * @returns The customer's state.
  */
@@ -444,7 +447,7 @@ async function countedTenant(
 }
 
 /**
- * `tenant_settings_updated`: completes the steps on that trigger.
+ * `tenant_settings_updated`: completes that trigger's steps, unless the actor used platform access.
  * @param event - The event.
  * @param context - Its context.
  */
@@ -457,7 +460,7 @@ async function onTenantSettingsUpdated(
 }
 
 /**
- * `teammate_invited`: completes the steps on that trigger.
+ * `teammate_invited`: completes that trigger's steps, unless the actor used platform access.
  * @param event - The event.
  * @param context - Its context.
  */
@@ -476,6 +479,7 @@ async function onTeammateInvited(
  * starts the clock was not the first member (others joined while the tenant
  * waited), `teammate_joined` completes then too. The tenant is re-read after
  * the start, so an accept that lost the race to start it still counts.
+ * Does nothing when the actor used platform access.
  * @param event - The event.
  * @param context - Its context.
  */
@@ -509,12 +513,14 @@ export function registerOnboardingSubscribers(): void {
 /**
  * Re-read the actor's access under lock and refuse anyone who is not a
  * member at `minimum` or above: staff acting through platform access get
- * the 404 a non-member gets.
+ * the 404 a non-member gets, unless that access is below `minimum`, which is
+ * a 403.
  * @param actor - The signed-in user.
  * @param tenantId - The tenant.
  * @param minimum - The lowest membership role admitted.
  * @param tx - The transaction to hold the locks in.
- * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 when their role is below `minimum`.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 when their
+ * role is below `minimum`.
  */
 async function lockMemberAccess(
   actor: Actor,
@@ -535,7 +541,10 @@ async function lockMemberAccess(
  * @param tenantId - The tenant.
  * @param stepKey - The step.
  * @returns The onboarding as the actor now sees it.
- * @throws {HttpError} 404 `onboarding_step_not_found` for an unknown key; 409 `not_manual` for a step that completes on its own; 404 `Tenant not found` when the actor is not a member; 403 for a tenant step below admin; 409 `not_tracked` when the tenant's onboarding is untracked or waits for its first owner.
+ * @throws {HttpError} 404 `onboarding_step_not_found` for an unknown key; 409 `not_manual` for
+ * a step that completes on its own; 404 `Tenant not found` when the actor is not a member; 403
+ * for a tenant step below admin; 409 `not_tracked` when the tenant's onboarding is untracked or
+ * waits for its first owner.
  */
 export async function completeStepAsMember(
   actor: Actor,
@@ -570,7 +579,8 @@ export async function completeStepAsMember(
  * @param tenantId - The tenant.
  * @param tx - The transaction.
  * @returns The locked tenant.
- * @throws {HttpError} 404 when the tenant is gone; 409 `not_tracked` when its onboarding is untracked or waits for its first owner.
+ * @throws {HttpError} 404 when the tenant is gone; 409 `not_tracked` when its onboarding is
+ * untracked or waits for its first owner.
  */
 async function lockRunningTenant(tenantId: string, tx: DbTransaction): Promise<Tenant> {
   const tenant = await tenantRepository.lockById(tenantId, tx)
@@ -587,7 +597,8 @@ async function lockRunningTenant(tenantId: string, tx: DbTransaction): Promise<T
  * @param actor - The signed-in owner.
  * @param tenantId - The tenant.
  * @returns The onboarding as the actor now sees it.
- * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is already dismissed.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is not a member or the tenant is
+ * gone; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is already dismissed.
  */
 export async function dismissOnboarding(
   actor: Actor,
@@ -620,7 +631,8 @@ export async function dismissOnboarding(
  * @param actor - The signed-in owner.
  * @param tenantId - The tenant.
  * @returns The onboarding as the actor now sees it.
- * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is not dismissed.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is not a member or the tenant is
+ * gone; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is not dismissed.
  */
 export async function undismissOnboarding(
   actor: Actor,

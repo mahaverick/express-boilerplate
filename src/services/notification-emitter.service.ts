@@ -53,7 +53,8 @@ const messageSchema = z.object({
 })
 
 /**
- * A failed start is retried after this delay, doubling up to `RETRY_MAX_MS`, while listeners wait.
+ * A failed start is retried after this delay, doubling up to `RETRY_MAX_MS`, while any listener
+ * is registered.
  */
 const RETRY_BASE_MS = 1000
 const RETRY_MAX_MS = 30_000
@@ -298,7 +299,7 @@ export function emitNotification(userId: string, notification: Notification): vo
 /**
  * Subscribe to one user's live notification stream, opening this process's subscriber on first use.
  * @param userId - The user to subscribe to.
- * @param handler - Called once per notification, with its dates revived.
+ * @param handler - Called once per notification, with its dates as `Date`s.
  */
 export function onNotification(
   userId: string,
@@ -313,6 +314,7 @@ export function onNotification(
  *
  * Must be called with the same function reference `onNotification` was
  * given: `EventEmitter#off` removes a listener by reference, not by user id.
+ * Once the last listener is gone, a pending subscriber retry is dropped.
  * @param userId - The user this handler was subscribed to.
  * @param handler - The exact function reference passed to the matching `onNotification` call.
  */

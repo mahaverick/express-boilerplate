@@ -1,12 +1,12 @@
 /**
  * @file The notice jobs of the last maintenance-mode change. Before a
  * change into `full` pauses the queues, the changing request waits for its
- * notices (`waitForNoticeJobs`) by polling each job's state, never with a
- * `QueueEvents` connection (a job removed on completion before the wait
- * starts would read as a failure). It records their ids in Redis
+ * notices (`waitForNoticeJobs`) by polling each job's state, not with a
+ * `QueueEvents` connection: there, a job removed on completion before the
+ * wait starts reads as a failure. Their ids are recorded in Redis
  * (`redisKey('maintenance-mode', 'notices')`, kept a week); the status
- * section reads them to report whether any notice has not gone out yet,
- * which happens when the queues paused first: they go out on resume.
+ * section reads them to report whether any notice has not gone out yet, as
+ * when the queues paused first (the notice then goes out on resume).
  */
 import { setTimeout as delay } from 'node:timers/promises'
 import type { Job, Queue } from 'bullmq'
@@ -73,7 +73,7 @@ export async function rememberNoticeJobs(ids: NoticeJobIds): Promise<void> {
  * Whether any of a queue's jobs has yet to finish.
  * @param queue - The queue.
  * @param ids - Job ids on it.
- * @returns True when any is still waiting, delayed or running.
+ * @returns True when any is neither completed, failed nor gone.
  */
 async function isAnyUnfinished(queue: Queue, ids: string[]): Promise<boolean> {
   const states = await Promise.all(ids.map((id) => queue.getJobState(id)))
@@ -83,7 +83,7 @@ async function isAnyUnfinished(queue: Queue, ids: string[]): Promise<boolean> {
 /**
  * Whether a notice of the last change has not gone out: a notification job,
  * or the email job its worker enqueued, not yet finished.
- * @returns The answer; false when nothing is recorded or Redis fails. Never rejects.
+ * @returns The answer; false when nothing is recorded or the read fails. Never rejects.
  */
 export async function hasPendingNotices(): Promise<boolean> {
   try {
@@ -123,10 +123,11 @@ async function pollUntilFinished(
 }
 
 /**
- * What is left of the notice wait for a change committed at `changedAt`: the
- * wait counts from the commit, so it always ends by the time another replica's
- * backstop may pause the queues (`MAINTENANCE_MODE_PAUSE_GRACE_MS` after it).
- * @param changedAt - The commit time the database stamped.
+ * What is left of the notice wait for a change stamped `changedAt`. The wait
+ * counts from that stamp, so it ends no later than the pause grace
+ * (`MAINTENANCE_MODE_PAUSE_GRACE_MS`, equal to the whole wait) after it, which
+ * is when a reload on any replica may first pause the queues.
+ * @param changedAt - The time the database stamped on the change.
  * @param now - The current instant in epoch ms; injectable for tests.
  * @returns The remaining wait in ms, never negative and never above the whole wait.
  */
@@ -140,12 +141,12 @@ export function noticeWaitBudgetMs(changedAt: Date, now: number = Date.now()): n
  * finish, then for the email job each one that did not fail enqueued
  * (`emailJobIdFor`). `completed`, `failed` and `unknown` (finished and
  * removed, or, for an email, never enqueued because the channel is off)
- * count as finished: the notification worker enqueues the email before its
- * own job completes.
+ * count as finished. The email is waited for second because the notification
+ * worker enqueues it before its own job completes.
  * @param jobs - The change's jobs.
  * @param jobs.notification - Its notification jobs.
  * @param deadlineMs - The shared deadline; defaults to `MAINTENANCE_MODE_NOTICE_WAIT_MS`.
- * @returns `'done'`, `'timeout'`, or `'error'` when Redis failed; never rejects.
+ * @returns `'done'`, `'timeout'`, or `'error'` when a state read failed; never rejects.
  */
 export async function waitForNoticeJobs(
   jobs: { notification: Job[] },
