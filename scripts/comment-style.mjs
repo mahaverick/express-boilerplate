@@ -1,6 +1,7 @@
 /**
- * @file The local/comment-style ESLint rule: every comment is JSDoc, a
- * single-line why, a directive or a one-line JSX comment, and none narrates history.
+ * @file The local/comment-style ESLint rule: every comment is a JSDoc block,
+ * a directive, a one-line JSX comment or a single `//` line, and none narrates
+ * history.
  */
 import { findHistory } from './history-patterns.mjs'
 
@@ -22,7 +23,10 @@ function isOneLineJsxComment(text, comment) {
 }
 
 /**
- * The local/comment-style ESLint rule. See comment-style.d.mts for its type.
+ * Reports a block comment that is not JSDoc, a directive or a one-line JSX
+ * comment, a non-directive `//` line straight below another one, and any
+ * comment, directives included, in which `findHistory` finds history. Its type
+ * is in comment-style.d.mts.
  */
 export const commentStyleRule = {
   meta: {

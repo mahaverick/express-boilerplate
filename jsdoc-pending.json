@@ -1,11 +1,4 @@
 {
-  "XT": [
-    "commitlint.config.js",
-    "scripts/comment-style.mjs",
-    "scripts/history-patterns.mjs",
-    "scripts/lint-docs.mjs",
-    "src/services/errors/error-scrubber.service.ts"
-  ],
   "X01": [
     "drizzle.config.ts",
     "eslint.config.mjs",

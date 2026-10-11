@@ -1,6 +1,7 @@
 /**
  * @file Patterns for prose that narrates how the code got here instead of
- * stating what is true now. Shared by the comment-style ESLint rule and lint:docs.
+ * stating present facts. The comment-style ESLint rule and lint:docs both
+ * call `findHistory`.
  */
 
 /**
@@ -20,9 +21,10 @@ const HISTORY_WORDS =
 const HISTORY_IDS = /\b(?:NF|H|M|E|X|R)\d{1,2}[a-z]?\b|\b[PC]-\d{1,2}\b|\bE-[TW]\b/
 
 /**
- * Find the first history phrase in a piece of prose.
+ * The history phrase a piece of prose holds: the first `HISTORY_WORDS`
+ * match, and only when there is none, the first `HISTORY_IDS` match.
  * @param text - A comment body or a line of markdown.
- * @returns The matched phrase, or null when the text states only current facts.
+ * @returns The matched phrase, or null when neither pattern matches.
  */
 export function findHistory(text) {
   const match = HISTORY_WORDS.exec(text) ?? HISTORY_IDS.exec(text)
