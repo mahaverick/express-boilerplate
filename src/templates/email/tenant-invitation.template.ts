@@ -32,7 +32,7 @@ export interface TenantInvitationVariables {
    */
   inviterName: string
   /**
-   * The role the invitee gets on accepting.
+   * The role the invitation offers.
    */
   role: string
   /**
@@ -50,7 +50,10 @@ export interface TenantInvitationVariables {
 }
 
 /**
- * How email tracking treats this template. Its link carries a token, so it mails from the transactional sender; a resend re-sends the same invitation with a new link. `inviterName` is not stored: it is another person's name, which that person's purge could not find here.
+ * How email tracking treats this template. Its link carries a token, so it
+ * mails from the transactional sender; a resend re-sends the same invitation
+ * with a new link. `inviterName` is not stored: it is another person's name,
+ * which that person's purge could not find here.
  */
 export const TENANT_INVITATION_TEMPLATE_META: EmailTemplateMeta<TenantInvitationVariables> = {
   senderClass: 'transactional',

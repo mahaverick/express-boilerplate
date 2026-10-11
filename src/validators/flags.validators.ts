@@ -1,6 +1,6 @@
 /**
  * @file The body of the three `…/flags/exposures` routes, and the allowlist
- * each reported key must pass: registered, read by the client, an
+ * each reported key must pass: registered, read by the client, a multivariate
  * experiment, and served to the app the route belongs to. Any other key gets
  * one fixed message that never names it, so the answer can't tell an
  * unregistered key from a non-experiment one.
@@ -23,9 +23,8 @@ export const EXPOSURE_KEY_MESSAGE = 'keys must name experiment flags this app re
 
 /**
  * `{ keys }`: 1 to `MAX_EXPOSURE_KEYS` distinct strings of at most
- * `FLAG_KEY_MAX` characters, nothing else. The
- * object is strict, so a client can't send a value: the server evaluates
- * every key itself.
+ * `FLAG_KEY_MAX` characters. The object is strict, so a client can't send a
+ * value: the server evaluates every key itself.
  */
 const exposureBodySchema = z.strictObject({
   keys: z

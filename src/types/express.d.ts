@@ -12,9 +12,17 @@ import type { FlagContext, FlagEvaluation } from '@/types/flags'
 
 declare global {
   namespace Express {
+    /**
+     * What `request.user` holds once `requireAuth` has run: the client-visible
+     * user projection, on the field `@types/passport` declares.
+     */
     // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- empty on purpose: extending `Express.User` types passport's own `Request.user` declaration
     interface User extends AuthenticatedUser {}
 
+    /**
+     * The fields this app adds to a request. Each optional field says when it
+     * is set; until then it is absent.
+     */
     interface Request {
       /**
        * Correlation id, set by requestId middleware.

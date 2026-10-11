@@ -1,7 +1,7 @@
 /**
- * @file The "verify your email address" message sent after registration.
- * `verificationUrl` arrives fully built, so this stays a pure function of
- * strings.
+ * @file The "verify your email address" message sent after registration and
+ * on each resend. `verificationUrl` arrives fully built, so this stays a pure
+ * function of strings.
  */
 import {
   escapeHtmlForEmail,
@@ -29,7 +29,9 @@ export interface EmailVerificationVariables {
 }
 
 /**
- * How email tracking treats this template. Its link carries a token, so it mails from the transactional sender; a resend issues a new verification link.
+ * How email tracking treats this template. Its link carries a token, so it
+ * mails from the transactional sender; a resend issues a new verification
+ * link.
  */
 export const EMAIL_VERIFICATION_TEMPLATE_META: EmailTemplateMeta<EmailVerificationVariables> = {
   senderClass: 'transactional',

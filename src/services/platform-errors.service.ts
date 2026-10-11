@@ -7,8 +7,8 @@
  * called), the view audited (throttled per staff member and target,
  * platform-view-audit.service.ts), the hourly timeline budget taken, and
  * only then PostHog asked, with the fixed query in errors-query.service.ts.
- * Nothing is cached. Each issue's most recent event is verified, and its
- * text re-scrubbed, by errors-mapper.service.ts.
+ * No query result is cached. Each issue's most recent event is verified, and
+ * its text re-scrubbed, by errors-mapper.service.ts.
  */
 import { isTimelineEnabled, posthogAppHost } from '@/configs/analytics.config'
 import { getEnv } from '@/configs/env.config'
@@ -66,7 +66,7 @@ async function queryIssues(kind: TimelineKind, id: string): Promise<ErrorIssuesP
     if (groupTypeIndex === undefined) throw new TimelineUnavailableError()
   }
   const { query, values } = buildErrorsQuery(kind, { id, groupTypeIndex })
-  // PostHog otherwise answers a repeated query from its own cache for hours.
+  // PostHog may otherwise answer a repeated query from its own cache.
   const result = await posthogApi('POST', posthogProjectPath('query/'), {
     query: { kind: 'HogQLQuery', query, values },
     refresh: 'force_blocking',

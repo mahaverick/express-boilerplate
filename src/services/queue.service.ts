@@ -313,10 +313,16 @@ async function hasBecomeReady(connection: IORedis): Promise<boolean> {
   if (connection.status === 'ready') return true
   if (connection.status === 'end') return false
   return new Promise((resolve) => {
+    /**
+     * Settles the wait with true, and removes the 'end' listener so it cannot leak.
+     */
     const onReady = (): void => {
       connection.off('end', onEnd)
       resolve(true)
     }
+    /**
+     * Settles the wait with false, and removes the 'ready' listener so it cannot leak.
+     */
     const onEnd = (): void => {
       connection.off('ready', onReady)
       resolve(false)

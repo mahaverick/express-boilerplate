@@ -1,6 +1,6 @@
 /**
- * @file `isAllowedOrigin`, the one definition of an origin this API will talk
- * to, used by the CORS configuration and the Origin check on the refresh
+ * @file `isAllowedOrigin`, the one definition of the origins this API grants,
+ * used by the CORS configuration and the Origin check on the refresh
  * cookie's routes (origin.middleware.ts).
  */
 import { getEnv } from '@/configs/env.config'
@@ -12,8 +12,9 @@ import { getEnv } from '@/configs/env.config'
  *
  * Exact string equality against a fixed set, never a suffix or regex match,
  * which a lookalike domain can satisfy. For CORS a refused origin only has
- * the grant header withheld; `requireAllowedOriginWhenPresent` refuses it
- * outright on `/auth/refresh` and `/auth/logout`.
+ * the grant header withheld; `requireAllowedOriginWhenPresent` answers it 403
+ * on `/auth/refresh` and `/auth/logout`, unless the request carries
+ * `Sec-Fetch-Site: same-origin`.
  * @param origin - The request's `Origin` header, or undefined when it has none.
  * @returns True when the request may proceed.
  */
@@ -31,9 +32,9 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 
 /**
  * Reduce a configured URL down to the bare origin a browser's `Origin`
- * header actually sends: scheme + host + port, lowercased, no trailing
- * slash, no path. A configured `https://App.Example.com/path` would
- * otherwise never equal a browser's `Origin`. Only the allow-list is
+ * header actually sends: scheme, host and any non-default port, lowercased,
+ * no trailing slash, no path. A configured `https://App.Example.com/path`
+ * would otherwise never equal a browser's `Origin`. Only the allow-list is
  * canonicalized, never the incoming header, so attacker input is compared
  * exactly as sent.
  * @param value - A configured origin/URL, or undefined.

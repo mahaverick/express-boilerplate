@@ -26,7 +26,8 @@ export function isSameSignature(expected: Buffer, received: Buffer): boolean {
 
 /**
  * A provider's Message-ID value in the form `email_messages.message_id_header`
- * stores it: trimmed, inside one pair of angle brackets.
+ * stores it: trimmed, and wrapped in angle brackets unless it already starts
+ * with `<` and ends with `>`.
  * @param value - The value from the payload.
  * @returns `<id@domain>`, or undefined when there is no usable value.
  */
@@ -40,7 +41,8 @@ export function normalizedMessageIdHeader(value: unknown): string | undefined {
 }
 
 /**
- * An all-hex run, the shape a token takes once upper-cased.
+ * Sixteen or more hex digits and nothing else, the shape a token takes once
+ * upper-cased.
  */
 const HEX_RUN = /^[\dA-F]{16,}$/
 
@@ -81,8 +83,10 @@ function camelWords(chunk: string): string[] {
  * the UPPER_SNAKE `detail` `email_events` stores (`MESSAGE_REJECTED`), or
  * nothing. A value that does not fit `EMAIL_DETAIL_PATTERN` and
  * `EMAIL_DETAIL_MAX_LENGTH` once converted is dropped rather than cut, and
- * so is an all-hex run of 16 or more characters, so a token-shaped value
- * never reaches the column.
+ * so is a detail made only of 16 or more hex digits, which a bare hex token
+ * would be. A token split into words, by separators or by letter case
+ * (base64url), is not caught; a full-length token of this app exceeds
+ * `EMAIL_DETAIL_MAX_LENGTH` and is dropped anyway.
  * @param value - The provider's code.
  * @returns The UPPER_SNAKE code, or undefined.
  */

@@ -1,17 +1,19 @@
 /**
- * @file Maintenance mode's hold on the BullMQ queues: `full` pauses every
- * queue `getAllQueues()` (queue.service.ts) returns, anything else resumes
- * them. A pause is BullMQ's queue-wide `Queue.pause()`, a flag in Redis that
- * every replica's Workers obey: running jobs finish, waiting ones stay. Both
- * calls are idempotent, so replicas reconciling at once are harmless.
+ * @file Maintenance mode's hold on the BullMQ queues: in `full` every queue
+ * `getAllQueues()` (queue.service.ts) returns is paused, and in any other
+ * known mode they are resumed. A pause is BullMQ's queue-wide `Queue.pause()`,
+ * a flag in Redis that every replica's Workers obey: running jobs finish,
+ * waiting ones stay. Pausing and resuming are both idempotent, so replicas
+ * reconciling at once are harmless.
  *
  * Every replica reconciles on every store reload (`reconcileQueuePause`),
- * which heals a crash between the commit and the pause, and a Redis outage.
- * Each queue is handled on its own and never rejects: the producer
- * connection has no offline queue, so during an outage the calls fail fast
- * and the next reload retries them. A reload's pause waits for the grace
- * (`MAINTENANCE_MODE_PAUSE_GRACE_MS`) so the changing request's notices go out first; a resume is immediate,
- * after removing duplicate scheduler runs queued during the pause.
+ * which repairs a crash between the commit and the pause, and a Redis outage.
+ * Each queue is handled on its own, and a failure is logged rather than
+ * thrown. The producer connection has no offline queue, so during an outage
+ * the calls fail fast instead of waiting, and the next reload retries them.
+ * A reload's pause waits for the grace (`MAINTENANCE_MODE_PAUSE_GRACE_MS`) so
+ * the changing request's notices go out first; a resume is immediate, after
+ * removing duplicate scheduler runs queued during the pause.
  *
  * A reconcile acts only while its snapshot is still the store's: before each
  * pause or resume it rereads the store's version, so a change that landed
@@ -58,8 +60,8 @@ export function resetQueueFailureStreaks(): void {
  * What a reload does to the queues for one snapshot: `pause` only for
  * `full` whose change is at least `MAINTENANCE_MODE_PAUSE_GRACE_MS` old;
  * `leave` for a younger `full` (the changing request pauses after its
- * notices, and a reload must not undo that) and for an unknown mode;
- * `resume` for every other mode.
+ * notices, and a reload must not undo that), for a `full` with no change
+ * time, and for an unknown mode; `resume` for every other mode.
  * @param snapshot - The replica's snapshot.
  * @param now - The current instant.
  * @returns The target.
@@ -74,14 +76,15 @@ export function queuePauseTarget(snapshot: MaintenanceModeSnapshot, now: Date): 
 
 /**
  * Remove the duplicate pending runs a job scheduler gathered while its
- * queue was paused, before the queue resumes (a scheduler re-upserted
- * during a pause, as each replica boot does, adds one pending run per
- * elapsed interval). Per scheduler, the pending job with id
+ * queue was paused, before the queue resumes. A scheduler re-upserted while
+ * one of its runs is pending, as the start of each replica that runs workers
+ * does, adds another pending run. Per scheduler, the pending job with id
  * `repeat:<key>:<next>` is kept, or else the one due latest; every other is
  * removed. A scheduler's only pending job is never removed: its chain lives
- * there. A job another replica removed first is skipped.
+ * there. A removal BullMQ refuses is logged, unless the job is gone by then,
+ * and not counted.
  * @param queue - A paused queue.
- * @returns How many jobs were removed.
+ * @returns How many removals succeeded, a job another replica removed first included.
  */
 export async function dedupeSchedulerJobs(queue: Queue): Promise<number> {
   const schedulers = await queue.getJobSchedulers(0, -1)
@@ -125,10 +128,9 @@ function dueAt(job: Job): number {
 }
 
 /**
- * Remove one duplicate run, treating one already gone as not removed here.
- * @param queue - Its queue.
- * @param job - The run.
- * @returns True when this call removed it.
+ * Remove one duplicate run. A removal BullMQ refuses is logged, unless the
+ * job is gone by then.
+ * @returns True when the removal did not throw.
  */
 // eslint-disable-next-line unicorn/consistent-boolean-name -- `try…` names an attempt; the boolean says whether this call removed the job
 async function tryRemove(queue: Queue, job: Job): Promise<boolean> {
@@ -136,7 +138,7 @@ async function tryRemove(queue: Queue, job: Job): Promise<boolean> {
     await job.remove()
     return true
   } catch (error) {
-    // BullMQ reports a job another replica already removed the same way as a locked one.
+    // BullMQ throws for a job a worker holds (or one of its children) or its scheduler's current run, never for one gone.
     if (job.id !== undefined && (await queue.getJobState(job.id)) !== 'unknown') {
       logger.warn('A duplicate scheduler job could not be removed', {
         queue: queue.name,
@@ -176,13 +178,18 @@ async function dedupeBeforeResume(queue: Queue): Promise<void> {
  * Bring one queue to the target. Never rejects.
  * @param queue - The queue.
  * @param target - Pause or resume.
- * @param version - The store version the target was decided for; the queue is left alone once the store holds another. Omit to act whatever the store holds.
+ * @param version - The store version the target was decided for; the queue is left alone once
+ * the store holds another. Omit to act whatever the store holds.
  */
 async function applyTarget(
   queue: Queue,
   target: 'pause' | 'resume',
   version?: number
 ): Promise<void> {
+  /**
+   * Whether a change has landed in the store since the target was decided.
+   * @returns True when `version` was given and the store holds another.
+   */
   const isSuperseded = (): boolean =>
     version !== undefined && getMaintenanceMode().version !== version
   try {
@@ -226,7 +233,7 @@ async function applyToAllQueues(target: 'pause' | 'resume', version?: number): P
 
 /**
  * Pause or resume every queue now, whatever the grace: what the changing
- * request does once its notices are out (pause) or when leaving `full`
+ * request does once its notice wait is over (pause) or when leaving `full`
  * (resume, after removing duplicate scheduler runs). Never rejects.
  * @param shouldPause - True to pause, false to resume.
  * @returns Resolves once every queue has been tried.
@@ -258,7 +265,8 @@ export async function reconcileQueuePause(
  * null, those of queues that did answer included. The staff system status,
  * the staff maintenance-mode view and the view a mode change answers with
  * all show this list, for display only.
- * @returns One entry per queue, in registry order; a field Redis could not answer in time is null.
+ * @returns One entry per queue, in registry order (empty during shutdown, when the queues cannot
+ * be reached); a field Redis did not answer, or failed to answer, in time is null.
  */
 export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
   let queues: Queue[]

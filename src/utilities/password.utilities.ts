@@ -9,14 +9,14 @@ import { logger } from '@/services/logger.service'
 /**
  * Hash a plaintext password with bcrypt at `BCRYPT_COST`.
  *
- * Rejects a password longer than `MAX_PASSWORD_BYTES` instead of silently
- * hashing only its first 72 bytes: bcrypt ignores anything past that point,
- * so without this check two different passwords sharing that prefix would
- * hash identically. The error message deliberately does not state the
- * limit, so a client can't use it to fingerprint accounts or probe exactly
- * where the truncation boundary sits.
+ * Throws a plain `Error` for a password longer than `MAX_PASSWORD_BYTES`
+ * instead of silently hashing only its first 72 bytes: bcrypt ignores
+ * anything past that point, so without this check two different passwords
+ * sharing that prefix would hash identically. The password validators
+ * (auth.validators.ts) refuse such input first; an `Error` that escapes
+ * answers 500.
  * @param plain - The password to hash, as typed by the user.
- * @returns The bcrypt hash string, safe to store.
+ * @returns The bcrypt hash string.
  */
 export async function hashPassword(plain: string): Promise<string> {
   if (Buffer.byteLength(plain, 'utf8') > MAX_PASSWORD_BYTES) {
@@ -57,12 +57,12 @@ export async function isPasswordValid(plain: string, hash: string): Promise<bool
 
 /**
  * A bcrypt hash of a fixed, non-secret plaintext, so `login` (auth.service.ts)
- * pays a real compare for an unknown email. Hashed lazily through
- * `hashPassword` and memoised, so it always costs the current `BCRYPT_COST`.
+ * pays a real compare for an unknown email or an account with no password.
+ * Hashed lazily through `hashPassword` and memoised, so it always costs the
+ * current `BCRYPT_COST`.
  * A stored hash keeps the cost it was written with, so raising the cost
  * makes an unknown email slower than a wrong password until rows are
  * rehashed; see `BCRYPT_COST` (auth.constants.ts).
- * @returns A memoised promise of a bcrypt hash of a fixed, non-secret plaintext.
  */
 export const getDummyHash: () => Promise<string> = (() => {
   let cached: Promise<string> | undefined

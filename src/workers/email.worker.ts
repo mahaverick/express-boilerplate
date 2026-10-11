@@ -57,7 +57,7 @@ async function createMessageForUntrackedJob(job: Job<EmailJobData>): Promise<Ema
  * In order: find the job's message row (creating it for an untracked
  * job); skip the send when the row is gone (purged since the job was
  * queued) or the recipient is suppressed, which marks the row `suppressed`
- * and completes the job with no attempt row and no retry; otherwise send
+ * and completes the job with no `email_logs` row and no retry; otherwise send
  * with the row's Message-ID and record `sent`.
  *
  * `sendMail` never rejects; it resolves `'failed'` for every failure,
@@ -66,7 +66,7 @@ async function createMessageForUntrackedJob(job: Job<EmailJobData>): Promise<Ema
  * and `emailJobDefaults` (email.job.ts) sets the retries. Recording `sent`
  * never throws: a retry after a real send would send the email again.
  * @param job - The BullMQ job to process; `job.data` is a `MailMessage` (discriminated union) plus `userId` and `messageId`.
- * @returns Resolves once the email has been sent or skipped; rejects (so BullMQ retries) when `sendMail` reports `'failed'`, or when a lookup before the send fails.
+ * @returns Resolves once the email has been sent or skipped.
  * @throws {Error} When `sendMail` resolves to `'failed'`, or when the lookup, row creation, suppression check or suppressed mark before it throws (the original error is logged, redacted). Either message carries only `job.id` and `templateKey`, never the recipient address, since BullMQ persists it in `failedReason` (Redis).
  */
 export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
@@ -120,7 +120,9 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
 }
 
 /**
- * Start the email worker.
+ * Start the Worker for the email queue, sending up to `WORKER_CONCURRENCY`
+ * jobs at once. The 'failed' handler never rejects: a retryable failure logs a
+ * warning, and the last attempt calls `recordPermanentFailure`.
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startEmailWorker(): Worker<EmailJobData> {

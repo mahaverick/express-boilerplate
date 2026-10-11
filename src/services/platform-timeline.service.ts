@@ -11,8 +11,9 @@
  * `TIMELINE_AUDIT_THROTTLE_SECONDS`. The audit comes before the cache read,
  * so a cached page is audited too, and a later PostHog failure does not undo
  * it: it records that staff asked to look. Rows keep their server fields
- * only when their signature verifies (timeline-mapper.service.ts). This is
- * the one request path that calls PostHog's private API.
+ * only when their signature verifies (timeline-mapper.service.ts). With the
+ * errors view (platform-errors.service.ts), this is where a request calls
+ * PostHog's private API.
  */
 import { isTimelineEnabled, timelineLinks } from '@/configs/analytics.config'
 import { SYSTEM_DISTINCT_ID } from '@/constants/analytics.constants'
@@ -226,7 +227,7 @@ async function queryPage(
     cursor,
     groupTypeIndex,
   })
-  // PostHog otherwise answers a repeated query from its own cache for hours; ours is the 30 s one.
+  // PostHog may otherwise answer a repeated query from its own cache; the 30 s one here is ours.
   const result = await posthogApi('POST', posthogProjectPath('query/'), {
     query: { kind: 'HogQLQuery', query, values },
     refresh: 'force_blocking',
@@ -241,7 +242,7 @@ async function queryPage(
     throw new TimelineUnavailableError()
   }
   const rows = mapTimelineResults(results.slice(0, TIMELINE_PAGE_SIZE), { kind, id })
-  // From raw row 100, before any drop or dedupe, so filtering never opens a gap or a repeat.
+  // From the page's last raw row, before any drop or dedupe, so filtering never opens a gap or a repeat.
   const after =
     results.length > TIMELINE_PAGE_SIZE ? cursorAfter(results[TIMELINE_PAGE_SIZE - 1]) : undefined
   const nextCursor =

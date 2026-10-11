@@ -74,7 +74,7 @@ function configuredDomains(): string[] {
 }
 
 /**
- * The user's role in the platform tenant, read now with no cache, so a
+ * The user's role in the platform tenant, read at call time with no cache, so a
  * revocation takes effect on the next request.
  * @param userId - The user.
  * @param executor - A transaction to read in; the pool when omitted.
@@ -102,7 +102,7 @@ export async function getPlatformMembership(
  * @param minimum - The platform role the route requires.
  * @param tx - The write's transaction.
  * @returns The actor's platform role, at least `minimum`.
- * @throws {HttpError} 404 when the actor's platform role is now below `minimum`, as the route gate answers; 401 when the actor's account is now inactive or soft-deleted, as `requireAuth` answers.
+ * @throws {HttpError} 404 when the actor's platform role is below `minimum`, as the route gate answers; 401 when the actor's account is inactive or soft-deleted, as `requireAuth` answers.
  */
 export async function assertStillPlatformRole(
   actor: Actor,
@@ -174,6 +174,9 @@ export async function autoJoinSafely(
   domains: readonly string[] = configuredDomains()
 ): Promise<void> {
   if (!isPlatformEmailDomain(user.email, domains)) return
+  /**
+   * The unit run in a savepoint or a transaction of its own, so a failure stays contained.
+   */
   const join = (tx: DbTransaction): Promise<UserMembership | undefined> =>
     autoJoin(user, tx, domains)
   try {
@@ -228,7 +231,7 @@ async function regrant(
  * bootstrap script: nobody can invite before the first platform owner exists.
  * @param email - The user's address, in any case.
  * @param role - The platform role to hold.
- * @returns The membership as it now is.
+ * @returns The membership after the change.
  * @throws {HttpError} 404 when no account uses `email`; 409 when it is unverified, or when the change would leave the platform tenant without an owner; 500 when the platform tenant is missing.
  */
 export async function bootstrapGrant(email: string, role: MembershipRole): Promise<UserMembership> {

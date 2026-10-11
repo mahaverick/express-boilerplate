@@ -32,7 +32,7 @@ function identityKey(): Buffer {
 /**
  * A keyed digest of an identity (a normalised address), for a Redis key
  * name: HMAC-SHA256 under a key derived from SESSION_SECRET, hex, first 32
- * characters. Equal inputs share a bucket exactly as the raw value did, but
+ * characters. Equal inputs share a bucket as the raw value did, but
  * a key name read from Redis names no one, and nobody without the secret can
  * test a guessed address against it. Changing SESSION_SECRET starts every
  * counter afresh.

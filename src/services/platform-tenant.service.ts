@@ -1,5 +1,7 @@
 /**
- * @file Staff reads and writes over every customer tenant. The route has already checked the platform role; each write re-checks it under lock. The per-user "your tenants" list stays in tenant.service.ts.
+ * @file Staff reads and writes over every customer tenant. The route has
+ * already checked the platform role; each write re-checks it under lock. The
+ * per-user "your tenants" list stays in tenant.service.ts.
  */
 import { statesFor } from '@/constants/platform.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
@@ -104,7 +106,7 @@ export async function getTenantDetail(tenantId: string): Promise<PlatformTenantD
  * @param actor - The staff user (platform admin or owner; the route checked).
  * @param input - The validated body.
  * @returns The new tenant's detail, and whether the email was enqueued.
- * @throws {HttpError} 409 `slug_taken` when the slug is taken; 409 `invitee_deactivated` when the owner address belongs to a deactivated account; 404 when the actor is no longer a platform admin; 401 when the actor's account is now inactive or gone.
+ * @throws {HttpError} 409 `slug_taken` when the slug is taken; 409 `invitee_deactivated` when the owner address belongs to a deactivated account; 404 when the actor lost the platform admin role; 401 when the actor's account is inactive or gone.
  */
 export async function createTenant(
   actor: Actor,
@@ -167,7 +169,7 @@ function assertOwnerInvitable(tenant: Tenant): void {
  * @param email - The new owner's address; a staff address is allowed.
  * @param reason - Why, for the audit log.
  * @returns Whether the email was enqueued.
- * @throws {HttpError} 404 when no tenant has this id or the actor lost the role; 401 when the actor's account is now inactive or gone; 409 for the platform tenant, a suspended or archived tenant, a tenant that has an active owner, a deactivated invitee account (`invitee_deactivated`), or an address that belongs to a member (`already_member`).
+ * @throws {HttpError} 404 when no tenant has this id or the actor lost the role; 401 when the actor's account is inactive or gone; 409 for the platform tenant, a suspended or archived tenant, a tenant that has an active owner, a deactivated invitee account (`invitee_deactivated`), or an address that belongs to a member (`already_member`).
  */
 export async function reissueOwnerInvitation(
   actor: Actor,
@@ -222,10 +224,13 @@ export async function reissueOwnerInvitation(
  */
 export const TENANT_STATE_CONFLICT_CODE = 'tenant_state_conflict'
 
+/**
+ * The audit action each lifecycle transition records.
+ */
 type LifecycleAction = 'tenant.suspended' | 'tenant.reactivated' | 'tenant.archived'
 
 /**
- * Apply one lifecycle transition, audit it, and return the tenant as it now is.
+ * Apply one lifecycle transition, audit it, and return the tenant after the transition.
  * @param actor - The staff user.
  * @param tenantId - The tenant.
  * @param from - The states the transition starts from.

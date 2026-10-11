@@ -46,7 +46,9 @@ export interface OnboardingReminderVariables {
 }
 
 /**
- * How email tracking treats this template. No token, so the general sender, and every variable is stored for the preview. Never resent: staff send a new reminder, which the 24-hour limit governs.
+ * How email tracking treats this template. No token, so the general sender,
+ * and every variable is stored for the preview. Never resent: staff send a
+ * new reminder, which the 24-hour limit governs.
  */
 export const ONBOARDING_REMINDER_TEMPLATE_META: EmailTemplateMeta<OnboardingReminderVariables> = {
   senderClass: 'general',

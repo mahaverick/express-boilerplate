@@ -1,13 +1,14 @@
 /**
  * @file Maintenance mode as the rest of the app asks about it: whether a
  * user may sign in now, the public status and the staff status section,
- * which read this replica's in-memory mode; and the staff view and change
- * behind `/platform/maintenance-mode`, which read and write Postgres.
+ * which read this replica's in-memory mode (the staff section also reads
+ * queue state from Redis); and the staff view and change behind
+ * `/platform/maintenance-mode`, which read and write Postgres.
  *
  * A change commits the row and its audit entry in one transaction, then
  * publishes the reload, queues the notices, and, entering `full`, waits for
- * them before pausing every queue; leaving `full` resumes them. Messages and
- * reasons are stored as given and never logged.
+ * them before pausing every queue; leaving `full` resumes them. This file
+ * never logs a message or a reason.
  */
 import type { Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
@@ -91,7 +92,8 @@ const NO_REASON = 'No reason given.'
 /**
  * Refuse a sign-in in `full` unless the user is staff (holds any platform
  * role). Called by password login and the Google callback after the user is
- * identified and before a session is created; in any other mode it reads nothing.
+ * identified and before a session is created. In any other mode, or while
+ * the mode is unknown, it allows the sign-in without reading the user's role.
  * @param userId - The user signing in.
  * @returns Resolves when the sign-in may go ahead.
  * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` for a non-staff user in `full`.
@@ -118,7 +120,8 @@ export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
  * it: the mode, when it began and when it last changed (also while off),
  * whether it is known, each queue's pause state, whether the last change's
  * notices are still pending, and the last reload failure.
- * @returns The section; never rejects (a Redis failure, or no answer within `STATUS_READ_TIMEOUT_MS`, shows as null queue fields and no pending notices).
+ * @returns The section. It never rejects: a Redis failure, or no answer within
+ * `STATUS_READ_TIMEOUT_MS`, shows as null queue fields and no pending notices.
  */
 export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus> {
   const snapshot = getMaintenanceMode()
@@ -152,8 +155,9 @@ function changeKindOf(from: MaintenanceMode, to: MaintenanceMode): ChangeKind {
 }
 
 /**
- * A staff member's display name: their names, or `MAINTENANCE_ACTOR_PLACEHOLDER` when they have none:
- * never their address, which would reach other staff's notices and the notice jobs' Redis data.
+ * A staff member's display name, or `MAINTENANCE_ACTOR_PLACEHOLDER` when they have no name.
+ * It is never their address, which would reach other staff's notices and the notice jobs'
+ * Redis data.
  * @param staff - The staff member.
  * @returns The name.
  */
@@ -168,7 +172,8 @@ function nameOf(staff: MaintenanceModeStaff): string {
  * equal to `APP_ENV`.
  * @param kind - The kind of change.
  * @param body - The validated body.
- * @throws {HttpError} 400 `Validation failed` for a missing message or reason; 400 `CONFIRMATION_MISMATCH` for a wrong or missing confirm.
+ * @throws {HttpError} 400 `Validation failed` for a missing message or reason; 400
+ * `CONFIRMATION_MISMATCH` for a wrong or missing confirm.
  */
 function assertChangeAllowed(kind: ChangeKind, body: ChangeMaintenanceModeBody): void {
   if (body.mode !== 'off' && body.message === undefined) {
@@ -189,7 +194,7 @@ function assertChangeAllowed(kind: ChangeKind, body: ChangeMaintenanceModeBody):
 
 /**
  * The staff view of the stored mode, read from Postgres, with each queue's
- * pause state and the environment name a switch-on must confirm.
+ * pause state and the environment name a switch-on or escalation must confirm.
  * @returns The view.
  */
 export async function getPlatformMaintenanceMode(): Promise<PlatformMaintenanceModeView> {
@@ -268,8 +273,8 @@ async function viewOfCommitted(
 }
 
 /**
- * Queue one in-app notice and email to every other platform owner and admin,
- * and record the jobs for the status section. A failed enqueue is logged and
+ * Queue one notification job for every other live, active platform owner and
+ * admin, each carrying its paired email. A failed enqueue is logged and
  * skipped: the change is already committed.
  * @param actor - The staff member who made the change.
  * @param change - The committed change.
@@ -342,25 +347,31 @@ async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promis
 }
 
 /**
- * Change the maintenance mode, as the platform owner. In order: one
- * transaction re-checks the owner role under lock, locks the row, checks
- * `expectedVersion` (409), answers a no-op (same mode and message, and no
- * reason sent or the stored one sent again) with the current state and
- * writes nothing, checks the change's rules, updates the
- * row (`version + 1`; a save that keeps the mode keeps `changed_at`, `changed_by`
- * and, unless the body sends one or `null`, which clears it, the reason) and
- * writes the audit entry. Then it publishes the
- * reload and rereads this replica's copy, queues notices for a switch-on,
- * an escalation or a switch-off, and entering `full` waits for them under
- * one shared deadline before pausing every queue (a timeout or Redis error
- * is logged and the pause goes ahead); leaving `full` resumes them. Once the
- * row has committed no failure turns the change into an error: a failed
- * notice lookup is logged and no notices go out, and a failed final read
- * answers the view built from what was written.
+ * Change the maintenance mode, as the platform owner.
+ *
+ * One transaction re-checks the owner role under lock, locks the row, checks
+ * `expectedVersion` (409), and answers a no-op with the current state,
+ * writing nothing. A no-op is a save that keeps the mode and either stays
+ * `off` (whatever reason is sent) or repeats the stored message with no new
+ * reason (none sent, or the stored one again). Otherwise it checks the change's rules, updates the row
+ * (`version + 1`) and writes the audit entry. A save that keeps the mode keeps
+ * `changed_at` and `changed_by`, and keeps the reason unless the body sends
+ * one (`null` clears it).
+ *
+ * After the commit it publishes the reload and rereads this replica's copy,
+ * then queues notices for a switch-on, an escalation or a switch-off. Entering
+ * `full` waits for the notices under one shared deadline, then pauses every
+ * queue unless a later change has replaced this one; a timeout or Redis error
+ * in the wait is logged and the pause goes ahead. Leaving `full` resumes the
+ * queues. Once the row has committed no failure turns the change into an
+ * error: a failed notice lookup is logged and no notices go out, and a failed
+ * final read answers the view built from what was written.
  * @param actor - The platform owner.
  * @param body - The validated body.
  * @returns The view after the change.
- * @throws {HttpError} 409 `MAINTENANCE_MODE_CONFLICT` for a stale version; 400 for a missing message or reason, or a wrong confirm; 404 when the actor is no longer an owner.
+ * @throws {HttpError} 409 `MAINTENANCE_MODE_CONFLICT` for a stale version; 400 for a missing
+ * message or reason, or a wrong confirm; 404 when the actor lost the owner role; 401 when the
+ * actor's account is inactive or gone; 500 when the platform tenant is missing.
  */
 export async function changeMaintenanceMode(
   actor: Actor,

@@ -64,7 +64,6 @@ export const slugSchema = z
  * not checked against `RESERVED_SLUGS`: `platform`, the staff tenant's slug,
  * is reserved for creation but looked up like any other.
  * @param value - The raw path segment.
- * @returns True when the segment could name a tenant.
  */
 export function isSlugShaped(value: string): boolean {
   return value.length <= MAX_SLUG_LENGTH && SLUG_PATTERN.test(value)
@@ -87,10 +86,10 @@ const tenantDescriptionField = z
 /**
  * A tenant's `logo` or `website`: an absolute `http:` or `https:` URL, trimmed
  * and capped at the column width, never `javascript:`, `data:` or free
- * text, so a client that renders it as a link or image source cannot be
- * made to run or load anything else. A backslash anywhere, or credentials
- * (`user:pw@`) in the URL, are refused too, so one host cannot read as
- * another; an `@` in the path or query is fine.
+ * text, so a client that renders it as a link or image source is never given
+ * a script or data URL. A backslash anywhere, or credentials (`user:pw@`) in
+ * the URL, are refused too, so one host cannot read as another; an `@` in the
+ * path or query is fine.
  * @param label - The field's name in its messages (`Logo`, `Website`).
  * @param maxLength - The column width.
  * @returns The field schema; callers add `.nullable()`/`.optional()`.
@@ -213,7 +212,6 @@ interface JsonScan {
  * Walk a parsed JSON value once, iteratively (a deep value cannot overflow
  * the stack), recording a NUL in any key or string and the nesting depth.
  * @param value - A value `JSON.parse` produced.
- * @returns What the walk found.
  */
 export function scanJson(value: unknown): JsonScan {
   const scan: JsonScan = { hasNul: false, depth: 0 }
@@ -245,7 +243,6 @@ const LOCALE_PATTERN = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/
  * accepted; the colon form `+05:30` is refused by the shape check, though the
  * runtime would take it.
  * @param value - The trimmed candidate.
- * @returns True when the value is a usable time zone name.
  */
 export function isTimeZoneName(value: string): boolean {
   if (!TIMEZONE_PATTERN.test(value)) return false
@@ -262,7 +259,6 @@ export function isTimeZoneName(value: string): boolean {
  * letter language, then `-`-separated subtags such as `en-US` or
  * `zh-Hant-TW`) that `Intl` accepts.
  * @param value - The trimmed candidate.
- * @returns True when the value is a usable locale tag.
  */
 export function isLocaleTag(value: string): boolean {
   if (!LOCALE_PATTERN.test(value)) return false

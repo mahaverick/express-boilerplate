@@ -1,10 +1,11 @@
 /**
  * @file The dependency checks behind `GET /health/ready`, each bounded by
- * `READINESS_CHECK_DEADLINE_MS`. A stalled database or queue connection
- * answers nothing and neither driver times the call out, so without a bound
- * the probe would hang. Each check runs at most once at a time: a probe that
- * arrives while one is in flight waits on that one, so a stall holds one pool
- * connection, not one per probe.
+ * `READINESS_CHECK_DEADLINE_MS`. A stalled database or queue connection can
+ * answer nothing for far longer than a probe may wait (the statement timeout
+ * defaults to 30 s and the queue connection sets no command timeout), so
+ * without a bound the probe would hang. Each check runs at most once at a time:
+ * a probe that arrives while one is in flight waits on that one, so a stall
+ * holds one pool connection, not one per probe.
  */
 import { READINESS_CHECK_DEADLINE_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'

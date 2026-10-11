@@ -21,7 +21,7 @@ const state: { stalledUntil: number | undefined; connectsInFlight: number } = {
 }
 
 /**
- * Whether a cooldown is open now.
+ * Whether a cooldown is in force.
  * @returns True until `stalledUntil` passes.
  */
 function isCoolingDown(): boolean {
@@ -120,12 +120,13 @@ export async function withRedisDeadline<T>(operation: () => Promise<T>, label: s
 
 /**
  * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a write whose loss would widen
- * access: a session deny, an audit throttle key's release, a maintenance-mode
- * change. Unlike `withRedisDeadline` it never consults or opens the stall
- * cooldown, so the write is always sent; one still in flight at the deadline
- * is left to land when Redis answers, never abandoned, with one `warn`, and
- * `onLateFailure` runs if it then fails. If the connection drops first,
- * node-redis rejects it and the write is lost; `onLateFailure` reports that.
+ * access (a session deny, a maintenance-mode change) or let a dedupe or
+ * throttle key linger (its release). Unlike `withRedisDeadline` it never
+ * consults or opens the stall cooldown, so the write is always sent; one
+ * still in flight at the deadline is left to land when Redis answers, never
+ * abandoned, with one `warn`, and `onLateFailure` runs if it then fails. If
+ * the connection drops first, node-redis rejects it and the write is lost;
+ * `onLateFailure` reports that.
  * @param write - Starts the write, `getRedis()` included.
  * @param label - What is being written, for the warning.
  * @param onLateFailure - Reports a write that fails after the deadline; must not throw.

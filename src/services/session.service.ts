@@ -36,9 +36,9 @@ const userTokenRepository = new UserTokenRepository()
 const userRepository = new UserRepository()
 
 /**
- * Revoke every live token in one session under the user row lock, then deny
- * the session. FOR NO KEY UPDATE waits for any rotation holding the row FOR
- * SHARE, so this revoke starts after that rotation's next token has
+ * Revoke every unrevoked token in one session under the user row lock, then
+ * deny the session. FOR NO KEY UPDATE waits for any rotation holding the row
+ * FOR SHARE, so this revoke starts after that rotation's next token has
  * committed, and a rotation arriving later finds its token revoked.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
@@ -65,8 +65,9 @@ interface AccessTokenPayload {
    */
   sid?: string
   /**
-   * This token's own id. Not checked — it exists so a token accepted after
-   * a Redis flush can be identified in logs.
+   * This token's own id, unique per token. Nothing checks it and nothing in
+   * this app logs it; it lets a token accepted after a Redis flush be told
+   * apart from the other tokens of its session.
    */
   jti?: string
   /**
@@ -199,16 +200,13 @@ export function signAccessToken(
 }
 
 /**
- * The outcome of verifying an access token: its payload, or WHICH of two
+ * The outcome of verifying an access token: its payload, or which of two
  * reasons verification failed for.
  *
- * A caller (auth.middleware.ts) needs that distinction to tell a client
- * "refresh me" from "log in again" — but only this module has anything
- * trustworthy to say about why a token was rejected, since only this module
- * ever calls `jwt.verify` and sees what `jsonwebtoken` actually threw. A
- * caller re-deriving "expired" from the token's own, unverified claims after
- * a generic rejection would be trusting exactly the data verification just
- * said not to trust; a discriminated result here means it never has to.
+ * auth.middleware.ts needs that distinction to tell a client "refresh me"
+ * from "log in again", and only this module calls `jwt.verify` and sees what
+ * `jsonwebtoken` threw. A caller re-deriving "expired" from the token's own
+ * unverified claims would trust the data verification just rejected.
  */
 export type VerifyAccessTokenResult =
   { ok: true; payload: AccessTokenPayload } | { ok: false; reason: 'expired' | 'invalid' }
@@ -216,20 +214,17 @@ export type VerifyAccessTokenResult =
 /**
  * Verify an access token.
  *
- * Never resolves `ok: true` for a token that is malformed, expired, or
- * signed with any key or algorithm other than this server's own
- * `JWT_ACCESS_SECRET` under HS256 — `algorithms: ['HS256']` is pinned
- * explicitly so a token signed with a different algorithm can never be
- * accepted, regardless of what its own (attacker-controlled) header claims.
+ * Never returns `ok: true` for a token that is malformed, expired, or signed
+ * with any key or algorithm other than this server's `JWT_ACCESS_SECRET`
+ * under HS256: `algorithms: ['HS256']` is pinned, so the token's own
+ * (attacker-controlled) header cannot choose another algorithm.
  *
- * `reason: 'expired'` is reported ONLY for `jsonwebtoken`'s own
- * `TokenExpiredError` — i.e. only when the signature and every other check
- * already passed and the sole remaining problem is `exp`. Every other
- * failure (bad signature, wrong algorithm, malformed structure, missing
- * `sub`) is `'invalid'`. The two carry no information beyond that label —
- * in particular `'invalid'` never says which of its causes applied — so
- * resolving the distinction can never teach an unauthenticated caller
- * anything more than "your token is stale" versus "your token is no good."
+ * `reason: 'expired'` is reported only for `jsonwebtoken`'s
+ * `TokenExpiredError`, which it raises only after the signature has
+ * verified. Every other failure (bad signature, wrong algorithm, malformed
+ * structure, missing `sub`) is `'invalid'`, which never says which cause
+ * applied, so an unauthenticated caller learns no more than "your token is
+ * stale" versus "your token is no good".
  * @param token - The bearer token presented by the client.
  * @returns The verified payload, or which of the two reasons verification failed.
  */
@@ -347,11 +342,21 @@ interface RotationRefused {
 type RotationOutcome = RotationIssued | RotationRefused
 
 /**
- * Concurrent-refresh grace: a token replayed within REFRESH_REUSE_GRACE_MS of its rotation gets a sibling (accepted trade-off); later reuse revokes the session.
+ * Concurrent-refresh grace: a token replayed within REFRESH_REUSE_GRACE_MS of
+ * its rotation gets a sibling (an accepted trade-off); later reuse revokes
+ * the session.
  *
- * A kill that races this check (logout, reuse, a password write, an account claim) takes the user row FOR NO KEY UPDATE, which waits for this rotation's FOR SHARE, so it revokes the sibling this check lets through.
+ * A kill that races this check (logout, reuse, the locked pass of a password
+ * write or an account claim) takes the user row FOR NO KEY UPDATE, which
+ * waits for this rotation's FOR SHARE, so it revokes the sibling this check
+ * lets through. `revokeAllSessions`, the unlocked first pass of a reset or a
+ * claim, takes no user row lock and misses the sibling; the locked pass its
+ * callers run after it catches it.
  *
- * Only a kill marker at or after the presented row's consumption refuses grace (`isSessionKilled`): an older one is a revoke that spared this chain, such as a sibling a password change or sign-out of other sessions ended, and the session keeps its grace window.
+ * Only a kill marker at or after the presented row's consumption refuses
+ * grace (`isSessionKilled`): an older one is a revoke that spared this chain,
+ * such as a sibling a password change or sign-out of other sessions ended,
+ * and the session keeps its grace window.
  * @param existing - The already-claimed row the presented token hashes to.
  * @param tx - The rotation's transaction.
  * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
@@ -364,7 +369,7 @@ async function findGraceSession(
 > {
   const { purpose, sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
   if (purpose !== 'refresh' || sessionId === null || sessionStartedAt === null) return undefined
-  // consumedAt is null for a row killed by logout/reuse revocation, never a rotation.
+  // consumedAt is null for a row an explicit revoke killed, and set for one a rotation spent.
   if (consumedAt === null) return undefined
   // Judged by Postgres's own clock, not Date.now() — see wasConsumedWithin.
   if (!(await userTokenRepository.wasConsumedWithin(tokenHash, REFRESH_REUSE_GRACE_MS, tx))) {
@@ -372,16 +377,16 @@ async function findGraceSession(
   }
   // claimOnce also consumes expired rows; an expired token must never mint a sibling.
   if (expiresAt.getTime() <= Date.now()) return undefined
-  // Committed kill markers since this row's consumption only, so a sibling rotation still in flight can't look like a logout.
+  // A sibling rotation's claim sets consumedAt too, so isSessionKilled never counts it as a kill.
   if (await userTokenRepository.isSessionKilled(sessionId, tokenHash, tx)) return undefined
   return { sessionId, sessionStartedAt, authenticatedAt: existing.authenticatedAt }
 }
 
 /**
  * Issue the next refresh token in a session, enforcing the session's absolute
- * lifetime. Every token in a session shares its start time, so past the ceiling
- * all of them are; the refusal's message matches the expiry branch's, so a
- * caller can't tell which clock ran out.
+ * lifetime. Every token in a session shares its start time, so past the
+ * ceiling every one of them is refused; the refusal's message matches the
+ * expiry branch's, so a caller can't tell which clock ran out.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
  * @param sessionStartedAt - When the session began; copied forward so the absolute TTL never resets.
@@ -417,7 +422,7 @@ async function continueSession(
  * not thrown, so the transaction still commits the claim. A session to kill
  * is revoked after commit, under FOR NO KEY UPDATE, never in this FOR SHARE
  * transaction: upgrading here would deadlock two concurrent reuses. The
- * FOR SHARE lock waits for a password change or reset in flight; a
+ * FOR SHARE lock waits for a password write holding the row; a
  * soft-deleted user has no row to lock, and refresh() (auth.service.ts)
  * refuses that user afterwards.
  * @param userId - The presented token's user.
@@ -488,13 +493,13 @@ async function rotateUnderUserLock(
  * diligently refreshing client (or a stolen cookie) cannot hold a login forever.
  *
  * The claim, the checks and the next token's insert share one transaction
- * that holds the user row FOR SHARE, so a password change or reset cannot
- * revoke in between. A session killed by reuse or by its absolute lifetime
- * is revoked after that commit, under the user row lock, then denied.
- * Logout, those kills, the Google account claim and password writes lock the
- * row FOR NO KEY UPDATE before their in-transaction revoke (`revokeAllSessions`'
- * first pass takes no lock), so a rotation either commits first and its new
- * token is revoked, or waits and finds the presented token revoked.
+ * that holds the user row FOR SHARE, so no locked revoke runs in between. A
+ * session killed by reuse or by its absolute lifetime is revoked after that
+ * commit, under the user row lock, then denied. Logout, those kills, the
+ * Google account claim and password writes lock the row FOR NO KEY UPDATE
+ * before their in-transaction revoke (`revokeAllSessions`' first pass takes
+ * no lock), so a rotation in a session they revoke either commits first and
+ * its new token is revoked, or waits and finds the presented token revoked.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
  * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
@@ -517,19 +522,16 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
 
 /**
  * Revoke the session a raw refresh token belongs to, under the user row
- * lock, and deny its access tokens (best-effort — see `denySession`) —
+ * lock, and deny its access tokens (best-effort, see `denySession`):
  * logout's primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
- * issued for a different purpose entirely (a password-reset or
- * email-verification token's raw value presented here has no session to
- * revoke, and `findByHash` is purpose-agnostic so it would still be found);
- * it never distinguishes any of those from a live one in what it returns. A
- * matched token opens a locked transaction and a miss returns at once, so
- * the time it takes is not uniform. Logout must feel like unconditional success to
- * whoever calls it, not a way to test whether a given token string is
- * still live — exactly the same reasoning `rotateRefreshToken` (this
- * module) and login (auth.service.ts) already apply to their own callers.
+ * issued for another purpose (`findByHash` is purpose-agnostic, but a reset
+ * or verification token has no session to revoke), and returns nothing that
+ * tells those apart from a live one: logout must not be a way to test
+ * whether a token string is live. Its timing is not uniform: a matched token
+ * opens a locked transaction and a miss returns at once.
+ *
  * A live token (not revoked, not expired) whose revoke changed rows emits
  * `user_signed_out` after it, on the matched branch only, which already
  * takes longer than a miss. The locked revoke decides who changed them, so
@@ -556,11 +558,11 @@ export async function revokeRefreshToken(
 /**
  * The caller's own refresh row, named by the refresh cookie its request
  * presented: found only when that row belongs to the caller, is a refresh
- * token of the caller's session (the access token's `sid`), and is the live
- * head of its chain (not revoked). Anything else (an unknown, revoked or
- * foreign token, another session's) names nothing, and the caller's whole
- * session is spared as before. Read in the caller's transaction, after its
- * user row lock, so no rotation of that chain is in flight.
+ * token of the caller's session (the access token's `sid`), and is not
+ * revoked. Anything else (an unknown, revoked or foreign token, another
+ * session's) names nothing, and the caller's whole session is spared, as
+ * when no cookie is sent. Read in the caller's transaction, after its user
+ * row lock, so no rotation of that chain is in flight.
  * @param userId - The authenticated caller.
  * @param sessionId - The caller's session, from the access token's `sid`.
  * @param presentedRefreshToken - The raw refresh token the request presented.
@@ -589,10 +591,10 @@ async function findCallerRefreshTokenId(
  * denial written before commit would outlive a rollback.
  *
  * With `exceptSessionId` alone the whole session is spared. With a
- * `presentedRefreshToken` that names the caller's live chain
+ * `presentedRefreshToken` that names the caller's unrevoked chain
  * (`findCallerRefreshTokenId`), only that one row is spared, so a sibling a
  * grace-window replay minted in the same session ends too. Run it after the
- * user row lock, as every caller does.
+ * user row lock, as every caller but `revokeAllSessions` does (see there).
  * @param userId - The user whose tokens are revoked, every purpose.
  * @param options - What to spare.
  * @param options.exceptSessionId - The one session id to spare, if any.
@@ -625,14 +627,14 @@ export async function revokeSessionRows(
 
 /**
  * Deny the sessions a committed revocation revoked: a password change or
- * reset, a Google account claim, or a staff deactivation, sign-out or
- * deletion. Never rejects,
- * because the revocation already stands. When Redis refuses, those
- * sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL, as when the
- * denylist fails open, and one error line is logged. A denial still in flight
- * at the deadline (`'pending'`) is not counted here: it lands when Redis
- * answers, and if it fails instead `denySession` logs the same error line for
- * it, with this user id.
+ * reset, a Google account claim, a sign-out of other sessions, or a staff
+ * deactivation, sign-out or deletion. Never rejects, because the revocation
+ * already stands. When Redis refuses, those sessions' access tokens stay
+ * valid for up to ACCESS_TOKEN_TTL, as when the denylist fails open, and one
+ * error line is logged. A denial still in flight at the deadline
+ * (`'pending'`) is not counted here: it lands when Redis answers, and if it
+ * fails instead `denySession` logs the same error line for it, with this
+ * user id.
  * @param userId - The user whose sessions were revoked.
  * @param sessionIds - The revoked session ids.
  * @returns Resolves once every denial is written, left in flight past the deadline, or its failure logged.
@@ -665,7 +667,7 @@ function absoluteLifetimeCutoff(): Date {
  * after commit, which also ends that session's notification stream at its
  * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  *
- * When the request presented the caller's live refresh cookie, a sibling
+ * When the request presented the caller's unrevoked refresh cookie, a sibling
  * chain a grace-window replay minted in the calling session is revoked too
  * (`revokeSessionRows`); its access tokens share the caller's `sid`, so they
  * are not denied and last until ACCESS_TOKEN_TTL. No Origin check is needed:
@@ -674,7 +676,7 @@ function absoluteLifetimeCutoff(): Date {
  * @param userId - The authenticated caller.
  * @param sessionId - The calling session (the token's `sid`), which is spared; undefined for a token without one.
  * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only the caller's own chain when it names it.
- * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token, within SESSION_ABSOLUTE_TTL) and are now revoked; a lapsed session is revoked but not counted, and neither is a sibling in the calling session.
+ * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token, within SESSION_ABSOLUTE_TTL) and this call revoked; a lapsed session is revoked but not counted, and neither is a sibling in the calling session.
  * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, or an account gone or inactive.
  */
 export async function revokeOtherSessions(
@@ -709,11 +711,12 @@ export async function revokeOtherSessions(
 }
 
 /**
- * Revoke every live token belonging to a user, across every session, and
- * deny each revoked session's access tokens (best-effort — see
- * `denySession`). It takes no user row lock, so a rotation in flight can
- * outlive it; its callers (reset and the Google account claim) follow it
- * with a pass under the lock.
+ * Revoke every unrevoked token a user holds, across every session and
+ * purpose, and deny each revoked session's access tokens (best-effort, see
+ * `denySession`). It takes no user row lock, so a successor token that a
+ * rotation in flight mints survives it. Its callers (a password reset and
+ * the Google account claim) follow it with a pass under the lock, which
+ * revokes that successor unless that pass rolls back.
  * @param userId - The user whose sessions should all end.
  * @returns Resolves once every token is revoked and each revoked session is denied, best-effort.
  */
@@ -723,12 +726,12 @@ export async function revokeAllSessions(userId: string): Promise<void> {
 }
 
 /**
- * Record that a session's user just proved their identity again (by password,
- * `POST /auth/reauthenticate`): move
- * `authenticated_at` to now on every row of the session
- * (`markSessionAuthenticated`). Holds the user row FOR NO KEY UPDATE, which
- * waits for a rotation holding it FOR SHARE, so that rotation's new row
- * exists before the update and gets the new time.
+ * Record that a session's user just proved their identity again, by
+ * password (`POST /auth/reauthenticate`): move `authenticated_at` to the
+ * current time on every row of the session (`markSessionAuthenticated`).
+ * Holds the user row FOR NO KEY UPDATE, which waits for a rotation holding it
+ * FOR SHARE, so that rotation's new row exists before the update and gets
+ * the new time.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id, from the access token's `sid`.
  * @param tx - A caller's transaction to run in, so an audit entry can commit with the change; a transaction of its own when omitted.
@@ -740,6 +743,10 @@ export function markSessionReauthenticated(
   sessionId: string,
   tx?: DbTransaction
 ): Promise<Date> {
+  /**
+   * The step-up itself: the locked active check and the `authenticated_at`
+   * write, shared by both transaction paths.
+   */
   const mark = async (transaction: DbTransaction): Promise<Date> => {
     const user = await userRepository.lockById(userId, 'no key update', transaction)
     if (!user?.active) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)

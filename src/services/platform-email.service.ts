@@ -3,8 +3,8 @@
  * `/platform/email-suppressions`: search, detail, preview, health, resend
  * and lifting a suppression. The routes check the caller's platform role
  * before any of this runs. A resend never replays a stored email: it runs
- * the SP2 action that sent it, which issues a fresh token, with that
- * action's own gates, errors and audit entry. The only importer of
+ * the action that sent it, which issues a fresh token, with that action's
+ * own gates, errors and audit entry. The only module in `src/` that imports
  * `platform-email.repository.ts`.
  */
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
@@ -81,13 +81,13 @@ const emailSuppressionRepository = new EmailSuppressionRepository()
 export const TOKEN_MASK = '••••••'
 
 /**
- * What a preview shows for the inviter, whose name is never stored.
+ * What a preview shows for the inviter, whose name the email record never stores.
  */
 export const INVITER_NAME_PLACEHOLDER = 'A teammate'
 
 /**
- * What a maintenance-mode notice's preview shows for the reason, which stays
- * in the audit log only.
+ * What a maintenance-mode notice's preview shows for the reason, which the
+ * email record never stores; the audit log keeps it.
  */
 export const MAINTENANCE_REASON_PLACEHOLDER = '(See the audit log.)'
 
@@ -207,10 +207,10 @@ export interface ResendContext {
  * for the UI, computed with the same predicates the delegated actions
  * enforce, which the resend endpoint still runs. True only when the actor
  * is a platform admin or owner, the template has a resend action, the row
- * carries the ids that action needs, the recipient is not suppressed, and
- * the user (for user-targeted mail) is active and, for verification, not
- * yet verified, and the action's own actor check passes: `canStaffMailTarget` against the
- * user's platform role for verification and password mail, and
+ * carries the ids that action needs, the recipient is not suppressed, the
+ * user (for user-targeted mail) is active and, for verification, not yet
+ * verified, and the action's own actor check passes: `canStaffMailTarget`
+ * against the user's platform role for verification and password mail, and
  * `canActorGrantRole` on the invitation's role for an invitation, with the
  * actor's role in that tenant (membership first, as `lockTenantAccess`
  * resolves it, else the platform role). An invitation also needs to be
@@ -420,6 +420,12 @@ export function buildPreviewMessage(
 ): { message: MailMessage; isPartial: boolean } {
   const allowed: readonly string[] = EMAIL_TEMPLATE_META[templateKey].previewVariables
   let isPartial = false
+  /**
+   * The stored value of a preview variable, or `TOKEN_MASK` when it is not an
+   * allowed string variable, which also makes the preview partial.
+   * @param name - The variable's name.
+   * @returns The text to show.
+   */
   const fill = (name: string): string => {
     const value = allowed.includes(name) ? stored[name] : undefined
     if (typeof value === 'string') return value
@@ -525,7 +531,8 @@ export function buildPreviewMessage(
  * reads `TOKEN_MASK`. Nothing is sent or stored.
  * @param id - The message id.
  * @returns The subject, HTML, text and whether a stored preview variable was missing.
- * @throws {HttpError} 404 when no message has that id; 409 `template_unavailable` when its template is not in the registry.
+ * @throws {HttpError} 404 when no message has that id; 409 `template_unavailable` when its
+ * template is not in the registry.
  */
 export async function previewEmail(id: string): Promise<EmailPreview> {
   const message = await requireMessage(id)
@@ -664,7 +671,8 @@ export async function searchSuppressions(
  * @param action - The template's resend action.
  * @param message - The message.
  * @returns The target ids.
- * @throws {HttpError} 409 `not_resendable` when a needed id is missing (a row backfilled from before tracking, or a purged link).
+ * @throws {HttpError} 409 `not_resendable` when a needed id is missing (a row backfilled from
+ * before tracking, or a purged link).
  */
 function resendTargetOf(
   action: ResendAction,
@@ -691,18 +699,24 @@ function resendTargetOf(
  * unchanged; this adds an `email.resent` entry with the reason once it
  * succeeds. That entry is written after, and separately from, the delegated
  * action's commit: if it fails the call answers 500 though the mail was
- * queued, and a retry rotates the token again. Checks, in order: the message exists; its template is in the
- * registry; it has a resend action and the ids it needs; the recipient is
- * not suppressed; for an invitation, its tenant is active (the member
- * route's `resolveTenant` gate) and the caller signed in within the step-up
- * window, on any tenant, as the member route asks of staff.
+ * queued, and a retry rotates the token again.
+ *
+ * Checks, in order: the message exists; its template is in the registry; it
+ * has a resend action and the ids it needs; the recipient is not suppressed;
+ * for an invitation, its tenant is active (the member route's
+ * `resolveTenant` gate) and the caller signed in within the step-up window,
+ * on any tenant, as the member route asks of staff.
  * @param actor - The signed-in staff admin.
  * @param id - The message id.
- * @param reason - Why, for the audit log: on the `email.resent` entry, and on an invitation's `invitation.resent` entry.
+ * @param reason - Why, for the audit log: on the `email.resent` entry, and on an
+ * invitation's `invitation.resent` entry.
  * @param authTime - The access token's `auth_time` (`request.authTime`).
  * @param now - The current time in ms; injectable for tests.
- * @returns `emailSent` when the delegated action reports it; empty for an invitation, whose mail is queued without waiting.
- * @throws {HttpError} 404 unknown message, or an invitation's tenant not active; 409 `template_unavailable`, `not_resendable` or `recipient_suppressed`; 401 `REAUTH_REQUIRED` for an invitation with a stale sign-in; and whatever the delegated action throws.
+ * @returns `emailSent` when the delegated action reports it; empty for an invitation, whose mail
+ * is queued without waiting.
+ * @throws {HttpError} 404 unknown message, or an invitation's tenant not active; 409
+ * `template_unavailable`, `not_resendable` or `recipient_suppressed`; 401 `REAUTH_REQUIRED` for
+ * an invitation with a stale sign-in; and whatever the delegated action throws.
  */
 export async function resendEmail(
   actor: Actor,
@@ -719,7 +733,7 @@ export async function resendEmail(
       TEMPLATE_UNAVAILABLE_CODE
     )
   }
-  // Captured once narrowed: the audit entry is written in a callback, where a property's narrowing does not reach.
+  // Captured once narrowed: the audit entry is written in a callback, where a property's narrowing is lost.
   const templateKey = message.templateKey
   const action = EMAIL_TEMPLATE_META[templateKey].resendAction
   if (action === null) {

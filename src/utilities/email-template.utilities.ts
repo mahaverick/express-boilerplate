@@ -78,7 +78,7 @@ type HtmlEscapable = keyof typeof HTML_ESCAPE_TABLE
  * recipient a literal `&amp;`. The template tests assert escaping on the
  * rendered HTML, not on this function alone.
  * @param value - The raw string to make safe for HTML.
- * @returns `value` with `& < > " '` replaced by their named HTML entities.
+ * @returns `value` with `& < > " '` replaced by their HTML entities.
  */
 export function escapeHtmlForEmail(value: string): string {
   return value.replaceAll(/[&<>"']/g, (character) => HTML_ESCAPE_TABLE[character as HtmlEscapable])
@@ -122,7 +122,7 @@ export function requireEmailVariables<T extends object>(
 }
 
 /**
- * The SP2 flows a staff resend can re-run. Each issues a fresh token; a
+ * The flows a staff resend can re-run. Each issues a fresh token; a
  * token email is never replayed.
  */
 export type ResendAction = 'verification' | 'password_setup' | 'invitation'
@@ -138,8 +138,9 @@ type SecretKey<T> = {
 /**
  * What email tracking needs to know about one template, typed against its
  * variables so the compiler enforces two rules: a template with a secret
- * variable must use the `transactional` sender (click tracking off), and no
- * secret variable can be listed for storage.
+ * variable must use the `transactional` sender (the one meant for a domain
+ * with click tracking off; `assertEnvConsistent` warns when it is not
+ * separate), and no secret variable can be listed for storage.
  */
 export type EmailTemplateMeta<V> = {
   /**
@@ -151,9 +152,10 @@ export type EmailTemplateMeta<V> = {
    */
   previewVariables: readonly Exclude<keyof V, SecretKey<V>>[]
   /**
-   * The flow a staff resend re-runs, or null when the template must never be
-   * resent: a security notice about an event that did not recur, or an
-   * onboarding reminder, which staff send afresh instead.
+   * The flow a staff resend re-runs, or null when the template is never
+   * resent: a notice about an event that did not recur (a password change, a
+   * registration attempt, a maintenance change), or an onboarding reminder,
+   * which staff send afresh instead.
    */
   resendAction: ResendAction | null
 }
