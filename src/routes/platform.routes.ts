@@ -45,9 +45,9 @@ export function createPlatformRouter(): Router {
   router.use(logStaffWrites)
   // One instance: separate ones would split the budget on the in-memory fallback.
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
-  // One instance shared by every /platform write: users', tenants', emails' and onboarding's.
+  // One instance shared by the /platform writes of users, tenants, emails and onboarding.
   const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
-  // One instance shared by the user and tenant timelines and Errors views.
+  // One instance shared by the user and tenant timelines, Errors views and the flag evaluator.
   const timelineLimiter = createRateLimiter(RATE_LIMITS.platformTimeline, {
     limit: getEnv().TIMELINE_REQUESTS_PER_MINUTE,
   })

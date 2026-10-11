@@ -34,8 +34,8 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * sibling page could otherwise send them a body-less POST with the cookie
  * attached. `/change-password` and `/sessions/revoke-others` read the cookie
  * too, but only to narrow what they spare; they authenticate with the bearer
- * token, which a browser never attaches cross-site, so they need no Origin
- * check.
+ * token, which a cross-site page cannot make a browser send, so they need no
+ * Origin check.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;

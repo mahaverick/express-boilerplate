@@ -27,8 +27,8 @@ export interface MembershipWithUser {
   membership: UserMembership
   /**
    * The member's public identity — never `passwordHash` — and `active`:
-   * false for a deactivated account, which cannot sign in and which the
-   * platform tenant's last-owner guard does not count (`countActiveOwners`).
+   * false for a deactivated account, which cannot sign in and which
+   * `countActiveOwners` does not count.
    * `listMembers` (tenant.service.ts) drops `active` on a customer tenant.
    */
   user: Pick<User, 'id' | 'email' | 'firstName' | 'lastName' | 'active'>
@@ -398,10 +398,10 @@ export class UserMembershipRepository {
 
   /**
    * Lock a tenant's owner memberships until the transaction ends, in id
-   * order so two lockers never deadlock. A concurrent demotion or removal of
-   * an owner waits here, which is what makes the last-owner check atomic.
-   * Only meaningful inside a transaction. Lock order: this first, then
-   * `lockMemberships`.
+   * order, so callers locking the same owners take them in the same order. A
+   * concurrent demotion or removal of an owner waits here, which is what makes
+   * the last-owner check atomic. Only meaningful inside a transaction. Lock
+   * order: this first, then `lockMemberships`.
    * @param tenantId - The tenant whose owners to lock.
    * @param mode - `'update'` when the transaction may delete a locked row; otherwise `'no key update'`, which lets foreign-key checks through.
    * @param executor - The transaction to hold the lock in.
@@ -426,8 +426,8 @@ export class UserMembershipRepository {
    *
    * Lock order within one transaction: the tenant's owner rows first
    * (`lockOwners`), then this, then `lockPlatformRole` when the actor has no
-   * membership here. Every service that locks memberships follows it, so two
-   * transactions never wait on each other in a cycle.
+   * membership here. Services that lock memberships follow it, so two
+   * transactions do not wait on each other in a cycle.
    * @param tenantId - The tenant.
    * @param userIds - The users whose memberships to lock. Duplicates and non-members are ignored.
    * @param mode - `'update'` when the transaction may delete a locked row; otherwise `'no key update'`.

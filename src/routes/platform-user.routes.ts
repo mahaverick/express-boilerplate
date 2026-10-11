@@ -2,9 +2,9 @@
  * @file Staff user management, mounted at `/api/v1/platform/users` by
  * `createPlatformRouter`, behind its router-wide `requireAuth`. Each route
  * names its own role gate and runs it first, before the JSON gate, the
- * step-up check (deactivate, delete and purge) and the limiter, so a refused caller
- * gets the plain 404: no 415 and no `RateLimit-*` headers to show the route
- * exists.
+ * step-up check (deactivate, delete and purge) and the limiter, so a refused
+ * caller gets the plain 404: no 415 and no `RateLimit-*` headers to show the
+ * route exists.
  */
 import { Router, type RequestHandler } from 'express'
 import { platformErrorsController } from '@/controllers/platform-errors.controller'

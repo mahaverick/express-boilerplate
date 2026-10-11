@@ -504,7 +504,7 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * Delete up to `limit` invitations whose latest of expiry, acceptance and
+   * Delete about `limit` invitations whose latest of expiry, acceptance and
    * revocation is before `cutoff`. `greatest` ignores NULLs, so a pending
    * invitation counts from its expiry. No index: the table holds one row per
    * invite, so the daily scan is cheap.
@@ -512,7 +512,7 @@ export class TenantInvitationRepository {
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
    * @param cutoff - Rows older than this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The batch size to aim for; a target, not a hard cap, because the batch is an `IN` subquery the planner may rescan.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

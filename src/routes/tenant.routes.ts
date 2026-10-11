@@ -31,11 +31,11 @@ import {
  * Build the tenant routes. `requireRole` checks the effective role, so staff
  * admins pass the owner/admin routes (the audit log included) and staff
  * viewers do not. The onboarding writes and leaving add `requireMembership`,
- * so no platform role acts on them. On the platform tenant, member role changes, removals,
- * leaving, every invitation and every resend also need a recent sign-in
- * (`requireRecentAuthOnPlatformTenant`): every platform role, viewer included,
- * reads every user, tenant and address.
- * A revoke there needs no recent sign-in: it only removes a pending grant.
+ * so no platform role acts on them. On the platform tenant, member role
+ * changes, removals, leaving, every invitation and every resend also need a
+ * recent sign-in (`requireRecentAuthOnPlatformTenant`): every platform role,
+ * viewer included, reads every user, tenant and address. A revoke there
+ * needs no recent sign-in: it only removes a pending grant.
  * On a customer tenant, staff acting through their platform role need a
  * recent sign-in and a `reason` for the same member and invitation writes,
  * and for a revoke (`requireRecentAuthAndReasonOnPlatformAccess`).

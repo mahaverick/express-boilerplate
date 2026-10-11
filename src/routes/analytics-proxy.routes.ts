@@ -30,19 +30,20 @@ const ANALYTICS_UNCONFIGURED = {
 } as const
 
 /**
- * How long PostHog may take to answer before the proxy gives up with a 504.
- * Without a bound, an upstream that accepts a connection and never answers
- * would hold the client's socket and the upstream's open indefinitely.
+ * How long the upstream connection may sit idle before the proxy gives up with
+ * a 504. Without a bound, an upstream that accepts a connection and never
+ * answers would hold the client's socket and the upstream's open indefinitely.
  */
 const UPSTREAM_TIMEOUT_MS = 30_000
 
 /**
- * Prepare the upstream request: drop the browser's credentials, and name the
- * client and the origin it addressed by what Express resolved under
- * `trust proxy`.
+ * Prepare the upstream request: drop the browser's credentials, name the
+ * client address and protocol by what Express resolved under `trust proxy`,
+ * and pass on the `Host` the client sent and the port it connected to.
  *
- * The refresh cookie is `__Host-refreshToken` with `Path=/`, so the browser
- * sends it here too; PostHog must never receive it, nor a bearer token.
+ * The refresh cookie can have `Path=/` (it is `__Host-refreshToken` unless
+ * `COOKIE_DOMAIN` is set), so the browser can send it here too; PostHog must
+ * never receive it, nor a bearer token.
  * The `X-Forwarded-*` headers are replaced, not appended to: `xfwd` only adds
  * the ones the client did not send, which would let any client choose the
  * address PostHog geolocates.
@@ -65,7 +66,7 @@ function prepareUpstreamRequest(proxyRequest: ClientRequest, request: Request): 
 
 /**
  * Strip what the upstream must not decide on this origin: cookies (a
- * `Set-Cookie` here could overwrite the refresh cookie, which is `Path=/`) and
+ * `Set-Cookie` here could overwrite a refresh cookie that has `Path=/`) and
  * `Access-Control-*` (the app's `cors` middleware already granted or withheld
  * this origin, and an upstream `*` would replace its grant).
  * @param proxyResponse - The upstream's response, before it reaches the client.

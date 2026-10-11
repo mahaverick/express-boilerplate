@@ -1,26 +1,4 @@
 {
-  "X07": [
-    "src/repositories/tenant-invitation.repository.ts",
-    "src/repositories/tenant-settings.repository.ts",
-    "src/repositories/tenant.repository.ts",
-    "src/repositories/user-membership.repository.ts",
-    "src/repositories/user-token.repository.ts",
-    "src/repositories/user.repository.ts",
-    "src/routes/analytics-proxy.routes.ts",
-    "src/routes/auth.routes.ts",
-    "src/routes/email-webhook.routes.ts",
-    "src/routes/flags.routes.ts",
-    "src/routes/index.routes.ts",
-    "src/routes/invitation.routes.ts",
-    "src/routes/notification.routes.ts",
-    "src/routes/platform-email.routes.ts",
-    "src/routes/platform-onboarding.routes.ts",
-    "src/routes/platform-user.routes.ts",
-    "src/routes/platform.routes.ts",
-    "src/routes/profile.routes.ts",
-    "src/routes/status.routes.ts",
-    "src/routes/tenant.routes.ts"
-  ],
   "X08": [
     "src/scripts/analytics-backfill-groups.ts",
     "src/scripts/email-fire-event.ts",

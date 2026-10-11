@@ -49,7 +49,8 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
 /**
  * Query access to the `tenants` table: lookup by slug and/or id, atomic
  * creation (tenant + settings + owner membership), and the tenants a given
- * user belongs to. Every lookup excludes a soft-deleted tenant by default.
+ * user belongs to. The slug and id lookups exclude a soft-deleted tenant by
+ * default.
  */
 export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['config']> {
   /**

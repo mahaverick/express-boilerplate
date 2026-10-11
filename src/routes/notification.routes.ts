@@ -1,7 +1,6 @@
 /**
  * @file The notification routes, including preferences and the SSE stream,
- * every one behind a router-wide `requireAuth`. `/stream` is registered
- * before the `:id` routes, so `stream` is never captured as an id.
+ * every one behind a router-wide `requireAuth`.
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -12,7 +11,7 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
  * Build the notification routes.
- * @returns A router mounted at `/api/v1/notifications` by `index.routes.ts`. Every route sits behind `requireAuth`.
+ * @returns A router mounted at `/api/v1/notifications` by `index.routes.ts`.
  */
 export function createNotificationRouter(): Router {
   const router = Router()
