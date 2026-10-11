@@ -5,7 +5,8 @@
  * fetch that flag-definitions.job.ts schedules, one job at a time whatever
  * `WORKER_CONCURRENCY` says, so this Worker never has two of its jobs
  * talking to PostHog at once. Two replicas may; the drain and the deletion
- * tick each claim their rows, so two never take the same ones.
+ * tick each lease their rows, so two do not take the same ones while a lease
+ * holds.
  */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'

@@ -2,8 +2,9 @@
  * @file Auth request bodies. Email and name fields are capped at the width of
  * the column they are written to (the `MAX_*_LENGTH` constants user.model.ts
  * also uses): an over-long value would otherwise reach Postgres as a 22001
- * and answer 500 instead of 400. A password is capped in bytes instead
- * (`MAX_PASSWORD_BYTES`), because only its bcrypt hash is stored.
+ * and answer 500 instead of 400. A password being set is capped at
+ * `MAX_PASSWORD_BYTES` bytes (bcrypt's limit) instead; one being checked is
+ * not (see `loginSchema`).
  */
 import { z } from 'zod'
 import {

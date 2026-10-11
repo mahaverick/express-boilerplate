@@ -1,11 +1,11 @@
 /**
  * @file The shape of PostHog's `/flags/definitions` body, and the parse
  * into the snapshot express evaluates from. The body is untrusted input:
- * unknown flag-level fields are stripped (PostHog adds them often), a keyed
- * flag that fails the schema is kept as `malformed` so it is never evaluated,
- * and a construct the evaluator does not reproduce marks the flag unsupported
- * (`detectUnsupported`), so it answers its registry fallback instead of a
- * half-evaluated value.
+ * unknown flag-level fields are stripped (PostHog adds them often), a keyed,
+ * undeleted flag that fails the schema is kept as `malformed` so it is never
+ * evaluated, and a construct the evaluator does not reproduce marks the flag
+ * unsupported (`detectUnsupported`), so it answers its registry fallback
+ * instead of a half-evaluated value.
  */
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
@@ -317,7 +317,6 @@ export interface ParsedSnapshot {
 
 /**
  * A construct on the flag itself, before its conditions are read.
- * @returns The construct, or undefined.
  */
 function flagLevelConstruct(definition: FlagDefinitionJson): UnsupportedConstruct | undefined {
   if (definition.ensure_experience_continuity === true) return 'experience_continuity'
@@ -356,8 +355,6 @@ function fieldConstruct(definition: FlagDefinitionJson): UnsupportedConstruct | 
  * A group aggregation the evaluator cannot bucket on: an index other than
  * the tenant's (one missing from `group_type_mapping` included), or a
  * condition aggregated differently from the flag.
- * @param definition - The definition.
- * @param tenantGroupIndex - The tenant group type index, or null.
  * @returns `group_type`, or undefined.
  */
 function aggregationConstruct(
@@ -381,8 +378,6 @@ function aggregationConstruct(
  * one; any other pairing is mixed targeting and is `group_type`.
  * @param property - The property.
  * @param isTenantAggregated - Whether the flag aggregates on a group type.
- * @param tenantGroupIndex - The tenant group type index, or null.
- * @returns The construct, or undefined.
  */
 function propertyConstruct(
   property: FlagPropertyJson,
@@ -506,8 +501,6 @@ function malformedDefinition(item: unknown): ParsedDefinition | undefined {
 
 /**
  * Parse one raw flag.
- * @param item - The raw flag.
- * @param tenantGroupIndex - The tenant group type index, or null.
  * @returns Its snapshot entry, or undefined for a deleted flag or one with no key.
  */
 function parseDefinition(

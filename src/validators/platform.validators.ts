@@ -36,8 +36,8 @@ const platformTenantCursorSchema = z
   .strict()
 
 /**
- * The trimmed search text every staff search takes. Whitespace alone is a
- * 400 rather than a match-everything search.
+ * The trimmed `q` of the staff tenant, user, email and suppression searches.
+ * Whitespace alone is a 400 rather than a match-everything search.
  */
 export const searchQueryField = z
   .string()
