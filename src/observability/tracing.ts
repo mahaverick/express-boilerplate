@@ -4,7 +4,8 @@
  * pino before they load. It runs before env validation, so it reads
  * `process.env` directly (`.env` arrives through `--env-file-if-exists`) and
  * writes with `console`, never the logger it instruments. Without
- * OTEL_EXPORTER_OTLP_ENDPOINT it is a complete no-op.
+ * OTEL_EXPORTER_OTLP_ENDPOINT it starts nothing and only logs that tracing
+ * is disabled.
  */
 import type { IncomingMessage } from 'node:http'
 // eslint-disable-next-line sonarjs/deprecation -- `register()` is deprecated in favor of `module.registerHooks()`, but that replacement takes a synchronous hooks object, not a loader specifier; `@opentelemetry/instrumentation@0.222.0`'s `hook.mjs` only exports the async `load`/`resolve`/`initialize` shape `register()` expects, so this is the only integration path this package version offers (see the `register()` call below)
@@ -30,7 +31,7 @@ if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
 }
 
 /**
- * Health probes fire every few seconds and produce nothing worth a trace.
+ * Health probes are frequent and produce nothing worth a trace.
  */
 const IGNORED_INCOMING_PATHS = new Set(['/health', '/health/ready'])
 

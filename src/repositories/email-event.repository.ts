@@ -53,9 +53,10 @@ export class EmailEventRepository {
 
   /**
    * Delete up to `limit` events whose message was created before `cutoff`:
-   * the group's retention is dated by the message, not the event. Takes the
-   * batch oldest id first with FOR UPDATE SKIP LOCKED on the events only, so
-   * a message row a webhook is updating is never waited on.
+   * retention is dated by the message, not the event. Takes the batch oldest
+   * id first (ids are time-ordered `uuidv7`) with FOR UPDATE SKIP LOCKED on
+   * the events only, so a message row a webhook is updating is never waited
+   * on.
    * @param cutoff - Events of messages created before this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.

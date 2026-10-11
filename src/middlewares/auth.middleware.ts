@@ -90,9 +90,10 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * soft-delete deny no session, so only the load stops a disabled account's
  * tokens. It costs one `findById` per request; a cache of known-good ids
  * would trade that for a window in which a disabled account keeps working,
- * and is deliberately not built. Every session revocation in
- * session.service.ts also denies the session; `revokeAllForUserAndPurpose`
- * (verification-link cleanup) is not a session revocation and denies nothing.
+ * and is deliberately not built. Session revocations in session.service.ts
+ * deny the session too (`denySession`, directly or through
+ * `denySessionsAfterCommit`); `revokeAllForUserAndPurpose` (verification-link
+ * cleanup) is not a session revocation and denies nothing.
  *
  * A verified token without `sid` skips the denylist and is admitted until it
  * expires (at most `ACCESS_TOKEN_TTL`). To drop that tolerance, throw a 401
@@ -160,9 +161,9 @@ export async function requireAuth(
  * `request.authTime`, which `requireAuth` copies from the verified token's
  * `auth_time`, so it must run after `requireAuth`. The predicate is
  * `isRecentAuth` (recent-auth.utilities.ts), so a token with no claim
- * counts as stale. The refusal is a
- * 401 carrying REAUTH_REQUIRED_CODE: the client confirms the user's identity
- * and retries. Nothing is revoked.
+ * counts as stale. Without `request.user` the refusal is a plain 401; a
+ * stale sign-in gets a 401 carrying REAUTH_REQUIRED_CODE, on which the client
+ * confirms the user's identity and retries. Nothing is revoked.
  * @param maxAgeMs - The oldest authentication accepted. Defaults to STEP_UP_MAX_AGE_MS.
  * @returns An Express middleware.
  */

@@ -11,7 +11,7 @@ import { requestContextStore } from '@/services/request-context.service'
  * Record a well-formed `X-POSTHOG-SESSION-ID` on the current request
  * context. Anything that is not a single UUID is dropped silently: the id
  * only ever labels an analytics event, so a bad one is not worth a 400.
- * Runs right after `requestContext`, whose store it extends in place.
+ * Runs after `requestContext`, whose store it extends in place.
  * @param request - The request.
  * @param _response - Unused.
  * @param next - Continues the chain.

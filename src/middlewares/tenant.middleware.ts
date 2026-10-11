@@ -260,9 +260,9 @@ function stepUpOnPlatformTenant(request: Request, response: Response, next: Next
 
 /**
  * Step-up on the platform tenant only: a request that changes who holds
- * staff power (a member's role, a removal, an invitation of any role, a
- * resend) needs a recent sign-in there, as the `/platform` staff actions
- * do. Customer tenants pass straight through. Must run after
+ * staff power (a member's role, a removal, leaving, an invitation of any
+ * role, a resend) needs a recent sign-in there, as the `/platform` staff
+ * actions do. Customer tenants pass straight through. Must run after
  * `resolveTenant`, which sets `request.principal`; without a principal it
  * answers 500, failing closed, since it cannot tell which tenant it guards.
  * @returns An Express middleware.

@@ -62,7 +62,7 @@ export type Touched<TValues> = TValues & { updatedAt: SQL }
  *
  * A subclass supplies the four concrete Drizzle chains (`selectOne`,
  * `insertOne`, `updateOne`, `markDeleted`) against its own concrete table.
- * This class cannot run them generically: in drizzle-orm 0.45.2
+ * This class cannot run them generically: in drizzle-orm 0.45
  * `PgSelectBuilder.from()` types its parameter as a deferred conditional, so
  * `function f<T extends PgTable>(t: T) { return db.select().from(t) }` fails
  * with TS2345, and `.update(table).set()` and `.returning()` break the same
@@ -147,7 +147,7 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
   /**
    * Update a row's columns and bump `updatedAt`.
    * @param id - The row's id.
-   * @param values - The columns to change. `id`, `createdAt` and `updatedAt` are excluded even if passed — none is meant to change by hand.
+   * @param values - The columns to change. The type omits `id`, `createdAt` and `updatedAt`: none is meant to change by hand.
    * @param options - Soft-delete visibility options.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no matching row exists.
