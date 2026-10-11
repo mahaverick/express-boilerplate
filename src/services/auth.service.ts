@@ -1,10 +1,12 @@
 /**
  * @file Email-and-password authentication. An unknown email and a wrong password
  * get the same status and body and each pay one bcrypt comparison (`getDummyHash`),
- * so the response does not tell a registered address from an unregistered one. Work
- * that runs after the reply (register's mail, requestPasswordReset) never rejects:
- * the controller does not await it, and a rejection on one branch only would tell
- * a free address from a taken one.
+ * so status and body do not tell a registered address from an unregistered one, and
+ * the timing matches while stored hashes use the current `BCRYPT_COST`. Work that
+ * runs after the reply (register's mail, requestPasswordReset) never rejects: the
+ * controller does not await it, so a rejection would be unhandled and treated as a
+ * process fault (index.ts), and on one branch only that would tell a free address
+ * from a taken one.
  */
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
@@ -456,7 +458,7 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  * @param userId - The authenticated caller's id.
  * @param currentSessionId - The session to spare, when the token carried one.
  * @param input - The validated `{ currentPassword, newPassword }` body.
- * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only the caller's own chain when it names it.
+ * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only that token's row when it is the caller's live refresh token.
  * @returns Resolves once the password is stored. The notification is not awaited, so a mail
  * failure never fails a change that already committed; the mail carries no secret.
  * @throws {HttpError} 401 when the account is gone; 400 for federated-only, a wrong current password, or no change.

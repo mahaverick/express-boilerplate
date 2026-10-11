@@ -48,7 +48,7 @@ const RESEND_SECRET_PREFIX = 'whsec_'
  */
 const PROVIDER_SUPPRESSED_DETAIL = 'PROVIDER_SUPPRESSED'
 
-// The width of email_events.provider_event_id; the characters are word characters and `-`.
+// The width of email_events.provider_event_id.
 const SVIX_ID_PATTERN = /^[\w-]{1,128}$/
 const SVIX_TIMESTAMP_PATTERN = /^\d{1,12}$/
 const SIGNATURE_VERSION = 'v1'
@@ -91,7 +91,7 @@ const resendEventSchema = z.object({
  * One header's single value.
  * @param headers - The request headers.
  * @param name - A lowercase header name.
- * @returns The value (a repeated header arrives joined with `, `), or undefined when absent.
+ * @returns The value (Node joins a repeated custom header such as `svix-id` with `, `), or undefined when absent.
  */
 function singleHeader(headers: IncomingHttpHeaders, name: string): string | undefined {
   const value = headers[name]
@@ -124,8 +124,8 @@ function v1Signatures(header: string): Buffer[] {
 }
 
 /**
- * The bounce kind and detail to store for a Resend event: set for a bounce
- * and for `email.suppressed`, empty for the other tracked types.
+ * The bounce kind and detail to store for a Resend event: a bounce's kind and
+ * detail, `email.suppressed`'s detail, nothing for the other tracked types.
  * @param type - The tracked type the Resend type maps to.
  * @param resendType - Resend's own type.
  * @param bounce - `data.bounce`, when present.

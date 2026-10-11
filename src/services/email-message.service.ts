@@ -4,7 +4,7 @@
  * or by the worker for a job queued without one, and moved forward by the
  * email worker. Stored variables are only the template's `previewVariables`,
  * and a template may not list a name ending in `Url` or `Token` there, so no
- * token link is stored.
+ * variable named as a link or a token is stored.
  */
 import { getEnv } from '@/configs/env.config'
 import type { EmailMessage } from '@/database/models/email-message.model'

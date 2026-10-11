@@ -59,7 +59,7 @@ export function fakeEmailWebhookSignature(rawBody: Buffer, secret: string): stri
  * One header's single value.
  * @param headers - The request headers.
  * @param name - A lowercase header name.
- * @returns The value (a repeated header arrives joined with `, `), or undefined when absent.
+ * @returns The value (Node joins a repeated custom header such as `x-fake-signature` with `, `), or undefined when absent.
  */
 function singleHeader(headers: IncomingHttpHeaders, name: string): string | undefined {
   const value = headers[name]

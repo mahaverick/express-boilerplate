@@ -7,8 +7,8 @@
  * backs off while PostHog asks to retry. It is in memory, not the outbox,
  * because errors often happen while the database is down, and it never
  * depends on Redis, which only counts outcomes. A failure inside the
- * reporter is caught and logged, never reported, so the reporter cannot
- * recurse.
+ * reporter is caught (logged at most once a minute, counted, or turned into
+ * a retry), never reported, so the reporter cannot recurse.
  */
 import type { Exception } from '@posthog/core/error-tracking'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
@@ -544,7 +544,7 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
  * non-`HttpError` (an unexpected throw) always is. An `HttpError` is a
  * deliberate response, reported only when it wraps a `cause`, the fault
  * behind it. A `TimelineUnavailableError` never is: PostHog could not be
- * asked or did not answer, and its thrower already logged why. Below 500,
+ * asked or did not answer usably, and its thrower already logged why. Below 500,
  * nothing is.
  * @param error - The error `errorHandler` received.
  * @param status - The status it resolved.
