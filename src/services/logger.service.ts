@@ -1,5 +1,5 @@
 /**
- * @file The logger every module writes through: a lazily built pino logger
+ * @file The logger application code writes through: a lazily built pino logger
  * with a `level` label, `timestamp` and `message`, a mixin adding correlation ids
  * from the request context and active span, and a formatter that serialises every
  * top-level Error-valued field, redacting database query errors with `redactedForLog`.

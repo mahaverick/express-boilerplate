@@ -66,12 +66,15 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  * marked verified, and every session revoked.
  *
  * Precondition: the caller has checked that Google verified the profile's
- * email, and that it matches this account's address. Nothing here checks it.
+ * email, that it matches this account's address, and that the account's email
+ * was never verified (checked before the lock). Nothing here checks any of it.
  *
- * Sessions are revoked first on their own, so the sessions that existed are
- * already revoked if the claim fails, then again in the claim's transaction,
- * under the user row lock: a refresh rotation in flight either commits before
- * the lock and is revoked there, or waits and finds its token revoked. The
+ * Sessions are revoked first on their own, so every refresh token that
+ * existed is already revoked if the claim fails. A rotation already in flight
+ * can still mint a successor in its session, which only the locked pass
+ * below revokes. That pass runs in the claim's transaction, under the user
+ * row lock: a refresh rotation in flight either commits before the lock
+ * and is revoked there, or waits and finds its token revoked. The
  * revoked sessions' access tokens are denied after the commit, best effort
  * (`denySessionsAfterCommit`), so they can stay valid for up to
  * `ACCESS_TOKEN_TTL` when Redis refuses.
@@ -205,9 +208,10 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
  *
  * The active check runs first and again under the user-row lock before the
  * session is issued, so a deactivation or deletion that committed before the
- * lock is taken gets no session. Once the session is issued, a sign-in that
- * created the account emits `user_signed_up`, and every one emits
- * `user_signed_in`.
+ * lock is taken gets no session; one that commits later waits for that lock
+ * and revokes the session just issued (`deactivateUser`). Once the session
+ * is issued, a sign-in that created the account emits `user_signed_up`, and
+ * every one emits `user_signed_in`.
  *
  * In `full` maintenance a user with no platform role is refused after the
  * active check (`assertSignInAllowed`); the controller redirects with

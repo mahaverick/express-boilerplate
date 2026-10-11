@@ -328,7 +328,8 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       readiness.hasBeenReady = true
     })
     /**
-     * Connect the subscriber and subscribe it to the reload channel.
+     * Bring the subscriber to a live subscription to the reload channel;
+     * `subscribe` races it against `REDIS_CONNECT_TIMEOUT_MS`.
      * @throws {Error} When the store closed meanwhile, or the connection or subscription fails.
      */
     const handshake = async (): Promise<void> => {

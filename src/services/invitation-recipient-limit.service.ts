@@ -28,8 +28,9 @@ const WINDOW_MS = 24 * 60 * 60 * 1000
 export const INVITATION_RECIPIENT_TENANT_SHARE = 3
 
 /**
- * The verdict on one invitation send: `spent` when it fits the recipient's
- * daily budget and was counted against it, `exhausted` when it does not.
+ * The verdict on one invitation send: `spent` when the mail may go (it fit
+ * the budget, or Redis did not answer), `exhausted` when the tenant's share
+ * or the address's ceiling is used up.
  */
 export type InvitationRecipientBudget = 'spent' | 'exhausted'
 
