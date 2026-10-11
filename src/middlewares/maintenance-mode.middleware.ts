@@ -1,7 +1,7 @@
 /**
  * @file The maintenance-mode gate. Mounted in app.ts right after
- * `requestContext`, after `cors` (so a refusal carries the CORS grant and a
- * preflight never reaches it) and before every router, the webhook router,
+ * `requestContext`, after `cors` (so a refusal carries the CORS grant and an
+ * allowed-origin preflight never reaches it) and before every router, the webhook router,
  * the PostHog proxy and the body parsers. It decides by method and path
  * (`maintenanceDecision`, maintenance-mode.constants.ts), from this replica's
  * in-memory mode; it never reads Postgres or Redis. It runs before

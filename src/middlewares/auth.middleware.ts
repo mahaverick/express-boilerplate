@@ -109,7 +109,7 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * maintenance; an unauthenticated call is still answered 401 first.
  *
  * Every response behind it, refusal included, is `Cache-Control: no-store`
- * (ASVS 8.2.1): without it a browser keeps an authenticated body on disk,
+ * (ASVS 5.0 14.3.2): without it a browser keeps an authenticated body on disk,
  * readable with no credential after sign-out. Not `no-cache` or `private`,
  * which still store the body. A handler that sets its own policy afterwards
  * (the SSE stream's `no-cache`) wins.
@@ -157,7 +157,7 @@ export async function requireAuth(
 
 /**
  * Require that the session behind the access token authenticated within
- * `maxAgeMs`: the step-up gate a destructive route adds (ASVS 7.5.3). Reads
+ * `maxAgeMs`: the step-up gate a destructive route adds (ASVS 5.0 7.5.3). Reads
  * `request.authTime`, which `requireAuth` copies from the verified token's
  * `auth_time`, so it must run after `requireAuth`. The predicate is
  * `isRecentAuth` (recent-auth.utilities.ts), so a token with no claim

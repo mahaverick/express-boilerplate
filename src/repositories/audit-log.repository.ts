@@ -156,14 +156,17 @@ export class AuditLogRepository {
   }
 
   /**
-   * Delete up to `limit` entries that occurred before `cutoff`. The trigger
+   * Delete about `limit` entries that occurred before `cutoff`. The trigger
    * refuses this unless `tx` is a retention purge transaction; see
    * retention.service.ts.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Entries older than this go.
-   * @param limit - The most rows one call deletes.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The purge's batch transaction.
    * @returns How many rows were deleted.
    */

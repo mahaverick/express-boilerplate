@@ -2,7 +2,9 @@
  * @file `requireFlag`, the route gate for a boolean feature flag. A closed
  * gate answers exactly the unknown-route 404, so a response never reveals
  * that a flag or its route exists. The value comes from the request's
- * memoised evaluation (`evaluateForRequest`), which records no exposure.
+ * memoised evaluation (`evaluateForRequest`), the same evaluation the flag
+ * reads serve, so a gate agrees with the flag the client sees; it records no
+ * exposure.
  */
 import type { NextFunction, Request, Response } from 'express'
 import { flagEntry, type BooleanFlagKey } from '@/constants/flags.constants'

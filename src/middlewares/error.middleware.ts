@@ -186,7 +186,7 @@ export function errorHandler(
   }
 
   const httpError = error instanceof HttpError ? error : undefined
-  // A character Postgres cannot store came from the client: a 400, masked and unlogged like any 4xx.
+  // A character Postgres cannot store came from the client: a 400, masked and unlogged like any 4xx (except a value-free warn for 22P05, below).
   const statusCode =
     httpError?.statusCode ??
     clientStatusOf(error) ??
