@@ -6,8 +6,8 @@
  * sweep. The routes check the caller's platform role before any of this
  * runs; each write re-checks it under lock. Progress is derived by
  * `platform-onboarding.repository.ts` from `ONBOARDING_STEPS` and
- * `ONBOARDING_STUCK_AFTER_DAYS`; this file shapes it. The only importer of
- * that repository.
+ * `ONBOARDING_STUCK_AFTER_DAYS`; this file shapes it. The only file in `src/`
+ * that imports that repository.
  */
 import { getEnv } from '@/configs/env.config'
 import {
@@ -176,7 +176,7 @@ export function daysStuckOf(
 }
 
 /**
- * Why a reminder cannot go now, in the order the remind endpoint checks:
+ * Why a reminder cannot go, in the order the remind endpoint checks:
  * the tenant must be active, in progress or stuck, have an active owner,
  * and have had no reminder in the last 24 hours.
  * @param input - What the rule reads.
@@ -366,7 +366,7 @@ export async function searchOnboardingTenants(
 }
 
 /**
- * How many active, tracked tenants are stuck now, for the Overview.
+ * How many active, tracked tenants are stuck at the moment of the read, for the Overview.
  * @param now - The current instant; injectable for tests.
  * @returns The count.
  */
@@ -416,7 +416,7 @@ function countedCompletionOf(
  * @param step - The registry step.
  * @param completions - The tenant's stored completions of this step, oldest first.
  * @param members - The tenant's live members.
- * @param canComplete - Whether staff could mark a tenant step complete in this tenant now.
+ * @param canComplete - Whether staff could mark a tenant step complete in this tenant.
  * @returns The step's detail.
  */
 function stepDetailOf(
@@ -504,7 +504,7 @@ function reminderViewOf(row: OnboardingReminderRow): OnboardingReminderView {
  * One customer tenant's onboarding, in any lifecycle state, for the staff
  * tenant tab: its state, every registry step with who completed it (staff
  * completions with their reason), each member step's per-member status,
- * whether a reminder could go now, and the reminder history.
+ * whether a reminder could go, and the reminder history.
  * @param tenantId - The tenant.
  * @param now - The current instant; injectable for tests.
  * @returns The detail.
@@ -642,8 +642,8 @@ async function lockActiveCustomerTenant(tenantId: string, tx: DbTransaction): Pr
  * @param stepKey - The registry step.
  * @param reason - Why, stored on the completion and in the audit entry.
  * @param now - The current instant, for the detail returned; injectable for tests.
- * @returns The tenant's onboarding as it now is.
- * @throws {HttpError} 404 for an unknown step, an unknown tenant or the platform tenant, or an actor who lost the role; 401 when the actor's account is now inactive or gone; 409 `tenant_state_conflict` (suspended or archived), `member_step` (staff complete tenant steps only), `not_tracked` (untracked, or awaiting its first owner) or `already_complete`.
+ * @returns The tenant's onboarding after the write.
+ * @throws {HttpError} 404 for an unknown step, an unknown tenant or the platform tenant, or an actor who lost the role; 401 when the actor's account is inactive or gone; 409 `tenant_state_conflict` (suspended or archived), `member_step` (staff complete tenant steps only), `not_tracked` (untracked, or awaiting its first owner) or `already_complete`.
  */
 export async function completeTenantStep(
   actor: Actor,
@@ -738,8 +738,9 @@ interface PendingReminder {
 
 /**
  * Write one reminder's `email_messages` row per owner, in the caller's
- * transaction, with the tenant as context, so SP3 tracks it, a suppressed
- * address is skipped by the worker, and the staff preview renders it.
+ * transaction, with the tenant as context, so the staff email list
+ * (`/platform/emails`) tracks it, a suppressed address is skipped by the
+ * worker, and the staff preview renders it.
  * @param owners - The active owners.
  * @param variables - The template's variables, the same for each.
  * @param tenantId - The tenant, stored on each message row.
@@ -767,8 +768,8 @@ async function createReminderMessages(
 
 /**
  * Enqueue the reminders' jobs, after their rows committed. A failed enqueue
- * is logged (its row is marked failed, as SP3's Emails page shows) and the
- * rest still go.
+ * is logged (its row is marked failed, which `/platform/emails` shows) and
+ * the rest still go.
  * @param pending - The reminders.
  * @param tenantId - The tenant, for the log.
  * @returns How many were enqueued.
@@ -812,7 +813,7 @@ async function enqueueReminders(
  * @param reason - Why, for the audit log.
  * @param now - The current instant; injectable for tests.
  * @returns Whether every owner's email was queued, and how many active owners it addressed.
- * @throws {HttpError} 404 for an unknown tenant or the platform tenant, or an actor who lost the role; 401 when the actor's account is now inactive or gone; 409 `tenant_state_conflict`, `not_in_progress`, `no_owner`, or `reminded_recently` with `errors.retryAfter`.
+ * @throws {HttpError} 404 for an unknown tenant or the platform tenant, or an actor who lost the role; 401 when the actor's account is inactive or gone; 409 `tenant_state_conflict`, `not_in_progress`, `no_owner`, or `reminded_recently` with `errors.retryAfter`.
  */
 export async function sendOnboardingReminder(
   actor: Actor,
@@ -903,8 +904,8 @@ export interface ReconcileCompletion {
  * tenant, each dated when it happened: `tenant_settings_updated` at the
  * earliest member settings save, `teammate_invited` at the earliest member
  * teammate invitation, and `teammate_joined` when the second member joined,
- * or at the clock's start when that came later (the first owner's accept
- * on a staff-created tenant completes it then).
+ * or at the clock's start when the join came before it (the owner whose
+ * accept starts the clock completes it then, as `onboarding.service.ts` does).
  * @param candidate - What the reconcile read about the tenant.
  * @param candidate.startedAt - When its onboarding clock started.
  * @param candidate.settingsUpdatedAt - Its earliest member settings save since then, or null.

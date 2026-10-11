@@ -313,10 +313,16 @@ async function hasBecomeReady(connection: IORedis): Promise<boolean> {
   if (connection.status === 'ready') return true
   if (connection.status === 'end') return false
   return new Promise((resolve) => {
+    /**
+     * The connection became ready: answers true, and stops listening for 'end'.
+     */
     const onReady = (): void => {
       connection.off('end', onEnd)
       resolve(true)
     }
+    /**
+     * The connection gave up: answers false, and stops listening for 'ready'.
+     */
     const onEnd = (): void => {
       connection.off('ready', onReady)
       resolve(false)

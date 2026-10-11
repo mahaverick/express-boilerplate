@@ -1,22 +1,4 @@
 {
-  "X12": [
-    "src/services/platform-onboarding.service.ts",
-    "src/services/platform-purge.service.ts",
-    "src/services/platform-stats.service.ts",
-    "src/services/platform-system.service.ts",
-    "src/services/platform-tenant.service.ts",
-    "src/services/platform-timeline.service.ts",
-    "src/services/platform-user.service.ts",
-    "src/services/platform-view-audit.service.ts",
-    "src/services/platform.service.ts",
-    "src/services/profile.service.ts",
-    "src/services/queue.service.ts",
-    "src/services/readiness.service.ts",
-    "src/services/redis-deadline.service.ts",
-    "src/services/redis.service.ts",
-    "src/services/request-context.service.ts",
-    "src/services/retention.service.ts"
-  ],
   "X13": [
     "src/services/session-denylist.service.ts",
     "src/services/session.service.ts",

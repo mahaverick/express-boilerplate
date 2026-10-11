@@ -1,6 +1,6 @@
 /**
  * @file The throttled audit of a staff read view (a timeline, an errors
- * list): one entry per staff member, target and view every
+ * list, a flags evaluation): one entry per staff member, target and view every
  * `TIMELINE_AUDIT_THROTTLE_SECONDS`, claimed with Redis `SET NX EX`. It
  * fails toward auditing: a Redis failure writes the entry anyway, and a
  * failed write releases the key it claimed, so the next read is audited.

@@ -1,13 +1,13 @@
 /**
- * @file Deletes rows past their retention window, one rule per table, in batches
- * by primary key, each in its own short transaction, until a batch comes back
- * short. A batch skips locked rows, which the next daily run deletes; a failing
- * rule is logged and reported while the others still run. The email tracking
- * tables share `RETENTION_EMAIL_LOGS_DAYS` and are dated by the message's
- * `created_at`: events, then attempts, then the messages left with neither,
- * so no batch cascades. Suppressions never expire. An `analytics_outbox` row
- * still there after `ANALYTICS_OUTBOX_RETENTION_DAYS` was never delivered,
- * so that rule logs what it drops at `warn`.
+ * @file Deletes rows past their retention window, one rule per table, in
+ * batches by primary key, each in its own short transaction, until a batch does
+ * not come back full. A batch skips locked rows, which the next daily run
+ * deletes; a failing rule is logged and reported while the others still run.
+ * The email tracking tables share `RETENTION_EMAIL_LOGS_DAYS` and are dated by
+ * the message's `created_at`: events, then attempts, then the messages left
+ * with neither, so no batch cascades. Suppressions never expire. An
+ * `analytics_outbox` row still there after `ANALYTICS_OUTBOX_RETENTION_DAYS`
+ * was never delivered, so that rule logs what it drops at `warn`.
  */
 import { sql } from 'drizzle-orm'
 import { getEnv, type Env } from '@/configs/env.config'
@@ -23,7 +23,8 @@ import { db, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 
 /**
- * The most rows one batch deletes.
+ * The batch size each rule asks for. Every rule except `analytics_outbox` can
+ * delete more than this in one batch, so it is a target, not a bound.
  */
 export const RETENTION_BATCH_SIZE = 5000
 
@@ -61,6 +62,10 @@ export interface RetentionResult {
   error?: unknown
 }
 
+/**
+ * One table's purge: its window, how to delete one batch, and an optional
+ * hook that sees the total.
+ */
 interface RetentionRule {
   table: string
   days: number
@@ -92,7 +97,7 @@ export function retentionDays(env: Env): RetentionDays {
  * One audit batch. The trigger allows these deletes only in a transaction
  * that set both settings, transaction-locally, and only below the cutoff.
  * @param cutoff - Entries older than this go.
- * @param limit - The most rows the batch deletes.
+ * @param limit - The batch size aimed for; more rows may go.
  * @param tx - The batch's transaction.
  * @returns How many rows were deleted.
  */
@@ -105,7 +110,7 @@ async function purgeAuditLogs(cutoff: Date, limit: number, tx: DbTransaction): P
 
 /**
  * Warn about outbox rows dropped undelivered: each is an event PostHog never
- * received, after an outage longer than the retention window.
+ * accepted, typically after an outage longer than the retention window.
  * @param deleted - How many rows the rule deleted.
  */
 function reportDroppedAnalytics(deleted: number): void {

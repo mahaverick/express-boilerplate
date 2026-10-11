@@ -126,7 +126,7 @@ export async function searchUsers(query: PlatformUserSearchQuery): Promise<Platf
  * A user and everything the staff detail page shows. A soft-deleted user is
  * returned too, with `deletedAt` set: its page offers only a purge. Its
  * `pendingInvitations` is always empty: invitations are matched by address,
- * and a deleted user's address may now belong to another account.
+ * and a deleted user's address may belong to another account.
  * @param userId - The user's id.
  * @returns The detail.
  * @throws {HttpError} 404 when no user has that id.
@@ -260,7 +260,7 @@ interface LockedStaffPair {
  * @param tx - The transaction holding the locks.
  * @param customerOwnerTenantIds - Customer tenants whose owner rows to lock first (the last-owner guard of a delete).
  * @returns The roles, the locked target and the platform tenant.
- * @throws {HttpError} 404 when the actor's platform role no longer meets `minimum` or the target is gone; 401 when the actor's own account is gone or inactive; 403 when `canPlatformActorModifyTarget` refuses a staff target.
+ * @throws {HttpError} 404 when the actor's platform role falls below `minimum` or the target is gone; 401 when the actor's own account is gone or inactive; 403 when `canPlatformActorModifyTarget` refuses a staff target.
  */
 async function lockStaffPair(
   actor: Actor,
@@ -301,13 +301,14 @@ async function lockStaffPair(
 }
 
 /**
- * Mail-only actions on a staff target need an actor of at least the
- * target's rank (`canStaffMailTarget`). Unlocked: the roles are read once, and the writes that follow
- * (token revocation, the audit entry) do not depend on them staying unchanged.
+ * Mail-only actions need an admin actor of at least a staff target's rank
+ * (`canStaffMailTarget`). Unlocked: the roles are read once, and the writes
+ * that follow (token revocation, the audit entry) do not depend on them
+ * staying unchanged.
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user to mail.
  * @returns The target's platform role, or null when not staff.
- * @throws {HttpError} 404 when the actor is no longer staff; 403 when the target outranks them.
+ * @throws {HttpError} 404 when the actor lost staff access; 403 when the target outranks them.
  */
 async function assertMayMail(actor: Actor, targetUserId: string): Promise<MembershipRole | null> {
   const [actorRole, targetRole] = await Promise.all([

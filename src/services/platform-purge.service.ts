@@ -1,10 +1,11 @@
 /**
- * @file Purge: the only hard delete, owner-only, for a user already
- * soft-deleted or a tenant already archived. Each purge runs in one
- * transaction, sets the audit trigger's setting it needs (and no other), and
- * records itself in the platform tenant. This file and retention.service.ts
- * are the only places that name those settings
- * (tests/unit/audit-purge-setting.test.ts).
+ * @file Purge: the only hard delete of a user or a tenant, owner-only, for a
+ * user already soft-deleted or a tenant already archived. Each purge runs in
+ * one transaction, sets the audit trigger's settings it needs (and no
+ * others), and records itself in the platform tenant. This file and
+ * retention.service.ts are the only places that name the purge settings
+ * (tests/unit/audit-purge-setting.test.ts); only this file names
+ * `app.audit_redact`.
  */
 import { sql } from 'drizzle-orm'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
@@ -75,28 +76,27 @@ async function lockMembershipsForPurge(
 }
 
 /**
- * Permanently delete a soft-deleted user: redact them from the audit
- * entries they acted in, delete the email messages (with their attempts and
- * events) sent to their account, delete the mail log rows, email messages
- * and invitations addressed to their address up to their deletion, forget
- * them as the lifter of any email suppression, delete their memberships
- * (locked first, in the membership lock order) and then the row (the rest
- * cascades), record `user.purged` in the platform tenant, queue the deletion
- * of their PostHog person, events and recordings (`analytics_deletions`, sent
- * an hour later by the `analytics-deletions` job), and delete their
- * undelivered analytics outbox rows, so none is sent after the deletion and
- * recreates the person. A deleted
- * user's address can be claimed again, and the address-keyed rows are keyed
- * by the address alone: when a live account holds it now, none of them is
- * deleted, since the database can't tell the purged user's from the new
- * holder's. Rows written after the deletion are kept either way. Email
+ * Permanently delete a soft-deleted user: redact them from the audit entries
+ * they acted in, delete the email messages (with their attempts and events)
+ * sent to their account, delete the mail log rows, email messages and
+ * invitations addressed to their address up to their deletion, forget them as
+ * the lifter of any email suppression, delete their memberships (locked first,
+ * in the membership lock order) and then the row (the rest cascades), record
+ * `user.purged` in the platform tenant, queue the deletion of their PostHog
+ * person, events and recordings (`analytics_deletions`, sent an hour later by
+ * the `analytics-deletions` job), and delete their undelivered analytics outbox
+ * rows, so none is sent after the deletion and recreates the person. A deleted
+ * user's address can be claimed again, and the address-keyed rows are keyed by
+ * the address alone: when a live account holds it at the time of the purge,
+ * none of them is deleted, since the database can't tell the purged user's from
+ * the new holder's. Rows written after the deletion are kept either way. Email
  * suppressions stay: they belong to the address, and dropping one would let
  * mail reach a mailbox known to bounce or complain.
  * @param actor - The platform owner, recently authenticated.
  * @param userId - The user.
  * @param reason - Why, for the audit log.
  * @returns Resolves once the transaction commits.
- * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown user or the actor is no longer an owner; 409 when the user is not soft-deleted.
+ * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown user or the actor lost the owner role; 409 when the user is not soft-deleted.
  */
 export async function purgeUser(actor: Actor, userId: string, reason: string): Promise<void> {
   const found = await platformUserRepository.findRecord(userId, { includeDeleted: true })
@@ -158,13 +158,13 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
  * memberships are locked first, in the membership lock order),
  * record `tenant.purged` in the platform tenant, and queue a `$groupidentify`
  * marker for it, which the drainer sends with the group's name cleared and
- * its status `purged` (PostHog cannot reliably delete a group).
+ * its status `purged`, in place of deleting the group in PostHog.
  * `memberCount` counts the members whose accounts are not soft-deleted.
  * @param actor - The platform owner, recently authenticated.
  * @param tenantId - The tenant.
  * @param reason - Why, for the audit log.
  * @returns Resolves once the transaction commits.
- * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown tenant or the actor is no longer an owner; 409 for the platform tenant or a tenant that is not archived.
+ * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown tenant or the actor lost the owner role; 409 for the platform tenant or a tenant that is not archived.
  */
 export async function purgeTenant(actor: Actor, tenantId: string, reason: string): Promise<void> {
   const found = await tenantRepository.findByIdIncludingDeleted(tenantId)

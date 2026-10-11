@@ -21,7 +21,7 @@ const state: { stalledUntil: number | undefined; connectsInFlight: number } = {
 }
 
 /**
- * Whether a cooldown is open now.
+ * Whether a cooldown is in force.
  * @returns True until `stalledUntil` passes.
  */
 function isCoolingDown(): boolean {
@@ -120,8 +120,8 @@ export async function withRedisDeadline<T>(operation: () => Promise<T>, label: s
 
 /**
  * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a write whose loss would widen
- * access: a session deny, an audit throttle key's release, a maintenance-mode
- * change. Unlike `withRedisDeadline` it never consults or opens the stall
+ * access or drop a record: a session deny, a dedupe or throttle key's release,
+ * a maintenance-mode change. Unlike `withRedisDeadline` it never consults or opens the stall
  * cooldown, so the write is always sent; one still in flight at the deadline
  * is left to land when Redis answers, never abandoned, with one `warn`, and
  * `onLateFailure` runs if it then fails. If the connection drops first,

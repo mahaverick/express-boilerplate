@@ -21,10 +21,10 @@ const RANGE_DAYS: Readonly<Record<StatsRange, number>> = { '7d': 7, '30d': 30 }
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
- * One UTC day of email messages: how many created that day are now in each
- * of the five disjoint groups of `EMAIL_MESSAGE_GROUPS` (`sent` also holds
- * `deferred`, `undelivered` holds `bounced` and `failed`). `queued` counts
- * in none.
+ * One UTC day of email messages: how many created that day have a current
+ * status in each of the five disjoint groups of `EMAIL_MESSAGE_GROUPS` (`sent`
+ * also holds `deferred`, `undelivered` holds `bounced` and `failed`). `queued`
+ * counts in none.
  */
 export type EmailMessageDay = { date: string } & Record<EmailMessageGroup, number>
 
@@ -36,7 +36,7 @@ export type EmailMessageDay = { date: string } & Record<EmailMessageGroup, numbe
  * `emailMessages[]` counts logical emails by their current status; with no
  * provider webhook configured every successful send stays in `sent`.
  * `totals.stuckTenants` counts the active, tracked tenants whose onboarding
- * is stuck now, whatever the range.
+ * is stuck at the moment of the read, whatever the range.
  */
 export interface PlatformStats {
   range: StatsRange
