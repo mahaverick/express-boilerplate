@@ -398,9 +398,9 @@ export class UserMembershipRepository {
 
   /**
    * Lock a tenant's owner memberships until the transaction ends, in id
-   * order, so callers locking the same owners take them in the same order. A
-   * concurrent demotion or removal of an owner waits here, which is what makes
-   * the last-owner check atomic. Only meaningful inside a transaction. Lock
+   * order, so two transactions locking a tenant's owners queue instead of
+   * deadlocking. A concurrent demotion or removal of an owner waits here,
+   * which is what makes the last-owner check atomic. Only meaningful inside a transaction. Lock
    * order: this first, then `lockMemberships`.
    * @param tenantId - The tenant whose owners to lock.
    * @param mode - `'update'` when the transaction may delete a locked row; otherwise `'no key update'`, which lets foreign-key checks through.

@@ -382,10 +382,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * The sessions of a user, other than one, that hold a live refresh token:
    * unrevoked (a rotation's claim revokes the row it spends), unexpired, and
    * started after `startedAfter`, the absolute lifetime rotation enforces.
-   * Read under the user row lock, it is the set a following
+   * Read under the user row lock, it is the sessions a following
    * `revokeAllForUserExceptSession` or `revokeAllForUserExceptToken` ends
-   * that a person would call signed in; a lapsed session either also revokes
-   * is not among them, and neither is a sibling in the excluded session.
+   * that a person would call signed in. A lapsed session, which either
+   * revoker also ends, is not among them, and neither is a sibling in the
+   * excluded session.
    * @param userId - The user whose sessions are read.
    * @param sessionId - The one session id to leave out.
    * @param startedAfter - A live session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
