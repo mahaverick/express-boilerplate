@@ -63,14 +63,14 @@ never fails the login.
 ### Password policy: a 15-character floor, no composition rules
 
 Every password a user sets (`registerSchema`, `resetPasswordSchema` and
-`changePasswordSchema`'s `newPassword`, all through
-`registrationPasswordSchema` in `src/validators/auth.validators.ts`) must be at
-least `MIN_PASSWORD_LENGTH` (15) and at most `MAX_PASSWORD_BYTES` (72) bytes. The
-floor counts Unicode code points (zod's `.min()`), which the error message calls
-characters: 15 emoji pass, 14 do not. There are no composition rules. 15 is the
-NIST SP 800-63B revision 4 minimum for a password used as a single factor, and
-that guidance holds that required character classes push people toward more
-predictable passwords.
+`changePasswordSchema`'s `newPassword`, all through `registrationPasswordSchema`
+in `src/validators/auth.validators.ts`) must be at least `MIN_PASSWORD_LENGTH`
+(15) and at most `MAX_PASSWORD_BYTES` (72) bytes. The floor counts Unicode code
+points (zod's `.min()`), which the error message calls characters: 15 emoji
+pass, 14 do not. There are no composition rules. 15 is the NIST SP 800-63B
+revision 4 minimum for a password used as a single factor, and that guidance
+holds that required character classes push people toward more predictable
+passwords.
 
 The floor applies only where a password is set. `loginSchema`,
 `reauthenticateSchema` and change-password's `currentPassword` only require a
@@ -328,10 +328,10 @@ a frontend page, never to this API: the page `POST`s the token, so the token
 never sits in an API request URL that tracing or proxy logs record, and a mail
 scanner that follows links does not spend it (`buildTokenUrl`,
 `src/services/verification.service.ts`). The token does sit in the frontend
-page's URL (`?token=`), so the frontend's access logs and its
-`Referrer-Policy` are part of this defence. Which frontend a link opens is an enum
-(`app: 'web' | 'apex'`), never a URL, so a request can only choose between
-`WEB_URL` and `APEX_URL`.
+page's URL (`?token=`), so the frontend's access logs and its `Referrer-Policy`
+are part of this defence. Which frontend a link opens is an enum (`app: 'web' |
+'apex'`), never a URL, so a request can only choose between `WEB_URL` and
+`APEX_URL`.
 
 | Link               | Token                                      | Lifetime                         | Claimed by                                                      |
 | ------------------ | ------------------------------------------ | -------------------------------- | --------------------------------------------------------------- |
@@ -371,7 +371,9 @@ session, in one transaction.
 
 ### Invitations
 
-A user joins a tenant only by accepting an invitation; no route adds a
+A user joins a customer tenant only by creating it or by accepting an
+invitation; the platform tenant also admits staff by auto-join and
+`pnpm platform:grant` ([Platform staff](#platform-staff)). No route adds a
 registered address to a tenant directly
 (`src/services/tenant-invitation.service.ts`).
 
@@ -407,9 +409,9 @@ RATE_LIMITED`. The recipient ceiling fails open when Redis does not answer.
 
 - A failed email or notification job stays in Redis (7 days and 3 days) so an
   operator can read why. Once it will not be retried, its stored payload has
-  every key ending in `Url` or `Token`, and every recipient-address key, replaced
-  with `[redacted]` (`src/jobs/job-failure.job.ts`). Until then a retry needs
-  them.
+  every key ending in `Url` or `Token`, and every recipient-address key,
+  replaced with `[redacted]` (`src/jobs/job-failure.job.ts`). Until then a retry
+  needs them.
 - An `email_messages` row refuses template variables whose key ends in `Url` or
   `Token` (`src/repositories/email-message.repository.ts`), so no stored row
   holds a link or a token.
@@ -466,15 +468,15 @@ Roles rank `owner > admin > manager > editor > viewer`
 Staff are the members of one seeded tenant, the row with `is_platform = true`;
 their role there is their platform role (`src/services/platform.service.ts`).
 
-- **Gated per route, not by prefix.** Every staff route lives under
-  `/api/v1/platform`, and each names its own `requirePlatformRole`, which reads
-  the role on every request with no cache across requests
-  (`src/middlewares/platform.middleware.ts`). The prefix secures nothing, and
-  neither does serving Apex from its own host. A non-staff caller, or staff
-  below the route's role, gets the app's own `404 Not found`, before the JSON
-  gate, the step-up check and the limiter, so a refused caller sees no `415` and
-  no `RateLimit-*` headers. `cors` answers an `OPTIONS` with no `Origin`
-  or an allowed one itself, with the same 204 for every path; any other
+- **Gated per route, not by prefix.** Every staff route but
+  `POST /auth/reauthenticate` lives under `/api/v1/platform`, and each names its
+  own `requirePlatformRole`, which reads the role on every request with no cache
+  across requests (`src/middlewares/platform.middleware.ts`). The prefix secures
+  nothing, and neither does serving Apex from its own host. A non-staff caller,
+  or staff below the route's role, gets the app's own `404 Not found`, before
+  the JSON gate, the step-up check and the limiter, so a refused caller sees no
+  `415` and no `RateLimit-*` headers. `cors` answers an `OPTIONS` with no
+  `Origin` or an allowed one itself, with the same 204 for every path; any other
   authenticated `OPTIONS` that reaches the platform router gets the same 404
   (`refusePlatformOptions`). Either way Express's automatic `Allow` answer never
   lists a route's methods.
@@ -494,7 +496,8 @@ their role there is their platform role (`src/services/platform.service.ts`).
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
-  address. The audit log is the record.
+  address. Apex's flag exposure report (`POST /platform/me/flags/exposures`) is
+  telemetry and logs nothing. The audit log is the record.
 
 ### Step-up and a stated reason
 
@@ -566,14 +569,15 @@ PostHog, describes what stays there.
 
 ## Input and output
 
-- **Validation.** Every body, query and set of params goes through a zod schema
-  (`parseBody`, `src/validators/parse.validators.ts`); a failure is a 400 with
-  field-level `errors`. Email and name fields are capped at their column widths,
-  so an over-long value is a 400, not a Postgres 500. JSON bodies are limited to
-  1 MB and form bodies to 100 KB (`src/app.ts`). The email webhook and the
-  collect proxy are mounted before those parsers: the webhook reads its raw
-  body up to 256 KB, and the proxy streams bodies to PostHog unread and
-  unbounded.
+- **Validation.** Every JSON body and query goes through a zod schema
+  (`parseBody`, `src/validators/parse.validators.ts`), and a failure is a 400
+  with field-level `errors`. A malformed path id or invitation token answers the
+  route's 404 instead, so a guess learns nothing more than a miss. Email and
+  name fields are capped at their column widths, so an over-long value is a 400,
+  not a Postgres 500. JSON bodies are limited to 1 MB and form bodies to 100 KB
+  (`src/app.ts`). The email webhook and the collect proxy are mounted before
+  those parsers: the webhook reads its raw body up to 256 KB, and the proxy
+  streams bodies to PostHog unread and unbounded.
 - **Free text.** `safeText` (`src/validators/safe-text.validators.ts`) refuses
   control characters, Unicode format characters (bidi marks and overrides,
   zero-width spaces and the like) and line and paragraph separators in every
@@ -710,11 +714,11 @@ unread (`src/routes/analytics-proxy.routes.ts`).
 ### Server events
 
 - **Ids, not names.** The event builder holds every PII rule
-  (`src/services/analytics/analytics-event-builder.service.ts`): no person names,
-  full addresses, staff reasons or email contents go into an event; an
+  (`src/services/analytics/analytics-event-builder.service.ts`): no person
+  names, full addresses, staff reasons or email contents go into an event; an
   address's domain may. A tenant's name goes into the tenant group's properties
-  (`$groupidentify`). A user id `distinct_id` and a `$session_id` are pseudonymous, not
-  anonymous.
+  (`$groupidentify`). A user id `distinct_id` and a `$session_id` are
+  pseudonymous, not anonymous.
 - **The opt-out is the browser's.** `analyticsOptOut` tells the frontends to
   stop capturing; server events do not read it (`src/presenters/user.presenter.ts`).
 - **Server events are signed; browser events are client-reported.** The project
@@ -753,8 +757,8 @@ not through the outbox, since errors often arrive while the database is down
   to Slack. The react and apex frontends hold the same file byte for byte
   (`react-boilerplate/src/observability/errors/scrub.ts`), and all three test it
   against `tests/fixtures/error-scrub-vectors.json`. The file's own comments
-  list what each rule catches and what it misses. Regex scrubbing is best-effort:
-  keep secrets and personal data out of error messages.
+  list what each rule catches and what it misses. Regex scrubbing is
+  best-effort: keep secrets and personal data out of error messages.
 - **`$exception` events are signed too.** The staff Errors views verify the most
   recent event of each issue and scrub its type and message again, because a
   forged browser event can carry anything

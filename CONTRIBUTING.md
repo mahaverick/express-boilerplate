@@ -344,6 +344,8 @@ in Apex. The rules behind them are in
 - [CLAUDE.md](CLAUDE.md): a non-obvious constraint a future contributor would
   otherwise rediscover by hitting it, rather than a code comment buried three
   files deep.
-- [AGENTS.md](AGENTS.md): only when a doc is added, removed or renamed.
+- [README.md](README.md#documentation-index)'s documentation index: when a doc
+  is added, removed or renamed. AGENTS.md links to the index and changes only
+  if CLAUDE.md or README.md is renamed.
 - Bumping a major dependency: say so in the PR description and title it
   `feat!`/`fix!` if it breaks consumers.

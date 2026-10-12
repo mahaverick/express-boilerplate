@@ -412,7 +412,8 @@ as described so it does not build them a second time under the lock, then run
   and with no foreign key, and its `not_before` index, so it applies
   instantly on any database.
 
-- **`0024` blocks writes to `audit_logs` and `users` until the batch commits.**
+- **`0024` blocks every read and write on `audit_logs`, and writes to `users`,
+  until the batch commits.**
   It creates `maintenance_mode_state` (empty, so instant) and inserts its one
   row. Swapping `audit_logs_target_type_check` drops the constraint, which takes
   an `ACCESS EXCLUSIVE` lock on `audit_logs`, and re-adds it, which scans every

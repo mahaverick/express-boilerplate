@@ -297,9 +297,9 @@ points at the code or doc that holds the detail. How things work is in
   `reloadMaintenanceMode()`
   (`src/services/maintenance-mode/maintenance-mode-store.service.ts`), and
   resets it the same way (`resetMaintenanceMode`): a store ignores a row whose
-  version is not above its copy's. **A test that pauses the queues resumes them**
-  (`setAllQueuesPaused(false)`) before the file ends: the pause is a flag in
-  Redis under the worker's prefix, and the next file's jobs would never run.
+  version is not above its copy's. **A test that pauses the queues resumes
+  them** (`setAllQueuesPaused(false)`) before the file ends: the pause is a flag
+  in Redis under the worker's prefix, and the next file's jobs would never run.
 
 ## Tests
 
@@ -406,9 +406,10 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   newest version of a tool missing from `node_modules`.
 - **Read configuration through `getEnv()`, never at module scope.** It is lazy
   and memoised: parsing at import time would crash every importing file on one
-  bad variable. Only `src/configs/env.config.ts`, `src/observability/tracing.ts`,
-  `src/services/logger.service.ts` and `src/index.ts` read `process.env`
-  (lint enforces it); `tracing.ts` loads via `--import` before validation.
+  bad variable. Only `src/configs/env.config.ts`,
+  `src/observability/tracing.ts`, `src/services/logger.service.ts` and
+  `src/index.ts` read `process.env` (lint enforces it); `tracing.ts` loads via
+  `--import` before validation.
 - **Pick environment-dependent behaviour only through the `env.config.ts`
   helpers** (`isCookieSecure`, `logFormat`, `requiresSmtpTls`), never by
   reading `APP_ENV` or `NODE_ENV` at a call site. Cross-variable rules go in
