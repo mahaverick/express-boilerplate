@@ -5,8 +5,10 @@
  * into the log.
  */
 import { randomUUID } from 'node:crypto'
+import * as bcrypt from 'bcrypt'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
+import { BCRYPT_COST } from '@/constants/auth.constants'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -210,5 +212,99 @@ describe('requestPasswordReset mail cooldown', () => {
 
     expect(await resetTokenCount(first.id)).toBe(1)
     expect(await resetTokenCount(second.id)).toBe(1)
+  })
+})
+
+/**
+ * The password hash stored for an address.
+ */
+async function storedHash(email: string): Promise<string> {
+  const [row] = await sql<{ passwordHash: string }[]>`
+    select password_hash as "passwordHash" from users where lower(email) = ${email.toLowerCase()}
+  `
+  if (!row) throw new Error('user not found')
+  return row.passwordHash
+}
+
+/**
+ * A successful login rewrites a hash made at a lower cost than `BCRYPT_COST`,
+ * leaves a current-cost hash alone, and never fails or changes its answer
+ * because of the rewrite.
+ */
+describe('login rehashes an old-cost password hash', () => {
+  const OLD_COST = 4
+  const createdEmails: string[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    if (createdEmails.length === 0) return
+    await sql`delete from users where lower(email) = any(${createdEmails.map((email) => email.toLowerCase())})`
+    createdEmails.length = 0
+  })
+
+  /**
+   * Register a verified user, optionally with its hash replaced by one at `cost`.
+   * @param cost - The cost to store the hash at; omitted keeps the hash register wrote.
+   * @returns The user's email and the hash now stored.
+   */
+  async function verifiedUser(cost?: number): Promise<{ email: string; hash: string }> {
+    const email = uniqueEmail()
+    createdEmails.push(email)
+    await register({ email, password: VALID_PASSWORD, app: 'web' })
+    await sql`update users set email_verified_at = now() where lower(email) = ${email.toLowerCase()}`
+    if (cost !== undefined) {
+      const oldHash = await bcrypt.hash(VALID_PASSWORD, cost)
+      await sql`update users set password_hash = ${oldHash} where lower(email) = ${email.toLowerCase()}`
+    }
+    return { email, hash: await storedHash(email) }
+  }
+
+  it('rewrites an old-cost hash at BCRYPT_COST on a successful login', async () => {
+    const { email, hash } = await verifiedUser(OLD_COST)
+    expect(bcrypt.getRounds(hash)).toBe(OLD_COST)
+
+    await login({ email, password: VALID_PASSWORD })
+
+    const rewritten = await storedHash(email)
+    expect(bcrypt.getRounds(rewritten)).toBe(BCRYPT_COST)
+    expect(await bcrypt.compare(VALID_PASSWORD, rewritten)).toBe(true)
+  })
+
+  it('leaves a current-cost hash unchanged', async () => {
+    const { email, hash } = await verifiedUser()
+    expect(bcrypt.getRounds(hash)).toBe(BCRYPT_COST)
+
+    await login({ email, password: VALID_PASSWORD })
+
+    expect(await storedHash(email)).toBe(hash)
+  })
+
+  it('leaves an old-cost hash unchanged when the password is wrong', async () => {
+    const { email, hash } = await verifiedUser(OLD_COST)
+
+    await expect(login({ email, password: 'not the password' })).rejects.toMatchObject({
+      statusCode: 401,
+    })
+
+    expect(await storedHash(email)).toBe(hash)
+  })
+
+  it('still signs the user in, and logs a warning, when the rewrite fails', async () => {
+    const { email, hash } = await verifiedUser(OLD_COST)
+    const warnSpy = vi.spyOn(logger, 'warn')
+
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'replacePasswordHash',
+      failingQuery,
+      async () => {
+        const result = await login({ email, password: VALID_PASSWORD })
+        expect(result.accessToken).toEqual(expect.any(String))
+      }
+    )
+
+    expect(warnSpy).toHaveBeenCalledWith('Password rehash on login failed', expect.anything())
+    expect(loggedText(warnSpy)).not.toContain(LEAKED_PARAM)
+    expect(await storedHash(email)).toBe(hash)
   })
 })

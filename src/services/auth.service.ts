@@ -2,7 +2,8 @@
  * @file Email-and-password authentication. An unknown email and a wrong password
  * get the same status and body and each pay one bcrypt comparison (`getDummyHash`),
  * so status and body do not tell a registered address from an unregistered one, and
- * the timing matches while stored hashes use the current `BCRYPT_COST`. Work that
+ * the timing matches while stored hashes use the current `BCRYPT_COST`; a successful
+ * login rewrites an older-cost hash at it. Work that
  * runs after the reply (register's mail, requestPasswordReset) never rejects: the
  * controller does not await it, so a rejection would be unhandled and treated as a
  * process fault (index.ts), and on one branch only that would tell a free address
@@ -54,7 +55,12 @@ import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.te
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import type { EmailResendOptions } from '@/types/email-context'
 import { requireDurationMs } from '@/utilities/duration.utilities'
-import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import {
+  getDummyHash,
+  hashPassword,
+  isHashCostOutdated,
+  isPasswordValid,
+} from '@/utilities/password.utilities'
 import type {
   ChangePasswordInput,
   LoginInput,
@@ -231,6 +237,29 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
 }
 
 /**
+ * Rewrite a just-verified password's hash at `BCRYPT_COST` when it was made
+ * at a lower cost. Runs only after a successful login, so a wrong password
+ * never pays for it, and never throws: a failure is logged and the login
+ * goes on with the old hash.
+ * @param userId - The user who signed in.
+ * @param password - The password that matched.
+ * @param comparedHash - The stored hash it matched; the write lands only while it is unchanged.
+ */
+async function rehashIfOutdated(
+  userId: string,
+  password: string,
+  comparedHash: string
+): Promise<void> {
+  if (!isHashCostOutdated(comparedHash)) return
+  try {
+    const newHash = await hashPassword(password)
+    await userRepository.replacePasswordHash(userId, comparedHash, newHash)
+  } catch (error) {
+    logger.warn('Password rehash on login failed', { error: redactedForLog(error), userId })
+  }
+}
+
+/**
  * Log in with an email and password.
  *
  * Unknown, wrong-password, inactive and unverified all fail through ONE
@@ -277,6 +306,8 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     }
     return issueRefreshToken(user.id, sessionId, tx)
   })
+  // After the token's transaction, whose re-read compares the hash this would change.
+  await rehashIfOutdated(user.id, input.password, comparedHash)
   const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   await emitDomainEvent({

@@ -9,16 +9,15 @@
  * every password this boilerplate hashes. Each +1 doubles the time per hash.
  *
  * bcrypt stores the cost in each hash, so raising this affects only
- * passwords hashed afterwards.
+ * passwords hashed afterwards, and a successful `login` (auth.service.ts)
+ * rewrites a hash made at a lower cost.
  *
- * Before raising it: `login` (auth.service.ts) answers an unknown email by
+ * Raising it opens a timing gap: `login` answers an unknown email by
  * verifying against a dummy hash made at the current cost, while each stored
  * hash verifies at the cost it was written with. A higher cost makes an
- * unknown email measurably slower than a wrong password for an existing
- * account, reopening the login timing oracle (whether an email is
- * registered). Nothing rehashes on login, so the gap lasts until every
- * active user has a new hash. Build rehash-on-login first, or accept that
- * trade.
+ * unknown email measurably slower than a wrong password for an account whose
+ * hash is still at the old cost, which tells whether that email is
+ * registered. The gap closes for each account at its next successful login.
  */
 export const BCRYPT_COST = 12
 

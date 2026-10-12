@@ -202,9 +202,12 @@ passwords sharing a 72-byte prefix would hash identically and either would
 verify against the other's hash. Hashing or verifying refuses an over-length
 password outright instead of silently truncating it.
 
-Raising `BCRYPT_COST` opens a timing difference on `/login` until every stored
-hash is rewritten at the new cost; `BCRYPT_COST`'s own comment explains why,
-and the remedy (rehash on login) is not built.
+Raising `BCRYPT_COST` opens a timing difference on `/login` for each account
+until its stored hash is rewritten at the new cost; `BCRYPT_COST`'s own comment
+explains why. A successful login rewrites a hash made at a lower cost
+(`isHashCostOutdated`), so the gap lasts only until each active user next signs
+in. The rewrite lands only while the stored hash is the one the login verified,
+and a failed rewrite is logged and never fails the login.
 
 ### Password policy: an 8-character floor, no composition rules
 
@@ -1349,7 +1352,6 @@ None of these is built, except where the Status column says Partial:
 | MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
 | General-purpose rate limiting                         | **Partial**         | 30 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
-| Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |
 | Session list                                          | **Not implemented** | `POST /auth/sessions/revoke-others` ends every other session (as a password change does), and a staff admin can end all of a user's sessions.                                                                                       |

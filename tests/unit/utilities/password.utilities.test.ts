@@ -1,9 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import * as bcrypt from 'bcrypt'
 import { describe, expect, it, vi } from 'vitest'
 import { BCRYPT_COST, MAX_PASSWORD_BYTES } from '@/constants/auth.constants'
 import { logger } from '@/services/logger.service'
-import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import {
+  getDummyHash,
+  hashPassword,
+  isHashCostOutdated,
+  isPasswordValid,
+} from '@/utilities/password.utilities'
 
 describe('password hashing', () => {
   it('produces a verifiable hash', async () => {
@@ -103,5 +109,19 @@ describe('getDummyHash', () => {
 
     // Identity, not equality: bcrypt salts every call, so two separate hashings of the same string would not be equal. Same string object is the only thing that proves the cache was used.
     expect(second).toBe(first)
+  })
+})
+
+describe('isHashCostOutdated', () => {
+  it('flags a hash made below BCRYPT_COST', async () => {
+    expect(isHashCostOutdated(await bcrypt.hash('x', 4))).toBe(true)
+  })
+
+  it('leaves a hash made at BCRYPT_COST alone', async () => {
+    expect(isHashCostOutdated(await hashPassword('x'))).toBe(false)
+  })
+
+  it('leaves a hash whose cost cannot be read alone, without throwing', () => {
+    expect(isHashCostOutdated('not-a-bcrypt-hash')).toBe(false)
   })
 })
