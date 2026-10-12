@@ -1199,7 +1199,9 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   object) with the fixed value `Non-Error object thrown`: its keys and values,
   which can be user input, are never sent. The rule families are Postgres
   `Key (col)=(value)` detail, Postgres and JSON input echoes, URL logins,
-  query strings, fragments (a line anchor such as `#L5` and a lowercase heading
+  query strings (the query of a `mailto:` or other address URL too, its
+  addresses joined by `,` or `;`),
+  fragments (a line anchor such as `#L5` and a lowercase heading
   such as `#getting-started` are kept), Bearer, Basic and known-scheme
   Authorization credentials, every parameter of an Authorization header (any
   scheme, Digest and OAuth included) and of a Cookie line, to the end of the
@@ -1219,7 +1221,9 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   becomes `/reset/[token] = [redacted]`); `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
-  `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
+  `missing`, `true` and `false`, and already-scrubbed placeholders, are kept;
+  the words `compass`, `encompass`, `bypass` and `surpass` on their own are
+  not keys, though a compound of them is, `auth_bypass` included);
   `code` only where it reads as an authorization code: after `?` or `&`,
   before a further `&` field (`code=…&`), with `oauth`, `authorization` or
   `authorize` earlier on its line or later on it with no brace in between, or anywhere in
@@ -1271,7 +1275,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   letters each, 40 or more characters in all, which reads as an identifier;
   vendor tokens with no rule (`ya29.`, `glpat-`, `hf_`, Google `1//` refresh
   tokens); a host named like a package ref after `@` (`jane@main`, `jane@npm:`,
-  `jane@workspace:`); the domain of an email whose local part is a JWT
+  `jane@workspace:`), though an AWS secret access key before it is replaced
+  (`[secret]@main`); the domain of an email whose local part is a JWT
   (`[jwt]@example.com`); the part before the last `/` of a run joined to
   an email address's local part when the run, with the local part's leading
   base64 characters, is under 40 characters or reads as a path rather than

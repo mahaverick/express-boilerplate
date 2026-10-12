@@ -80,7 +80,8 @@ const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}
  * A URL or path followed by a query string: the part before `?` is kept. A
  * bare word before `?` (`callback?code=…`) counts as a path when the query
  * holds an `=`, so a question in prose is left alone. A word after `@` is
- * a domain, which the email rule handles.
+ * a domain, which the email rule handles; the query after an address in a
+ * URL with no `//` (`mailto:jane@…?subject=…`) is `EMAIL_QUERY_PATTERN`'s.
  */
 const QUERY_PATTERN =
   /((?:https?:\/\/|\/)[^\s?"'<>]*|(?<![@\w.-])[\w.-]+(?=\?[^\s"'<>]*=))\?[^\s"'<>]+/g
@@ -363,8 +364,13 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * `auth_code`, `authorization_code`, `code_verifier`, `session`, `sid`,
  * `credential`, `signature`, `sig`, `hmac`, `nonce`, a one-time code name
  * (`otp_code`, `mfa_code`, `verification_code`, `recovery_code`,
- * `backup_code`), `jwt` or `otp`. So `compass: north` counts too. Some words
- * count only in context:
+ * `backup_code`), `jwt` or `otp`. So `user_pass`, `userPass`,
+ * `userpassword` and `db_password` count too, but the words `compass`,
+ * `encompass`, `bypass` and `surpass` on their own, with no letter,
+ * digit, `_`, `-` or `.` before them, do not (`compass: north` is kept);
+ * every other key ending in `pass` counts, a compound of those words
+ * included (`dbpass`, `auth_bypass`, `x-vercel-protection-bypass`). Some
+ * words count only in context:
  * - `pin` (and `pin_code`, `pincode`, `pin_number`) only as a whole word or
  *   after `_` or `-` (`user_pin`, never `spin`).
  * - `key` or `keys` only unquoted and before `=` (not `=>`), `%3D`, `&#61;`
@@ -385,7 +391,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * A URL fragment the fragment rule replaced (`#[fragment] = …`) counts as a
  * key too, since the fragment may have ended in one.
  */
-const KV_SECRET_KEY = String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)`
+const KV_SECRET_KEY = String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd|(?<!(?<![\w.-])(?:(?:en)?com|by|sur)pass))|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)`
 
 /**
  * The value grammar of `KV_SECRET_PATTERN`. A value `KEPT_VALUE` keeps (one
@@ -538,13 +544,15 @@ const VENDOR_KEY_PATTERN =
 
 /**
  * An AWS secret access key: exactly 40 base64 characters with at least one
- * `/` or `+`, on its own between non-base64 characters. One followed by `@`
- * is left to the email rules, which run first and replace it with the
- * address when they accept the domain (`SLASHED_SECRET_EMAIL_PATTERN`); before
- * a domain they refuse (`@main`), a key with a `/` and no digit is kept.
- * `isAwsSecretKey` then tells it from a 40-character path.
+ * `/` or `+`, not straight after a letter, digit, `_`, `+`, `/` or `-`,
+ * and not straight before a letter, digit, `_`, `+`, `=` or `-`. The email
+ * rules run first and replace a key followed by `@` with the address when
+ * they accept the domain (`SLASHED_SECRET_EMAIL_PATTERN`); before a domain
+ * they refuse (`@main`) this rule replaces the key and keeps the `@main`.
+ * `isAwsSecretKey` then tells it from a 40-character path. A key followed
+ * by `/` is handled only after the hex rule (`applyKeyShapes`).
  */
-const AWS_SECRET_KEY_PATTERN = /(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+/=@-])/g
+const AWS_SECRET_KEY_PATTERN = /(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+=-])/g
 
 /**
  * The length of an AWS secret access key.
@@ -593,6 +601,22 @@ const EMAIL_PATTERN = new RegExp(
   String.raw`(?:"[^"\n]{1,64}"|${EMAIL_LOCAL_PART})${EMAIL_AT_AND_DOMAIN}`,
   'gu'
 )
+
+/**
+ * The query of a URL whose path is addresses the email rule replaced, after
+ * a scheme of at most 32 characters and no `//` (`mailto:[email]?subject=…`,
+ * `mailto:[email],[email]?cc=…`, `xmpp:[email]?message;body=…`), or straight
+ * after `mailto:` (`mailto:?to=…`); addresses may be joined by `,` or `;`,
+ * with whitespace after. The query rule takes no word after `@`, so
+ * this query is left to this rule, which runs after every other rule but the
+ * last key redaction, so a phone number, IP address or secret in the query is
+ * replaced whole first. Group 1, the scheme and the addresses, is kept and
+ * the rest of the query, up to whitespace, a quote, `<` or `>`, becomes
+ * `?[query]`, as the query rule writes it. A bare address before `?`
+ * (`jane@localhost?x=1`) is not a URL, and its query is kept.
+ */
+const EMAIL_QUERY_PATTERN =
+  /(?<![a-z\d+.-])((?:mailto:(?:\[email\])?|[a-z][a-z\d+.-]{0,31}:\[email\])(?:[,;]\s*\[email\])*)\?[^\s"'<>]+/gi
 
 /**
  * An email address whose unquoted local part comes straight after a `/`,
@@ -718,6 +742,25 @@ function isSecretRun(run: string): boolean {
   const letters = run.replaceAll(/[^A-Za-z]/g, '')
   const uppercase = run.replaceAll(/[^A-Z]/g, '')
   return uppercase.length >= letters.length * BASE64_UPPERCASE_SHARE && /\d/.test(run)
+}
+
+/**
+ * `BASE64_RUN_PATTERN`, matching only at `lastIndex`.
+ */
+const BASE64_RUN_AT = new RegExp(BASE64_RUN_PATTERN.source, 'y')
+
+/**
+ * Whether an AWS-key-shaped match followed by a `/` starts a longer run that
+ * the base64 run rule replaces whole (`isSecretRun`). After the hex rule the
+ * AWS rule leaves such a match to that rule, which runs next on the same
+ * text, so the run is never split and its tail never left too short for it.
+ * @param match - A match of `AWS_SECRET_KEY_PATTERN` on the view.
+ * @returns True when the base64 run rule takes the match and what follows it.
+ */
+function isInLongerSecretRun(match: RegExpExecArray): boolean {
+  BASE64_RUN_AT.lastIndex = match.index
+  const run = BASE64_RUN_AT.exec(match.input)?.[0] ?? ''
+  return run.length > AWS_SECRET_KEY_LENGTH && isSecretRun(run)
 }
 
 /**
@@ -1180,15 +1223,16 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
     isSlashedSecret(match[1] ?? '') ? { offset: 0, text: '[email]' } : undefined
   )
   apply(scrub, EMAIL_PATTERN, whole('[email]'))
-  applyKeyShapes(scrub)
+  applyKeyShapes(scrub, false)
   apply(scrub, IPV4_PATTERN, whole('[ip]'))
   apply(scrub, IPV6_PATTERN, whole('[ip]'))
   apply(scrub, PHONE_PATTERN, whole('[phone]'))
   apply(scrub, HEX_RUN_PATTERN, whole('[secret]'))
-  applyKeyShapes(scrub)
+  applyKeyShapes(scrub, true)
   apply(scrub, BASE64_RUN_PATTERN, (match) =>
     isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
+  apply(scrub, EMAIL_QUERY_PATTERN, afterGroup('?[query]'))
   redactRanges(scrub, keyRanges)
   return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
 }
@@ -1196,13 +1240,30 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
 /**
  * The PostHog-key, vendor-credential and AWS secret access key rules, which
  * run once before the IP, phone and hex rules and once after the hex rule.
+ * Before the hex rule, an AWS-shaped match that a `/` follows is left alone:
+ * a hex run after the `/` can still change how the run reads. After it, such
+ * a match is left to the base64 run rule when that rule replaces the whole
+ * run (`isInLongerSecretRun`), which then reads the same text; and the AWS
+ * rule runs twice, so a key straight after one it replaced is found too.
+ * @param scrub - The scrub.
+ * @param isAfterHex - Whether the hex rule has run.
  */
-function applyKeyShapes(scrub: Scrub): void {
+function applyKeyShapes(scrub: Scrub, isAfterHex: boolean): void {
   apply(scrub, POSTHOG_KEY_PATTERN, whole('[posthog-key]'))
   apply(scrub, VENDOR_KEY_PATTERN, whole('[secret]'))
-  apply(scrub, AWS_SECRET_KEY_PATTERN, (match) =>
-    isAwsSecretKey(match[0]) ? { offset: 0, text: '[secret]' } : undefined
-  )
+  /**
+   * The AWS rule's replacer.
+   * @param match - A match of `AWS_SECRET_KEY_PATTERN`.
+   * @returns `[secret]` for a key this call replaces, else nothing.
+   */
+  const awsKey = (match: RegExpExecArray): Replacement => {
+    if (!isAwsSecretKey(match[0])) return undefined
+    const isBeforeSlash = match.input.charAt(match.index + match[0].length) === '/'
+    const isLeft = isAfterHex ? isInLongerSecretRun(match) : isBeforeSlash
+    return isLeft ? undefined : { offset: 0, text: '[secret]' }
+  }
+  apply(scrub, AWS_SECRET_KEY_PATTERN, awsKey)
+  if (isAfterHex) apply(scrub, AWS_SECRET_KEY_PATTERN, awsKey)
 }
 
 /**
@@ -1248,7 +1309,9 @@ const PASSES_MAX = 3
  *    a run of 32 or more hex digits becomes `[secret]`, and the PostHog,
  *    vendor and AWS rules run again for a key glued to it; a run of 40 or
  *    more base64 characters that `isSecretRun` accepts becomes `[secret]`. A
- *    UUID on its own matches none of these and is kept.
+ *    UUID on its own matches none of these and is kept. Then the query of a
+ *    URL whose path is addresses (`mailto:[email]?subject=…`), or straight
+ *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`).
  * 7. The value of a secret-named key that an earlier rule took into its
  *    placeholder, found again in the original text (`tokenKeyRanges`),
  *    becomes `[redacted]`. When there is one, the rules run again over the
