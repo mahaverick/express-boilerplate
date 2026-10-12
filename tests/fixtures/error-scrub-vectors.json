@@ -2347,7 +2347,7 @@
   {
     "rule": "bearer",
     "input": "Authorization: Bearer abc; foo=bar; baz=qux",
-    "expected": "Authorization: Bearer [token],[redacted]"
+    "expected": "Authorization: Bearer [token];[redacted]"
   },
   {
     "rule": "bearer",
@@ -2367,7 +2367,7 @@
   {
     "rule": "basic",
     "input": "authorization: basic dXNlcjpwYXNzd29yZA==;refresh=xyz",
-    "expected": "authorization: basic [token],[redacted]"
+    "expected": "authorization: basic [token];[redacted]"
   },
   {
     "rule": "bearer",
@@ -2397,7 +2397,7 @@
   {
     "rule": "bearer",
     "input": "4ff95d0eaee22db9a64dca666708805d9bearer zqC3CYwbMo; csrf=zqI2ikjxQA",
-    "expected": "[secret]Bearer [token],[redacted]"
+    "expected": "[secret]Bearer [token];[redacted]"
   },
   {
     "rule": "basic",
@@ -2408,6 +2408,56 @@
     "rule": "bearer",
     "input": "Bearer zqT3,k=/reset/x.tspwd=\"zqS7hunter2\"",
     "expected": "Bearer [token],[redacted]\"[redacted]\""
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,refresh=\"zqSECRET1\"",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,refresh='zqSECRET1'",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer abc,x=Bearer zqSECRET1,y=zqSECRET2",
+    "expected": "Bearer [token],[redacted]Bearer [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "Bearer abc,authorization=Basic dXNlcjpwYXNzd29yZA==,x=zqSECRET1",
+    "expected": "Bearer [token],[redacted]Basic [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\"h\":\"Bearer abc,a=\",\"x\":1}",
+    "expected": "{\"h\":\"Bearer [token],[redacted]\",\"x\":1}"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,\nrefresh=zqSECRET1",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc ,a=zqSECRET1",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,a%3DzqSECRET1",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "BaSiC dXNlcjpwYXNzd29yZA==,a=zqSECRET1",
+    "expected": "BaSiC [token],[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/xtoken=zqSECRET1,Bearer abc,a=zqSECRET2",
+    "expected": "/reset/[token],Bearer [token],[redacted]"
   },
   {
     "rule": "email",

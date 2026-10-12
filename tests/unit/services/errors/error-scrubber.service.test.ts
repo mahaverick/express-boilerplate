@@ -201,6 +201,18 @@ describe('scrubText', () => {
       `Bearer abc,k=${'[redacte'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
     [
+      'a Bearer credential before repeated quoted pairs that never close',
+      `Bearer abc${',k="x'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a Bearer credential before repeated whitespace-padded separators',
+      `Bearer abc${' \n,\n k%3D'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a reset path of repeated glued scheme words',
+      `/reset/${',Bearer;basic'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
       'a mailto address before repeated encoded-comma addresses and no query',
       `mailto:a@x.com${'%2Cb@y.com'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
@@ -214,7 +226,7 @@ describe('scrubText', () => {
     expect(performance.now() - started).toBeLessThan(2000)
   })
 
-  it('keeps a text that every pass lengthens under the cap', () => {
+  it('keeps a text the first pass lengthens past the cap under the cap', () => {
     const scrubbed = scrubText('token=a\n'.repeat(512))
     expect(scrubbed.length).toBeLessThanOrEqual(ERROR_VALUE_MAX)
     expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)

@@ -165,9 +165,12 @@ function isHarmlessFragment(fragment: string): boolean {
 
 /**
  * The path segment after `/reset/`, `/verify/`, `/invite/` or `/accept/`:
- * a token however short (`/reset/abc123XYZ`). The prefix is kept.
+ * a token however short (`/reset/abc123XYZ`). The prefix is kept. The
+ * segment stops before a `,` or `;` followed by a `Bearer` or `Basic` scheme
+ * word and whitespace, so that credential is left to its own rule.
  */
-const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<>]+/g
+const PATH_TOKEN_PATTERN =
+  /(\/(?:reset|verify|invite|accept)\/)(?!\[)(?:(?![,;](?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])\s)[^\s/?#"'<>])+/g
 
 /**
  * `Bearer`, in any letter case, and the credential after it, up to
@@ -178,7 +181,7 @@ const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<
 const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
 
 /**
- * HTTP Basic credentials: `Basic`, `basic` or `BASIC`, whitespace, and a
+ * HTTP Basic credentials: `Basic` in any letter case, whitespace, and a
  * base64 value of at least eight characters that holds an uppercase letter, a
  * digit, `+` or `/`. So `Basic validation failed` is left alone, but
  * capitalised prose (`Basic Authentication required`) is taken. Like
@@ -187,7 +190,7 @@ const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
  * credential.
  */
 const BASIC_PATTERN =
-  /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
+  /(?<![G-Zg-z_])([Bb][Aa][Ss][Ii][Cc])\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
 
 /**
  * The separator between a secret-named key and its value: `:`, `=`, `=>`
@@ -243,25 +246,41 @@ const KEPT_VALUE = [
 const SCHEMED_PLACEHOLDER_VALUE = String.raw`${AUTH_SCHEMES}[ \t]+${PLACEHOLDER}(?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?`
 
 /**
- * One `key=value` pair after a replaced scheme credential, joined by `,` or `;`
- * (`Bearer [token],refresh=xyz`): another credential or cookie may sit there.
- * The value may hold a placeholder a key rule wrote (`,password=[redacted]`).
+ * A `Bearer [token]` or `Basic [token]` an earlier rule wrote, the scheme's
+ * letter case aside.
  */
-const SCHEME_TAIL_PAIR = String.raw`[,;][ \t]*[\w.-]+=(?:${PLACEHOLDER}|[^\s"'\\,;&})\]])*`
+const SCHEME_PLACEHOLDER = String.raw`(?:Bearer|[Bb][Aa][Ss][Ii][Cc]) \[token\]`
+
+/**
+ * One `key=value` pair after a replaced scheme credential, joined by `,` or `;`
+ * with whitespace, line breaks included, on either side
+ * (`Bearer [token],refresh=xyz`): another credential or cookie may sit there.
+ * The `=` may be URL-encoded (`%3D`). The value is a quoted string that ends
+ * at whitespace, `,`, `;` or the end of the text, or else an unquoted run that
+ * may hold a placeholder a key rule wrote (`,password=[redacted]`) and stops
+ * before another scheme placeholder, so that credential starts its own match.
+ */
+const SCHEME_TAIL_PAIR = String.raw`\s*[,;]\s*[\w.-]+(?:=|%3[Dd])(?:"[^"\\\n]*"(?=[\s,;]|$)|'[^'\\\n]*'(?=[\s,;]|$)|(?:${PLACEHOLDER}|(?!${SCHEME_PLACEHOLDER})[^\s"'\\,;&})\]])*)`
 
 /**
  * The `Bearer [token]` or `Basic [token]` an earlier rule wrote, with the pairs
- * joined to it. Group 1 is kept; the pairs become `,[redacted]`. It runs
+ * joined to it. Group 1 is kept; the pairs become `[redacted]` after the
+ * first pair's own `,` or `;`. It runs
  * after every other rule but the last key redaction. A header-valued key
  * (`, cookie=OAuth abc`) or an array value is redacted past the first
  * whitespace or `]`, where this rule stops, and a phone number, address or
  * secret in a pair is replaced whole, so taking the pair first would leave
  * the rest of the value, or of the number, in view. It may follow any
  * character (`0100Bearer [token]`), so a pass that turns what precedes it
- * into a placeholder does not change whether it matches.
+ * into a placeholder does not change whether it matches. It misses a pair
+ * whose credential a secret key's value already took
+ * (`token=Bearer abc,refresh=xyz` keeps `,refresh=xyz`), a quote inside an
+ * unquoted value (`,a=b"x"` keeps `"x"`), a credential the Bearer or Basic
+ * rule does not take (`xBearer abc`, glued to a letter from `g` to `z`), and a
+ * fully URL-encoded header (`Bearer%20abc%2Crefresh%3Dxyz`).
  */
 const SCHEME_TAIL_PATTERN = new RegExp(
-  String.raw`((?:Bearer|[Bb]asic|BASIC) \[token\])(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
+  `(${SCHEME_PLACEHOLDER})(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
   'g'
 )
 
@@ -1260,7 +1279,10 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
     isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
   apply(scrub, EMAIL_QUERY_PATTERN, afterGroup('?[query]'))
-  apply(scrub, SCHEME_TAIL_PATTERN, afterGroup(',[redacted]'))
+  apply(scrub, SCHEME_TAIL_PATTERN, (match) => ({
+    offset: (match[1] ?? '').length,
+    text: `${/[,;]/.exec(match[2] ?? '')?.[0] ?? ','}[redacted]`,
+  }))
   redactRanges(scrub, keyRanges)
   return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
 }
@@ -1340,9 +1362,10 @@ const PASSES_MAX = 3
  *    UUID on its own matches none of these and is kept. Then the query of a
  *    URL whose path is addresses (`mailto:[email]?subject=…`), or straight
  *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`). Last, any
- *    `,key=value` or `;key=value` pairs still glued to a `Bearer [token]` or
- *    `Basic [token]` become `,[redacted]` (`SCHEME_TAIL_PATTERN`), while prose
- *    after a comma is kept.
+ *    `,key=value` or `;key=value` pairs, quoted values included, still glued
+ *    to a `Bearer [token]` or `Basic [token]` become `[redacted]` after the
+ *    first separator (`SCHEME_TAIL_PATTERN`), while prose after a comma is
+ *    kept.
  * 7. The value of a secret-named key that an earlier rule took into its
  *    placeholder, found again in the original text (`tokenKeyRanges`),
  *    becomes `[redacted]`. When there is one, the rules run again over the
@@ -1363,8 +1386,9 @@ const PASSES_MAX = 3
  * against a URL's or path's query or fragment, end an address with a `.`
  * straight before a query (`jane@example.com.?a=1`), or leave a placeholder
  * in quotes straight before an `@` (a placeholder written by the first pass
- * can open a match for the second, and a replaced quoted address does not
- * stop a path).
+ * can open a match for the second, a replaced quoted address does not stop
+ * a path, and a later rule can shorten a quoted span under the 64-character
+ * quoted local-part limit, as the scheme-tail rule does before a `%40`).
  * @param value - Text bound for a third party, such as an exception's type or
  *   value, a stack frame's filename or function, or a log line.
  * @returns The scrubbed text, at most `SCRUB_VALUE_MAX` characters.

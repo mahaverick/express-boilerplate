@@ -786,15 +786,20 @@ not through the outbox, since errors often arrive while the database is down
   (`src/services/errors/error-scrubber.service.ts`) removes addresses, IPs,
   `+`-prefixed phone numbers, JWTs and vendor keys, URL logins, query strings
   and fragments, Authorization and Cookie values, Bearer and Basic credentials
-  with any `,key=value` or `;key=value` pairs glued to them, secret-named
-  `key=value` pairs, OAuth codes, the token segment of a link path, and long
-  hex and base64 runs, then caps each value at 1024 characters. The span that records the
-  exception gets the same scrubbed text, and so does every log record forwarded
-  to Slack. The react and apex frontends hold the same file byte for byte
+  with the unquoted or quoted `,key=value` or `;key=value` pairs glued to
+  them, secret-named `key=value` pairs, OAuth codes, the token segment of a
+  link path, and long hex and base64 runs, then caps each value at 1024
+  characters. The span that records the exception gets the same scrubbed
+  text, and so does every log record forwarded to Slack. The react and apex
+  frontends hold the same file byte for byte
   (`react-boilerplate/src/observability/errors/scrub.ts`), and all three test it
   against `tests/fixtures/error-scrub-vectors.json`. The file's own comments
-  list what each rule catches and what it misses. Regex scrubbing is
-  best-effort: keep secrets and personal data out of error messages.
+  list what each rule catches and what it misses. Known gaps: a `Bearer`
+  glued to a letter from `g` to `z` (`xBearer abc`) is not taken, nor is a
+  fully URL-encoded header (`Bearer%20abc%2Crefresh%3Dxyz`), and pairs after
+  a credential that a secret key's value took (`token=Bearer abc,refresh=xyz`)
+  are kept. Regex scrubbing is best-effort: keep secrets and personal data
+  out of error messages.
 - **`$exception` events are signed too.** The staff Errors views verify the most
   recent event of each issue and scrub its type and message again, because a
   forged browser event can carry anything
