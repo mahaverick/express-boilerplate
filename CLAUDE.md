@@ -31,11 +31,11 @@ points at the code or doc that holds the detail. How things work is in
   into their session. Put `COOKIE_DOMAIN` on the set, the clear and the OAuth
   session cookie alike, since a clear with another domain leaves the cookie
   behind. See [SECURITY.md](SECURITY.md#the-refresh-cookie).
-- **The Google callback sets the refresh cookie `SameSite=Lax`; don't make it
-  `Strict`.** Lax costs nothing; it lasts until the first rotation, which
-  re-sets the cookie `Strict` (`setOAuthRefreshTokenCookie`,
-  `src/controllers/auth.controller.ts`). The reasoning is in
-  [SECURITY.md](SECURITY.md#the-refresh-cookie).
+- **The OAuth refresh cookie stays `SameSite=Lax`** (a decision, set by
+  `setOAuthRefreshTokenCookie`, `src/controllers/auth.controller.ts`). It costs
+  nothing, since both routes that act on the cookie are `POST`s behind the
+  Origin check, and it lasts only until the first rotation re-sets it
+  `Strict`. See [SECURITY.md](SECURITY.md#the-refresh-cookie).
 - **Never link a Google identity to an address Google has not verified.**
   `resolveGoogleUser` (`src/services/google-auth.service.ts`) refuses it,
   because linking an unverified address is an account takeover. Don't relax
@@ -291,9 +291,12 @@ points at the code or doc that holds the detail. How things work is in
   (`getPlatformMaintenanceMode`) and the change's row lock
   (`lockMaintenanceModeState`). See
   [ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode).
-- **A test that changes the mode** writes the row with a higher version and
-  calls `reloadMaintenanceMode()` (`tests/helpers/maintenance-mode.ts`), and
-  resets it the same way. **A test that pauses the queues resumes them**
+- **A test that changes the mode** writes the row with a higher version
+  (`storeMaintenanceMode`, `tests/helpers/maintenance-mode.ts`) and calls
+  `reloadMaintenanceMode()`
+  (`src/services/maintenance-mode/maintenance-mode-store.service.ts`), and
+  resets it the same way (`resetMaintenanceMode`): a store ignores a row whose
+  version is not above its copy's. **A test that pauses the queues resumes them**
   (`setAllQueuesPaused(false)`) before the file ends: the pause is a flag in
   Redis under the worker's prefix, and the next file's jobs would never run.
 
@@ -361,6 +364,18 @@ points at the code or doc that holds the detail. How things work is in
   vacuous in the next.
 - **For a guard `a && b`, a test supplies the case where `a` is true and `b`
   is false;** otherwise `b` can be deleted with the suite green.
+- **Before trusting a width, regex or prefix check, compute what it must
+  reject and compare.** A 64-character column can't "structurally" exclude a
+  64-character hex token; prefer a shape constraint (a `CHECK` on a pattern)
+  to a width.
+- **Run a check; don't read it.** A `CHECK` built with drizzle's `sql`
+  template and bound values compiles and fails only when the migration runs.
+  Prove an `@ts-expect-error` guards what it claims by removing it and
+  watching the specific error appear.
+- **Don't assert a constant against itself, or `toStrictEqual` between two
+  calls that both throw:** either passes whatever the code does.
+- **A helper's JSDoc matches its body:** a helper documented as polling
+  polls, because the next caller relies on the comment.
 
 ### Test timing rules
 
@@ -374,7 +389,9 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
    observed ("absence has no event", "poll interval").
 3. Wall-clock upper bounds only when the bound is the claim under test. Each
    carries a comment naming what it proves and either references a product
-   constant by name or has at least 10x headroom over the measured p99.
+   constant by name or has at least 10x headroom over a measured figure: the
+   p99, or the worst measured run where the test has no p99 (as
+   `tests/unit/lint-gates.test.ts` does for its cold lint runs).
 4. No exact counts of process-wide resources. Count only what the test itself
    created.
 5. Negative checks use a barrier event where one exists, and otherwise
@@ -465,10 +482,11 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
 
 ## Versions
 
-- **TypeScript is pinned `~6.0.3`** because `typescript-eslint@8.70.1` peers
-  `typescript <6.1.0`, and `pnpm lint` depends on its type-aware rules. Bump it
-  only when a `typescript-eslint` release's peer range admits the new major,
-  and lift `renovate.json`'s `<6.1.0` rule with it.
+- **Keep `typescript` within the `typescript` peer range of the
+  `typescript-eslint` version `package.json` pins:** `pnpm lint` depends on its
+  type-aware rules. Bump TypeScript past that range only once a
+  `typescript-eslint` release admits it, and lift the matching hold in
+  `renovate.json` with it.
 - **Lift the TypeScript and Node holds in `renovate.json` deliberately, never
   by merging a Renovate PR,** and bump `engines.node` and
   `devEngines.runtime.version` by hand with them: Renovate leaves `>=` ranges
