@@ -196,10 +196,12 @@ points at the code or doc that holds the detail. How things work is in
 - **Some email channels can't be switched off** (`verify_email`,
   `password_reset_requested`, `password_changed`, `tenant_invitation`,
   `maintenance_mode_changed`): disabling them would lock a user out or silence
-  the mail an account owner must see. Change `NON_DISABLEABLE_EMAIL_TYPES`
+  the mail an account owner must see. `PUT /notifications/preferences`
+  answers 400 for `emailEnabled: false` on any of them; `inAppEnabled` can
+  still be switched off for any type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
   (`src/repositories/notification-preference.repository.ts`) and
   `NON_DISABLEABLE_NOTIFICATION_TYPES` (`src/validators/notification.validators.ts`)
-  together, or a client can save a preference the repository then ignores.
+  together, or a client can save an email preference the repository then ignores.
 - **Notification `metadata` never holds `variables`.** Verification tokens
   live there; the worker strips them before the insert and the email fan-out
   reads them from the job payload (`src/workers/notification.worker.ts`).

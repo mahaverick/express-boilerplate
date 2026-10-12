@@ -17,6 +17,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { updatePreferences } from '@/services/notification.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -188,6 +189,33 @@ describe('notification.worker', () => {
 
     const emailJobs = await emailQueueJobs()
     expect(emailJobs.some((emailQueueJob) => emailQueueJob.data.to === recipient)).toBe(true)
+  }, 15_000)
+
+  it('skips the in-app row for a type switched off through the preferences service, and keeps the other types', async () => {
+    const userId = await createUser()
+    await updatePreferences(userId, [
+      { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
+    ])
+
+    const quiet = await addNotificationJob({
+      userId,
+      type: 'password_changed',
+      title: 'Password changed',
+      body: 'body',
+    })
+    const loud = await addNotificationJob({
+      userId,
+      type: 'verify_email',
+      title: 'Verify your email',
+      body: 'body',
+    })
+    if (!quiet.id || !loud.id) throw new Error('expected addNotificationJob to assign job ids')
+
+    await expect(waitForJobSettled(worker, quiet.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, loud.id)).resolves.toBe('completed')
+
+    const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+    expect(notifications.map((notification) => notification.type)).toEqual(['verify_email'])
   }, 15_000)
 
   it('does not enqueue an email when no email payload is present, but still creates the in-app row', async () => {

@@ -110,10 +110,11 @@ export async function getPreferences(userId: string): Promise<PreferenceMatrix> 
 
 /**
  * Upsert the given preference entries. Not transactional: a failure partway
- * leaves earlier upserts committed. Every type is non-configurable, and the
- * schema requires at least one entry, so no body passes validation to reach it.
+ * leaves earlier upserts committed. The schema has already refused a type the
+ * caller cannot see, a duplicate type and any disabled email channel, so the
+ * entries are written as given.
  * @param userId - The user.
- * @param preferences - The validated entries; the schema admits configurable types only.
+ * @param preferences - The validated entries (at least one, one per type).
  * @returns The resulting rows, in input order.
  */
 export async function updatePreferences(

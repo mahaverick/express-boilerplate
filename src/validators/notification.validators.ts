@@ -48,16 +48,18 @@ export const notificationIdSchema = z.object({
 })
 
 /**
- * Notification types no preference may be written for: the write-side mirror
- * of `NON_DISABLEABLE_EMAIL_TYPES` (notification-preference.repository.ts),
- * kept in sync by hand. The repository ignores a stored email toggle for
- * these types when it decides delivery; this set stops a `PUT` from storing
- * one the settings UI would show. `verify_email` and
- * `password_reset_requested` would lock the user out if disabled;
- * `password_changed` must not be silenceable by someone who has taken the
- * account over; `maintenance_mode_changed` must reach every platform owner
- * and admin; `tenant_invitation` has no email on the notification path and is
- * listed only to keep the two sets the same.
+ * Notification types whose email channel may never be switched off: the
+ * write-side mirror of `NON_DISABLEABLE_EMAIL_TYPES`
+ * (notification-preference.repository.ts), kept in sync by hand. The
+ * repository ignores a stored email toggle for these types when it decides
+ * delivery; `updatePreferencesSchemaFor` refuses to store `emailEnabled:
+ * false` for them, so the settings UI never shows a toggle the repository
+ * would ignore. `verify_email` and `password_reset_requested` would lock the
+ * user out if disabled; `password_changed` must not be silenceable by someone
+ * who has taken the account over; `maintenance_mode_changed` must reach every
+ * platform owner and admin; `tenant_invitation` has no email on the
+ * notification path and is listed only to keep the two sets the same. Their
+ * in-app channel stays switchable.
  */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'verify_email',
@@ -66,16 +68,6 @@ const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'tenant_invitation',
   'maintenance_mode_changed',
 ])
-
-/**
- * Notification types whose preferences `PUT /api/v1/notifications/preferences`
- * accepts. Every type is non-disableable, so the list is empty and that route
- * answers 400 for every entry; `updatePreferencesSchemaFor` is its only
- * reader.
- */
-const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
-  (type) => !NON_DISABLEABLE_NOTIFICATION_TYPES.has(type)
-)
 
 /**
  * The notification types that exist for a caller: every type for platform
@@ -91,31 +83,55 @@ function notificationTypesFor(isStaff: boolean): readonly string[] {
 
 /**
  * `PUT /api/v1/notifications/preferences` request body for one caller: one or
- * more per-type channel toggles to upsert. `z.enum(NOTIFICATION_TYPES)` keeps
- * the parsed type the `NotificationType` union, and the `.refine()` turns
- * "not configurable" into a per-field message
- * (`preferences.<index>.notificationType`) instead of zod's generic
- * invalid-enum text. A staff-only type is not configurable for a caller who
- * cannot see it, whatever `CONFIGURABLE_NOTIFICATION_TYPES` holds.
+ * more per-type channel toggles to upsert. Any type the caller can see may
+ * switch `inAppEnabled` either way. `emailEnabled` must be `true` for a type in
+ * `NON_DISABLEABLE_NOTIFICATION_TYPES` (all of them today); `false` is a
+ * field-scoped 400 (`preferences.<index>.emailEnabled`), so no body, whatever
+ * its extra keys or entry order, can store a disabled email channel. A type
+ * the caller cannot see (a staff-only one for a non-staff caller) fails on
+ * `notificationType`, and a type listed twice fails on its second entry, so one
+ * request never races two upserts of the same row. A rejected body writes
+ * nothing: the whole body is parsed before the first upsert.
+ * `z.enum(NOTIFICATION_TYPES)` keeps the parsed type the `NotificationType`
+ * union; unknown keys are stripped by zod.
  * @param isStaff - Whether the caller holds a platform membership.
  */
 export function updatePreferencesSchemaFor(isStaff: boolean) {
   const visibleTypes = notificationTypesFor(isStaff)
-  /**
-   * Whether a type is visible to this caller and has a preference that may be written.
-   */
-  const isConfigurable = (type: string): boolean =>
-    visibleTypes.includes(type) &&
-    (CONFIGURABLE_NOTIFICATION_TYPES as readonly string[]).includes(type)
-  const entry = z.object({
-    notificationType: z.enum(NOTIFICATION_TYPES).refine(isConfigurable, {
-      message: 'This notification type does not support a configurable preference.',
-    }),
-    emailEnabled: z.boolean(),
-    inAppEnabled: z.boolean(),
-  })
+  const entry = z
+    .object({
+      notificationType: z.enum(NOTIFICATION_TYPES).refine((type) => visibleTypes.includes(type), {
+        message: 'This notification type does not exist.',
+      }),
+      emailEnabled: z.boolean(),
+      inAppEnabled: z.boolean(),
+    })
+    .superRefine((value, context) => {
+      if (!value.emailEnabled && NON_DISABLEABLE_NOTIFICATION_TYPES.has(value.notificationType)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['emailEnabled'],
+          message: 'Email for this notification type cannot be turned off.',
+        })
+      }
+    })
   return z.object({
-    preferences: z.array(entry).min(1, 'preferences must contain at least one entry.'),
+    preferences: z
+      .array(entry)
+      .min(1, 'preferences must contain at least one entry.')
+      .superRefine((entries, context) => {
+        const seen = new Set<string>()
+        for (const [index, value] of entries.entries()) {
+          if (seen.has(value.notificationType)) {
+            context.addIssue({
+              code: 'custom',
+              path: [index, 'notificationType'],
+              message: 'Each notification type may appear only once.',
+            })
+          }
+          seen.add(value.notificationType)
+        }
+      }),
   })
 }
 
