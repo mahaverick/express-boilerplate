@@ -1,7 +1,7 @@
 /**
  * @file Integration test: touches the real per-worker Postgres database
  * (through `EmailLogRepository`) and the real Mailpit container (SMTP on
- * 1025, its own HTTP API on 8025), never mocked. See CLAUDE.md on why a
+ * 1025, its own HTTP API on 8025, `MAILPIT_URL`), never mocked. See CLAUDE.md on why a
  * test like this must live under `tests/integration/`, never
  * `tests/unit/`.
  */
