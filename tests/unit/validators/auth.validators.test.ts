@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { forgotPasswordSchema, registerSchema } from '@/validators/auth.validators'
+import { MIN_PASSWORD_LENGTH } from '@/constants/auth.constants'
+import {
+  changePasswordSchema,
+  forgotPasswordSchema,
+  loginSchema,
+  reauthenticateSchema,
+  registerSchema,
+  resetPasswordSchema,
+} from '@/validators/auth.validators'
 import { resendVerificationSchema } from '@/validators/verification.validators'
 
 const VALID_REGISTRATION = { email: 'user@example.com', password: 'a-long-enough-password' }
@@ -34,5 +42,46 @@ describe('the app field', () => {
     expect(forgotPasswordSchema.safeParse({ email: 'user@example.com', app: value }).success).toBe(
       false
     )
+  })
+})
+
+describe('the password length floor', () => {
+  const SHORT = 'a'.repeat(14)
+  const LONG_ENOUGH = 'a'.repeat(15)
+
+  it('is 15 characters, the NIST SP 800-63B rev 4 single-factor minimum', () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(15)
+  })
+
+  it.each([
+    [
+      'registerSchema',
+      (password: string) => registerSchema.safeParse({ email: 'user@example.com', password }),
+    ],
+    [
+      'resetPasswordSchema',
+      (password: string) => resetPasswordSchema.safeParse({ token: 't', password }),
+    ],
+    [
+      'changePasswordSchema',
+      (password: string) =>
+        changePasswordSchema.safeParse({ currentPassword: 'x', newPassword: password }),
+    ],
+  ])('%s refuses 14 characters and accepts 15', (_name, parse) => {
+    const refused = parse(SHORT)
+    expect(refused.success).toBe(false)
+    expect(refused.error?.issues[0]?.message).toBe('Password must be at least 15 characters long.')
+    expect(parse(LONG_ENOUGH).success).toBe(true)
+  })
+
+  // A password set under an older, shorter floor must still be accepted where it is verified, not set.
+  it('leaves passwords that are verified, not set, without a floor', () => {
+    expect(loginSchema.safeParse({ email: 'user@example.com', password: 'short' }).success).toBe(
+      true
+    )
+    expect(
+      changePasswordSchema.safeParse({ currentPassword: 'short', newPassword: LONG_ENOUGH }).success
+    ).toBe(true)
+    expect(reauthenticateSchema.safeParse({ password: 'short' }).success).toBe(true)
   })
 })

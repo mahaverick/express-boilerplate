@@ -209,14 +209,15 @@ explains why. A successful login rewrites a hash made at a lower cost
 in. The rewrite lands only while the stored hash is the one the login verified,
 and a failed rewrite is logged and never fails the login.
 
-### Password policy: an 8-character floor, no composition rules
+### Password policy: a 15-character floor, no composition rules
 
 Every password a user sets — `registerSchema`, `resetPasswordSchema` and
 `changePasswordSchema`'s `newPassword` (`src/validators/auth.validators.ts`) —
-must be at least `MIN_PASSWORD_LENGTH` (8) characters and at most
+must be at least `MIN_PASSWORD_LENGTH` (15) characters and at most
 `MAX_PASSWORD_BYTES` bytes, and nothing else — no required uppercase, digit,
-or symbol. This follows [NIST SP
-800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html): length matters more
+or symbol. 15 is [NIST SP 800-63B revision
+4](https://pages.nist.gov/800-63-4/sp800-63b.html)'s minimum for a password
+used as a single factor. The guidance behind it: length matters more
 than complexity, and mandatory composition rules push real users toward
 _more_ predictable passwords (a capitalised first letter, a `1` or `!`
 appended). Bolting composition requirements back on is a regression against
@@ -228,6 +229,12 @@ fails with the same "invalid credentials" response as a wrong password for a
 real account — see "User enumeration" below. A distinct validation error for
 a bad-length login password would leak that distinction to an
 unauthenticated caller.
+
+The floor applies only where a password is set. Login, step-up
+(`reauthenticateSchema`) and change-password's `currentPassword` verify a
+password without a length rule, so an account whose password was set under an
+earlier, shorter floor still signs in; it meets the floor at its next change or
+reset.
 
 ### Password change and reset against a concurrent login
 

@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import * as bcrypt from 'bcrypt'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { BCRYPT_COST } from '@/constants/auth.constants'
+import { BCRYPT_COST, MIN_PASSWORD_LENGTH } from '@/constants/auth.constants'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -309,6 +309,18 @@ describe('login rehashes an old-cost password hash', () => {
       }
     )
     expect(await storedHash(email)).toBe(otherHash)
+  })
+
+  it('signs in an account whose password is shorter than MIN_PASSWORD_LENGTH', async () => {
+    const shortPassword = 'eight-ch'
+    expect(shortPassword.length).toBeLessThan(MIN_PASSWORD_LENGTH)
+    const { email } = await verifiedUser()
+    const shortHash = await bcrypt.hash(shortPassword, BCRYPT_COST)
+    await sql`update users set password_hash = ${shortHash} where lower(email) = ${email.toLowerCase()}`
+
+    const result = await login({ email, password: shortPassword })
+
+    expect(result.accessToken).toEqual(expect.any(String))
   })
 
   it('leaves a current-cost hash unchanged', async () => {
