@@ -213,16 +213,22 @@ describe('notification.worker', () => {
         },
       },
     })
+    if (!quiet.id) throw new Error('expected addNotificationJob to assign a job id')
+    // Attach each wait right after its add, before the next await: the shared Worker can settle a job at any point, and a wait attached after that event never resolves.
+    const quietSettled = waitForJobSettled(worker, quiet.id)
     const loud = await addNotificationJob({
       userId,
       type: 'verify_email',
       title: 'Verify your email',
       body: 'body',
     })
-    if (!quiet.id || !loud.id) throw new Error('expected addNotificationJob to assign job ids')
+    if (!loud.id) throw new Error('expected addNotificationJob to assign a job id')
+    const loudSettled = waitForJobSettled(worker, loud.id)
 
-    await expect(waitForJobSettled(worker, quiet.id)).resolves.toBe('completed')
-    await expect(waitForJobSettled(worker, loud.id)).resolves.toBe('completed')
+    await expect(Promise.all([quietSettled, loudSettled])).resolves.toEqual([
+      'completed',
+      'completed',
+    ])
 
     const { notifications } = await notificationRepository.list(userId, { limit: 10 })
     expect(notifications.map((notification) => notification.type)).toEqual(['verify_email'])
