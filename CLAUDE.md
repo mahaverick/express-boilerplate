@@ -209,7 +209,8 @@ points at the code or doc that holds the detail. How things work is in
   type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
   (`src/repositories/notification-preference.repository.ts`) and
   `NON_DISABLEABLE_NOTIFICATION_TYPES`
-  (`src/validators/notification.validators.ts`) together, or a client can save an email preference the repository then ignores.
+  (`src/validators/notification.validators.ts`) together, or a client can
+  save an email preference the repository then ignores.
 - **Notification `metadata` never holds `variables`.** Verification tokens
   live there; the worker strips them before the insert and the email fan-out
   reads them from the job payload (`src/workers/notification.worker.ts`).

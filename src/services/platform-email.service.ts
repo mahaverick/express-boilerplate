@@ -404,8 +404,9 @@ function maskedLink(build: (rawToken: string, webUrl: string) => string, origin:
 /**
  * The mail a preview renders, and whether a stored preview variable was
  * missing (a message migrated from an old send attempt, whose variables are
- * `{}`, or one written with empty variables) and read as the mask. The masked token and the inviter's fixed placeholder are in
- * every such preview, so they do not make it partial. Only the template's
+ * `{}`, or one written with empty variables) and read as the mask. The
+ * masked token and the inviter's fixed placeholder are in every such
+ * preview, so they do not make it partial. Only the template's
  * `previewVariables` are read from `stored`, and only string values; every
  * secret is a placeholder, whatever `stored` holds.
  * @param templateKey - The stored template key, already known to the registry.

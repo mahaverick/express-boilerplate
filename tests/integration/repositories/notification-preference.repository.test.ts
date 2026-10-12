@@ -25,8 +25,8 @@ function uniqueEmail(): string {
 }
 
 /**
- * Insert a preference row directly, bypassing the repository's `upsert` guard, to stand for a row
- * written before that guard existed.
+ * Insert a preference row directly, around the repository's `upsert` guard, so a test can store
+ * a row that disables a channel the guard refuses to disable.
  * @param userId - The user.
  * @param notificationType - The type.
  * @param isEmailOn - The stored email flag.
@@ -192,7 +192,7 @@ describe('NotificationPreferenceRepository', () => {
       )
     })
 
-    it('always returns true for verify_email’s email channel, even when a legacy row disables it', async () => {
+    it('always returns true for verify_email’s email channel, even when a stored row disables it', async () => {
       const userId = await createUser()
       await seedRow(userId, 'verify_email', false, false)
 
@@ -205,7 +205,7 @@ describe('NotificationPreferenceRepository', () => {
       )
     })
 
-    it('always returns true for password_changed’s email channel, even when a legacy row disables it', async () => {
+    it('always returns true for password_changed’s email channel, even when a stored row disables it', async () => {
       // Same NON_DISABLEABLE_EMAIL_TYPES mechanism as verify_email above, but this one locks nobody out: it exists so an attacker who took over the account cannot silence the message that tells the real owner it happened.
       const userId = await createUser()
       await seedRow(userId, 'password_changed', false, false)
@@ -218,7 +218,7 @@ describe('NotificationPreferenceRepository', () => {
       ).toBe(false)
     })
 
-    it('always returns true for tenant_invitation’s email channel, even when a legacy row disables it', async () => {
+    it('always returns true for tenant_invitation’s email channel, even when a stored row disables it', async () => {
       const userId = await createUser()
       await seedRow(userId, 'tenant_invitation', false, true)
 
