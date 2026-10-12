@@ -215,9 +215,9 @@ function setRefreshTokenCookie(
  * `'lax'` here is a decision, and it costs nothing: a `'lax'` cookie is still
  * withheld from cross-site `POST`s and subresource requests, and both routes
  * that act on the cookie, `/refresh` and `/logout`, are `POST`s behind the
- * Origin check. It also lasts only until the first rotation, which re-sets the
- * cookie `'strict'` (SECURITY.md, "The refresh cookie",
- * `#the-refresh-cookie`).
+ * Origin check, and the one `GET` that reads it, this callback, only revokes.
+ * It also lasts only until the first rotation, which re-sets the cookie
+ * `'strict'` (SECURITY.md, "The refresh cookie", `#the-refresh-cookie`).
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.

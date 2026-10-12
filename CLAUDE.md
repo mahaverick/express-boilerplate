@@ -34,8 +34,9 @@ points at the code or doc that holds the detail. How things work is in
 - **The OAuth refresh cookie stays `SameSite=Lax`** (a decision, set by
   `setOAuthRefreshTokenCookie`, `src/controllers/auth.controller.ts`). It costs
   nothing, since both routes that act on the cookie are `POST`s behind the
-  Origin check, and it lasts only until the first rotation re-sets it
-  `Strict`. See [SECURITY.md](SECURITY.md#the-refresh-cookie).
+  Origin check and the one `GET` that reads it, the callback, only revokes, and
+  it lasts only until the first rotation re-sets it `Strict`. See
+  [SECURITY.md](SECURITY.md#the-refresh-cookie).
 - **Never link a Google identity to an address Google has not verified.**
   `resolveGoogleUser` (`src/services/google-auth.service.ts`) refuses it,
   because linking an unverified address is an account takeover. Don't relax

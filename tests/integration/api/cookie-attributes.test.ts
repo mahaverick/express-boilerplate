@@ -982,6 +982,20 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     expect(clears.filter((line) => !ANY_DOMAIN.test(line))).toHaveLength(1)
   })
 
+  it('clears an empty refreshToken in its one host-only scope without COOKIE_DOMAIN', async () => {
+    const app = appWith(PLAIN_HOST_ONLY)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', `${PLAIN_COOKIE}=`)
+
+    expect(refreshed.status).toBe(401)
+    const clears = cookieLines(refreshed, PLAIN_COOKIE)
+    expect(clears).toHaveLength(1)
+    expect(clears[0]).toMatch(EPOCH_EXPIRY)
+    expectRefreshAttributes(clears[0], { path: PATH_AUTH, isSecure: false, domain: undefined })
+  })
+
   it('clears both scopes of the plain name for an empty refreshToken when COOKIE_DOMAIN is set', async () => {
     const app = appWith(PLAIN_SCOPED)
 
