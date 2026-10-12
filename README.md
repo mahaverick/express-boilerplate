@@ -31,7 +31,7 @@ what is left to you.
 
 ```bash
 pnpm install
-docker compose up -d
+docker compose up -d --wait
 cp .env.example .env    # then fill in the blank required values below
 pnpm db:migrate
 pnpm dev
@@ -93,17 +93,12 @@ Every variable, with its default and what it does, is in the table in
 `.env.example` are both generated from the Zod schema in
 `src/configs/env.config.ts`. A quick start needs only the keys above.
 
-Optional keys a first run may add:
-
-- `APEX_URL`: the origin of the Apex staff dashboard. Platform-tenant
-  invitations, and verification, reset and Google sign-in links started with
-  `app: "apex"`, open there instead of at `WEB_URL`. See
-  [A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex).
-- `TRUST_PROXY`: the number of proxies in front of the app. Set it in any
-  deployment behind one.
-- `RESEND_WEBHOOK_SECRET`, `MAIL_FROM` and `MAIL_FROM_TRANSACTIONAL`: see
-  [Email tracking](#email-tracking).
-- The `POSTHOG_*` keys: see [Analytics (PostHog)](#analytics-posthog).
+Optional keys have their own sections: `APEX_URL` in
+[A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex),
+`RESEND_WEBHOOK_SECRET`, `MAIL_FROM` and `MAIL_FROM_TRANSACTIONAL` in
+[Email tracking](#email-tracking), the `POSTHOG_*` keys in
+[Analytics (PostHog)](#analytics-posthog), and `TRUST_PROXY` for any
+deployment behind a proxy.
 
 ## Available scripts
 
@@ -122,7 +117,7 @@ Optional keys a first run may add:
 | `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                     |
 | `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                             |
 | `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                  |
-| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run it in the production image.                       |
+| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                        |
 | `pnpm platform:grant -- <e> <role>` | Gives an existing, verified user a role in the platform tenant; see below.                          |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).          |
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).              |
@@ -160,7 +155,11 @@ ignored. A permanent bounce and a complaint suppress the address; a transient
 bounce is a delay and suppresses nothing. `email.suppressed` (Resend's own
 list blocked the send) marks the message failed and adds no local
 suppression. The webhook's limiters and signature check are in
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). The rejected-request limiter counts a request
+while it is in flight and refunds it only when it ends under 400, so more than
+60 concurrent deliveries from one provider IP can be throttled (providers
+retry, and the event id makes a retry exact). A wrong `TRUST_PROXY` puts every
+caller in the proxy's single per-IP bucket.
 
 **Two senders.** Token emails (verification, password reset, account setup,
 invitations) go from `MAIL_FROM_TRANSACTIONAL`; the other mail goes from
@@ -175,7 +174,7 @@ redirector, which would then see every token. Open and click rates count
 signed with `FAKE_EMAIL_WEBHOOK_SECRET` (a local default, not a credential).
 `pnpm email:fire-event <messageId> <type> [hard|soft] [--origin <api origin>]`
 signs and posts one event for a message id from Apex or
-`GET /platform/emails`; `--origin` defaults to the local API.
+`GET /platform/emails`; `--origin` defaults to `APP_URL`.
 
 ### Suppression
 
@@ -198,13 +197,17 @@ the user's address: they belong to the mailbox, not the account.
   every successful send stays `sent`, and every rate except the undelivered
   rate is `null` until a provider event arrives.
 - `GET /platform/emails/:id/preview` re-renders the stored template with
-  every token masked.
+  every token masked (`••••••`) and the inviter as "A teammate"; a stored
+  variable a legacy row lacks is masked too and sets `partial: true`. Apex
+  shows it in a sandboxed `srcdoc` iframe under the page's CSP, so a remote
+  image added to a template does not load in the preview.
 - `POST /platform/emails/:id/resend` (admin, with a reason) never replays a
   mail. It runs the action that sent it, which issues a fresh token, and that
   action's role rules, errors and audit entry apply unchanged; `email.resent`
-  records the reason beside it. The security notices `password_changed` and
-  `registration_attempt` are never resent, nor is a row without the ids its
-  action needs (409 `not_resendable`); a suppressed recipient gets 409
+  records the reason beside it. A template with no resend action (`password_changed`,
+  `registration_attempt`, `onboarding_reminder`, `maintenance_mode_changed`)
+  is never resent, nor is a row without the ids its action needs (409
+  `not_resendable`); a suppressed recipient gets 409
   `recipient_suppressed` and a template this build lacks 409
   `template_unavailable`. Every invitation resend needs a sign-in within the
   last 10 minutes (401 `REAUTH_REQUIRED`).
@@ -237,12 +240,22 @@ staff create waits for its first owner to accept (`awaiting_owner`, never
 stuck) before its clock starts. Actions staff take through platform access
 never count as customer progress.
 
-**Staff.** The funnel, the stuck-tenant list, a tenant's onboarding tab,
-manual completion and reminders are under `/api/v1/platform`
-(`platform-onboarding.service.ts`). A reminder sends one `onboarding_reminder`
-email to each active owner, at most one per tenant per 24 hours (409
-`reminded_recently`), and is refused on a suspended or archived tenant (409
-`tenant_state_conflict`).
+**Staff** (`platform-onboarding.service.ts`, under `/api/v1/platform`):
+`GET /onboarding/funnel?range=7d|30d|90d` (default 30d) counts each step's
+completions and the cohort by state; `GET /onboarding/tenants?state=` lists
+active tracked tenants in one state (`stuck` by default);
+`GET /tenants/:id/onboarding` returns one tenant's steps, members, reminder
+history and whether a reminder may go now;
+`POST /tenants/:id/onboarding/steps/:key/complete` (admin, with a reason)
+marks a step done. `POST /tenants/:id/onboarding/remind` (admin, with a
+reason) sends one `onboarding_reminder`
+email to each active owner, and goes only when the tenant is active, in progress or stuck, has an owner,
+and was not reminded in the last 24 hours (409 `tenant_state_conflict`,
+`not_in_progress`, `no_owner` or `reminded_recently`, whose
+`errors.retryAfter` says when the next may go). The reminder's email rows and
+audit entry commit together and the sends queue after; if queueing fails the
+audit entry stays, the email row is marked failed, and the answer says
+`emailSent: false`.
 
 **`pnpm onboarding:reconcile`.** Subscribers run after the request commits and
 never fail it; one that fails only logs. The script re-completes the default
@@ -263,6 +276,16 @@ the staff timelines are in [ARCHITECTURE.md](ARCHITECTURE.md#analytics); what
 is and is not sent is in
 [SECURITY.md](SECURITY.md#analytics-and-error-tracking-privacy).
 
+**What the server sends.** Every audit action, named with `_` for `.`
+(`invitation.created` becomes `invitation_created`), with snake_case metadata,
+a free-text `reason` reduced to `has_reason`, and a tenant's `name` and `slug`
+left out; a few product events; and each email tracking event as
+`email_<type>`. No name, full address, reason or recipient is sent; invitation,
+auto-join, user and email audit events carry only the address's
+`email_domain`. `$session_id` goes only on an event of the user whose browser
+sent it. The rules live in `analytics-event-builder.service.ts` and
+[SECURITY.md](SECURITY.md#server-events).
+
 **Turning it on, once per environment:**
 
 1. Create a PostHog project for the environment and enable group analytics
@@ -272,7 +295,8 @@ is and is not sent is in
    follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it. Set
    the same key as the `POSTHOG_KEY` container env var of react and apex.
    Workers that run in separate pods need `POSTHOG_PROJECT_KEY` too: without
-   it the drain does not run there.
+   it the drain does not run there, so rows accumulate and retention prunes
+   them with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
    existed before carry their name, status and creation date. It queues one
    `$groupidentify` marker per tenant and exits 1 if a batch could not be
@@ -314,6 +338,13 @@ when only one is. They are independent of `POSTHOG_PROJECT_KEY`.
    group properties converge. It needs `POSTHOG_PROJECT_KEY` too and fails
    without it.
 
+**A request.** Query `range` is `24h`, `7d` (default), `30d` or `90d`; `view`
+is `all` (default) or `key` (no `$` events); `before` is the `nextCursor` of
+the previous page. A page holds at most 100 rows. Every request, a cursor page
+included, writes `user.timeline_viewed` or `tenant.timeline_viewed`, at most
+once per staff member, target and view every 10 minutes, before the cache is
+read; the audit fails closed, so if its write fails the read answers 500.
+
 A PostHog error, a timeout, a spent query budget or, for a tenant timeline, a
 project without a `tenant` group type answers 502 `TIMELINE_UNAVAILABLE`; a
 401, 403 or 404 from PostHog also logs `Timeline key or project misconfigured`
@@ -349,7 +380,8 @@ it yet (allow about 15 s).
 **Staff views.** `GET /api/v1/platform/users/:id/errors` and
 `GET /api/v1/platform/tenants/:id/errors` (platform admin and up) list a user's
 or a tenant's PostHog error issues from the last 30 days. They need what the
-staff timelines need and answer `{ configured: false }` without it.
+staff timelines need, answer `{ configured: false }` without it, and are
+audited as `user.errors_viewed` and `tenant.errors_viewed`.
 `GET /api/v1/platform/system/status` answers the release and the reporter's
 sent and dropped counts.
 
@@ -384,7 +416,8 @@ project, and every registered flag must exist in each):
    exits 0 when clean or after creating, 2 on drift, 1 on a failure. It never
    edits or deletes a flag; fix drift in PostHog or in the registry.
 4. Roll flags out in PostHog. Every API and worker process picks up a change
-   within about a minute; browsers on their next refetch.
+   within about a minute; browsers on their next refetch (a page load, a
+   tenant switch, focus after 5 minutes, or every 10 minutes).
 5. Check the Apex status card's Feature flags section and the `/flags` page: a
    `missing` flag needs `pnpm flags:sync`, an `unsupported` one uses a
    construct the server can't evaluate (the page names it), and every flag
@@ -420,25 +453,22 @@ Runbook:
    restore to an earlier version leaves each replica on the old mode until it
    restarts.
 7. **Keep the clocks in sync (NTP) on the database and every replica.** The
-   10 s pause grace and the notice wait are measured from the database's
-   commit time on each replica's own clock, so skew shifts when the queues
+   10 s pause grace and the notice wait are measured from the time the
+   database stamps on the change, on each replica's own clock, so skew shifts when the queues
    pause.
 8. **Failed notice jobs keep personal data.** A notice job that fails keeps the
-   actor's name and the reason in Redis for up to 3 days (the in-app
-   notification) or 7 days (the email) before it is removed.
+   actor's name and the reason in its Redis job data until it is removed; the
+   windows are in [SECURITY.md](SECURITY.md#mail-at-rest).
 
-Every change, switching off and a message edit included, asks for the owner's
-password if it was entered more than 10 minutes ago. Switching on or
-escalating also asks for a reason, the customer message and the environment
-name (`APP_ENV`) typed out. A switch-on, an escalation or a switch-off
+The controls on a change (owner role, recent sign-in, typed environment name)
+are in [SECURITY.md](SECURITY.md#maintenance-mode). A switch-on, an escalation or a switch-off
 notifies every other platform owner and admin in-app and by email.
 
 ## Deploy
 
 - **Image.** The `Dockerfile` builds a non-root production image that starts
   only the app. Run migrations from the same image with
-  `node dist/database/migrate.js` (`pnpm db:migrate:prod`), which reads only
-  `DATABASE_URL`. The stages, the local `docker run` recipe and the health
+  `node dist/database/migrate.js`, which reads only `DATABASE_URL`. The stages, the local `docker run` recipe and the health
   endpoints are in [ARCHITECTURE.md](ARCHITECTURE.md#docker).
 - **Pipeline.** A push to `main` runs CI, then builds and pushes the image to
   GHCR (`.github/workflows/deploy.yml`). The `deploy` job there is a
@@ -458,7 +488,6 @@ it, change the things that still say "express-boilerplate":
 - [ ] **`package.json`**: `name`, `description`, `author`, `license` and
       `version`.
 - [ ] **`.github/CODEOWNERS`**: it names this repository's maintainer.
-- [ ] **Repository URLs** in `package.json` and the docs, and this README.
 - [ ] **`SECURITY.md`**: the reporting section, and the list of what is not
       implemented as you implement it.
 - [ ] **`.github/domain-terms.txt`**: placeholder terms only. Replace them with

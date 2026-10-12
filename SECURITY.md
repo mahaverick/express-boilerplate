@@ -411,10 +411,9 @@ RATE_LIMITED`. The recipient ceiling fails open when Redis does not answer.
 - An `email_messages` row refuses template variables whose key ends in `Url` or
   `Token` (`src/repositories/email-message.repository.ts`), so no stored row
   holds a link or a token.
-- Token mails go out from `MAIL_FROM_TRANSACTIONAL`, falling back to
-  `MAIL_FROM` when it is unset. Put it on a domain with click tracking off, or a
-  provider that tracks clicks rewrites every token link through itself. Boot
-  warns outside `local` when it shares `MAIL_FROM`'s domain.
+- Token mails go out from their own sender, on a domain with click tracking
+  off, so a provider never rewrites a token link through itself; the rule and
+  the boot warning are in [README.md](README.md#email-tracking).
 - The email webhook is public, so each adapter verifies the provider's
   signature over the raw body before reading it (Resend: Svix HMAC-SHA256 with a
   5-minute timestamp tolerance, `src/services/email-webhook-resend.service.ts`).
