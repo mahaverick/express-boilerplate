@@ -227,6 +227,53 @@ that adds it. The file's own comments carry the detail.
   sets none, and `braces` parses patterns, never request paths. Remove the
   entry once `braces` ships a fix.
 
+## Extending the Apex API
+
+The places that change together when a product extends what staff see and do
+in Apex. The rules behind them are in
+[ARCHITECTURE.md](ARCHITECTURE.md#extending-apex).
+
+- **A user or tenant field staff can see.** Add the column (model, then
+  `pnpm db:migration:generate`), select it in
+  `src/repositories/platform-user.repository.ts` (`recordSelection`) or
+  `src/repositories/platform-tenant.repository.ts` (`searchAll`,
+  `findDetail`), and mirror it in `apex-boilerplate/src/types/api.types.ts`. A
+  user field staff may edit joins `updatePlatformUserSchema`
+  (`src/validators/platform.validators.ts`); a tenant field is edited through
+  `PATCH /tenants/:slug` (`updateTenantSchema`,
+  `src/validators/tenant.validators.ts`). List it by name in the
+  `user.updated` or `tenant.updated` audit metadata.
+- **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES`
+  (`src/constants/tenant.constants.ts`) and generate the migration, decide what
+  `statesFor` (`src/constants/platform.constants.ts`) lists by default, give it
+  a transition in `src/services/platform-tenant.service.ts` and an audit action,
+  and decide whether `resolveTenant` and invitations treat it like
+  `suspended`.
+- **A staff action.** A POST under `/platform/users/:id/<verb>` or
+  `/platform/tenants/:id/<verb>` with `requirePlatformRole(<least role>)`,
+  `requireJsonContentType`, `requireRecentAuth()` when it is destructive, then
+  the shared write limiter, and a body with `reason` (`reasonBodySchema`). The
+  service runs one transaction that re-reads the actor's role under lock,
+  writes, and records an `AUDIT_ACTIONS` entry. Add its row to
+  `tests/integration/api/platform-route-gates.test.ts` and mirror the action in
+  `apex-boilerplate/src/constants/audit-actions.ts`.
+- **An onboarding step.** Add it to `ONBOARDING_STEPS`
+  (`src/constants/onboarding.constants.ts`). An `auto` step needs a
+  domain-event trigger or a direct `completeOnboardingStep` call.
+- **An email template.** Add the template module with its `…_TEMPLATE_META`
+  (sender class, `previewVariables`, `resendAction`), add its key to
+  `EMAIL_TEMPLATE_KEYS` (`src/utilities/email-template.utilities.ts`) and
+  `MailMessage` (`src/services/mailer.service.ts`), give
+  `buildPreviewMessage` (`src/services/platform-email.service.ts`) a case that
+  masks its token links, and mirror the key in
+  `apex-boilerplate/src/constants/email.constants.ts`.
+- **A feature flag.** Add an entry to `FLAGS`
+  (`src/constants/flags.constants.ts`), read it with `isEnabled` or
+  `variantOf` or gate a route with `requireFlag(key)`, mirror a client flag in
+  `react-boilerplate/src/observability/flags/flag-keys.ts` or
+  `apex-boilerplate/src/observability/flags/flag-keys.ts`, then run
+  `pnpm flags:sync` in every environment ([README.md](README.md#feature-flags)).
+
 ## Docs to update alongside a change
 
 - [README.md](README.md): a new script, requirement or quickstart step.

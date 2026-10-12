@@ -96,8 +96,8 @@ Two endpoints, deliberately different depths. Neither is traced.
 - **`GET /health`** is liveness. It touches no dependency, so a database blip
   never makes an orchestrator restart a healthy process. It answers
   `{ status: 'ok', uptime, release }`, where `release` is `APP_VERSION`, the
-  image's git sha (`dev` outside an image). The route is public, so the sha is
-  too.
+  image's git sha (`dev` outside an image). Both routes are public
+  ([SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog)).
 - **`GET /health/ready`** is readiness. Failing it only removes the pod from
   rotation, so it checks the database, Redis and both queue connections, in
   parallel, and answers 503 `not-ready` when any fails, or 503
@@ -154,15 +154,10 @@ queue check reports `false` for a connection in any post-ready status but
 `ready`.
 
 A queue connection that gives up before its first `ready` is replaced on next
-use, with the producer's queues. Workers on it never recover by themselves:
-BullMQ does not re-initialise a connection whose init failed, and unless the
-failure is one BullMQ counts as a connection error (`ECONNREFUSED`, or
-"Connection is closed."), its fetch loop retries with no delay and starves the
-event loop. So `startWorkers()` (`src/services/worker-supervisor.service.ts`)
-closes those Workers inside the connection's `end` event, before they can
-spin, and starts a new generation on a fresh connection. A failed restart
-cannot throw from inside `end`, so it marks the Workers failed and the queue
-check reports `false` until a later restart succeeds or the process restarts.
+use, and Workers on it never recover by themselves, so start Workers only
+through `startWorkers()`, which replaces them on a fresh connection; why is in
+the file JSDoc of `src/services/worker-supervisor.service.ts`. A failed restart
+keeps the queue check `false` until a later one succeeds.
 
 **Through a stalled Redis.** node-redis never times out a command it has
 written, and its `connectTimeout` stops at the TCP connect: the handshake after
@@ -194,33 +189,32 @@ and every Redis call a request waits on runs under a deadline
 Workers, BullMQ, pub/sub, background publishes and counters, and the staff
 status reads (bounded by `STATUS_READ_TIMEOUT_MS`) are outside both. The
 deadline is a design limit, not a fault detector: a Redis whose latency
-regularly passes 300 ms trips the cooldown, and then the denylist fails open
-and the limiters count per process (see
-[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter)).
+regularly passes 300 ms trips the cooldown. What each caller then does is in
+[SECURITY.md](SECURITY.md#revocation-and-the-session-denylist) and
+[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter).
 
 ## Layers and directory rules
 
 ### Layers
 
-| Layer        | Directory              | Job                                                                     | Imports in the code                                                                                                                         |
-| ------------ | ---------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| routes       | `src/routes/`          | Wire middleware to controller methods; one router per feature.          | controllers, middlewares, configs, constants, utilities, `logger.service`                                                                   |
-| middlewares  | `src/middlewares/`     | Cross-cutting request handling: auth, tenant, gates, limits, errors.    | services, repositories (read-only lookups), policies, presenters, validators, errors, configs, utilities, constants, types, model types     |
-| controllers  | `src/controllers/`     | Parse and validate input, call services, shape the response. HTTP only. | services, presenters, validators, errors, configs, utilities, constants, types, `flag-context.middleware`, model types (`import type` only) |
-| services     | `src/services/`        | Business rules, transactions, authorization, side effects. Never send.  | repositories, policies, other services, jobs, workers, templates, validators, errors, utilities, configs, constants, types, models          |
-| policies     | `src/policies/`        | Pure authorization predicates that return booleans and never throw.     | constants                                                                                                                                   |
-| repositories | `src/repositories/`    | Queries only.                                                           | models, `database.service`, errors, constants, utilities, types                                                                             |
-| presenters   | `src/presenters/`      | Pure mappers from a row to its wire shape.                              | models, constants, types                                                                                                                    |
-| validators   | `src/validators/`      | Zod schemas and `parseBody`.                                            | constants, errors, utilities, types                                                                                                         |
-| jobs         | `src/jobs/`            | A queue's job payloads, default options and schedules.                  | services, validators, configs, constants, errors, types, models                                                                             |
-| workers      | `src/workers/`         | One BullMQ Worker per queue.                                            | services, repositories, jobs, configs, errors, models                                                                                       |
-| configs      | `src/configs/`         | The validated environment and library configuration.                    | services (`logger`, `redis`, `redis-deadline`), utilities, constants                                                                        |
-| constants    | `src/constants/`       | Fixed values: limits, names, keys, registries.                          | types, utilities, validators (`rate-limit.constants.ts` reads `loginSchema`)                                                                |
-| utilities    | `src/utilities/`       | Small pure helpers.                                                     | configs, constants, `logger.service` (`password.utilities.ts`), `request-id.middleware` (`response.utilities.ts` reads `REQUEST_ID_HEADER`) |
-| errors       | `src/errors/`          | Error classes and Postgres error handling.                              | constants, types                                                                                                                            |
-| templates    | `src/templates/email/` | One plain function per email: subject, text and HTML.                   | constants, utilities                                                                                                                        |
+| Layer        | Directory              | Job                                                                     |
+| ------------ | ---------------------- | ----------------------------------------------------------------------- |
+| routes       | `src/routes/`          | Wire middleware to controller methods; one router per feature.          |
+| middlewares  | `src/middlewares/`     | Cross-cutting request handling: auth, tenant, gates, limits, errors.    |
+| controllers  | `src/controllers/`     | Parse and validate input, call services, shape the response. HTTP only. |
+| services     | `src/services/`        | Business rules, transactions, authorization, side effects. Never send.  |
+| policies     | `src/policies/`        | Pure authorization predicates that return booleans and never throw.     |
+| repositories | `src/repositories/`    | Queries only.                                                           |
+| presenters   | `src/presenters/`      | Pure mappers from a row to its wire shape.                              |
+| validators   | `src/validators/`      | Zod schemas and `parseBody`.                                            |
+| jobs         | `src/jobs/`            | A queue's job payloads, default options and schedules.                  |
+| workers      | `src/workers/`         | One BullMQ Worker per queue.                                            |
+| configs      | `src/configs/`         | The validated environment and library configuration.                    |
+| constants    | `src/constants/`       | Fixed values: limits, names, keys, registries.                          |
+| utilities    | `src/utilities/`       | Small pure helpers.                                                     |
+| errors       | `src/errors/`          | Error classes and Postgres error handling.                              |
+| templates    | `src/templates/email/` | One plain function per email: subject, text and HTML.                   |
 
-The last column is what the code imports, not a permission list.
 `eslint.config.mjs` turns the boundaries that matter into `error`-level gates:
 
 - `import-x/no-restricted-paths`: controllers may not import a repository or
@@ -345,88 +339,37 @@ Each cross-tenant repository is imported by its own `platform-*` service only;
 ### Extending Apex
 
 Apex is a template: a product adds its own fields, states and staff actions.
-Each recipe lists the places that change together.
+The step-by-step recipes are in
+[CONTRIBUTING.md](CONTRIBUTING.md#extending-the-apex-api). The rules a recipe
+does not make obvious:
 
-- **A user or tenant field staff can see.** Add the column (model, then
-  `pnpm db:migration:generate`), select it in `platform-user.repository.ts`
-  (`recordSelection`) or `platform-tenant.repository.ts` (`searchAll`,
-  `findDetail`), and mirror it in `apex-boilerplate/src/types/api.types.ts`. A
-  user field staff may edit joins `updatePlatformUserSchema`
-  (`platform.validators.ts`); a tenant field is edited through
-  `PATCH /tenants/:slug` (`updateTenantSchema`, `tenant.validators.ts`). Either
-  way it is listed by name, never value, in the `user.updated` or
-  `tenant.updated` audit metadata.
-- **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES`
-  (`tenant.constants.ts`; the model's CHECK reads it, so generate the
-  migration), decide what `statesFor` (`platform.constants.ts`) lists by
-  default, give it a transition in `platform-tenant.service.ts` and an audit
-  action, and decide whether `resolveTenant` and invitations treat it like
-  `suspended`.
-- **A staff action.** A POST under `/platform/users/:id/<verb>` or
-  `/platform/tenants/:id/<verb>` with `requirePlatformRole(<least role>)`,
-  `requireJsonContentType`, `requireRecentAuth()` when it is destructive, then
-  the shared write limiter, and a body with `reason` (`reasonBodySchema`). The
-  service runs one transaction that re-reads the actor's role under lock,
-  writes, and records an `AUDIT_ACTIONS` entry. Add its row to
-  `tests/integration/api/platform-route-gates.test.ts`, whose completeness
-  check fails until you do, and mirror the action in
+- A new staff route is not done until its row is in
+  `tests/integration/api/platform-route-gates.test.ts` (the completeness check
+  fails without it) and its audit action is mirrored in
   `apex-boilerplate/src/constants/audit-actions.ts`.
-- **An onboarding step.** Add it to `ONBOARDING_STEPS`
-  (`onboarding.constants.ts`); both apps and the staff views read the registry.
-  An `auto` step needs a domain-event trigger or a direct
-  `completeOnboardingStep` call. See [Onboarding](README.md#onboarding).
-- **An email template.** Add the template module with its `…_TEMPLATE_META`
-  (sender class, `previewVariables`, `resendAction`;
-  `src/utilities/email-template.utilities.ts`), add its key to
-  `EMAIL_TEMPLATE_KEYS` and `MailMessage`, and give `buildPreviewMessage`
-  (`platform-email.service.ts`) a case that masks its token links. A template
-  whose variables carry a token is `transactional` (the type enforces it) and
-  needs a `resendAction` that re-issues the token, or `null`. Mirror the key in
-  `apex-boilerplate/src/constants/email.constants.ts`.
-- **A feature flag.** Add an entry to `FLAGS` (`flags.constants.ts`), read it
-  with `isEnabled` or `variantOf` (`flagContextFor(request)` in request code)
-  or gate a route with `requireFlag(key)`, mirror a client flag in
-  `react-boilerplate/src/observability/flags/flag-keys.ts` or
-  `apex-boilerplate/src/observability/flags/flag-keys.ts`, then run
-  `pnpm flags:sync` in every environment
-  ([README.md](README.md#feature-flags)). Until it runs, the flag answers its
-  fallback there.
+- `TENANT_LIFECYCLE_STATES` also feeds the `tenants` CHECK constraint, so a
+  new state needs a generated migration.
+- A template whose variables carry a token must be `transactional` (the type
+  enforces it) and needs a `resendAction` that re-issues the token, or `null`.
+- An audit entry for an edit lists the changed field names, never their values.
 
 ### Directory rules
 
-`eslint-plugin-check-file` in `eslint.config.mjs` enforces the filename rules,
-and `pnpm lint` fails on a misnamed file. This table mirrors that config; when
-they disagree, the config is right.
-
-| Directory              | Required suffix   | Example                      |
-| ---------------------- | ----------------- | ---------------------------- |
-| `src/controllers/`     | `*.controller.ts` | `tenant.controller.ts`       |
-| `src/repositories/`    | `*.repository.ts` | `user.repository.ts`         |
-| `src/services/`        | `*.service.ts`    | `database.service.ts`        |
-| `src/policies/`        | `*.policy.ts`     | `tenant.policy.ts`           |
-| `src/presenters/`      | `*.presenter.ts`  | `user.presenter.ts`          |
-| `src/validators/`      | `*.validators.ts` | `auth.validators.ts`         |
-| `src/routes/`          | `*.routes.ts`     | `auth.routes.ts`             |
-| `src/middlewares/`     | `*.middleware.ts` | `error.middleware.ts`        |
-| `src/database/models/` | `*.model.ts`      | `user.model.ts`              |
-| `src/utilities/`       | `*.utilities.ts`  | `response.utilities.ts`      |
-| `src/constants/`       | `*.constants.ts`  | `global.constants.ts`        |
-| `src/configs/`         | `*.config.ts`     | `env.config.ts`              |
-| `src/jobs/`            | `*.job.ts`        | `email.job.ts`               |
-| `src/workers/`         | `*.worker.ts`     | `email.worker.ts`            |
-| `src/templates/`       | `*.template.ts`   | `password-reset.template.ts` |
-
-The suffix is the singular of the role, except `.validators`, `.utilities`,
-`.constants` and `.routes`, which stay plural. Subfolders inherit their
-parent's rule (`src/services/analytics/`, `src/services/flags/`). Every folder
-under `src/` is kebab-case (`check-file/folder-naming-convention`).
+Every file in a governed directory carries its role as a suffix
+(`*.controller.ts`, `*.service.ts`, `*.repository.ts` and so on): the
+`check-file/filename-naming-convention` map in `eslint.config.mjs` is the list,
+and `pnpm lint` fails on a misnamed file. The suffix is the singular of the
+role, except `.validators`, `.utilities`, `.constants` and `.routes`.
+Subfolders inherit their parent's rule, and every folder under `src/` is
+kebab-case.
 
 Directories with no filename rule:
 
 - `src/errors/`: error classes and Postgres error handling (`HttpError`,
   `isUniqueViolation`, `redactedForLog`).
-- `src/types/`: the `Express.Request` augmentation (`express.d.ts`) and small
-  shared types with no other home (`actor.ts`, `lock-mode.ts`).
+- `src/types/`: the `Express.Request` augmentation (`express.d.ts`) and the
+  shared and domain types several layers use (`actor.ts`, `flags.ts`,
+  `timeline.ts`).
 - `src/scripts/`: tools a `package.json` script runs through `tsx`, never
   imported by the app. They live under `src/` so `tsc` and type-aware lint see
   them.
@@ -443,7 +386,7 @@ they name the three stages of the [boot sequence](#boot-sequence), not a role a
 suffix could encode. No test file lives under `src/`.
 
 A new top-level concern under `src/` gets its naming rule in
-`eslint.config.mjs` and a row in the table above, in the same change.
+`eslint.config.mjs` in the same change.
 
 #### No barrel files
 
@@ -495,24 +438,21 @@ new feature router is one more `router.use(...)` there, never a change to
   reloads the user by id. That reload is one database read per request,
   deliberately not cached: a deactivated or deleted account is refused on its
   next request, not when its token expires. Every response behind it is
-  `Cache-Control: no-store`.
+  `Cache-Control: no-store`, except the SSE stream, which sends `no-cache`.
 - **Tenant routes** compose `resolveTenant()` and `requireRole(...)` per
   route; the tenant comes from `:slug` only. See
   [SECURITY.md](SECURITY.md#tenant-roles).
-- **Platform routes** mount `requireAuth`, `refusePlatformOptions` (every
-  OPTIONS gets the unknown-route 404, so Express's automatic `Allow` answer
-  never lists a staff route's methods) and `logStaffWrites` (one `Staff write`
-  line per successful staff write: method, path, status, actor and target,
-  never the body). Each route then runs its role gate first, then the JSON
-  gate, step-up where it applies, then the limiter, so a refused caller gets a
-  plain 404 with no `RateLimit-*` headers or 415.
+- **Platform routes** mount `requireAuth` router-wide; their gates, the
+  OPTIONS refusal and the staff-write log line are in
+  [SECURITY.md](SECURITY.md#platform-staff).
 - **Every authenticated write has a limiter**, built once per router and
   reused, so the in-memory fallback keeps one budget;
   `tests/unit/routes/route-limiters.test.ts` fails a write route without one.
 
 ### Errors and the response envelope
 
-Every JSON response uses one envelope, defined once in
+Every response `errorHandler` and the controllers write uses one envelope,
+defined once in
 `src/utilities/response.utilities.ts`:
 
 ```json
@@ -525,7 +465,9 @@ Every JSON response uses one envelope, defined once in
 validation detail, shaped by the validator. They are separate fields, so a
 client parsing `errors` never gets a different shape when `code` is present. A
 success with no payload goes through `messageResponse`, which always sends
-`data: null`. Every 5xx except a maintenance refusal also carries `errorId`.
+`data: null`. Every 5xx `errorHandler` writes, except a maintenance refusal,
+also carries `errorId`. `/health`, `/health/ready` and the SSE stream-capacity
+503 write their own bodies.
 The envelope is not RFC 9457 `problem+json`: switching would change what every
 client parses on every response.
 
@@ -541,7 +483,8 @@ handler by arity. It decides:
 - **The status** is the `HttpError`'s, else a foreign error's 4xx `status` (the
   body parser's 400 or 413), else 400 for text Postgres cannot store, else 500.
 - **A 4xx** shows the `HttpError`'s message, or a foreign error's only when it
-  marks it `expose`, and is never logged.
+  marks it `expose`, and is not logged, except one value-free `warn` when
+  Postgres refused a character in client text.
 - **A 5xx** is masked (`Internal server error`), gets an `errorId`, and is
   logged redacted (`redactedForLog`, `src/errors/postgres-errors.ts`), except a
   `TimelineUnavailableError`, whose thrower already logged why. It is reported
@@ -609,10 +552,8 @@ per provider event id, and a hard bounce or complaint suppresses the address.
 The sender follows the template's sender class and nothing else
 (`src/utilities/email-sender.utilities.ts`): a template whose links carry a
 token goes from `MAIL_FROM_TRANSACTIONAL` (or `MAIL_FROM` while that is
-unset), everything else from `MAIL_FROM`. Keep click tracking off at the
-provider for the transactional sender's domain: a tracked link is rewritten
-through the provider, token included. Outside `local`, boot warns when both
-senders share a domain. The operator guide (the Resend webhook, suppressions,
+unset), everything else from `MAIL_FROM`. Outside `local`, boot warns when both
+senders share a domain; why is in [SECURITY.md](SECURITY.md#mail-at-rest). The operator guide (the Resend webhook, suppressions,
 preview and resend, and `pnpm email:fire-event`) is
 [Email tracking in README.md](README.md#email-tracking).
 
@@ -627,20 +568,19 @@ missing from it.
 
 | Queue          | Carries                                                                    | Worker concurrency   | Job options                                                        |
 | -------------- | -------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `email`        | One tracked email per job (`addEmailJob`)                                  | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s; failed jobs kept 7 days              |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s; failed jobs kept 3 days              |
-| `maintenance`  | The retention purge                                                        | 1                    | 3 attempts, backoff from 60 s; failed jobs kept 7 days             |
+| `email`        | One tracked email per job (`addEmailJob`)                                  | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
+| `maintenance`  | The retention purge                                                        | 1                    | 3 attempts, backoff from 60 s                                      |
 | `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
 
-A completed email or notification job is removed at once, because its payload
-can carry a raw token. Every Worker's `failed` handler first calls
+Every Worker's `failed` handler first calls
 `reportFinalJobFailure`, which reports the attempt BullMQ will not retry
 (`attemptsMade >= attempts`, or an `UnrecoverableError`) to error tracking. The
 email, notification and maintenance handlers then log a retryable attempt at
-`warn`; on the final one they replace every `…Url`, `…Token` and address value
-in the stored payload with `[redacted]`, mark an email's message `failed`, and
-log `job failed permanently` once (`recordPermanentFailure`,
-`src/jobs/job-failure.job.ts`). The analytics handler only logs a `warn`: a
+`warn`; on the final one `recordPermanentFailure`
+(`src/jobs/job-failure.job.ts`) scrubs the stored payload, marks an email's
+message `failed`, and logs `job failed permanently` once. What a job payload
+may hold, and for how long, is in [SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a `warn`: a
 failed tick loses nothing. No handler rejects, since an unhandled rejection
 exits the process.
 
@@ -810,10 +750,9 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   deduplicates on `uuid` eventually, without a guarantee, so a consumer that
   needs exactness dedupes by `uuid`.
 - **Signing and GeoIP.** `toPosthogBatchEvent` adds `server_sig` to every event
-  it sends, an HMAC keyed from `SESSION_SECRET`
-  (`analytics-signature.service.ts`), and `$geoip_disable: true`, since server
-  events reach PostHog from the data centre's address. The timelines and Errors
-  views trust a row's server fields only when its signature verifies.
+  it sends ([SECURITY.md](SECURITY.md#server-events)), and
+  `$geoip_disable: true`, since server events reach PostHog from the data
+  centre's address.
 - **Groups.** A tenant's name, status and creation date reach PostHog only as
   `$groupidentify` properties. The outbox stores a marker (`$group_type`,
   `$group_key`), never the name, and the drain fills in `$group_set` from the
@@ -831,7 +770,8 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   recreate the person, then asks `persons/bulk_delete/` to delete each person
   with their events and recordings. Anything but a 2xx with an empty
   `deletion_errors` keeps the rows with a backoff of `least(2^attempts, 360)`
-  minutes, logged at `warn`, or `error` once a row is a day old. PostHog
+  minutes, logged at `warn`, or at `error` when PostHog refused the key or
+  project (401, 403, 404) or a row is a day old. PostHog
   cannot delete a group, so `purgeTenant` queues a marker that the drain sends
   with the group's name cleared and its status `purged`; the tenant's events
   stay, under its id.
@@ -993,30 +933,17 @@ are in [README.md](README.md#feature-flags).
 ### Observability
 
 **Tracing.** `src/observability/tracing.ts` loads through Node's `--import`,
-before `index.ts`, so its instrumentations patch HTTP, Express, `ioredis` and
-pino before the app imports them. It runs before environment validation, so it
-reads `process.env` directly. Without `OTEL_EXPORTER_OTLP_ENDPOINT` it starts
-nothing and logs one line saying tracing is disabled. With it, it registers
-OTel's ESM loader hook (without which the CommonJS pino imported from ESM is
-never patched) and starts a `NodeSDK` exporting traces and logs over OTLP HTTP,
-reporting `service.name` (`OTEL_SERVICE_NAME`) and
-`deployment.environment.name` (`APP_ENV`, omitted when unset).
+before `index.ts` and before environment validation, so it reads `process.env`
+directly and never `getEnv()` or the logger. Without
+`OTEL_EXPORTER_OTLP_ENDPOINT` it starts nothing. node-redis (the shared
+client) and postgres.js have no installed instrumentation, so their calls
+appear as gaps in a trace; `/health`, `/health/ready` and `/api/v1/collect/`
+get no spans. How it is set up is in the file's JSDoc.
 
-What gets spans: incoming HTTP and Express routing, except `/health`,
-`/health/ready` and everything under `/api/v1/collect/`; and BullMQ's Redis
-traffic through `IORedisInstrumentation`. node-redis (the shared client: rate
-limits, the denylist) and postgres.js have no installed instrumentation, so
-their calls appear as gaps in a trace.
-
-**Logs.** `src/services/logger.service.ts` builds one lazily created pino
-logger. Each record carries `level` as a label, an ISO `timestamp`, `message`,
-`source` (the caller's `file:line`) and the correlation fields from
-[Request correlation](#request-correlation). An Error-valued field is
-serialised with its `cause` chain, and redacted with `redactedForLog` when it
-carries a database query. The format is `LOG_FORMAT`, else `pretty` on
-`local` and `json` elsewhere; `pretty` needs the `pino-pretty`
-devDependency, so the production image writes JSON. `PinoInstrumentation`
-forwards every record to the collector as an OTel log record.
+**Logs.** `src/services/logger.service.ts` is the one logger; each record
+carries `source` (the caller's `file:line`) and the correlation fields from
+[Request correlation](#request-correlation), and an Error-valued field is
+redacted with `redactedForLog` when it carries a database query.
 
 **Slack.** With `SLACK_WEBHOOK_URL` set, records at or above `SLACK_LOG_LEVEL`
 also go to Slack. Repeats of one `source` and message within 60 s are counted
@@ -1027,14 +954,14 @@ scrubbed with the error tracker's `scrubText` first.
 
 A platform owner puts the product into maintenance from Apex, without a
 deploy: `read_only` refuses customer writes with 503 `READ_ONLY_MODE`, and
-`full` refuses every customer route with 503 `MAINTENANCE_MODE`, refuses a
-non-staff sign-in, and pauses every queue. What the gate lets through, and the
-controls on changing the mode, are in
+`full` refuses every route not on its let-through list with 503
+`MAINTENANCE_MODE`, refuses a non-staff sign-in, and pauses every queue. The
+let-through list, and the controls on changing the mode, are in
 [SECURITY.md](SECURITY.md#maintenance-mode); the operator steps in
 [README.md](README.md#maintenance-mode).
 
-- **State.** One row, `maintenance_mode_state` (seeded `off`, version 0, by
-  migration 0024), is the source of truth. A change is a compare-and-set on
+- **State.** One row, `maintenance_mode_state` (its migration seeds `off`,
+  version 0), is the source of truth. A change is a compare-and-set on
   `version`, written with its `platform.maintenance_mode_changed` audit entry
   in one transaction; a stale `expectedVersion` answers 409
   `MAINTENANCE_MODE_CONFLICT`.
@@ -1071,8 +998,11 @@ controls on changing the mode, are in
   replica reconciles on every reload, which repairs a crash between the commit
   and the pause and a Redis outage. A reload pauses only once the mode has been
   `full` for `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s), so the change's notices
-  go out first, and resumes at once in any other mode. Pause and resume are
-  idempotent, so replicas reconciling at once are harmless.
+  go out first, and resumes in any other mode after removing the duplicate
+  scheduler runs gathered while paused (`dedupeSchedulerJobs`): each Worker
+  start re-upserts its schedulers, and a paused queue keeps every extra run.
+  Pause and resume are idempotent, so replicas reconciling at once are
+  harmless.
 - **A change** (`PUT /api/v1/platform/maintenance-mode`,
   `maintenance-mode.service.ts`) commits, then publishes, rereads its own copy
   and queues an in-app and email notice to every other platform owner and admin
@@ -1332,16 +1262,8 @@ is keyed on `github.event_name`, because under `workflow_call`
 `github.workflow` is the caller's name. CI's `docker` job builds the image with
 a known `GIT_SHA` and checks that `/health` reports it.
 
-One-time repository setup before any of this is live:
-
-- **Renovate** and the **release GitHub App**: see
-  [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy) and
-  [CONTRIBUTING.md](CONTRIBUTING.md#releases); `release.yml` fails without the
-  App.
-- **Merge rules**: allow auto-merge and squash merging only, with the PR title
-  as the commit title and a blank commit message, and add a ruleset on `main`
-  requiring the checks `lint`, `test`, `docker`, `gitleaks` and `pr-title`.
-  Without the ruleset, `release.yml`'s fallback merge does not wait for CI.
-- **The `production` environment**: add protection rules, at least required
-  reviewers, before replacing the placeholder `deploy` step. Without them,
-  anything merged to `main` deploys unreviewed.
+`release.yml` merges its release PR with `--auto`, falling back to a direct
+merge. Only a ruleset on `main` that requires the checks `lint`, `test`,
+`docker`, `gitleaks` and `pr-title` makes that fallback wait for CI, so add it
+before relying on the release flow. The release App and the merge settings
+are in [CONTRIBUTING.md](CONTRIBUTING.md#releases).
