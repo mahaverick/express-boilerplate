@@ -24,6 +24,23 @@ function uniqueEmail(): string {
   return `notification-pref-repo-${randomUUID()}@example.test`
 }
 
+/**
+ * Insert a preference row directly, bypassing the repository's `upsert` guard, to stand for a row
+ * written before that guard existed.
+ * @param userId - The user.
+ * @param notificationType - The type.
+ * @param isEmailOn - The stored email flag.
+ * @param isInAppOn - The stored in-app flag.
+ */
+async function seedRow(
+  userId: string,
+  notificationType: string,
+  isEmailOn: boolean,
+  isInAppOn: boolean
+): Promise<void> {
+  await sql`insert into notification_preferences (user_id, notification_type, email_enabled, in_app_enabled) values (${userId}, ${notificationType}, ${isEmailOn}, ${isInAppOn})`
+}
+
 describe('NotificationPreferenceRepository', () => {
   const createdUserIds: string[] = []
 
@@ -47,20 +64,55 @@ describe('NotificationPreferenceRepository', () => {
       const userId = await createUser()
 
       const row = await preferenceRepository.upsert(userId, 'verify_email', {
-        emailEnabled: false,
-        inAppEnabled: true,
+        emailEnabled: true,
+        inAppEnabled: false,
       })
 
       expect(row.userId).toBe(userId)
       expect(row.notificationType).toBe('verify_email')
-      expect(row.emailEnabled).toBe(false)
-      expect(row.inAppEnabled).toBe(true)
+      expect(row.emailEnabled).toBe(true)
+      expect(row.inAppEnabled).toBe(false)
+    })
+
+    it.each(NOTIFICATION_TYPES)(
+      'refuses emailEnabled false for %s with a 400 and writes nothing',
+      async (type) => {
+        const userId = await createUser()
+
+        await expect(
+          preferenceRepository.upsert(userId, type, { emailEnabled: false, inAppEnabled: true })
+        ).rejects.toMatchObject({
+          statusCode: 400,
+          message: 'Email for this notification type cannot be turned off.',
+        })
+
+        expect(await preferenceRepository.findByUser(userId)).toEqual([])
+      }
+    )
+
+    it('leaves an existing row unchanged when a later upsert is refused', async () => {
+      const userId = await createUser()
+      await preferenceRepository.upsert(userId, 'verify_email', {
+        emailEnabled: true,
+        inAppEnabled: false,
+      })
+
+      await expect(
+        preferenceRepository.upsert(userId, 'verify_email', {
+          emailEnabled: false,
+          inAppEnabled: true,
+        })
+      ).rejects.toMatchObject({ statusCode: 400 })
+
+      expect(await preferenceRepository.findByUser(userId)).toEqual([
+        expect.objectContaining({ emailEnabled: true, inAppEnabled: false }),
+      ])
     })
 
     it('updates the existing row in place on a second call for the same user and type', async () => {
       const userId = await createUser()
       await preferenceRepository.upsert(userId, 'verify_email', {
-        emailEnabled: false,
+        emailEnabled: true,
         inAppEnabled: true,
       })
 
@@ -80,7 +132,7 @@ describe('NotificationPreferenceRepository', () => {
       const userId = await createUser()
       const otherUserId = await createUser()
       await preferenceRepository.upsert(otherUserId, 'verify_email', {
-        emailEnabled: false,
+        emailEnabled: true,
         inAppEnabled: false,
       })
 
@@ -91,7 +143,7 @@ describe('NotificationPreferenceRepository', () => {
 
       const otherRows = await preferenceRepository.findByUser(otherUserId)
       expect(otherRows).toEqual([
-        expect.objectContaining({ emailEnabled: false, inAppEnabled: false }),
+        expect.objectContaining({ emailEnabled: true, inAppEnabled: false }),
       ])
     })
   })
@@ -105,8 +157,8 @@ describe('NotificationPreferenceRepository', () => {
     it('returns only the rows this user explicitly set', async () => {
       const userId = await createUser()
       await preferenceRepository.upsert(userId, 'verify_email', {
-        emailEnabled: false,
-        inAppEnabled: true,
+        emailEnabled: true,
+        inAppEnabled: false,
       })
 
       const rows = await preferenceRepository.findByUser(userId)
@@ -140,12 +192,9 @@ describe('NotificationPreferenceRepository', () => {
       )
     })
 
-    it('always returns true for verify_email’s email channel, even when a row disables it', async () => {
+    it('always returns true for verify_email’s email channel, even when a legacy row disables it', async () => {
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'verify_email', {
-        emailEnabled: false,
-        inAppEnabled: false,
-      })
+      await seedRow(userId, 'verify_email', false, false)
 
       // This repository never reports this channel disabled: a user who turned it off would lock themselves out of verifying their own account. in_app, by contrast, honours the row above.
       expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'email')).toBe(
@@ -156,13 +205,10 @@ describe('NotificationPreferenceRepository', () => {
       )
     })
 
-    it('always returns true for password_changed’s email channel, even when a row disables it', async () => {
+    it('always returns true for password_changed’s email channel, even when a legacy row disables it', async () => {
       // Same NON_DISABLEABLE_EMAIL_TYPES mechanism as verify_email above, but this one locks nobody out: it exists so an attacker who took over the account cannot silence the message that tells the real owner it happened.
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'password_changed', {
-        emailEnabled: false,
-        inAppEnabled: false,
-      })
+      await seedRow(userId, 'password_changed', false, false)
 
       expect(await preferenceRepository.isChannelEnabled(userId, 'password_changed', 'email')).toBe(
         true
@@ -172,12 +218,9 @@ describe('NotificationPreferenceRepository', () => {
       ).toBe(false)
     })
 
-    it('always returns true for tenant_invitation’s email channel, even when a row disables it', async () => {
+    it('always returns true for tenant_invitation’s email channel, even when a legacy row disables it', async () => {
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'tenant_invitation', {
-        emailEnabled: false,
-        inAppEnabled: true,
-      })
+      await seedRow(userId, 'tenant_invitation', false, true)
 
       expect(
         await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'email')
@@ -204,15 +247,15 @@ describe('NotificationPreferenceRepository', () => {
     it('fills in an explicit row for the type it exists for, and defaults for every other type', async () => {
       const userId = await createUser()
       await preferenceRepository.upsert(userId, 'verify_email', {
-        emailEnabled: false,
-        inAppEnabled: true,
+        emailEnabled: true,
+        inAppEnabled: false,
       })
 
       const matrix = await preferenceRepository.getFullMatrix(userId)
 
       expect(matrix).toHaveLength(NOTIFICATION_TYPES.length)
       const verifyEmailEntry = matrix.find((entry) => entry.notificationType === 'verify_email')
-      expect(verifyEmailEntry).toMatchObject({ emailEnabled: false, inAppEnabled: true })
+      expect(verifyEmailEntry).toMatchObject({ emailEnabled: true, inAppEnabled: false })
     })
   })
 })

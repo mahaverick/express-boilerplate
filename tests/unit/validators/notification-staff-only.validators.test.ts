@@ -58,6 +58,9 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
       preferences: [entry('verify_email', true, false), entry('password_changed', false, true)],
     })
     expect(result.success).toBe(false)
+    expect(result.error?.issues).toHaveLength(1)
+    expect(result.error?.issues[0]?.path).toEqual(['preferences', 1, 'emailEnabled'])
+    expect(result.error?.issues[0]?.message).toBe(EMAIL_OFF_MESSAGE)
   })
 
   it('refuses a type listed twice, even when only the second entry turns email off', () => {
@@ -65,6 +68,13 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
       preferences: [entry('verify_email', true, true), entry('verify_email', false, true)],
     })
     expect(result.success).toBe(false)
+    const issues = result.error?.issues ?? []
+    expect(issues.map((issue) => issue.path)).toEqual(
+      expect.arrayContaining([
+        ['preferences', 1, 'emailEnabled'],
+        ['preferences', 1, 'notificationType'],
+      ])
+    )
   })
 
   it('refuses a type listed twice with both entries valid, so one request never races two upserts', () => {
@@ -88,5 +98,26 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
       preferences: [{ notificationType: 'verify_email', emailEnabled: value, inAppEnabled: true }],
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('updatePreferencesSchemaFor entry count', () => {
+  it('refuses more entries than there are notification types', () => {
+    const result = updatePreferencesSchemaFor(true).safeParse({
+      preferences: Array.from({ length: NOTIFICATION_TYPES.length + 1 }, () =>
+        entry('verify_email', true, true)
+      ),
+    })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.message).toBe(
+      `preferences must contain at most ${NOTIFICATION_TYPES.length} entries.`
+    )
+  })
+
+  it('accepts one entry per type', () => {
+    const result = updatePreferencesSchemaFor(true).safeParse({
+      preferences: NOTIFICATION_TYPES.map((type) => entry(type, true, false)),
+    })
+    expect(result.success).toBe(true)
   })
 })

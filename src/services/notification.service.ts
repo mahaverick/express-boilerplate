@@ -15,6 +15,7 @@ import {
   type PreferenceMatrix,
 } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
+import { db } from '@/services/database.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import type { UpdatePreferencesInput } from '@/validators/notification.validators'
 
@@ -109,10 +110,10 @@ export async function getPreferences(userId: string): Promise<PreferenceMatrix> 
 }
 
 /**
- * Upsert the given preference entries. Not transactional: a failure partway
- * leaves earlier upserts committed. The schema has already refused a type the
- * caller cannot see, a duplicate type and any disabled email channel, so the
- * entries are written as given.
+ * Upsert the given preference entries in one transaction, so a failure
+ * partway leaves none of them written. The schema has already refused a type
+ * the caller cannot see, a duplicate type and any disabled email channel (the
+ * repository refuses the last again), so the entries are written as given.
  * @param userId - The user.
  * @param preferences - The validated entries (at least one, one per type).
  * @returns The resulting rows, in input order.
@@ -121,14 +122,20 @@ export async function updatePreferences(
   userId: string,
   preferences: UpdatePreferencesInput['preferences']
 ): Promise<NotificationPreference[]> {
-  return Promise.all(
-    preferences.map((entry) =>
-      notificationPreferenceRepository.upsert(userId, entry.notificationType, {
-        emailEnabled: entry.emailEnabled,
-        inAppEnabled: entry.inAppEnabled,
-      })
-    )
-  )
+  return db.transaction(async (tx) => {
+    const rows: NotificationPreference[] = []
+    for (const entry of preferences) {
+      rows.push(
+        await notificationPreferenceRepository.upsert(
+          userId,
+          entry.notificationType,
+          { emailEnabled: entry.emailEnabled, inAppEnabled: entry.inAppEnabled },
+          tx
+        )
+      )
+    }
+    return rows
+  })
 }
 
 /**

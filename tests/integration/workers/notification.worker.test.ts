@@ -197,11 +197,21 @@ describe('notification.worker', () => {
       { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
     ])
 
+    const recipient = uniqueEmail('in-app-toggled')
     const quiet = await addNotificationJob({
       userId,
       type: 'password_changed',
       title: 'Password changed',
       body: 'body',
+      email: {
+        to: recipient,
+        templateKey: 'email_verification',
+        variables: {
+          firstName: 'Ada',
+          verificationUrl: 'https://example.test/verify?token=abc',
+          appName: 'Test',
+        },
+      },
     })
     const loud = await addNotificationJob({
       userId,
@@ -216,6 +226,9 @@ describe('notification.worker', () => {
 
     const { notifications } = await notificationRepository.list(userId, { limit: 10 })
     expect(notifications.map((notification) => notification.type)).toEqual(['verify_email'])
+
+    const emailJobs = await emailQueueJobs()
+    expect(emailJobs.some((emailQueueJob) => emailQueueJob.data.to === recipient)).toBe(true)
   }, 15_000)
 
   it('does not enqueue an email when no email payload is present, but still creates the in-app row', async () => {

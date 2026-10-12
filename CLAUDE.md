@@ -197,8 +197,9 @@ points at the code or doc that holds the detail. How things work is in
   `password_reset_requested`, `password_changed`, `tenant_invitation`,
   `maintenance_mode_changed`): disabling them would lock a user out or silence
   the mail an account owner must see. `PUT /notifications/preferences`
-  answers 400 for `emailEnabled: false` on any of them; `inAppEnabled` can
-  still be switched off for any type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
+  answers 400 for `emailEnabled: false` on any of them (the repository's
+  `upsert` refuses it too); `inAppEnabled` can still be switched off for any
+  type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
   (`src/repositories/notification-preference.repository.ts`) and
   `NON_DISABLEABLE_NOTIFICATION_TYPES` (`src/validators/notification.validators.ts`)
   together, or a client can save an email preference the repository then ignores.

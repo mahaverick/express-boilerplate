@@ -119,6 +119,10 @@ export function updatePreferencesSchemaFor(isStaff: boolean) {
     preferences: z
       .array(entry)
       .min(1, 'preferences must contain at least one entry.')
+      .max(
+        NOTIFICATION_TYPES.length,
+        `preferences must contain at most ${NOTIFICATION_TYPES.length} entries.`
+      )
       .superRefine((entries, context) => {
         const seen = new Set<string>()
         for (const [index, value] of entries.entries()) {

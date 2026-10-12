@@ -90,6 +90,9 @@ export class NotificationPreferenceRepository {
   /**
    * Create or replace one user's preference row for one notification type.
    * The upsert targets the composite primary key, so it never raises a 23505.
+   * It refuses `emailEnabled: false` for a type in `NON_DISABLEABLE_EMAIL_TYPES`
+   * (400, nothing written), so no caller can store a disabled email channel
+   * the read side would ignore.
    * @param userId - The user this preference belongs to.
    * @param notificationType - The notification type this preference governs.
    * @param data - The two channel toggles to set.
@@ -97,6 +100,7 @@ export class NotificationPreferenceRepository {
    * @param data.inAppEnabled - Whether the in-app channel should be enabled for this type.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The resulting row, whether newly inserted or updated in place.
+   * @throws {HttpError} 400 when `data.emailEnabled` is false for a non-disableable email type.
    */
   async upsert(
     userId: string,
@@ -104,6 +108,9 @@ export class NotificationPreferenceRepository {
     data: { emailEnabled: boolean; inAppEnabled: boolean },
     executor: DbExecutor = db
   ): Promise<NotificationPreference> {
+    if (!data.emailEnabled && NON_DISABLEABLE_EMAIL_TYPES.has(notificationType)) {
+      throw new HttpError('Email for this notification type cannot be turned off.', 400)
+    }
     const [row] = await executor
       .insert(notificationPreferenceModel)
       .values({ userId, notificationType, ...data })
