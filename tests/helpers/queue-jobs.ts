@@ -175,8 +175,8 @@ export async function waitForVerificationToken(userId: string): Promise<string> 
  * seen, not missed. It is scoped to one job id, so two tests sharing a Worker never resolve each
  * other's promise, and it detaches both listeners when it settles.
  *
- * A job that is gone from `queue` counts as `'completed'`: `jobId` comes from `addJob`, so the
- * job existed, and the queues here use `removeOnComplete: true`. A job that failed with
+ * A `jobId` missing from `queue` resolves `'completed'` at once, because the queues remove
+ * completed jobs and keep failed ones. Callers must pass the id `addJob` returned. A job that failed with
  * attempts left is waiting or delayed, not failed, so the wait continues for its final outcome.
  * @param worker - The Worker running the job.
  * @param queue - The queue the Worker consumes, to read the job's current state.
@@ -198,10 +198,12 @@ export function waitForJobSettled<TData>(
       resolve('completed')
     }
     /**
-     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
+     * Resolves the wait as 'failed' for `jobId` on its final attempt; other jobs on the shared Worker are ignored.
      */
     const onFailed = (job: Job<TData> | undefined): void => {
       if (job?.id !== jobId) return
+      // A failed attempt with attempts left is retried, not settled; BullMQ counts the attempt before it emits `failed`.
+      if (job.attemptsMade < (job.opts.attempts ?? 1)) return
       cleanup()
       resolve('failed')
     }

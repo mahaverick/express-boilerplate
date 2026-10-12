@@ -26,6 +26,7 @@ describe('waitForJobSettled', () => {
       async (job) => {
         if (job.name === 'hold') await gate.promise
         else if (job.name === 'fail') throw new Error('planned failure')
+        else if (job.name === 'flaky' && job.attemptsMade === 0) throw new Error('first attempt')
       },
       { connection, prefix, concurrency: 5 }
     )
@@ -65,6 +66,13 @@ describe('waitForJobSettled', () => {
     if (!job.id) throw new Error('expected a job id')
 
     await expect(waitForJobSettled(worker, queue, job.id)).resolves.toBe('failed')
+  })
+
+  it('keeps waiting through a failed attempt that has a retry left', async () => {
+    const job = await queue.add('flaky', {}, { attempts: 2, backoff: 0, removeOnComplete: true })
+    if (!job.id) throw new Error('expected a job id')
+
+    await expect(waitForJobSettled(worker, queue, job.id)).resolves.toBe('completed')
   })
 
   it('resolves for a kept completed job that settled before the call', async () => {
