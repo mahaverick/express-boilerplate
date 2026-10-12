@@ -15,10 +15,10 @@ import { UserRepository } from '@/repositories/user.repository'
 import { login, register, requestPasswordReset } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { addressDigest } from '@/services/mail-cooldown.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { prepareResendVerification } from '@/services/verification.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
-import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
 
@@ -191,7 +191,7 @@ describe('requestPasswordReset mail cooldown', () => {
     }
     expect(await resetTokenCount(id)).toBe(1)
 
-    const key = redisKey('password-reset-notice', hashRateLimitIdentity(email.trim().toLowerCase()))
+    const key = redisKey('password-reset-notice', addressDigest(email))
     const redis = await getRedis()
     const remainingMs = await redis.pTTL(key)
     expect(remainingMs).toBeGreaterThan(0)
