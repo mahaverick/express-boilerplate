@@ -6,7 +6,7 @@
  * transaction the retention purge (retention.service.ts) or a tenant purge
  * opened for it.
  */
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
+import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
 import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'
 import { tenantModel } from '@/database/models/tenant.model'
@@ -156,17 +156,17 @@ export class AuditLogRepository {
   }
 
   /**
-   * Delete about `limit` entries that occurred before `cutoff`. The trigger
+   * Delete at most `limit` entries that occurred before `cutoff`. The trigger
    * refuses this unless `tx` is a retention purge transaction; see
    * retention.service.ts.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Entries older than this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The purge's batch transaction.
    * @returns How many rows were deleted.
    */
@@ -178,7 +178,9 @@ export class AuditLogRepository {
       .orderBy(auditLogModel.id)
       .limit(limit)
       .for('update', { skipLocked: true })
-    const result = await tx.delete(auditLogModel).where(inArray(auditLogModel.id, batch))
+    const result = await tx
+      .delete(auditLogModel)
+      .where(sql`${auditLogModel.id} = any(array(${batch}))`)
     return result.count
   }
 

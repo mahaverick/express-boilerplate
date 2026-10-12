@@ -479,7 +479,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Delete about `limit` token rows past retention: expired before `cutoff`,
+   * Delete at most `limit` token rows past retention: expired before `cutoff`,
    * or revoked before it without ever being used. A rotated-away row stays
    * until it expires: reuse detection needs it while it can still be
    * presented. Soft-deleted rows go too, so this doesn't use `scope`. A kept
@@ -490,11 +490,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * can come back short while matching rows remain. The foreign key's update
    * of a kept row is an ordinary write and does wait on a lock a request
    * holds on that row.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Rows older than this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -513,7 +513,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .orderBy(userTokenModel.id)
       .limit(limit)
       .for('update', { skipLocked: true })
-    const result = await tx.delete(userTokenModel).where(inArray(userTokenModel.id, batch))
+    const result = await tx
+      .delete(userTokenModel)
+      .where(sql`${userTokenModel.id} = any(array(${batch}))`)
     return result.count
   }
 

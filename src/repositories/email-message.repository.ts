@@ -3,7 +3,7 @@
  * a message has no `updatedAt`/`deletedAt`, and its one mutable field,
  * `status`, moves only forward, through `advanceStatus` and `markSuppressed`.
  */
-import { and, eq, inArray, notExists, or, sql } from 'drizzle-orm'
+import { and, eq, notExists, or, sql } from 'drizzle-orm'
 import {
   EMAIL_STATUS_RANK,
   SECRET_VARIABLE_PATTERN,
@@ -187,21 +187,21 @@ export class EmailMessageRepository {
   }
 
   /**
-   * Delete about `limit` messages created before `cutoff` that no longer
+   * Delete at most `limit` messages created before `cutoff` that no longer
    * have an event or an attempt row. The retention job deletes those first
    * (`EmailEventRepository.purgeForMessagesCreatedBefore`,
    * `EmailLogRepository.purgeCreatedBefore`), so this delete cascades to
    * nothing and never waits on a child row another transaction holds; a
    * message whose child was skipped goes on a later run. Takes the batch
    * oldest id first with FOR UPDATE SKIP LOCKED.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * A newer message that was resent from one of these has its `resent_from_id`
    * set to NULL by the foreign key, which waits if a webhook is updating that
    * newer row.
    * @param cutoff - Messages created before this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -227,7 +227,9 @@ export class EmailMessageRepository {
       .orderBy(emailMessageModel.id)
       .limit(limit)
       .for('update', { skipLocked: true })
-    const result = await tx.delete(emailMessageModel).where(inArray(emailMessageModel.id, batch))
+    const result = await tx
+      .delete(emailMessageModel)
+      .where(sql`${emailMessageModel.id} = any(array(${batch}))`)
     return result.count
   }
 
