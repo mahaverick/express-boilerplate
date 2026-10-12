@@ -212,13 +212,12 @@ function setRefreshTokenCookie(
  * OAuth callback: `setRefreshTokenCookie` with `sameSite: 'lax'` in place of
  * its `'strict'` default.
  *
- * The browser reaches `handleGoogleCallback` by a top-level navigation
- * redirected from `accounts.google.com`, a cross-site origin, and a `'strict'`
- * cookie set here would be withheld on the redirect to the frontend's
- * `/auth/callback` that follows (SECURITY.md, "Cookies"). `'lax'` still
- * withholds the cookie on cross-site subresource requests and cross-site
- * unsafe (non-GET) requests, the CSRF surface `'strict'` closes on every other
- * endpoint, while allowing it on this top-level GET redirect chain.
+ * `'lax'` here is a decision, and it costs nothing: a `'lax'` cookie is still
+ * withheld from cross-site `POST`s and subresource requests, and both routes
+ * that act on the cookie, `/refresh` and `/logout`, are `POST`s behind the
+ * Origin check. It also lasts only until the first rotation, which re-sets the
+ * cookie `'strict'` (SECURITY.md, "The refresh cookie",
+ * `#the-refresh-cookie`).
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.

@@ -284,7 +284,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const cookies = response.headers['set-cookie'] as string[] | undefined
         const refreshCookie = cookies?.find((cookie) => cookie.startsWith('refreshToken='))
         expect(refreshCookie).toBeDefined()
-        // 'strict' (the refresh cookie's attribute everywhere else) would be withheld on the redirect chain this response starts, so the test asserts the literal attribute, not just that a cookie exists.
+        // The callback sets the cookie Lax by decision, unlike the Strict it carries everywhere else (SECURITY.md#the-refresh-cookie), so the test asserts the literal attribute, not just that a cookie exists.
         expect(refreshCookie?.toLowerCase()).toContain('samesite=lax')
         expect(refreshCookie?.toLowerCase()).not.toContain('samesite=strict')
 
