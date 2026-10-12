@@ -406,7 +406,7 @@ export async function changeRole(
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
       throw new HttpError("Insufficient permissions to change this member's role", 403)
     }
-    // After the membership locks, as staff writes take a user row: a delete holding tenants' owner rows then waits on this row, and the target is no owner of this tenant, so no delete holds it.
+    // After lockActorAndTarget's owner-row locks: a delete that holds them took them before the target's user row, so this queues there holding nothing the delete wants. The role gate only skips a redundant lock.
     if (role === 'owner' && target.role !== 'owner') {
       await lockUserForOwnership(
         targetUserId,

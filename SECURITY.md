@@ -319,9 +319,13 @@ change or reset commits.
   and sees the new state: a changed hash is compared again, and only a password
   that matches the stored one (another login's rehash, or a reset to the same
   password) gets a session.
-- A write that makes the user a tenant owner takes the same `FOR SHARE` lock
-  first, so a staff delete holding the row `FOR NO KEY UPDATE` and the grant
-  never both commit unseen ([Platform staff](#platform-staff)).
+- A write that makes the user a tenant owner or staff takes the same
+  `FOR SHARE` lock before its write, so a staff delete holding the row
+  `FOR NO KEY UPDATE` either waits for the grant and sees it, or wins and the
+  grant finds the account gone ([Platform staff](#platform-staff)).
+  Single-statement updates of the row on the pool (the last-login time, a
+  profile edit, email verification) queue behind a grant for its few
+  statements.
 
 A correct password still updates `last_logged_in_at` and runs the platform
 auto-join before that re-read, even when the re-read then answers 401.
@@ -504,10 +508,14 @@ their role there is their platform role (`src/services/platform.service.ts`).
   user's row `FOR NO KEY UPDATE` (`deleteUser`,
   `src/services/platform-user.service.ts`). Every write that makes a user an
   owner (creating a tenant, accepting an owner invitation, a role change to
-  owner) locks that user's row `FOR SHARE` first (`lockUserForOwnership`). A
-  grant that commits first is seen by the delete's second ownership read,
-  which answers `409`; a grant that waits finds the account gone and grants
-  nothing (`401`, or `404 member_not_found` for a role change).
+  owner), and accepting any platform-tenant invitation, locks that user's row
+  `FOR SHARE` before its write (`lockUserForOwnership`). A grant that holds
+  the row first commits before the delete reads on: a new customer tenant
+  answers `409` at the delete's second ownership read, and a new platform role
+  is re-read after the user-row lock, so the staff rank rule (`403`) and the
+  last-owner guard (`409`) apply to it. A grant that waits finds the account
+  gone and grants nothing (`401`, or `404 member_not_found` for a role
+  change).
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an

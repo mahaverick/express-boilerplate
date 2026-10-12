@@ -377,6 +377,7 @@ describe('TenantInvitationRepository', () => {
         name: 'Acme Inc',
         slug: tenant.slug,
         lifecycleState: 'active',
+        isPlatform: false,
       })
       expect(found?.invitedBy).toStrictEqual({ firstName: 'Ada', lastName: 'Lovelace' })
     })

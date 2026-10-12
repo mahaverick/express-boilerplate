@@ -502,6 +502,124 @@ describe('a delete racing a grant of ownership', () => {
   )
 })
 
+/**
+ * The platform tenant's id.
+ * @returns The id of the one `is_platform` tenant.
+ */
+async function platformTenantId(): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`select id from tenants where is_platform`
+  if (!row) throw new Error('no platform tenant')
+  return row.id
+}
+
+/**
+ * The target's platform role and whether they are soft-deleted.
+ * @param userId - The target.
+ * @returns Their state after a race.
+ */
+async function staffState(userId: string): Promise<{ deleted: boolean; role: string | null }> {
+  const [row] = await sql<{ deleted: boolean; role: string | null }[]>`
+    select u.deleted_at is not null as deleted, m.role
+    from users u
+    left join user_memberships m
+      on m.user_id = u.id and m.tenant_id = (select id from tenants where is_platform)
+    where u.id = ${userId}`
+  if (!row) throw new Error('no such user')
+  return row
+}
+
+describe('a delete racing a platform invitation accept', () => {
+  it.each(['owner', 'admin'] as const)(
+    'an admin delete queued behind the accept of a platform %s invitation sees the new role and answers 403',
+    async (role) => {
+      const { user: owner } = await createTrackedStaff('owner')
+      const { user: admin } = await createTrackedStaff('admin')
+      const target = await createTrackedUser()
+      const rawToken = randomUUID()
+      await invitationRepository.createPending({
+        tenantId: await platformTenantId(),
+        email: target.email,
+        role,
+        tokenHash: hashToken(rawToken),
+        invitedBy: owner.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      const pause = newPause()
+
+      let result: RaceResult | undefined
+      await withMutatedMethod(
+        TenantInvitationRepository.prototype,
+        'claimForAccept',
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        pausingFirstCall(TenantInvitationRepository.prototype.claimForAccept, 2, pause),
+        async () => {
+          result = await race(
+            () => accept(rawToken, target.id),
+            pause,
+            () => deleteUser({ userId: admin.id }, target.id, REASON)
+          )
+        }
+      )
+
+      // The delete queues behind the accept's lock on the target's user row.
+      expect(result?.wasQueued).toBe(true)
+      expect(result?.outcomes[0].status).toBe('fulfilled')
+      // An admin acting on a platform admin or owner is refused, as when the accept ran first.
+      expect(result?.outcomes[1]).toMatchObject({
+        status: 'rejected',
+        reason: {
+          statusCode: 403,
+          message: 'Insufficient permissions to act on this staff member',
+        },
+      })
+      expect(await staffState(target.id)).toEqual({ deleted: false, role })
+    },
+    DEADLOCK_TIMEOUT_MS
+  )
+})
+
+describe('a role change to platform owner racing a delete of the target', () => {
+  it(
+    'queues on the platform owner rows the delete holds, then answers 404 with no deadlock',
+    async () => {
+      const { user: platformOwner } = await createTrackedStaff('owner')
+      const { user: admin } = await createTrackedStaff('admin')
+      // A viewer who owns no customer tenant, so the delete's first owner-row lock is the platform's.
+      const { user: target } = await createTrackedStaff('viewer')
+      const platformId = await platformTenantId()
+      const pause = newPause()
+
+      let result: RaceResult | undefined
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'lockOwners',
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        pausingFirstCall(UserMembershipRepository.prototype.lockOwners, 2, pause),
+        async () => {
+          result = await race(
+            () => deleteUser({ userId: admin.id }, target.id, REASON),
+            pause,
+            () =>
+              changeRole({ userId: platformOwner.id }, platformId, target.id, 'owner', {
+                isPlatformTenant: true,
+              })
+          )
+        }
+      )
+
+      // It waits on the platform owner rows holding nothing; a user-row lock taken first would deadlock (40P01).
+      expect(result?.wasQueued).toBe(true)
+      expect(result?.outcomes[0].status).toBe('fulfilled')
+      expect(result?.outcomes[1]).toMatchObject({
+        status: 'rejected',
+        reason: { statusCode: 404, message: 'Member not found' },
+      })
+      expect(await staffState(target.id)).toEqual({ deleted: true, role: 'viewer' })
+    },
+    DEADLOCK_TIMEOUT_MS
+  )
+})
+
 describe('assertPlatformOwnerRemains', () => {
   it('refuses when the target is the last active platform owner, and allows a spare owner or a non-owner', () => {
     // The second argument counts the OTHER active platform owners.

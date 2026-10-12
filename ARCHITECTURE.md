@@ -292,12 +292,17 @@ Two writes take a user row later. Staff writes lock owner rows and platform
 memberships first, then the actor's user row `FOR SHARE`
 (`assertStillPlatformRole`, `platform.service.ts`) and, for a user action, the
 target's (`lockStaffPair`, `platform-user.service.ts`), then the tenant row. A
-role change to owner locks the tenant's owner rows and memberships, then the
-target's user row `FOR SHARE` (`lockUserForOwnership`), and only when the
-target is not already an owner there, so no staff delete of the target holds
-that tenant's owner rows. Each owner grant's `FOR SHARE` conflicts with the
-delete's `FOR NO KEY UPDATE` on the target, so a delete and a grant of
-ownership never both commit unseen by the other. A transaction that locks
+role change to owner takes the target's user row `FOR SHARE`
+(`lockUserForOwnership`) after the tenant's owner-row locks: a delete that
+holds them took them before the target's user row, so the role change queues
+there holding nothing the delete wants. Skipping the lock when the target is
+already an owner only avoids a redundant lock. Each grant's `FOR SHARE` (an
+owner grant, or any platform-tenant invitation's accept) conflicts with a
+staff delete's `FOR NO KEY UPDATE` on the target. A grant that holds the row
+first commits before the delete reads on: a new customer tenant fails its
+second ownership read (409), and a new platform role is seen by the role
+re-read after the user-row lock (`lockStaffPair`), so the rank rule and the
+last-owner guard apply to it. A transaction that locks
 membership rows in both a customer tenant and the platform tenant locks the
 customer tenant's first. Postgres cannot enforce an application lock order;
 the JSDoc of each lock method states its place, and deadlock regression tests

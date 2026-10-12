@@ -251,7 +251,9 @@ interface LockedStaffPair {
  * the actor's and target's platform memberships, then the actor's user row
  * FOR SHARE (`assertStillPlatformRole`), then the target's user row. An actor
  * deleted or deactivated by a transaction that held these locks first is
- * seen here, after the wait, and refused.
+ * seen here, after the wait, and refused. The target's platform role is read
+ * after the target's user row is locked, so a platform invitation the target
+ * accepted while this waited (it holds that row first) is seen.
  * Every transaction that locks membership rows in both a customer tenant and
  * the platform tenant locks the customer tenant's first
  * (tenant-access.service.ts), so the order has no cycle.
@@ -276,7 +278,7 @@ async function lockStaffPair(
   }
   const platform = await platformTenantOrThrow(tx)
   await userMembershipRepository.lockOwners(platform.id, 'no key update', tx)
-  const memberships = await userMembershipRepository.lockMemberships(
+  await userMembershipRepository.lockMemberships(
     platform.id,
     [actor.userId, targetUserId],
     'no key update',
@@ -286,10 +288,8 @@ async function lockStaffPair(
 
   const target = await userRepository.lockById(targetUserId, 'no key update', tx)
   if (!target) throw new HttpError('User not found', 404)
-  const targetRole =
-    memberships.find((membership) => membership.userId === targetUserId)?.role ??
-    // eslint-disable-next-line unicorn/no-null -- a non-staff target has no platform role
-    null
+  // Read again after the user-row wait: a platform invitation accepted meanwhile held that row first and has committed. No later change can land, since each needs the platform owner rows or this user row.
+  const targetRole = await userMembershipRepository.findPlatformRole(targetUserId, tx)
   // The rule never covers oneself: a caller that must refuse a self-action does so before this, and one that allows it relies on this skip.
   if (
     targetRole !== null &&
@@ -713,9 +713,12 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * locks. The owned tenants are listed again under the locks, and a customer
  * tenant missing from the locked set answers 409. Every write that makes a
  * user an owner (`createTenant`, an owner invitation's `accept`, `changeRole`
- * to owner) locks that user's row `FOR SHARE` first (`lockUserForOwnership`),
- * so it either commits before the delete's lock and the second read finds the
- * tenant (409), or waits and finds the user deleted.
+ * to owner), and every platform invitation's `accept`, locks that user's row
+ * `FOR SHARE` before its write (`lockUserForOwnership`). A grant that holds
+ * the row first commits before the delete's lock: a customer tenant is found
+ * by the second read (409), and a platform role by the role re-read in
+ * `lockStaffPair` (403 for a rank the actor cannot act on, or the last-owner
+ * 409). A grant that waits finds the user deleted.
  * @param actor - The signed-in platform admin or owner, recently authenticated.
  * @param userId - The user.
  * @param reason - Why, for the audit log.

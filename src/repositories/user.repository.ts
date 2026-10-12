@@ -99,7 +99,8 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
    * through. `'share'` is for a login's re-read of the hash, a refresh
    * rotation, or a write that makes the user a tenant owner
    * (`lockUserForOwnership`), which wait for that write and let each other
-   * through.
+   * through; a single-statement update of the row (last login, a profile
+   * edit, verification) waits for a `'share'` holder to commit.
    * @param id - The user's id.
    * @param mode - The lock strength.
    * @param tx - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
