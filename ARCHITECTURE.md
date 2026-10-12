@@ -276,9 +276,10 @@ the analytics forwarder are the subscribers.
 in this order:
 
 1. the user row (`lockById`, `user.repository.ts`), for password writes,
-   login, Google sign-in, refresh rotation, logout, the refresh kills, step-up
-   and the Google account claim; none of these goes on to lock a membership or
-   tenant row;
+   login, Google sign-in, refresh rotation, logout, the refresh kills, step-up,
+   the Google account claim, tenant creation and an owner invitation's accept
+   (`lockUserForOwnership`, `tenant-membership.service.ts`, before the claim);
+   none of these goes on to lock a membership or tenant row;
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);
 4. when the actor has no membership there, the actor's platform-tenant
@@ -287,15 +288,21 @@ in this order:
 5. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`).
 
-Staff writes are the one place a user row comes later: they lock owner rows and
-platform memberships first, then the actor's user row `FOR SHARE`
+Two writes take a user row later. Staff writes lock owner rows and platform
+memberships first, then the actor's user row `FOR SHARE`
 (`assertStillPlatformRole`, `platform.service.ts`) and, for a user action, the
 target's (`lockStaffPair`, `platform-user.service.ts`), then the tenant row. A
-transaction that locks membership rows in both a customer tenant and the
-platform tenant locks the customer tenant's first. Postgres cannot enforce an
-application lock order; the JSDoc of each lock method states its place, and a
-deadlock regression test
-(`tests/integration/services/tenant-membership.service.test.ts`) holds it.
+role change to owner locks the tenant's owner rows and memberships, then the
+target's user row `FOR SHARE` (`lockUserForOwnership`), and only when the
+target is not already an owner there, so no staff delete of the target holds
+that tenant's owner rows. Each owner grant's `FOR SHARE` conflicts with the
+delete's `FOR NO KEY UPDATE` on the target, so a delete and a grant of
+ownership never both commit unseen by the other. A transaction that locks
+membership rows in both a customer tenant and the platform tenant locks the
+customer tenant's first. Postgres cannot enforce an application lock order;
+the JSDoc of each lock method states its place, and deadlock regression tests
+(`tests/integration/services/tenant-membership.service.test.ts`,
+`tests/integration/api/platform-user-race.test.ts`) hold it.
 
 **Lock modes.** A lock that only guards a read-then-write takes
 `FOR NO KEY UPDATE`, because `FOR UPDATE` conflicts with the `FOR KEY SHARE`

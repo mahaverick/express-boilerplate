@@ -711,11 +711,11 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * owner: those tenants' owner rows are locked first, in tenant-id order, then
  * the platform's (see `lockStaffPair`), and the owners re-counted under the
  * locks. The owned tenants are listed again under the locks, and a customer
- * tenant missing from the locked set answers 409. A tenant the target comes
- * to own after that second read can still be missed: creating one only
- * key-share locks the user row, which the delete's lock does not block. The
- * delete then commits and `requireAuth` refuses the deleted account from its
- * next request.
+ * tenant missing from the locked set answers 409. Every write that makes a
+ * user an owner (`createTenant`, an owner invitation's `accept`, `changeRole`
+ * to owner) locks that user's row `FOR SHARE` first (`lockUserForOwnership`),
+ * so it either commits before the delete's lock and the second read finds the
+ * tenant (409), or waits and finds the user deleted.
  * @param actor - The signed-in platform admin or owner, recently authenticated.
  * @param userId - The user.
  * @param reason - Why, for the audit log.

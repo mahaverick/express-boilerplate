@@ -319,6 +319,9 @@ change or reset commits.
   and sees the new state: a changed hash is compared again, and only a password
   that matches the stored one (another login's rehash, or a reset to the same
   password) gets a session.
+- A write that makes the user a tenant owner takes the same `FOR SHARE` lock
+  first, so a staff delete holding the row `FOR NO KEY UPDATE` and the grant
+  never both commit unseen ([Platform staff](#platform-staff)).
 
 A correct password still updates `last_logged_in_at` and runs the platform
 auto-join before that re-read, even when the re-read then answers 401.
@@ -495,6 +498,16 @@ their role there is their platform role (`src/services/platform.service.ts`).
   anything above viewer takes an invitation or `pnpm platform:grant`. Every
   platform role reads every user, tenant and address, so list only domains
   whose mailboxes you control.
+- **Deleting a user never leaves a tenant ownerless.** The delete refuses
+  while the user is the last live owner of a customer tenant or the last
+  active platform owner, re-counting under the owner-row locks, and holds the
+  user's row `FOR NO KEY UPDATE` (`deleteUser`,
+  `src/services/platform-user.service.ts`). Every write that makes a user an
+  owner (creating a tenant, accepting an owner invitation, a role change to
+  owner) locks that user's row `FOR SHARE` first (`lockUserForOwnership`). A
+  grant that commits first is seen by the delete's second ownership read,
+  which answers `409`; a grant that waits finds the account gone and grants
+  nothing (`401`, or `404 member_not_found` for a role change).
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an

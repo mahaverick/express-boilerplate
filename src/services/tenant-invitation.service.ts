@@ -34,7 +34,11 @@ import { emitDomainEvent } from '@/services/domain-events.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
-import { assertStaffReasonGiven, lockActorRole } from '@/services/tenant-membership.service'
+import {
+  assertStaffReasonGiven,
+  lockActorRole,
+  lockUserForOwnership,
+} from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor, StaffReasonOption } from '@/types/actor'
@@ -755,6 +759,9 @@ async function acceptedEarlierBy(
  * A claimed accept that adds a membership emits `invitation_accepted` after
  * commit, saying whether the tenant had no member before; an accept that
  * finds the user already a member, or a repeat accept, emits nothing.
+ * An owner invitation locks the user's row `FOR SHARE` before the claim
+ * (`lockUserForOwnership`), so a concurrent staff delete of the user either
+ * sees the new ownership or wins and this answers 401.
  * @param rawToken - The raw token from the link.
  * @param userId - The signed-in user.
  * @returns The tenant and the role the user holds (an existing membership's role is kept).
@@ -771,6 +778,10 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     if (!valid) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
 
     assertInvitedAddress(user, valid.invitation.email)
+    // Before the claim: a delete takes the user row, then the invitations the user sent, and this one may be among them.
+    if (valid.invitation.role === 'owner') {
+      await lockUserForOwnership(user.id, () => new HttpError('Authentication required', 401), tx)
+    }
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
