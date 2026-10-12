@@ -2198,5 +2198,100 @@
     "rule": "kv",
     "input": "code_verifier=x \"cookie\" = [zqS7a zqS7b, zqS7c]/\\\"code=\n OAuth username=\"zqS7d\", nonce=\"zqS7e\"/\"CODE'&#61;Bearer [token] zqS7f zqS7g tail",
     "expected": "code_verifier=[redacted] \"cookie\" = [redacted], nonce=\"[redacted]\"/\"CODE'&#61;[redacted]"
+  },
+  {
+    "rule": "secret",
+    "input": "wJalrXUtnFEMI/KKMDENG/bPxRfiCYEXAMPLEKEY@main",
+    "expected": "[secret]@main"
+  },
+  {
+    "rule": "secret",
+    "input": "aws wJalrXUtnFEMI/KKMDENG/bPxRfiCYEXAMPLEKEY/ rejected",
+    "expected": "aws [secret]/ rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "aws wJalrXUtnFEMI/KKMDENG/bPxRfiCYEXAMPLEKEY/prod rejected",
+    "expected": "aws [secret]/prod rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "aws wJalrXUtnFEMI/KKMDENG/bPxRfiCYEXAMPLEKEY",
+    "expected": "aws [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "read /app/data/uploads/tenants/avatars/photo1/x.png failed",
+    "expected": "read /app/data/uploads/tenants/avatars/photo1/x.png failed"
+  },
+  {
+    "rule": "secret",
+    "input": "read /app/data/uploads/tenants/avatars/photo1@main failed",
+    "expected": "read /app/data/uploads/tenants/avatars/photo1@main failed"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:jane@example.com?subject=hi&body=reset-link-abc",
+    "expected": "mailto:[email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "MAILTO:jane@example.com,bob@example.com?cc=zqS7",
+    "expected": "MAILTO:[email],[email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "<mailto:jane@localhost?body=zqS7>",
+    "expected": "<mailto:[email]?[query]>"
+  },
+  {
+    "rule": "email",
+    "input": "xmpp:jane@example.com?message;body=zqS7",
+    "expected": "xmpp:[email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:?to=jane@example.com&body=zqS7",
+    "expected": "mailto:?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "Did you mean jane@example.com? Try again",
+    "expected": "Did you mean [email]? Try again"
+  },
+  {
+    "rule": "cap",
+    "input": "a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a jane@example.com, tail tail tail tail tail tail tail tail tail tail tail tail tail tail tail tail tail tail tail tail ",
+    "expected": "a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a …[truncated]"
+  },
+  {
+    "rule": "kv",
+    "input": "compass: north",
+    "expected": "compass: north"
+  },
+  {
+    "rule": "kv",
+    "input": "bypass: cache, encompass: all, surpass: zqS7",
+    "expected": "bypass: cache, encompass: all, surpass: zqS7"
+  },
+  {
+    "rule": "kv",
+    "input": "COMPASS: north",
+    "expected": "COMPASS: north"
+  },
+  {
+    "rule": "kv",
+    "input": "password: zqS7a, passwd: zqS7b, passphrase: zqS7c, passcode: zqS7d, pass: zqS7e",
+    "expected": "password: [redacted], passwd: [redacted], passphrase: [redacted], passcode: [redacted], pass: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "user_pass=zqS7a, user-pass=zqS7b, userPass=zqS7c, userpassword=zqS7d, db_password=zqS7e, PASS=zqS7f",
+    "expected": "user_pass=[redacted], user-pass=[redacted], userPass=[redacted], userpassword=[redacted], db_password=[redacted], PASS=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "dbpass: zqS7a, rootpass=zqS7b",
+    "expected": "dbpass: [redacted], rootpass=[redacted]"
   }
 ]
