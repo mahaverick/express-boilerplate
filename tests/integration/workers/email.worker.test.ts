@@ -16,7 +16,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
-import { Job, type Worker } from 'bullmq'
+import { Job } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { addEmailJob, emailJobDefaults, type EmailJobData } from '@/jobs/email.job'
@@ -35,7 +35,7 @@ import {
   getMailpitMessage,
 } from '../../helpers/mailpit'
 import { withMutatedMethod } from '../../helpers/mutate'
-import { waitForLoggedCall } from '../../helpers/queue-jobs'
+import { waitForJobSettled, waitForLoggedCall } from '../../helpers/queue-jobs'
 
 const emailLogRepository = new EmailLogRepository()
 const emailMessageRepository = new EmailMessageRepository()
@@ -92,44 +92,6 @@ type JobInternals = { updateData: (this: Job, data: unknown) => Promise<void> }
 const jobPrototype = Job.prototype as unknown as JobInternals
 const originalUpdateData = jobPrototype.updateData
 
-/**
- * Resolves with `'completed'` or `'failed'`, whichever fires first for the job `jobId` on
- * `worker`. It is scoped to one job id, not "the next completed or failed event", so two tests
- * that run jobs through the same shared Worker never resolve each other's promise.
- */
-function waitForJobSettled(
-  worker: Worker<EmailJobData>,
-  jobId: string
-): Promise<'completed' | 'failed'> {
-  return new Promise((resolve) => {
-    /**
-     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onCompleted = (job: Job<EmailJobData>): void => {
-      if (job.id !== jobId) return
-      cleanup()
-      resolve('completed')
-    }
-    /**
-     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onFailed = (job: Job<EmailJobData> | undefined): void => {
-      if (job?.id !== jobId) return
-      cleanup()
-      resolve('failed')
-    }
-    /**
-     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
-     */
-    const cleanup = (): void => {
-      worker.off('completed', onCompleted)
-      worker.off('failed', onFailed)
-    }
-    worker.on('completed', onCompleted)
-    worker.on('failed', onFailed)
-  })
-}
-
 describe('email.worker', () => {
   const worker = startEmailWorker()
   const createdLogIds: string[] = []
@@ -155,7 +117,7 @@ describe('email.worker', () => {
     const job = await addEmailJob(passwordResetMessage(recipient), 'user-happy-path')
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
 
     const messages = await findMailpitMessages(recipient)
     expect(messages).toHaveLength(1)
@@ -188,7 +150,7 @@ describe('email.worker', () => {
     )
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
 
     const [message] = await findMailpitMessages(recipient)
     if (!message) throw new Error('expected the password_changed mail in Mailpit')
@@ -205,7 +167,7 @@ describe('email.worker', () => {
     const job = await addEmailJob(passwordResetMessage(recipient), 'user-suppressed')
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
     const tracked = await emailMessageRepository.findById(job.data.messageId ?? '')
     expect(tracked?.status).toBe('suppressed')
     await expect(emailLogRepository.findByRecipient(recipient)).resolves.toEqual([])
@@ -224,7 +186,7 @@ describe('email.worker', () => {
     )
     if (!job.id) throw new Error('expected addJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
 
     const [row] = await sql`
       select id, status, job_key, user_id from email_messages where recipient = ${recipient}
@@ -316,7 +278,7 @@ describe('email.worker', () => {
         })
         if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-        await expect(waitForJobSettled(worker, job.id)).resolves.toBe('failed')
+        await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('failed')
 
         // The load-bearing assertion: what BullMQ itself persisted to Redis as failedReason, not merely the Error thrown in-process.
         const failedJob = await getEmailQueue().getJob(job.id)
@@ -351,7 +313,7 @@ describe('email.worker', () => {
         })
         if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-        await expect(waitForJobSettled(worker, job.id)).resolves.toBe('failed')
+        await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('failed')
 
         const failedJob = await getEmailQueue().getJob(job.id)
         expect(failedJob?.failedReason).toContain(job.id)

@@ -1,11 +1,11 @@
 /**
  * @file Reads jobs straight off the BullMQ queues, for test files that
- * start no Worker, and waits for a Worker's log line. `'prioritized'` is a
+ * start no Worker, waits for a Worker's log line, and waits for a job to settle. `'prioritized'` is a
  * job state included in every read here: email and notification jobs carry
  * a priority, and BullMQ keeps them there until a Worker pulls them.
  */
 import { randomUUID } from 'node:crypto'
-import type { Job, Queue } from 'bullmq'
+import { Job, type Queue, type Worker } from 'bullmq'
 import { expect, type MockInstance } from 'vitest'
 import type { EmailJobData } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
@@ -166,4 +166,70 @@ export async function waitForVerificationToken(userId: string): Promise<string> 
   const token = new URL(email.variables.verificationUrl).searchParams.get('token')
   if (!token) throw new Error('waitForVerificationToken: the link carries no token')
   return token
+}
+
+/**
+ * Resolves with `'completed'` or `'failed'` once the job `jobId` settles on `worker`, including
+ * a job that settled before this call. The listeners attach first, then the job's current state
+ * is read from `queue`, so a settle in the gap between `addJob` resolving and this call is
+ * seen, not missed. It is scoped to one job id, so two tests sharing a Worker never resolve each
+ * other's promise, and it detaches both listeners when it settles.
+ *
+ * A job that is gone from `queue` counts as `'completed'`: `jobId` comes from `addJob`, so the
+ * job existed, and the queues here use `removeOnComplete: true`. A job that failed with
+ * attempts left is waiting or delayed, not failed, so the wait continues for its final outcome.
+ * @param worker - The Worker running the job.
+ * @param queue - The queue the Worker consumes, to read the job's current state.
+ * @param jobId - The id `addJob` returned.
+ * @returns How the job settled.
+ */
+export function waitForJobSettled<TData>(
+  worker: Worker<TData>,
+  queue: Queue,
+  jobId: string
+): Promise<'completed' | 'failed'> {
+  return new Promise((resolve, reject) => {
+    /**
+     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
+     */
+    const onCompleted = (job: Job<TData>): void => {
+      if (job.id !== jobId) return
+      cleanup()
+      resolve('completed')
+    }
+    /**
+     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
+     */
+    const onFailed = (job: Job<TData> | undefined): void => {
+      if (job?.id !== jobId) return
+      cleanup()
+      resolve('failed')
+    }
+    /**
+     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
+     */
+    const cleanup = (): void => {
+      worker.off('completed', onCompleted)
+      worker.off('failed', onFailed)
+    }
+    worker.on('completed', onCompleted)
+    worker.on('failed', onFailed)
+    // After attaching: a job that settled earlier fires no further event, so read where it stands.
+    /**
+     * Resolves the wait when the job already stands completed or failed; rejects when the read fails.
+     */
+    const checkCurrentState = async (): Promise<void> => {
+      try {
+        const job = await Job.fromId(queue, jobId)
+        const state = job ? await job.getState() : 'completed'
+        if (state !== 'completed' && state !== 'failed') return
+        cleanup()
+        resolve(state)
+      } catch (error) {
+        cleanup()
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    }
+    void checkCurrentState()
+  })
 }

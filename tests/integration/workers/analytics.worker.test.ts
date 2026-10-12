@@ -6,7 +6,7 @@
  * Analytics and the personal API key are enabled for this file through a
  * mocked `getEnv()`.
  */
-import type { Job, Worker } from 'bullmq'
+import type { Worker } from 'bullmq'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ANALYTICS_DELETIONS_JOB } from '@/jobs/analytics-deletion.job'
 import { ANALYTICS_DRAIN_JOB } from '@/jobs/analytics.job'
@@ -24,7 +24,7 @@ import {
   createTrackedUser,
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
-import { waitForLoggedCall } from '../../helpers/queue-jobs'
+import { waitForJobSettled, waitForLoggedCall } from '../../helpers/queue-jobs'
 
 const target = vi.hoisted(() => ({ host: 'http://127.0.0.1:1' }))
 
@@ -42,39 +42,6 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
     }),
   }
 })
-
-/**
- * Resolves with 'completed' or 'failed' once the job `jobId` settles on the running analytics Worker.
- */
-function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
-  return new Promise((resolve) => {
-    /**
-     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onCompleted = (job: Job): void => {
-      if (job.id !== jobId) return
-      cleanup()
-      resolve('completed')
-    }
-    /**
-     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onFailed = (job: Job | undefined): void => {
-      if (job?.id !== jobId) return
-      cleanup()
-      resolve('failed')
-    }
-    /**
-     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
-     */
-    const cleanup = (): void => {
-      worker.off('completed', onCompleted)
-      worker.off('failed', onFailed)
-    }
-    worker.on('completed', onCompleted)
-    worker.on('failed', onFailed)
-  })
-}
 
 const state: { posthog?: FakePosthog; worker?: Worker } = {}
 
@@ -109,7 +76,7 @@ describe('analytics.worker', () => {
 
     const job = await addJob(getAnalyticsQueue(), ANALYTICS_DRAIN_JOB, {}, { attempts: 1 })
     if (!job.id) throw new Error('expected addJob to assign a job id')
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getAnalyticsQueue(), job.id)).resolves.toBe('completed')
 
     expect(posthog.batches.flat().map((event) => event.uuid)).toContain(row?.id)
     expect(await sql`select id from analytics_outbox`).toHaveLength(0)
@@ -164,7 +131,7 @@ describe('analytics.worker', () => {
 
     const job = await addJob(getAnalyticsQueue(), ANALYTICS_DELETIONS_JOB, {}, { attempts: 1 })
     if (!job.id) throw new Error('expected addJob to assign a job id')
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getAnalyticsQueue(), job.id)).resolves.toBe('completed')
 
     expect(posthog.bulkDeletes.flatMap((body) => body.distinct_ids)).toContain(gone.id)
     expect(
