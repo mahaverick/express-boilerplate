@@ -237,7 +237,7 @@ regularly passes 300 ms trips the cooldown. What each caller then does is in
 `tests/fixtures/lint-zones/` and `tests/fixtures/lint-cycle/` to prove each
 rule fires. The zones are a blocklist, so an edge no zone names is unchecked.
 When a rule refuses an import, either the import is wrong or the zone config
-and this table change in the same commit.
+and the zone list above change in the same commit.
 
 **Controllers.** Every route handler is a `BaseController` method
 (`src/controllers/base.controller.ts`), an arrow-function field built through
