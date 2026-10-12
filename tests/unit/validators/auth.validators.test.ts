@@ -74,6 +74,17 @@ describe('the password length floor', () => {
     expect(parse(LONG_ENOUGH).success).toBe(true)
   })
 
+  // NIST counts each Unicode code point as one character; an emoji is two UTF-16 code units. zod's string `.min` counts code points.
+  it.each([
+    ['8 emoji', '\u{1F600}'.repeat(8), false],
+    ['15 emoji', '\u{1F600}'.repeat(15), true],
+    ['15 ASCII characters', 'a'.repeat(15), true],
+  ])('counts the floor in code points: %s', (_name, password, isAccepted) => {
+    expect(registerSchema.safeParse({ email: 'user@example.com', password }).success).toBe(
+      isAccepted
+    )
+  })
+
   // A password set under an older, shorter floor must still be accepted where it is verified, not set.
   it('leaves passwords that are verified, not set, without a floor', () => {
     expect(loginSchema.safeParse({ email: 'user@example.com', password: 'short' }).success).toBe(
