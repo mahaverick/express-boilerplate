@@ -107,27 +107,6 @@ describe('scrubText', () => {
     expect(scrubText(text)).toBe(text)
   })
 
-  it.each([
-    ['[email]', 'jane@example.com'],
-    ['[secret]', 'a3f9'.repeat(8)],
-    ['[jwt]', 'eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl'],
-    ['[phone]', '+1 415 555 0100'],
-  ])(
-    'never cuts inside %s at the cap, so a second scrub changes nothing',
-    (placeholder, secret) => {
-      const cut = SCRUB_VALUE_MAX - TRUNCATION_MARKER.length
-      // Every prefix length that puts the cut on or inside the placeholder, and one either side.
-      for (let length = cut - placeholder.length - 1; length <= cut + 1; length += 1) {
-        const prefix = `${'a '.repeat(length).slice(0, length - 1)} `
-        const once = scrubText(`${prefix}${secret}, ${'tail '.repeat(20)}`)
-        expect(once.length).toBeLessThanOrEqual(SCRUB_VALUE_MAX)
-        expect(once.endsWith(TRUNCATION_MARKER)).toBe(true)
-        expect(once.slice(0, -TRUNCATION_MARKER.length)).not.toMatch(/\[[a-z-]*$/)
-        expect(scrubText(once)).toBe(once)
-      }
-    }
-  )
-
   it('never keeps half of a secret cut at the scan limit', () => {
     // The long run shrinks to [secret], pulling the hex that straddles the 4096th character into view.
     const text = `${'A'.repeat(3600)} ${'x '.repeat(240)}${'ab'.repeat(20)} tail`

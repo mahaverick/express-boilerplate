@@ -1199,7 +1199,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   object) with the fixed value `Non-Error object thrown`: its keys and values,
   which can be user input, are never sent. The rule families are Postgres
   `Key (col)=(value)` detail, Postgres and JSON input echoes, URL logins,
-  query strings (the query of a `mailto:` or other address URL too),
+  query strings (the query of a `mailto:` or other address URL too, its
+  addresses joined by `,` or `;`),
   fragments (a line anchor such as `#L5` and a lowercase heading
   such as `#getting-started` are kept), Bearer, Basic and known-scheme
   Authorization credentials, every parameter of an Authorization header (any
@@ -1221,8 +1222,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept;
-  a bare `pass` ending `compass`, `encompass`, `bypass` or `surpass` is not a
-  key);
+  the words `compass`, `encompass`, `bypass` and `surpass` on their own are
+  not keys, though a compound of them is, `auth_bypass` included);
   `code` only where it reads as an authorization code: after `?` or `&`,
   before a further `&` field (`code=…&`), with `oauth`, `authorization` or
   `authorize` earlier on its line or later on it with no brace in between, or anywhere in
@@ -1295,9 +1296,7 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   domain of an address whose local part follows a `/`
   (`dir/x@wJalr…/K7MDENG/…` keeps `/K7MDENG/…`). Scrubbing a
   scrubbed text
-  again changes nothing, except a text the length cap cut straight after a
-  key's separator or a rule's kept prefix (`password=…[truncated]`), and
-  contrived inputs that glue a phone number, IP
+  again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part
   (`"jane doe"@…`) straight against a URL's or path's query or fragment, end
   an address with a `.` straight before a query (`jane@example.com.?a=1`), or
