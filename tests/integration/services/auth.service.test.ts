@@ -15,17 +15,12 @@ import { UserRepository } from '@/repositories/user.repository'
 import { login, register, requestPasswordReset } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { prepareResendVerification } from '@/services/verification.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
-import { settle } from '../../helpers/timing'
-
-vi.mock('@/configs/env.config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/configs/env.config')>()
-  return { ...actual, getEnv: vi.fn(actual.getEnv) }
-})
-
-const realEnv = getEnv()
 
 const VALID_PASSWORD = 'correct horse battery staple'
 
@@ -164,7 +159,6 @@ describe('requestPasswordReset mail cooldown', () => {
   const createdIds: string[] = []
 
   afterEach(async () => {
-    vi.mocked(getEnv).mockReturnValue(realEnv)
     if (createdIds.length === 0) return
     await sql`delete from users where id = any(${createdIds})`
     createdIds.length = 0
@@ -189,15 +183,23 @@ describe('requestPasswordReset mail cooldown', () => {
     expect(await resetTokenCount(id)).toBe(1)
   })
 
+  // The cooldown is a Redis key with a PX expiry; deleting it is what that expiry does, with no wall-clock wait.
   it("queues the owner's request once the cooldown has passed", async () => {
-    vi.mocked(getEnv).mockReturnValue({ ...realEnv, PASSWORD_RESET_MAIL_COOLDOWN: '300ms' })
     const { id, email } = await seedActiveUser()
     for (let index = 0; index < 20; index += 1) {
       await requestPasswordReset(email)
     }
     expect(await resetTokenCount(id)).toBe(1)
 
-    await settle(400, 'the cooldown key expires on a timer; there is no event to await')
+    const key = redisKey('password-reset-notice', hashRateLimitIdentity(email.trim().toLowerCase()))
+    const redis = await getRedis()
+    const remainingMs = await redis.pTTL(key)
+    expect(remainingMs).toBeGreaterThan(0)
+    expect(remainingMs).toBeLessThanOrEqual(
+      requireDurationMs(getEnv().PASSWORD_RESET_MAIL_COOLDOWN)
+    )
+
+    await redis.del(key)
     await requestPasswordReset(email)
 
     expect(await resetTokenCount(id)).toBe(2)
