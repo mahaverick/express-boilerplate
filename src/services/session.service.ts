@@ -349,9 +349,8 @@ type RotationOutcome = RotationIssued | RotationRefused
  * A kill that races this check (logout, reuse, the locked pass of a password
  * write or an account claim) takes the user row FOR NO KEY UPDATE, which
  * waits for this rotation's FOR SHARE, so it revokes the sibling this check
- * lets through. `revokeAllSessions`, the unlocked first pass of a reset or a
- * claim, takes no user row lock and misses the sibling; the locked pass its
- * callers run after it catches it.
+ * lets through. `revokeAllSessions`, the first pass of a reset or a claim,
+ * takes the same lock in its own transaction, so it revokes the sibling too.
  *
  * Only a kill marker at or after the presented row's consumption refuses
  * grace (`isSessionKilled`): an older one is a revoke that spared this chain,
@@ -497,9 +496,9 @@ async function rotateUnderUserLock(
  * session killed by reuse or by its absolute lifetime is revoked after that
  * commit, under the user row lock, then denied. Logout, those kills, the
  * Google account claim and password writes lock the row FOR NO KEY UPDATE
- * before their in-transaction revoke (`revokeAllSessions`' first pass takes
- * no lock), so a rotation in a session they revoke either commits first and
- * its new token is revoked, or waits and finds the presented token revoked.
+ * before their revoke (`revokeAllSessions` too, in its own transaction), so
+ * a rotation in a session they revoke either commits first and its new token
+ * is revoked, or waits and finds the presented token revoked.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
  * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
@@ -594,7 +593,7 @@ async function findCallerRefreshTokenId(
  * `presentedRefreshToken` that names the caller's unrevoked chain
  * (`findCallerRefreshTokenId`), only that one row is spared, so a sibling a
  * grace-window replay minted in the same session ends too. Run it after the
- * user row lock, as every caller but `revokeAllSessions` does (see there).
+ * user row lock, as every caller does.
  * @param userId - The user whose tokens are revoked, every purpose.
  * @param options - What to spare.
  * @param options.exceptSessionId - The one session id to spare, if any.
@@ -713,15 +712,22 @@ export async function revokeOtherSessions(
 /**
  * Revoke every unrevoked token a user holds, across every session and
  * purpose, and deny each revoked session's access tokens (best-effort, see
- * `denySession`). It takes no user row lock, so a successor token that a
- * rotation in flight mints survives it. Its callers (a password reset and
- * the Google account claim) follow it with a pass under the lock, which
- * revokes that successor unless that pass rolls back.
+ * `denySession`). It runs in a transaction of its own, which commits
+ * whatever its caller does next, and locks the user row FOR NO KEY UPDATE
+ * first: a rotation in flight holds that row FOR SHARE, so it commits before
+ * the revoke and its successor token is revoked too, and a rotation that
+ * starts later finds its token revoked. Its callers (a password reset and the
+ * Google account claim) still revoke again under the lock in their own
+ * transaction, for a session created between the two; if that transaction
+ * rolls back, every session this pass revoked stays revoked.
  * @param userId - The user whose sessions should all end.
  * @returns Resolves once every token is revoked and each revoked session is denied, best-effort.
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
-  const sessionIds = await withTransaction((tx) => revokeSessionRows(userId, {}, tx))
+  const sessionIds = await withTransaction(async (tx) => {
+    await userRepository.lockById(userId, 'no key update', tx)
+    return revokeSessionRows(userId, {}, tx)
+  })
   await denySessionsAfterCommit(userId, sessionIds)
 }
 

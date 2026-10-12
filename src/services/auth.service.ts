@@ -435,11 +435,11 @@ export async function requestPasswordReset(email: string, app: FrontendApp = 'we
  * Reset a password with a token from the mailed link.
  *
  * Any claim failure (unknown, wrong purpose, used, expired) and a deleted
- * account answer the same 400. Every token is revoked first, on its own, so
- * every refresh token that existed is already revoked if the write fails, and
- * every purpose goes, so older reset links die too. A rotation already in
- * flight can still mint a successor, which only the locked pass below revokes.
- * The user row is then locked, the hash stored and the tokens revoked again in
+ * account answer the same 400. Every token is revoked first, in a committed
+ * transaction of its own under the user row lock (`revokeAllSessions`), so
+ * every refresh token that existed, and the successor of a rotation that was
+ * in flight, is already revoked if the write fails, and every purpose goes,
+ * so older reset links die too. The user row is then locked, the hash stored and the tokens revoked again in
  * one transaction. That second revoke catches a session a login or refresh
  * created after the first: either it committed before the lock and is revoked
  * here, or it waited on the lock and sees the new state. Those sessions are

@@ -243,9 +243,11 @@ change or reset commits. Both writes run in one transaction that locks the
 user row `FOR NO KEY UPDATE`, writes the new hash, and revokes the user's
 `user_tokens` rows: every session for a reset, every session but the caller's
 for a change (every session, the caller's included, when the caller's access
-token carries no session id). A reset also revokes every token once before
-that transaction, without the lock, so a failed write still leaves no session
-alive. Login still checks the password outside any transaction. It then opens
+token carries no session id). A reset (and a Google account claim) also
+revokes every token once before that transaction, in a transaction of its own
+that takes the same lock and commits first (`revokeAllSessions`), so a failed
+write still leaves no session alive, including the successor of a rotation
+that was in flight. Login still checks the password outside any transaction. It then opens
 a short one that locks the same row `FOR SHARE` and re-reads the hash. If the
 hash changed, it answers the same `401 Invalid email or password`; otherwise
 it issues the refresh token inside that transaction. So either the login
@@ -273,7 +275,7 @@ Every path that locks the user row:
 | Path                                                                                            | User row lock       | Why                                                                                                                                                                                                                        |
 | ----------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Password change, password reset, sign out other sessions                                        | `FOR NO KEY UPDATE` | Writes the hash (a password change or reset) and revokes sessions atomically                                                                                                                                               |
-| Google account claim, logout, reuse kill, lifetime kill                                         | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                                                                                                                                                                         |
+| Google account claim, `revokeAllSessions`, logout, reuse kill, lifetime kill                    | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                                                                                                                                                                         |
 | Step-up (`markSessionReauthenticated`, `POST /auth/reauthenticate`)                             | `FOR NO KEY UPDATE` | Re-checks the account is active and moves the session's `authenticated_at`                                                                                                                                                 |
 | Login (after the password compare), Google sign-in (after the account lookup), refresh rotation | `FOR SHARE`         | Issues a token only against the hash, account state and session state it checked: login and Google sign-in re-check `active` under the lock, so a deactivation or deletion that committed since the first read answers 401 |
 | A staff write's actor (`assertStillPlatformRole`)                                               | `FOR SHARE`         | A deactivation of the acting staff member waits for the write or is seen by it                                                                                                                                             |
@@ -287,9 +289,10 @@ open on the row; each holds it for one token insert (a login) or one rotation
 (a refresh). The reuse and lifetime
 kills run after the rotation's transaction commits, in a transaction of their
 own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE` transaction would
-deadlock two concurrent reuses. The session revocation that takes no user row
-lock is `revokeAllSessions`, the unlocked pass that a reset and a Google
-account claim run before their locked transaction.
+deadlock two concurrent reuses. `revokeAllSessions`, the pass that a reset and
+a Google account claim run before their own locked transaction, takes the user
+row `FOR NO KEY UPDATE` in a transaction of its own and commits before that
+transaction begins, so a rollback there never undoes it.
 
 Two effects are accepted:
 
