@@ -111,12 +111,12 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
  * those same two cold tests were observed at 20.2 s and once at 61 s:
  * parallel vitest workers, v8 coverage instrumentation, and a just-finished
  * `tsc` all compete for the CPU while ESLint type-checks the project from
- * cold. It is this variance that made the file flaky, not the mean, so the
- * timeout is generous (2x the worst contended run observed here) rather
- * than tuned close to it. Raising the global timeout instead would hide a
- * real slowdown anywhere else in the suite.
+ * cold. The timeout is 10x that worst measured run (61 s x 10 = 610 s), the
+ * headroom CLAUDE.md's test timing rule 3 asks of a bound not tied to a
+ * product constant. Raising the global timeout instead would hide a real
+ * slowdown anywhere else in the suite.
  */
-const LINT_GATE_TIMEOUT_MS = 120_000
+const LINT_GATE_TIMEOUT_MS = 610_000
 
 describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
   it('rejects an undocumented export', async () => {
