@@ -152,9 +152,10 @@ async function findReachableGoogleUser(profile: GoogleProfile): Promise<User | u
  *
  * 1. `(google, profile.id)` first: the OIDC `sub` is a stable account id, so
  *    a returning user stays correct whatever happened to their inbox.
- * 2. An email match is accepted only when Google verified the address;
- *    otherwise anyone adding `victim@example.com` to a Google account could
- *    sign in as its owner.
+ * 2. An email Google has not verified is refused before it is looked up,
+ *    with one 403 whether or not it is registered: otherwise anyone adding
+ *    `victim@example.com` to a Google account could sign in as its owner,
+ *    or learn whether the address has an account.
  * 3. A never-verified match is taken over (`claimUnverifiedAccount`); a
  *    verified one is linked untouched.
  * 4. A new account gets its 'email' and 'google' rows in one transaction.
@@ -178,28 +179,19 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
   }
 
   const { email, isVerified } = verifiedGoogleEmail(profile)
+  // Before the email lookup, so a registered and an unknown address get one answer at one cost (step 2 above).
+  if (!isVerified) {
+    throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
+  }
   const existingUser = await userRepository.findByEmail(email)
 
   if (existingUser) {
-    if (!isVerified) {
-      throw new HttpError(
-        'This email is registered, but Google has not verified this address',
-        403,
-        'email_not_verified'
-      )
-    }
-
     if (existingUser.emailVerifiedAt === null) {
       return { user: await claimUnverifiedAccount(existingUser.id, profile.id), isNew: false }
     }
 
     await linkGoogleProvider(existingUser.id, profile.id)
     return { user: existingUser, isNew: false }
-  }
-
-  // An unverified Google email must not create an account: anyone can add any address to a Google account.
-  if (!isVerified) {
-    throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
   }
 
   const created = await withTransaction(async (tx) => {

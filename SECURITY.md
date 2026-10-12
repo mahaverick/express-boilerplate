@@ -141,7 +141,9 @@ minutes and exists only on `/auth/google` and its callback.
 
 - A Google address that Google has not verified never creates an account and
   never links to one (`403 email_not_verified`): anyone can add any address to a
-  Google account.
+  Google account. It is refused before the address is looked up, with the same
+  status, code and message whether or not an account has it, so the answer
+  does not tell whether the address is registered.
 - A verified Google address that matches a verified account links to it.
 - A verified Google address that matches a never-verified account takes it
   over (`claimUnverifiedAccount`): the password and any other Google link are

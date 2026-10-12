@@ -518,6 +518,44 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(user.emailVerifiedAt?.getTime()).toBe(alreadyVerified?.emailVerifiedAt?.getTime())
     })
 
+    it('answers an unverified Google email the same, at the same cost, whether or not the address is registered', async () => {
+      const { getMaintenanceMode } =
+        await import('@/services/maintenance-mode/maintenance-mode-store.service')
+      expect(getMaintenanceMode().mode).toBe('off')
+      const { UserRepository: Users } = await import('@/repositories/user.repository')
+      const registered = await userRepository.create({
+        email: uniqueEmail(),
+        passwordHash: 'not-a-real-hash',
+      })
+      createdIds.push(registered.id)
+      const profiles = {
+        registered: googleProfile({ email: registered.email, emailVerified: false }),
+        unknown: googleProfile({ email: uniqueEmail(), emailVerified: false }),
+      }
+
+      const answers: Record<string, unknown> = {}
+      const emailReads: Record<string, number> = {}
+      for (const [name, profile] of Object.entries(profiles)) {
+        const findByEmail = vi.fn(Users.prototype.findByEmail.bind(userRepository))
+        await withMutatedMethod(Users.prototype, 'findByEmail', findByEmail, async () => {
+          try {
+            await signInWithGoogle(profile)
+            answers[name] = 'signed in'
+          } catch (error) {
+            answers[name] =
+              error instanceof Error
+                ? { type: error.constructor.name, ...error, message: error.message }
+                : error
+          }
+        })
+        emailReads[name] = findByEmail.mock.calls.length
+      }
+
+      expect(answers.registered).toEqual(answers.unknown)
+      expect(answers.unknown).toMatchObject({ statusCode: 403, code: 'email_not_verified' })
+      expect(emailReads.registered).toBe(emailReads.unknown)
+    })
+
     it('rejects linking an unverified Google email to an existing user (account-takeover guard)', async () => {
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
