@@ -6,6 +6,7 @@
  */
 import {
   MAX_NOTIFICATION_PAGE_SIZE,
+  NOTIFICATION_TYPES,
   STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
@@ -113,7 +114,11 @@ export async function getPreferences(userId: string): Promise<PreferenceMatrix> 
  * Upsert the given preference entries in one transaction, so a failure
  * partway leaves none of them written. The schema has already refused a type
  * the caller cannot see, a duplicate type and any disabled email channel (the
- * repository refuses the last again), so the entries are written as given.
+ * repository refuses the last again), so the values are written as given.
+ * The rows are written in `NOTIFICATION_TYPES` order, whatever order the
+ * caller lists them in, so two concurrent updates for one user lock the same
+ * rows in the same order and never wait on each other in a cycle
+ * (ARCHITECTURE.md "Lock order").
  * @param userId - The user.
  * @param preferences - The validated entries (at least one, one per type).
  * @returns The resulting rows, in input order.
@@ -122,10 +127,14 @@ export async function updatePreferences(
   userId: string,
   preferences: UpdatePreferencesInput['preferences']
 ): Promise<NotificationPreference[]> {
+  const lockOrder = NOTIFICATION_TYPES.flatMap((type) =>
+    preferences.filter((entry) => entry.notificationType === type)
+  )
   return db.transaction(async (tx) => {
-    const rows: NotificationPreference[] = []
-    for (const entry of preferences) {
-      rows.push(
+    const rowsByType = new Map<string, NotificationPreference>()
+    for (const entry of lockOrder) {
+      rowsByType.set(
+        entry.notificationType,
         await notificationPreferenceRepository.upsert(
           userId,
           entry.notificationType,
@@ -134,7 +143,7 @@ export async function updatePreferences(
         )
       )
     }
-    return rows
+    return preferences.flatMap((entry) => rowsByType.get(entry.notificationType) ?? [])
   })
 }
 

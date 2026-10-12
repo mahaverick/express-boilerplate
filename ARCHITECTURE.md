@@ -287,7 +287,10 @@ in this order:
    membership `FOR SHARE` (`lockPlatformRole`, through `lockTenantAccess` in
    `tenant-access.service.ts`);
 5. the tenant or settings row a write changes (`lockById` in
-   `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`).
+   `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
+6. a user's notification preference rows, in `NOTIFICATION_TYPES` order
+   (`updatePreferences`, `notification.service.ts`); that transaction locks
+   nothing else (its foreign key takes `FOR KEY SHARE` on the user row).
 
 Two writes take a user row later. Staff writes lock owner rows and platform
 memberships first, then the actor's user row `FOR SHARE`
