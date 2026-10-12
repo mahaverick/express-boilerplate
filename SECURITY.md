@@ -8,12 +8,6 @@ it cites before relying on it. How the pieces fit together is in
 [ARCHITECTURE.md](ARCHITECTURE.md); the database tables are in
 [DATABASE.md](DATABASE.md).
 
-## Reporting a vulnerability
-
-Do not open a public issue for a suspected vulnerability. Contact the
-maintainer named in [CODEOWNERS](.github/CODEOWNERS) with a description and, if you can,
-steps to reproduce it. Expect a first response within a few business days.
-
 This is a boilerplate, not a hosted service. Fixes land on `main` and ship in
 the next release; a project generated from it owns its own patch cadence, and
 `renovate.json` starts that on day one.
@@ -86,8 +80,11 @@ still signs in, and a too-short or too-long login password fails with the same
 
 ### Login: one answer, one cost
 
-`login` (`src/services/auth.service.ts`) runs exactly one bcrypt comparison and
-then one guard. An unknown address, a wrong password, a deactivated account, an
+`login` (`src/services/auth.service.ts`) runs one bcrypt comparison and then
+one guard, whether or not the address has an account. A password over 72 bytes
+skips the comparison as "no match", and a hash that changed since the first read
+is compared again under the lock; neither depends on whether the account
+exists. An unknown address, a wrong password, a deactivated account, an
 account with no password (Google only) and an unverified account all get
 `401 Invalid email or password`. For an unknown address the comparison runs
 against `getDummyHash()`, a hash at the current `BCRYPT_COST`, so the reply
@@ -196,7 +193,9 @@ Every form is `HttpOnly`, and `Secure` when `isCookieSecure` says so
 - **The prefixes stop cookie tossing.** A browser refuses a `__Host-` cookie
   unless it is `Secure`, host-only and on `Path=/`, and a `__Secure-` one unless
   it is `Secure`. Neither can be planted over plain http, and a `__Host-` one
-  cannot be planted by a sibling subdomain. Under `COOKIE_SECURE` the API never
+  cannot be planted by a sibling subdomain. A `__Secure-` one can: any host
+  under `COOKIE_DOMAIN` can set it over HTTPS, since `COOKIE_DOMAIN` already
+  trusts its subdomains. Under `COOKIE_SECURE` the API never
   reads an unprefixed `refreshToken`: redeeming a planted one would sign the
   victim into the planter's session. The cost of `__Host-` is `Path=/`, so the
   browser sends the cookie to every path on the API's origin; a deployment that
@@ -205,27 +204,32 @@ Every form is `HttpOnly`, and `Secure` when `isCookieSecure` says so
   sent, the most recently created one, so a stale cookie from an older
   `COOKIE_DOMAIN` never reaches reuse detection (`readCookie`,
   `src/controllers/auth.controller.ts`).
-- **Signing in again ends the presented session.** Login and the Google
-  callback revoke the session of the refresh cookie the request carries, once
-  the new session is issued, so an overwritten cookie's session does not stay
-  refreshable.
-- **The Google callback sets the cookie `SameSite=Lax`.** The browser reaches
-  the callback by a top-level navigation that Google's cross-site redirect
-  started, and the response redirects on to the frontend's `/auth/callback`; a
-  `Strict` cookie set there is withheld on that redirect
-  (`setOAuthRefreshTokenCookie`). A `Lax` cookie from an earlier Google sign-in
-  also reaches the next callback, which revokes that session; a `Strict` one
-  is withheld from the cross-site hop, so that session is not ended there.
-  `Lax` gives up nothing that matters here: it is still withheld from
-  cross-site `POST`s and subresource requests, the two routes that act on the
-  cookie are `POST`s behind the Origin check (see
-  [Transport and browser](#transport-and-browser)), and the one `GET` that reads
-  it is this callback, which only revokes.
+- **Signing in again ends the presented session, for a password login.** Login
+  revokes the session of the refresh cookie the request carries once the new
+  session is issued, so an overwritten cookie's session does not stay
+  refreshable. The Google callback does the same, but it is reached by a
+  cross-site navigation, which withholds a `Strict` cookie, and every rotation
+  re-sets the cookie `Strict`. So the callback usually sees no cookie, and the
+  session the new cookie overwrites in the browser stays refreshable until it
+  goes unused for `REFRESH_TOKEN_TTL` or reaches `SESSION_ABSOLUTE_TTL`, unless
+  something else ends it.
+- **The Google callback sets the cookie `SameSite=Lax`.** `Lax` costs nothing
+  here. It is still withheld from cross-site `POST`s and from subresource
+  requests. The two routes that act on the cookie are `POST`s behind the Origin
+  check (see [Transport and browser](#transport-and-browser)), and the one `GET`
+  that reads it is this callback, which only revokes. It is also short-lived:
+  the frontend refreshes as soon as it lands, and every rotation re-sets the
+  cookie `Strict`.
 
 `SameSite` assumes the frontend and this API share a registrable domain
 (eTLD+1). A deployment that splits them across registrable domains makes every
 refresh a cross-site `fetch`, which carries neither a `Strict` nor a `Lax`
 cookie, and needs `SameSite=None; Secure` plus a CSRF token.
+
+The OAuth session cookie of the Google round trip takes the same prefix rule:
+`__Host-oauth.sid`, `__Secure-oauth.sid` with `COOKIE_DOMAIN`, or `oauth.sid`
+without `COOKIE_SECURE` (`src/configs/passport.config.ts`). A planted
+`oauth.sid` would bind the victim's callback to the planter's OAuth `state`.
 
 ### Rotation and reuse detection
 
@@ -302,7 +306,8 @@ change or reset commits.
 - A reset, and a Google account claim, first run `revokeAllSessions`
   (`src/services/session.service.ts`) in a transaction of its own that takes the
   same lock and commits before the main transaction starts. It fails closed: if
-  it throws, the reset or claim never writes. If the main transaction then fails,
+  it throws, the reset never stores the new password and the claim never
+  changes the account (the reset token is already spent by then). If the main transaction then fails,
   every session that existed, and the successor of a rotation that was in
   flight, stays revoked. The main transaction revokes again, for a session
   created between the two.
@@ -322,7 +327,9 @@ Verification, password-reset, account-setup and invitation mails carry a link to
 a frontend page, never to this API: the page `POST`s the token, so the token
 never sits in an API request URL that tracing or proxy logs record, and a mail
 scanner that follows links does not spend it (`buildTokenUrl`,
-`src/services/verification.service.ts`). Which frontend a link opens is an enum
+`src/services/verification.service.ts`). The token does sit in the frontend
+page's URL (`?token=`), so the frontend's access logs and its
+`Referrer-Policy` are part of this defence. Which frontend a link opens is an enum
 (`app: 'web' | 'apex'`), never a URL, so a request can only choose between
 `WEB_URL` and `APEX_URL`.
 
@@ -404,12 +411,18 @@ RATE_LIMITED`. The recipient ceiling fails open when Redis does not answer.
 - An `email_messages` row refuses template variables whose key ends in `Url` or
   `Token` (`src/repositories/email-message.repository.ts`), so no stored row
   holds a link or a token.
-- Token mails go out from `MAIL_FROM_TRANSACTIONAL`, which the operator puts on
-  a domain with click tracking off, so no provider redirector sees a valid link.
-  Boot warns outside `local` when it shares `MAIL_FROM`'s domain.
+- Token mails go out from `MAIL_FROM_TRANSACTIONAL`, falling back to
+  `MAIL_FROM` when it is unset. Put it on a domain with click tracking off, or a
+  provider that tracks clicks rewrites every token link through itself. Boot
+  warns outside `local` when it shares `MAIL_FROM`'s domain.
 - The email webhook is public, so each adapter verifies the provider's
   signature over the raw body before reading it (Resend: Svix HMAC-SHA256 with a
   5-minute timestamp tolerance, `src/services/email-webhook-resend.service.ts`).
+  Two limiters guard it: `email-webhook-rejected` counts only failed responses,
+  60 a minute per IP, which caps forged traffic from one address;
+  `email-webhook` counts only accepted ones, 3000 a minute per provider, so
+  unsigned traffic cannot spend the budget a provider's bounce storm needs
+  (`src/routes/email-webhook.routes.ts`).
 - A staff resend never replays a stored mail: it runs the action that sent it,
   which issues a fresh token under that action's own gates. A mail with no such
   action, such as a security notice, cannot be resent
@@ -456,8 +469,11 @@ their role there is their platform role (`src/services/platform.service.ts`).
   neither does serving Apex from its own host. A non-staff caller, or staff
   below the route's role, gets the app's own `404 Not found`, before the JSON
   gate, the step-up check and the limiter, so a refused caller sees no `415` and
-  no `RateLimit-*` headers. Every authenticated `OPTIONS` there gets the same
-  404, so Express's automatic `Allow` answer never lists a route's methods.
+  no `RateLimit-*` headers. `cors` answers an `OPTIONS` with no `Origin`
+  or an allowed one itself, with the same 204 for every path; any other
+  authenticated `OPTIONS` that reaches the platform router gets the same 404
+  (`refusePlatformOptions`). Either way Express's automatic `Allow` answer never
+  lists a route's methods.
 - **In a customer tenant, staff act at their platform role.** With no
   membership there, `resolveTenant` uses the platform role
   (`access: 'platform'`) and audits the visit (`tenant.accessed_by_platform`,
@@ -520,12 +536,14 @@ a user, a tenant, an email or a suppression, each staff step-up, staff visits,
 and throttled staff reads of a timeline, an errors view or a flag evaluation.
 Each action's metadata has a strict schema (`src/constants/audit.constants.ts`);
 invitation entries keep the address's domain, never the address or the token.
-A database trigger makes the table append-only except for the retention purge
-and the owner purges (migrations `0017_retention.sql` and
-`0019_audit_redact.sql`). That guards against a stray statement in application
-code; it is not a privilege boundary, since any role that can run arbitrary SQL
-can set the same transaction settings, so revoke `UPDATE` and `DELETE` on
-`audit_logs` from every role but the app's. A tenant's audit log is readable by
+A `BEFORE UPDATE OR DELETE` trigger refuses every update and delete except
+the retention purge and the owner purges (created in
+`0016_platform_access.sql`, its function extended in `0017_retention.sql` and
+`0019_audit_redact.sql`). `TRUNCATE` is left open on purpose, for test and ops
+resets. The trigger guards against a stray statement in application code; it is
+not a privilege boundary, since any role that can run arbitrary SQL can set the
+same transaction settings or truncate the table, so revoke `UPDATE`, `DELETE`
+and `TRUNCATE` on `audit_logs` from every role but the app's. A tenant's audit log is readable by
 its owners and admins; the platform audit log by platform owners and admins. The
 IP, user agent and request id are stored and never returned.
 
@@ -546,7 +564,10 @@ entries. Each purge is recorded in the platform tenant.
   (`parseBody`, `src/validators/parse.validators.ts`); a failure is a 400 with
   field-level `errors`. Email and name fields are capped at their column widths,
   so an over-long value is a 400, not a Postgres 500. JSON bodies are limited to
-  1 MB and form bodies to 100 KB (`src/app.ts`).
+  1 MB and form bodies to 100 KB (`src/app.ts`). The email webhook and the
+  collect proxy are mounted before those parsers: the webhook reads its raw
+  body up to 256 KB, and the proxy streams bodies to PostHog unread and
+  unbounded.
 - **Free text.** `safeText` (`src/validators/safe-text.validators.ts`) refuses
   control characters, Unicode format characters (bidi marks and overrides,
   zero-width spaces and the like) and line and paragraph separators in every
@@ -555,17 +576,21 @@ entries. Each purge is recorded in the platform tenant.
   are allowed inside a word. A name is still not an identifier: it accepts
   cross-script lookalikes, so identify an account by its id or verified address.
 - **The error envelope.** `errorHandler` (`src/middlewares/error.middleware.ts`)
-  answers every 5xx with `Internal server error` and an `errorId`, whatever the
-  error says. Below 500, an `HttpError`'s message is shown, since it is written
+  answers every 5xx but a maintenance refusal with `Internal server error` and
+  an `errorId`, whatever the error says. A maintenance `503` shows the owner's
+  message and `Retry-After`, and carries no `errorId`. Below 500, an `HttpError`'s message is shown, since it is written
   for the client; any other error's message only when it is marked for exposure,
   else the status's reason phrase. `errorId` grants nothing: it names a log line
   and an error event.
-- **Logs never carry bound query values.** A failed query's error message
-  embeds its bound parameters, which for a failed `insert into users` are the
-  address and the bcrypt hash. The logger replaces every query error, through a
-  five-deep `cause` chain, with its SQL text, driver code, parameter count and
-  stack frames (`redactedForLog`, `src/errors/postgres-errors.ts`;
-  `src/services/logger.service.ts`).
+- **Logged errors lose their bound query values.** A failed query's error
+  message embeds its bound parameters, which for a failed `insert into users`
+  are the address and the bcrypt hash. The logger replaces every query error
+  logged as an `Error` field, through a five-deep `cause` chain, with its SQL
+  text, driver code, parameter count and stack frames (`redactedForLog`,
+  `src/errors/postgres-errors.ts`; `src/services/logger.service.ts`). It cannot
+  redact what it does not see as an error: a query-shaped value that is not an
+  `Error` needs `redactedForLog` at the call site, and a logged `error.message`
+  string is written as it is, so log the error object.
 - **No stack traces to clients.** Boot refuses `NODE_ENV` other than
   `production` outside `local`, since Express's own handler sends stack traces
   otherwise (`src/configs/env-consistency.config.ts`).
@@ -676,9 +701,10 @@ unread (`src/routes/analytics-proxy.routes.ts`).
 ### Server events
 
 - **Ids, not names.** The event builder holds every PII rule
-  (`src/services/analytics/analytics-event-builder.service.ts`): no names, full
-  addresses, staff reasons or email contents go into an event; an address's
-  domain may. A user id `distinct_id` and a `$session_id` are pseudonymous, not
+  (`src/services/analytics/analytics-event-builder.service.ts`): no person names,
+  full addresses, staff reasons or email contents go into an event; an
+  address's domain may. A tenant's name goes into the tenant group's properties
+  (`$groupidentify`). A user id `distinct_id` and a `$session_id` are pseudonymous, not
   anonymous.
 - **The opt-out is the browser's.** `analyticsOptOut` tells the frontends to
   stop capturing; server events do not read it (`src/presenters/user.presenter.ts`).
@@ -703,7 +729,8 @@ not through the outbox, since errors often arrive while the database is down
   tenant. Never request bodies, headers, query strings or cookies, a Postgres
   error's `detail`, `query`, `parameters` or `where`, a failed query's bound
   values, a job's data, or an `HttpError`'s `errors`. A thrown non-`Error`
-  contributes its class name, never its keys or values
+  contributes its class name, or the first `Error` it holds (whose message is
+  then sent, scrubbed), never its own keys or values
   (`src/services/errors/error-event.service.ts`).
 - **What is not reported.** Any 4xx, a client that went away, an `HttpError`
   5xx with no `cause`, and a timeline that PostHog could not answer.
@@ -795,9 +822,13 @@ everything but health, the email webhook, the collect proxy, the public status,
 and `GET /profile`. On the customer routes Apex calls, the
 refusal is decided in `requireAuth`, which lets platform staff through.
 
-- In `full`, password login and the Google callback refuse a user with no
-  platform role (`503 MAINTENANCE_MODE`) after the credentials pass and before
-  anything is written (`assertSignInAllowed`).
+- In `full`, password login refuses a user with no platform role
+  (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is
+  written (`assertSignInAllowed`). The Google callback refuses the same user
+  only after `resolveGoogleUser` has run, so a non-staff Google sign-in in
+  `full` can create an account, link a Google identity or claim an unverified
+  account before it gets the 503 (`completeGoogleSignIn`,
+  `src/services/google-auth.service.ts`); see the gaps table.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
   limiter (10 a minute), and, to switch on or escalate, a `confirm` equal to
   `APP_ENV`. A stale `expectedVersion` answers 409. The change and its audit
@@ -819,6 +850,13 @@ pause.
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                         |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                   |
+| Google sign-in writes before the maintenance refusal  | **Gap**             | In `full`, a non-staff Google sign-in can create, link or claim an account before `assertSignInAllowed` refuses it with a 503.                 |
 | HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                             |
 | Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                   |
 | OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role to an existing verified user.                     |
+
+## Reporting a vulnerability
+
+Report a security problem privately through GitHub's private vulnerability
+reporting on this repository: open the **Security** tab and choose **Report a
+vulnerability**. Do not open a public issue for a security problem.
