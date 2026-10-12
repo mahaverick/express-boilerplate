@@ -182,6 +182,17 @@ describe('POST /api/v1/auth/verify-email', () => {
     expect(response.status).toBe(400)
   })
 
+  it('answers a used password_reset token 400 even when its account is verified', async () => {
+    const { user } = await seedUnverifiedUser()
+    const reset = await issueToken(user.id, 'password_reset', 60_000)
+    await sql`update user_tokens set revoked_at = now(), consumed_at = now() where user_id = ${user.id} and purpose = 'password_reset'`
+    await sql`update users set email_verified_at = now() where id = ${user.id}`
+
+    const response = await verify(reset.raw, VALID_PASSWORD)
+
+    expect(response.status).toBe(400)
+  })
+
   it('answers an unknown token 400 with the old message', async () => {
     const response = await verify('deadbeef', VALID_PASSWORD)
 
