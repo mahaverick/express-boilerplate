@@ -100,8 +100,8 @@ const NO_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000'
 /**
  * Refuse a sign-in in `full` unless the user is staff (holds any platform
  * role). Password login calls it once the credentials pass; the Google
- * callback calls it on a read-only account lookup before anything is written,
- * and again once the account is resolved. Both call it before a session is
+ * callback, in `full` only, calls it on a read-only account lookup before
+ * anything is written, and in every mode again once the account is resolved. Both call it before a session is
  * created. In any other mode, or while the mode is unknown, it allows the
  * sign-in without reading the user's role.
  * @param userId - The user signing in; undefined for a sign-in that reaches no account, which cannot be staff.
