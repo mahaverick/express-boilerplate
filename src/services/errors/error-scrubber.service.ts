@@ -243,6 +243,25 @@ const KEPT_VALUE = [
 const SCHEMED_PLACEHOLDER_VALUE = String.raw`${AUTH_SCHEMES}[ \t]+${PLACEHOLDER}(?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?`
 
 /**
+ * One `key=value` pair after a replaced scheme credential, joined by `,` or `;`
+ * (`Bearer [token],refresh=xyz`): another credential or cookie may sit there.
+ * The value may hold a placeholder a key rule wrote (`,password=[redacted]`).
+ */
+const SCHEME_TAIL_PAIR = String.raw`[,;][ \t]*[\w.-]+=(?:${PLACEHOLDER}|[^\s"'\\,;&})\]])*`
+
+/**
+ * The `Bearer [token]` or `Basic [token]` an earlier rule wrote, with the pairs
+ * joined to it. Group 1 is kept; the pairs become `,[redacted]`. It runs after
+ * the key rules: a header-valued key (`, cookie=OAuth abc`) or an array value
+ * is redacted past the first whitespace or `]`, where this rule would stop, so
+ * taking its key first would leave the rest of its value in view.
+ */
+const SCHEME_TAIL_PATTERN = new RegExp(
+  String.raw`\b((?:Bearer|[Bb]asic|BASIC) \[token\])(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
+  'g'
+)
+
+/**
  * An array value, to its first `]` on the line (`["hunter2", "x"]`).
  */
 const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
@@ -607,16 +626,18 @@ const EMAIL_PATTERN = new RegExp(
  * a scheme of at most 32 characters and no `//` (`mailto:[email]?subject=…`,
  * `mailto:[email],[email]?cc=…`, `xmpp:[email]?message;body=…`), or straight
  * after `mailto:` (`mailto:?to=…`); addresses may be joined by `,` or `;`,
- * with whitespace after. The query rule takes no word after `@`, so
- * this query is left to this rule, which runs after every other rule but the
- * last key redaction, so a phone number, IP address or secret in the query is
- * replaced whole first. Group 1, the scheme and the addresses, is kept and
- * the rest of the query, up to whitespace, a quote, `<` or `>`, becomes
- * `?[query]`, as the query rule writes it. A bare address before `?`
- * (`jane@localhost?x=1`) is not a URL, and its query is kept.
+ * with whitespace after, or by an encoded `%2C` or `%3B` that the email rule
+ * already took into the next address (`mailto:[email][email]?…`). The query
+ * rule takes no word after `@`, so this query is left to this rule, which
+ * runs after every other rule but the last key redaction, so a phone number,
+ * IP address or secret in the query is replaced whole first. Group 1, the
+ * scheme and the addresses, is kept and the rest of the query, up to
+ * whitespace, a quote, `<` or `>`, becomes `?[query]`, as the query rule
+ * writes it. A bare address before `?` (`jane@localhost?x=1`) is not a URL,
+ * and its query is kept.
  */
 const EMAIL_QUERY_PATTERN =
-  /(?<![a-z\d+.-])((?:mailto:(?:\[email\])?|[a-z][a-z\d+.-]{0,31}:\[email\])(?:[,;]\s*\[email\])*)\?[^\s"'<>]+/gi
+  /(?<![a-z\d+.-])((?:mailto:(?:\[email\])?|[a-z][a-z\d+.-]{0,31}:\[email\])(?:(?:[,;]\s*)?\[email\])*)\?[^\s"'<>]+/gi
 
 /**
  * An email address whose unquoted local part comes straight after a `/`,
@@ -1213,6 +1234,7 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
     redactRunningThrough(scrub, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
   const keyRanges = tokenKeyRanges(scrub, innerKeys)
   rejoinQueries(scrub)
+  apply(scrub, SCHEME_TAIL_PATTERN, afterGroup(',[redacted]'))
   apply(scrub, JWT_PATTERN, whole('[jwt]'))
   apply(scrub, SLASHED_SECRET_EMAIL_PATTERN, (match) =>
     isSlashedSecret(`${match[1] ?? ''}${LEADING_BASE64_PATTERN.exec(match[2] ?? '')?.[0] ?? ''}`)
@@ -1296,7 +1318,10 @@ const PASSES_MAX = 3
  *    value step 3 already replaced (`AUTH_HEADER_PATTERN`). A value that takes a
  *    later such key runs on to the end of that key's value
  *    (`redactRunningThrough`). A query or fragment that a replaced value
- *    joins to its path is then replaced as in step 2 (`rejoinQueries`).
+ *    joins to its path is then replaced as in step 2 (`rejoinQueries`). Any
+ *    `,key=value` or `;key=value` pairs still glued to a `Bearer [token]` or
+ *    `Basic [token]` become `,[redacted]` (`SCHEME_TAIL_PATTERN`), while prose
+ *    after a comma is kept.
  * 5. A JWT becomes `[jwt]`; an email address (`EMAIL_PATTERN`) becomes
  *    `[email]`, together with a secret-looking base64 run joined to its local
  *    part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`) or forming its domain

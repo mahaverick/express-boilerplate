@@ -2338,5 +2338,70 @@
     "rule": "secret",
     "input": "qRpWs96At3aj/5WeV4V+HcIgMI+037584/0651cb/52bdf191/b1034bdf8834d544d/38048b9997db+b27ad5b15c559cb98fba8b025ef68d3b",
     "expected": "[secret][secret]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,refresh=xyz",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc; foo=bar; baz=qux",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\"authorization\":\"Bearer abc,refresh=xyz\",\"x\":1}",
+    "expected": "{\"authorization\":\"Bearer [token],[redacted]\",\"x\":1}"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc, retry later",
+    "expected": "Authorization: Bearer [token], retry later"
+  },
+  {
+    "rule": "basic",
+    "input": "Authorization: Basic dXNlcjpwYXNzd29yZA==,refresh=xyz",
+    "expected": "Authorization: Basic [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "authorization: basic dXNlcjpwYXNzd29yZA==;refresh=xyz",
+    "expected": "authorization: basic [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3, cookie=OAuth zqSECRET1",
+    "expected": "Bearer [token],[redacted] [redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,authorization=Digest zqSECRET1",
+    "expected": "Bearer [token],[redacted] [redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,api_key=[\"zqSECRET1\"]",
+    "expected": "Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,password=a,refresh=zqSECRET1",
+    "expected": "Bearer [token],[redacted]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:a@x.com%2Cb@y.com?body=secret",
+    "expected": "mailto:[email][email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:a@x.com%3Bb@y.com?body=secret",
+    "expected": "mailto:[email][email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:a@x.com%2C%20b@y.com?cc=c@z.org&body=s",
+    "expected": "mailto:[email][email]?[query]"
   }
 ]

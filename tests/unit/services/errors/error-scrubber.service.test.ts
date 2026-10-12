@@ -185,6 +185,25 @@ describe('scrubText', () => {
       'a value running through repeated keys',
       `token: ${'a pwd: '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
+    [
+      'a Bearer credential before repeated pairs with no =',
+      `Bearer abc${',k.k-k'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a Basic credential before repeated empty pairs',
+      `Basic dXNlcjpwYXNzd29yZA==${'; k='.repeat(4 * ERROR_VALUE_MAX)}`.slice(
+        0,
+        4 * ERROR_VALUE_MAX - 1
+      ),
+    ],
+    [
+      'a Bearer credential before a pair of repeated cut placeholders',
+      `Bearer abc,k=${'[redacte'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a mailto address before repeated encoded-comma addresses and no query',
+      `mailto:a@x.com${'%2Cb@y.com'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
   ])('worst-case 4 KB shapes the timing test does not cover: %s', (_label, shape) => {
     // A trailing space keeps the whole shape inside the scan cap's cut.
     const text = `${shape} `

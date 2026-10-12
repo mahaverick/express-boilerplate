@@ -785,9 +785,10 @@ not through the outbox, since errors often arrive while the database is down
 - **Everything sent is scrubbed first.** `scrubText`
   (`src/services/errors/error-scrubber.service.ts`) removes addresses, IPs,
   `+`-prefixed phone numbers, JWTs and vendor keys, URL logins, query strings
-  and fragments, Authorization and Cookie values, secret-named `key=value`
-  pairs, OAuth codes, the token segment of a link path, and long hex and base64
-  runs, then caps each value at 1024 characters. The span that records the
+  and fragments, Authorization and Cookie values, Bearer and Basic credentials
+  with any `,key=value` or `;key=value` pairs glued to them, secret-named
+  `key=value` pairs, OAuth codes, the token segment of a link path, and long
+  hex and base64 runs, then caps each value at 1024 characters. The span that records the
   exception gets the same scrubbed text, and so does every log record forwarded
   to Slack. The react and apex frontends hold the same file byte for byte
   (`react-boilerplate/src/observability/errors/scrub.ts`), and all three test it
