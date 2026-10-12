@@ -97,7 +97,7 @@ describe('updateTenantSchema free-text fields', () => {
   })
 
   it('null still clears description (safeText does not run against null)', () => {
-    // eslint-disable-next-line unicorn/no-null -- proving the PATCH "clear" contract survives the new refinement
+    // eslint-disable-next-line unicorn/no-null -- the PATCH "clear" contract: null clears the description, and the safeText refinement lets it through
     const result = updateTenantSchema.safeParse({ description: null })
     expect(result.success).toBe(true)
   })
