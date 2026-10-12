@@ -1260,7 +1260,8 @@ the frontends' source-map settings (`POSTHOG_SOURCEMAP_PROJECTS`,
 upload source maps; this Dockerfile uses only `GIT_SHA`. `ci.yml`'s concurrency group
 is keyed on `github.event_name`, because under `workflow_call`
 `github.workflow` is the caller's name. CI's `docker` job builds the image with
-a known `GIT_SHA` and checks that `/health` reports it.
+a known `GIT_SHA` and checks that `/health` reports it and that the process
+runs with `--enable-source-maps`.
 
 `release.yml` merges its release PR with `--auto`, falling back to a direct
 merge. Only a ruleset on `main` that requires the checks `lint`, `test`,

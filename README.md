@@ -490,9 +490,8 @@ it, change the things that still say "express-boilerplate":
 - [ ] **`.github/CODEOWNERS`**: it names this repository's maintainer.
 - [ ] **`SECURITY.md`**: the reporting section, and the list of what is not
       implemented as you implement it.
-- [ ] **`.github/domain-terms.txt`**: placeholder terms only. Replace them with
-      your own never-commit vocabulary, or delete the file and its CI step in
-      `.github/workflows/ci.yml`.
+- [ ] **`.github/domain-terms.txt`**: see
+      [CONTRIBUTING.md](CONTRIBUTING.md#ci) for what to put in it.
 - [ ] **`LICENSE`**: a proprietary licence naming Mahaverick. Replace it with
       your own terms, and set `license` in `package.json` to match.
 

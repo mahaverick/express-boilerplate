@@ -417,7 +417,7 @@ as described so it does not build them a second time under the lock, then run
   inserts its one row. Swapping `audit_logs_target_type_check` drops the
   constraint, which takes an `ACCESS EXCLUSIVE` lock on `audit_logs`, and
   re-adds it, which scans every audit row while the lock is held; every
-  audited write waits. The table's foreign key to `users` takes
+  audited write waits. `maintenance_mode_state`'s foreign key (`changed_by`) to `users` takes
   `SHARE ROW EXCLUSIVE` on `users`, so writes to a user row wait; reads do
   not. There is no manual step, because the batch is one transaction and the
   validation scan runs under the lock whatever order the statements take.
@@ -484,11 +484,14 @@ const batch = tx
   .select({ id: model.id })
   .from(model)
   .where(...)
-  .orderBy(model.id)
+  .orderBy(stableKey)
   .limit(limit)
   .for('update', { skipLocked: true })
 await tx.delete(model).where(sql`${model.id} = any(array(${batch}))`)
 ```
+
+Each site orders by a stable key (the id, or the time column and then the id)
+so batches take the oldest rows first.
 
 The shape bounds the batch. With `id in (select ... limit n for update skip
 locked)` the planner may choose a nested loop and rescan the subquery for every

@@ -3,8 +3,8 @@
 ## Setup
 
 Follow the [README](README.md) quick start first. Running tests locally needs
-the compose stack up and a working `.env`: `tests/integration/**` needs
-Postgres and Redis. `tests/unit/**` needs neither, but only under
+the compose stack up: `tests/integration/**` needs Postgres and Redis. The
+suite loads `.env.test.local` and then `.env.test`, never `.env`. `tests/unit/**` needs neither, but only under
 `pnpm test:unit`; `pnpm test`'s globalSetup provisions the test databases
 before any test runs, so it needs the stack even for unit tests
 ([DATABASE.md](DATABASE.md#the-test-database)).
@@ -35,7 +35,7 @@ not reach for `--no-verify` on a routine commit.
 
 - **`pre-commit`** checks that the lockfile is not stale, runs `lint-staged`
   (eslint --fix and prettier on staged `src/` and `tests/` TypeScript, prettier
-  on staged JSON and Markdown), runs `vitest run --changed HEAD` against
+  on staged JSON, JSONC and Markdown), runs `vitest run --changed HEAD` against
   `vitest.unit.config.ts`, and regenerates and stages `.env.example` when
   `env.config.ts` is staged. The unit config excludes `tests/integration/**`
   and skips the database setup, so the hook runs with Docker down: a hook that
@@ -51,7 +51,7 @@ not reach for `--no-verify` on a routine commit.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`type(scope): subject`), enforced by `@commitlint/config-conventional` in the
-`commit-msg` hook. `commitlint.config.mjs` turns the body line-length rule off,
+`commit-msg` hook. `commitlint.config.js` turns the body line-length rule off,
 so a long `BREAKING CHANGE:` footer passes. Common types: `feat`, `fix`,
 `docs`, `chore`, `refactor`, `test`, `ci`.
 
@@ -61,7 +61,8 @@ version. The `pr-title` workflow runs commitlint over the title, so a PR title
 must be a conventional commit too.
 
 **A breaking change puts its migration text in the PR body, inside a commit
-override block.** A squash merge here commits the PR title and drops the PR
+override block.** The repository's squash-merge setting (a GitHub setting to confirm, not
+something in the repo files) commits the PR title and drops the PR
 description, so a `BREAKING CHANGE:` footer written in the description never
 reaches the commit, and the release notes carry the `!` but no migration text.
 release-please reads the merged PR's body, not only the commit, and uses the
@@ -158,9 +159,8 @@ that makes them required, and what runs after they pass on `main`, are in
 - A check that `.env.example` matches what `pnpm env:example` generates (step 2
   above).
 
-**`docker`** builds the production image without pushing it, runs it, and
-checks that the process started with `--enable-source-maps` and that `/health`
-reports the `GIT_SHA` build argument as its release.
+**`docker`** builds the production image without pushing it and runs it; what
+it checks is in [ARCHITECTURE.md](ARCHITECTURE.md#deploying).
 
 Two more workflows run beside it:
 
@@ -172,7 +172,8 @@ Two more workflows run beside it:
 ## Secrets
 
 Never commit a real secret, even a test one that resembles a production value.
-`.env`, `.env.local` and any `.env.*.local` are git-ignored. `.env.test` is
+`.env`, `.env.local`, `.env.development.local`, `.env.test.local` and
+`.env.production.local` are git-ignored; other `.env.*.local` names are not. `.env.test` is
 committed on purpose: every value in it is a fixture, and it is its own
 example, so do not add a copy beside it.
 
@@ -199,8 +200,9 @@ commits cut a release:
 events `GITHUB_TOKEN` creates start no workflow: its PR would get no CI and its
 tag no promotion.
 
-Every PR merges by squash with the PR title as the commit subject, and the PR
-description is not carried into the commit. A PR that needs release notes
+Every PR merges by squash with the PR title as the commit subject; the
+repository's squash setting drops the PR description, as under
+[Commits](#commits). A PR that needs release notes
 beyond its title uses the override block under [Commits](#commits).
 
 ## Dependency policy
@@ -289,7 +291,7 @@ in Apex. The rules behind them are in
   `src/validators/tenant.validators.ts`). List it by name in the
   `user.updated` or `tenant.updated` audit metadata.
 - **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES`
-  (`src/constants/tenant.constants.ts`) and generate the migration, decide what
+  (`src/constants/tenant.constants.ts`), decide what
   `statesFor` (`src/constants/platform.constants.ts`) lists by default, give it
   a transition in `src/services/platform-tenant.service.ts` and an audit action,
   and decide whether `resolveTenant` and invitations treat it like
@@ -299,9 +301,9 @@ in Apex. The rules behind them are in
   `requireJsonContentType`, `requireRecentAuth()` when it is destructive, then
   the shared write limiter, and a body with `reason` (`reasonBodySchema`). The
   service runs one transaction that re-reads the actor's role under lock,
-  writes, and records an `AUDIT_ACTIONS` entry. Add its row to
-  `tests/integration/api/platform-route-gates.test.ts` and mirror the action in
-  `apex-boilerplate/src/constants/audit-actions.ts`.
+  writes, and records an `AUDIT_ACTIONS` entry. The route-gates row and the
+  audit-action mirror it needs are under
+  [Extending Apex](ARCHITECTURE.md#extending-apex).
 - **An onboarding step.** Add it to `ONBOARDING_STEPS`
   (`src/constants/onboarding.constants.ts`). An `auto` step needs a
   domain-event trigger or a direct `completeOnboardingStep` call.
