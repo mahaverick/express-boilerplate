@@ -794,12 +794,14 @@ not through the outbox, since errors often arrive while the database is down
   frontends hold the same file byte for byte
   (`react-boilerplate/src/observability/errors/scrub.ts`), and all three test it
   against `tests/fixtures/error-scrub-vectors.json`. The file's own comments
-  list what each rule catches and what it misses. Known gaps: a `Bearer`
-  glued to a letter from `g` to `z` (`xBearer abc`) is not taken, nor is a
-  fully URL-encoded header (`Bearer%20abc%2Crefresh%3Dxyz`), and pairs after
-  a credential that a secret key's value took (`token=Bearer abc,refresh=xyz`)
-  are kept. Regex scrubbing is best-effort: keep secrets and personal data
-  out of error messages.
+  list what each rule catches and what it misses. Known gaps: a `Bearer` or
+  `Basic` glued to a letter from `g` to `z` or a `_` (`xBearer abc`,
+  `_Bearer abc`) is not taken, nor is a fully URL-encoded header
+  (`Bearer%20abc%2Crefresh%3Dxyz`); pairs after a credential that a secret
+  key's value took (`token=Bearer abc,refresh=xyz`) are kept, and so is a
+  quoted pair value glued to more text or split by a line break. Regex
+  scrubbing is best-effort: keep secrets and personal data out of error
+  messages.
 - **`$exception` events are signed too.** The staff Errors views verify the most
   recent event of each issue and scrub its type and message again, because a
   forged browser event can carry anything

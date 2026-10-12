@@ -255,17 +255,20 @@ const SCHEME_PLACEHOLDER = String.raw`(?:Bearer|[Bb][Aa][Ss][Ii][Cc]) \[token\]`
  * One `key=value` pair after a replaced scheme credential, joined by `,` or `;`
  * with whitespace, line breaks included, on either side
  * (`Bearer [token],refresh=xyz`): another credential or cookie may sit there.
- * The `=` may be URL-encoded (`%3D`). The value is a quoted string that ends
- * at whitespace, `,`, `;` or the end of the text, or else an unquoted run that
- * may hold a placeholder a key rule wrote (`,password=[redacted]`) and stops
- * before another scheme placeholder, so that credential starts its own match.
+ * The `=` may be URL-encoded (`%3D`). The value is a JSON-escaped quoted
+ * string (`\"…\"`) closed before whitespace, `,`, `;`, a quote, a backslash
+ * or the end of the text; a quoted string closed before whitespace, `,`, `;`
+ * or the end; a quoted string left open to the end of its line; or else an
+ * unquoted run that may hold a placeholder a key rule wrote
+ * (`,password=[redacted]`) and stops before another scheme placeholder, so
+ * that credential starts its own match.
  */
-const SCHEME_TAIL_PAIR = String.raw`\s*[,;]\s*[\w.-]+(?:=|%3[Dd])(?:"[^"\\\n]*"(?=[\s,;]|$)|'[^'\\\n]*'(?=[\s,;]|$)|(?:${PLACEHOLDER}|(?!${SCHEME_PLACEHOLDER})[^\s"'\\,;&})\]])*)`
+const SCHEME_TAIL_PAIR = String.raw`\s*[,;]\s*[\w.-]+(?:=|%3[Dd])(?:\\"[^"\\\n]*\\"(?=[\s,;"\\]|$)|"[^"\\\n]*"(?=[\s,;]|$)|"[^"\\\n]*(?=\n|$)|'[^'\\\n]*'(?=[\s,;]|$)|(?:${PLACEHOLDER}|(?!${SCHEME_PLACEHOLDER})[^\s"'\\,;&})\]])*)`
 
 /**
  * The `Bearer [token]` or `Basic [token]` an earlier rule wrote, with the pairs
- * joined to it. Group 1 is kept; the pairs become `[redacted]` after the
- * first pair's own `,` or `;`. It runs
+ * joined to it. Group 1, and any whitespace before the first pair's own `,`
+ * or `;`, is kept; the pairs become `[redacted]` after that separator. It runs
  * after every other rule but the last key redaction. A header-valued key
  * (`, cookie=OAuth abc`) or an array value is redacted past the first
  * whitespace or `]`, where this rule stops, and a phone number, address or
@@ -275,9 +278,11 @@ const SCHEME_TAIL_PAIR = String.raw`\s*[,;]\s*[\w.-]+(?:=|%3[Dd])(?:"[^"\\\n]*"(
  * into a placeholder does not change whether it matches. It misses a pair
  * whose credential a secret key's value already took
  * (`token=Bearer abc,refresh=xyz` keeps `,refresh=xyz`), a quote inside an
- * unquoted value (`,a=b"x"` keeps `"x"`), a credential the Bearer or Basic
- * rule does not take (`xBearer abc`, glued to a letter from `g` to `z`), and a
- * fully URL-encoded header (`Bearer%20abc%2Crefresh%3Dxyz`).
+ * unquoted value (`,a=b"x"` keeps `"x"`), a quoted value glued to more text
+ * or split by a line break (`,a=""x`, `,a="x\ny"`), a credential the Bearer
+ * or Basic rule does not take (`xBearer abc`, `_Bearer abc`, `gBasic …`: a
+ * scheme word glued to a letter from `g` to `z` or a `_`), and a fully
+ * URL-encoded header (`Bearer%20abc%2Crefresh%3Dxyz`).
  */
 const SCHEME_TAIL_PATTERN = new RegExp(
   `(${SCHEME_PLACEHOLDER})(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
@@ -725,12 +730,14 @@ const IPV6_PATTERN =
 /**
  * The head of an IPv6 address whose last group an earlier rule took into a
  * `[secret]` or `[email]` (`2001:db8::8a2e:370:[secret]`, where an AWS-shaped
- * run took `7334/…`): colon-joined hex groups, or bare colons, that start
- * after neither a word character nor a `:` and end in the `:` before the
- * placeholder. `IPV6_PATTERN` refuses an address followed by `[`, so the
- * head would stay in view.
+ * run took `7334/…`): three to eight colon-joined hex groups, or groups
+ * that hold a `::`, that start after neither a word character nor a `:` and
+ * end in the `:` before the placeholder. So two groups with no `::`, such as
+ * a time or a port pair (`80:443:[email]`), are kept. `IPV6_PATTERN` refuses
+ * an address followed by `[`, so the head would stay in view.
  */
-const IPV6_HEAD_PATTERN = /(?<![\w:])(?:[\dA-Fa-f]{1,4}:|:){2,8}(?=\[(?:secret|email)\])/g
+const IPV6_HEAD_PATTERN =
+  /(?<![\w:])(?:(?:[\dA-Fa-f]{1,4}:){3,8}|(?:(?:[\dA-Fa-f]{1,4}:){1,7}:|::)(?:[\dA-Fa-f]{1,4}:){0,6})(?=\[(?:secret|email)\])/g
 
 /**
  * An international phone number: `+`, then 8 to 15 digits, single spaces,
@@ -1290,10 +1297,12 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
   )
   apply(scrub, IPV6_HEAD_PATTERN, whole('[ip]'))
   apply(scrub, EMAIL_QUERY_PATTERN, afterGroup('?[query]'))
-  apply(scrub, SCHEME_TAIL_PATTERN, (match) => ({
-    offset: (match[1] ?? '').length,
-    text: `${/[,;]/.exec(match[2] ?? '')?.[0] ?? ','}[redacted]`,
-  }))
+  apply(scrub, SCHEME_TAIL_PATTERN, (match) => {
+    // The replacement starts at the first separator, so whitespace or a line break before it is kept.
+    const pairs = match[2] ?? ''
+    const at = Math.max(0, pairs.search(/[,;]/))
+    return { offset: (match[1] ?? '').length + at, text: `${pairs.charAt(at)}[redacted]` }
+  })
   redactRanges(scrub, keyRanges)
   return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
 }

@@ -2442,7 +2442,7 @@
   {
     "rule": "bearer",
     "input": "Authorization: Bearer abc ,a=zqSECRET1",
-    "expected": "Authorization: Bearer [token],[redacted]"
+    "expected": "Authorization: Bearer [token] ,[redacted]"
   },
   {
     "rule": "bearer",
@@ -2463,6 +2463,31 @@
     "rule": "ip",
     "input": "/=2001:db8::8a2e:370:7334/X6ozNXWURAKk4WsxkrBQXXkhWOctoOHUeD9@xU0kDkZEgQQQDQCItaAjVZOfrMRp.com",
     "expected": "/=[ip][email]"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\"h\":\"Bearer abc,refresh=\\\"zqSECRET1\\\"\"}",
+    "expected": "{\"h\":\"Bearer [token],[redacted]\"}"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\\\"h\\\":\\\"Bearer abc,a=\\\",\\\"x\\\":1}",
+    "expected": "{\\\"h\\\":\\\"Bearer [token],[redacted]\\\",\\\"x\\\":1}"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer abc,refresh=\"zqSECRET1\nnext line",
+    "expected": "Bearer [token],[redacted]\nnext line"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer abc\n, retry=later is prose",
+    "expected": "Bearer [token]\n,[redacted] is prose"
+  },
+  {
+    "rule": "ip",
+    "input": "ports 80:443:jane@example.com",
+    "expected": "ports 80:443:[email]"
   },
   {
     "rule": "email",
