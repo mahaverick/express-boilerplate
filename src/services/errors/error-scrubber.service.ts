@@ -816,7 +816,8 @@ function scanned(value: string): string {
 /**
  * Cut a text to `SCRUB_VALUE_MAX` characters, the marker included.
  * @param value - The scrubbed text.
- * @param wasCut - Whether `scanned` already dropped part of the input.
+ * @param wasCut - Whether `scanned` dropped part of the input or of a text a
+ *   pass wrote.
  * @returns The text, ending in `…[truncated]` when anything was dropped.
  */
 function capped(value: string, wasCut: boolean): string {
@@ -1201,8 +1202,8 @@ function redactRanges(scrub: Scrub, ranges: readonly [number, number][]): void {
 /**
  * Every rule once, in order, then the values of keys found inside
  * replacements.
- * @param input - The scanned text (`scanned`), or the text the previous pass
- *   wrote.
+ * @param input - The scanned text (`scanned`) of the input or of the text
+ *   the previous pass wrote.
  * @returns The scrubbed text, and whether a key inside a replacement was found.
  */
 function scrubOnce(input: string): { text: string; keyInToken: boolean } {
@@ -1342,7 +1343,9 @@ const PASSES_MAX = 3
  *    becomes `[redacted]`. When there is one, the rules run again over the
  *    result, at most `PASSES_MAX` times in all.
  * 8. The result is cut to `SCRUB_VALUE_MAX` characters, ending in
- *    `…[truncated]`; only the first `SCAN_MAX` characters are scanned.
+ *    `…[truncated]`; every pass scans only the first `SCAN_MAX` characters
+ *    of its input (`scanned`), the later passes included, since a pass can
+ *    lengthen the text.
  *
  * A key-named word is replaced even in prose (`Missing token: please log in`
  * becomes `Missing token: [redacted]`): the rule gives up some readable text
@@ -1364,12 +1367,16 @@ const PASSES_MAX = 3
 export function scrubText(value: string): string {
   const input = scanned(value)
   let pass = scrubOnce(input)
+  let wasCut = input.length < value.length
   if (pass.keyInToken) {
     for (let count = 1; count < PASSES_MAX; count += 1) {
-      const next = scrubOnce(pass.text)
+      // A pass can lengthen the text (`token=a` becomes `token=[redacted]`), so each pass's input is cut to SCAN_MAX again.
+      const rescanned = scanned(pass.text)
+      wasCut ||= rescanned.length < pass.text.length
+      const next = scrubOnce(rescanned)
       if (next.text === pass.text) break
       pass = next
     }
   }
-  return capped(pass.text, input.length < value.length)
+  return capped(pass.text, wasCut)
 }

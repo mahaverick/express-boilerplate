@@ -214,6 +214,19 @@ describe('scrubText', () => {
     expect(performance.now() - started).toBeLessThan(2000)
   })
 
+  it('keeps a text that every pass lengthens under the cap', () => {
+    const scrubbed = scrubText('token=a\n'.repeat(512))
+    expect(scrubbed.length).toBeLessThanOrEqual(ERROR_VALUE_MAX)
+    expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)
+  })
+
+  it('scans only SCAN_MAX characters of a later pass, and marks what that cut', () => {
+    // The swallowed key takes a second pass; the first pass doubles the run of pairs past 4 x ERROR_VALUE_MAX, and the run has no whitespace, so the second pass's scan keeps only the text before it.
+    const text = `/reset/abcpassword="zqS7hunter2" ${'token=a,'.repeat(505)}`
+    expect(text.length).toBeLessThanOrEqual(4 * ERROR_VALUE_MAX)
+    expect(scrubText(text)).toBe(`/reset/[token]"[redacted]" ${TRUNCATION_MARKER}`)
+  })
+
   it('scrubs a secret that appears after replacements shortened the text', () => {
     const jwt = 'eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl'
     expect(scrubText(`${jwt} jane@example.com`)).toBe('[jwt] [email]')
