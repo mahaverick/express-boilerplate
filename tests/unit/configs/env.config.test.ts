@@ -753,10 +753,17 @@ describe('CORS_ALLOWED_ORIGINS', () => {
     'data:text/html,hi',
     'https://admin.example.com,file:///tmp/x',
     'about:blank',
+    'chrome-extension://abcdefghijklmnop',
   ])('refuses an entry with an opaque origin: %s', (value) => {
     expect(() => parseEnv({ ...valid, CORS_ALLOWED_ORIGINS: value })).toThrow(
       /CORS_ALLOWED_ORIGINS.*opaque/s
     )
+  })
+
+  it('names a non-http scheme such as chrome-extension: in its message', () => {
+    expect(() =>
+      parseEnv({ ...valid, CORS_ALLOWED_ORIGINS: 'chrome-extension://abcdefghijklmnop' })
+    ).toThrow(/non-http scheme such as chrome-extension:/)
   })
 })
 

@@ -38,7 +38,7 @@ function isLowercaseDomain(value: string): boolean {
 
 /**
  * Whether no entry of a comma-separated origin list has an opaque origin.
- * A `file:`, `data:` or other non-hierarchical URL's origin is the string
+ * A `file:`, `data:`, `chrome-extension:` or other opaque URL's origin is the string
  * `"null"`, which `isAllowedOrigin` (origin.utilities.ts) would then match
  * against `Origin: null`, the header sandboxed iframes and file pages send.
  * An entry that is not a URL at all is left to `isAllowedOrigin`, which skips it.
@@ -363,7 +363,7 @@ const EnvSchema = z.object({
     .string()
     .refine(hasNoOpaqueOrigin, {
       message:
-        'CORS_ALLOWED_ORIGINS must not list an entry with an opaque origin (file:, data:, about: and the like): its origin is "null", which would grant every sandboxed iframe and file page.',
+        'CORS_ALLOWED_ORIGINS must not list an entry with an opaque origin (file:, data:, about:, or a non-http scheme such as chrome-extension:): its origin is "null", which would grant every sandboxed iframe and file page.',
     })
     .optional()
     .describe(
