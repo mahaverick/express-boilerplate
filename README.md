@@ -9,24 +9,13 @@ On top of that platform it ships email and password registration with email
 verification, JWT access tokens with rotating opaque refresh tokens, forgot,
 reset and change password, optional Google sign-in, multi-tenancy with roles
 and invitations, an audit log, platform staff access, in-app notifications over
-server-sent events, BullMQ jobs and a daily data-retention purge.
-Staff directory: tenant and user search, detail, create, lifecycle, account
-actions and owner-only purge under `/api/v1/platform`, role-gated per route,
-audited with a reason, destructive actions behind a recent password
-sign-in.
-Message tracking: a delivery timeline per email fed by provider webhooks
-(Resend, and a fake one for local), deliverability health, masked
-previews, resend through the flow that sent the mail, and an automatic
-suppression list; see [Email tracking](#email-tracking).
-Onboarding: a code-defined steps registry with per-tenant and per-member
-progress, a customer checklist API, and a staff funnel, stuck-tenant list,
-reminders and manual completion; see [Onboarding](#onboarding).
-Usage analytics: every audited action, a short list of product events and
-every email tracking event go to PostHog through a transactional outbox
-that never blocks or fails a request, and `/api/v1/collect` proxies the
-frontends' posthog-js; see [Analytics (PostHog)](#analytics-posthog).
-[SECURITY.md](SECURITY.md#what-this-boilerplate-does-not-implement) lists what
-it does not implement.
+server-sent events, BullMQ jobs and a daily data-retention purge. A staff
+directory, email delivery tracking, onboarding, PostHog analytics, feature
+flags and a maintenance mode sit on the same base. How the code is built is in
+[ARCHITECTURE.md](ARCHITECTURE.md); [SECURITY.md](SECURITY.md) lists the
+defences and, under
+[what it does not implement](SECURITY.md#what-this-boilerplate-does-not-implement),
+what is left to you.
 
 ## Requirements
 
@@ -35,19 +24,21 @@ it does not implement.
 - [pnpm](https://pnpm.io) 12.4.1, pinned by `packageManager` in
   `package.json`. Use pnpm only. Node 25 and later do not bundle Corepack, so
   install it first: `npm i -g corepack@0.36.0 && corepack enable`.
-- Docker, for the local Postgres, Redis, OpenTelemetry, Loki and Mailpit stack.
+- Docker, for the local Postgres, Redis, OpenTelemetry, Tempo, Loki, Grafana
+  and Mailpit stack ([Local infrastructure](ARCHITECTURE.md#local-infrastructure)).
 
 ## Quickstart
 
 ```bash
 pnpm install
 docker compose up -d
-cp .env.example .env    # then fill in the six blank required values below
+cp .env.example .env    # then fill in the blank required values below
 pnpm db:migrate
 pnpm dev
 ```
 
-For the compose stack, the blank required values in `.env` are:
+`.env.example` already sets `APP_ENV=local` and `NODE_ENV=development`. For the
+compose stack, the blank required values in `.env` are:
 
 ```bash
 APP_URL=http://localhost:4040
@@ -60,16 +51,11 @@ SESSION_SECRET=      # openssl rand -hex 32
 
 `.env` is loaded for you (see
 [Configuration](ARCHITECTURE.md#configuration)), and `pnpm dev` fails fast
-with a named list if a required variable is missing. Every variable is
-described in [ARCHITECTURE.md](ARCHITECTURE.md#environment-variables).
-
-`APEX_URL` is optional: set it to the origin of the Apex staff dashboard so
-platform-tenant invitations and `app: "apex"` verification, reset and Google
-sign-in links open there instead of at `WEB_URL`. See
-[A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex).
+with a named list if a required variable is missing. The server listens on
+`APP_PORT` (4040).
 
 ```bash
-curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}; 503 at its 500 ms deadline if a dependency is down or stalled
+curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}; 503 when a dependency is down
 ```
 
 ### Register and log in
@@ -100,248 +86,182 @@ authenticated route such as `GET /api/v1/profile`. Every `/api/v1/auth` route
 refuses a non-JSON body with 415. See
 [ARCHITECTURE.md](ARCHITECTURE.md#request-path-auth-and-beyond) for the rest.
 
+## Environment variables
+
+Every variable, with its default and what it does, is in the table in
+[ARCHITECTURE.md](ARCHITECTURE.md#environment-variables). The table and
+`.env.example` are both generated from the Zod schema in
+`src/configs/env.config.ts`. A quick start needs only the keys above.
+
+Optional keys a first run may add:
+
+- `APEX_URL`: the origin of the Apex staff dashboard. Platform-tenant
+  invitations, and verification, reset and Google sign-in links started with
+  `app: "apex"`, open there instead of at `WEB_URL`. See
+  [A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex).
+- `TRUST_PROXY`: the number of proxies in front of the app. Set it in any
+  deployment behind one.
+- `RESEND_WEBHOOK_SECRET`, `MAIL_FROM` and `MAIL_FROM_TRANSACTIONAL`: see
+  [Email tracking](#email-tracking).
+- The `POSTHOG_*` keys: see [Analytics (PostHog)](#analytics-posthog).
+
 ## Available scripts
 
-| Script                              | What it does                                                                                |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- |
-| `pnpm dev`                          | `tsx watch`, loading `.env` and then `src/observability/tracing.ts` first.                  |
-| `pnpm build`                        | `tsc` and `tsc-alias` into `dist/`, with the migrations copied alongside.                   |
-| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                   |
-| `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).                |
-| `pnpm lint:fix`                     | `eslint . --fix`.                                                                           |
-| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                       |
-| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                               |
-| `pnpm format` / `pnpm format:check` | Prettier over the whole repo.                                                               |
-| `pnpm test`                         | `vitest run`. Needs the compose stack.                                                      |
-| `pnpm test:watch`                   | `vitest watch`.                                                                             |
-| `pnpm test:unit`                    | Every test but `tests/integration/**`; runs with Docker down.                               |
-| `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% on all four measures.                                 |
-| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                             |
-| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                             |
-| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                     |
-| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                          |
-| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run that in the prod image.                   |
-| `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                    |
-| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).  |
-| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).      |
-| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics](#analytics-posthog).        |
-| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags). |
-| `pnpm commit`                       | Interactive conventional-commit prompt.                                                     |
+| Script                              | What it does                                                                                        |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.        |
+| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias`, and copies the migrations into `dist/database/`.       |
+| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                           |
+| `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).                        |
+| `pnpm lint:fix`                     | `eslint . --fix`.                                                                                   |
+| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                               |
+| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                       |
+| `pnpm format`                       | `prettier --write .` over the whole repo.                                                           |
+| `pnpm format:check`                 | `prettier --check .`.                                                                               |
+| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                     |
+| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                     |
+| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                             |
+| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                  |
+| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run it in the production image.                       |
+| `pnpm platform:grant -- <e> <role>` | Gives an existing, verified user a role in the platform tenant; see below.                          |
+| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).          |
+| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).              |
+| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).      |
+| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags).         |
+| `pnpm test`                         | `vitest run`. Needs the compose stack.                                                              |
+| `pnpm test:unit`                    | Every test except `tests/integration/**`, with no global setup; runs with Docker down.              |
+| `pnpm test:watch`                   | `vitest watch`.                                                                                     |
+| `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% on lines, functions, branches and statements.                 |
+| `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`). |
+| `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
+| `pnpm prepare`                      | Installs the husky git hooks; `pnpm install` runs it.                                               |
 
 `pnpm platform:grant -- <email> <role>` gives an existing user with a verified
 address a role (`owner` to `viewer`) in the platform tenant, audited as
 `platform.member.granted`. Nobody can invite staff before a platform owner
 exists, so this is how the first one is made.
 
+The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Email tracking
 
-Every outbound email is one `email_messages` row, written when the mail is
-queued: the recipient, the template, the user, tenant and invitation it is
-about, the frontend its link opens (`link_app`), the sender class, its
-`Message-ID`, and the template's non-secret `previewVariables`. Never a
-rendered body, a link or a token. Each send attempt stays an append-only
-`email_logs` row pointing at its message, and each provider event an
-`email_events` row. A status only moves to a higher rank
-(`EMAIL_STATUS_RANK`, `src/constants/email.constants.ts`), so a fast
-`delivered` event is never overwritten by the worker's `sent`; `opened` and
-`clicked` never change it. `RETENTION_EMAIL_LOGS_DAYS` purges messages,
-their attempts and their events together; suppressions never expire.
-
-### Provider webhooks
-
-`POST /api/v1/webhooks/email/:provider` takes delivery events. `app.ts`
-mounts its router after `requestContext` and before the global
-`express.json`, with a raw body parser (256 kB) on that router only, so the
-signature is checked over the exact bytes the provider sent. It takes no
-access token and no CSRF token. An unknown or unconfigured
-provider gets the generic 404 before any limiter runs. Two limiters follow:
-`RATE_LIMITS.emailWebhook` allows 3000 accepted requests a minute per
-provider, not per IP, so a bounce storm is not throttled into retries, and
-`RATE_LIMITS.emailWebhookRejected` allows 60 failed requests a minute per IP,
-so forged traffic cannot spend a provider's budget. A bad signature gets 401
-`INVALID_SIGNATURE`.
-Each request logs one `email webhook processed` line with its counts
-(received, duplicate, unmatched, ignored, processed, and per event type). A
-repeated event is stored once, so a provider's retry changes nothing.
+Every outbound email is one `email_messages` row; its model and the sender
+rule are in [ARCHITECTURE.md](ARCHITECTURE.md#email-tracking). This section is
+the operator guide.
 
 **Resend.** In the Resend dashboard, add a webhook for
 `https://<api host>/api/v1/webhooks/email/resend` and subscribe it to
 `email.delivered`, `email.delivery_delayed`, `email.bounced`,
 `email.complained`, `email.opened`, `email.clicked`, `email.failed` and
 `email.suppressed`. Put its signing secret (`whsec_…`) in
-`RESEND_WEBHOOK_SECRET`; the adapter is enabled only while that is set.
-Every other event type is acknowledged and ignored. A permanent bounce and
-a complaint suppress the address; a transient bounce is a delay and
-suppresses nothing. `email.suppressed` (Resend's own list blocked the send)
-marks the message failed and adds no local suppression.
+`RESEND_WEBHOOK_SECRET`; the adapter is enabled only while that is set, and
+without it the route answers 404. Every other event type is acknowledged and
+ignored. A permanent bounce and a complaint suppress the address; a transient
+bounce is a delay and suppresses nothing. `email.suppressed` (Resend's own
+list blocked the send) marks the message failed and adds no local
+suppression. The webhook's limiters and signature check are in
+[SECURITY.md](SECURITY.md).
 
 **Two senders.** Token emails (verification, password reset, account setup,
-invitations) always go from `MAIL_FROM_TRANSACTIONAL`; the two security
-notices go from `MAIL_FROM`. No caller picks the sender. Give
-`MAIL_FROM_TRANSACTIONAL` its own subdomain (for example
+invitations) go from `MAIL_FROM_TRANSACTIONAL`; the other mail goes from
+`MAIL_FROM`. Give `MAIL_FROM_TRANSACTIONAL` its own subdomain (for example
 `no-reply@auth.example.com`) and keep click tracking **off** for that domain
 at the provider: tracked links are rewritten through the provider's
 redirector, which would then see every token. Open and click rates count
 `MAIL_FROM` mail only. Left unset it falls back to `MAIL_FROM`, and outside
 `local` the boot check warns when both senders share a domain.
 
-**Rollout order.** Deploy the workers before, or with, the API. A job the
-API enqueues at this version and an older worker picks up is sent untracked:
-its row stays `queued`, it goes from the general sender, and no suppression
-check runs. That lasts only for the deploy window.
-
-**Webhook limiter caveat.** `emailWebhookRejected` counts a request while it
-is in flight and refunds it only when it finishes under 400, so more than 60
-concurrent deliveries from one provider IP can be throttled. Providers retry,
-and the `svix-id` dedupe makes a retry exact. A wrong `TRUST_PROXY` (every
-caller seen as the proxy's IP) would put all webhook traffic in one per-IP
-bucket.
-
-**Resending an invitation from staff.** A resend through
-`/platform/emails/:id/resend` spends the staff write limiter (`platformWrite`,
-30 a minute per staff user), not the member route's `invite-tenant-member`
-budget. Every resend is admin-only, audited with a reason, and rotates the
-token.
-
 **Local.** `APP_ENV=local` (tests included) also enables a `fake` provider,
-signed with `FAKE_EMAIL_WEBHOOK_SECRET` (a local default, not a
-credential). `pnpm email:fire-event <messageId> <type> [hard|soft] [--origin
-<api origin>]` signs and posts one event for a message id from Apex or
+signed with `FAKE_EMAIL_WEBHOOK_SECRET` (a local default, not a credential).
+`pnpm email:fire-event <messageId> <type> [hard|soft] [--origin <api origin>]`
+signs and posts one event for a message id from Apex or
 `GET /platform/emails`; `--origin` defaults to the local API.
 
 ### Suppression
 
-A hard bounce or a complaint adds the address to `email_suppressions`.
-While it is there, every mail to it, security notices included, is marked
-`suppressed` and never sent, and the caller is told nothing, so a send
-still reveals no account. Staff lift a suppression from Apex's Suppressions
-page (`POST /platform/email-suppressions/:id/lift`: admin, with a reason,
-audited as `email.suppression_lifted`); lifting one twice answers 409
-`already_lifted`. A user purge keeps the suppressions of their address: they
-belong to the mailbox, not the account.
+A hard bounce or a complaint adds the address to `email_suppressions`. While
+it is there, every mail to it, security notices included, is marked
+`suppressed` and never sent, and the caller is told nothing, so a send still
+reveals no account. Staff lift a suppression from Apex's Suppressions page
+(`POST /platform/email-suppressions/:id/lift`: admin, with a reason, audited
+as `email.suppression_lifted`); lifting one twice answers 409
+`already_lifted`. Suppressions never expire, and a user purge keeps those of
+the user's address: they belong to the mailbox, not the account.
 
 ### Staff reads, preview and resend
 
-`GET /platform/emails` searches messages newest first (recipient text,
-status, template, user, tenant, and `from`/`to` UTC days, both inclusive),
-and `GET /platform/emails/:id` returns one message's timeline: attempts,
-provider events, the address's active suppression and the resend chain
-(`resentFromId`, `resentAsIds`). `GET /platform/emails/health?range=7d|30d`
-counts messages per UTC day in five disjoint groups (delivered; sent, which
-includes deferred; undelivered, which is bounced or failed; complained;
-suppressed) and reports rates over the messages that left the server.
-Without a webhook every successful send stays `sent`, and every rate except
-the undelivered rate is `null` until a provider event arrives.
-
-`GET /platform/emails/:id/preview` re-renders the stored template: every
-link keeps its page and frontend with the token shown as `••••••`, the
-inviter reads "A teammate" (the name is never stored), and a stored
-variable a row lacks (a legacy row) is masked, with `partial: true`; the
-masked token and the inviter's placeholder alone never make it partial. Apex shows the HTML in a sandboxed
-`srcdoc` iframe, which inherits the page's CSP (`img-src 'self' data:`).
-The templates use inline styles only; a remote image added to one would not
-load in the preview.
-
-`POST /platform/emails/:id/resend` (admin, with a reason) never replays a
-mail. It runs the action that sent it, which issues a fresh token:
-resend-verification for a verification mail, password-setup for account
-setup and password reset (sending whichever applies to the user now), and
-the invitation resend for an invitation. That action's role rules, errors
-and audit entry apply unchanged, and `email.resent` records the reason
-beside it. The two security notices, `password_changed` and
-`registration_attempt`, are never resent, nor is a row without the ids its
-action needs (409 `not_resendable`); a suppressed recipient gets 409
-`recipient_suppressed` and a template this build no longer has 409
-`template_unavailable`. An invitation to a tenant that is not active gets
-the member routes' 404, and every invitation resend, on any tenant, needs a
-sign-in within the last 10 minutes (401 `REAUTH_REQUIRED`).
+- `GET /platform/emails` searches messages newest first, and
+  `GET /platform/emails/:id` returns one message's timeline: attempts,
+  provider events, the address's active suppression and the resend chain.
+- `GET /platform/emails/health?range=7d|30d` counts messages per UTC day and
+  reports rates over the messages that left the server. Without a webhook
+  every successful send stays `sent`, and every rate except the undelivered
+  rate is `null` until a provider event arrives.
+- `GET /platform/emails/:id/preview` re-renders the stored template with
+  every token masked.
+- `POST /platform/emails/:id/resend` (admin, with a reason) never replays a
+  mail. It runs the action that sent it, which issues a fresh token, and that
+  action's role rules, errors and audit entry apply unchanged; `email.resent`
+  records the reason beside it. The security notices `password_changed` and
+  `registration_attempt` are never resent, nor is a row without the ids its
+  action needs (409 `not_resendable`); a suppressed recipient gets 409
+  `recipient_suppressed` and a template this build lacks 409
+  `template_unavailable`. Every invitation resend needs a sign-in within the
+  last 10 minutes (401 `REAUTH_REQUIRED`).
 
 ## Onboarding
 
 Onboarding steps are an extension point, not product logic: the registry is
-`ONBOARDING_STEPS` in `src/constants/onboarding.constants.ts`, served to both
-apps (neither keeps its own copy). Each step has a snake_case `key`, a
-`title` and `description`, a `scope` (`tenant`, done once for the tenant, or
-`member`, done by each person), a `completion` (`auto` on a trigger, or
-`manual`, ticked by the customer) and `required`. Steps display in registry
-order and complete in any order. A tenant is **complete** once every
-required step is done (a member step counts once any active owner has done
-it), and **stuck** when it is not complete, not dismissed, and has made no
-progress for `ONBOARDING_STUCK_AFTER_DAYS` (default 7) or more. An owner can
-dismiss the checklist and bring it back.
+`ONBOARDING_STEPS` in `src/constants/onboarding.constants.ts`, and both apps
+render what the API returns. Each step has a snake_case `key`, a `title` and
+`description`, a `scope` (`tenant`, done once for the tenant, or `member`, done
+by each person), a `completion` (`auto` on a trigger, or `manual`, ticked by
+the customer) and `required`. A tenant is **complete** once every required
+step is done, and **stuck** when it is not complete, not dismissed, and has
+made no progress for `ONBOARDING_STUCK_AFTER_DAYS` (default 7) or more.
 
 **Adding a step.** Add an entry to `ONBOARDING_STEPS`; the load-time check
-refuses a duplicate or non-snake_case key and a trigger mapped to two steps
-of one scope. An `auto` step, of either scope, completes from its trigger: a
-value of `ONBOARDING_TRIGGERS` that a subscriber in `onboarding.service.ts`
-maps from a `DomainEvent` (`teammate_joined`, for one, comes from the
-`invitation_accepted` event), and a member step completes for the event's
-subject user. For a new trigger, add the value to `ONBOARDING_TRIGGERS`,
-add the event to the `DomainEvent` union if it is new, subscribe to it, and
-call `emitDomainEvent` from the service that does the work, after its
-transaction commits. Product code can also call `completeOnboardingStep`
-directly (a member step needs the `userId`). `completeOnboardingStep` is the
-single writer and is idempotent. Mirror nothing in the apps: both render
-what `GET /tenants/:slug/onboarding` and the staff endpoints return.
+refuses a duplicate or non-snake_case key and a trigger mapped to two steps of
+one scope. An `auto` step completes from a value of `ONBOARDING_TRIGGERS` that
+a subscriber in `onboarding.service.ts` maps from a `DomainEvent`. For a new
+trigger, add the value to `ONBOARDING_TRIGGERS`, add the event to the
+`DomainEvent` union if it is new, subscribe to it, and call `emitDomainEvent`
+from the service that does the work, after its transaction commits. Product
+code can also call `completeOnboardingStep` directly (a member step needs the
+`userId`); it is the single writer and is idempotent.
 
-**Only tenants created after this release are tracked.** Existing tenants
-have `onboarding_tracked = false` and show as not tracked. A tenant staff
-create waits for its first owner to accept (`awaiting_owner`, never stuck)
-before its clock starts; until then its members see it as `not_tracked`, with
-no checklist. When that accept starts the clock and other members had
-already joined, `teammate_joined` completes then. Actions staff take through
-platform access (an
-`access: 'platform'` request on a customer route) never count as customer
-progress.
+**Tracking.** A tenant is tracked when `onboarding_tracked` is true, which the
+tenant repository sets for every tenant it creates; the platform tenant is
+never tracked. A tenant with it false shows as not tracked. A tenant that
+staff create waits for its first owner to accept (`awaiting_owner`, never
+stuck) before its clock starts. Actions staff take through platform access
+never count as customer progress.
 
-**Staff.** `GET /platform/onboarding/funnel?range=7d|30d|90d` (default 30d)
-counts, over the active tracked tenants whose onboarding started in the
-range, each step's completions and how many of them staff made, and the
-cohort by state. `GET /platform/onboarding/tenants?state=` lists the active
-tracked tenants in one state (`stuck` by default, longest stuck first; the
-others newest first; `awaiting_owner` included) with cursor paging, and
-`GET /platform/tenants/:id/onboarding` returns one tenant's onboarding in
-any lifecycle state: each step with who completed it (staff completions
-with their reason), each member step's per-member status, the reminder
-history, and whether a reminder may go now. `GET /platform/stats` counts
-stuck tenants in `totals.stuckTenants`. Platform admins may mark a tenant
-step complete (`POST /platform/tenants/:id/onboarding/steps/:key/complete`,
-with a reason) and send a reminder (`POST
-/platform/tenants/:id/onboarding/remind`, with a reason): one
-`onboarding_reminder` email to each active owner, tracked like every other
-email, at most one per tenant per 24 hours (409 `reminded_recently` with
-`errors.retryAfter`). Both are refused on a suspended or archived tenant
-(409 `tenant_state_conflict`) and audited in the tenant itself with platform
-access, so the customer's Activity tab shows them. The reminder writes the
-owners' email rows and its audit entry in one transaction and queues the
-sends after it commits; if queueing fails, the audit entry stays, the
-affected email row is marked failed, and the response says `emailSent:
-false`.
+**Staff.** The funnel, the stuck-tenant list, a tenant's onboarding tab,
+manual completion and reminders are under `/api/v1/platform`
+(`platform-onboarding.service.ts`). A reminder sends one `onboarding_reminder`
+email to each active owner, at most one per tenant per 24 hours (409
+`reminded_recently`), and is refused on a suspended or archived tenant (409
+`tenant_state_conflict`).
 
-**`pnpm onboarding:reconcile`.** Subscribers run after the request commits
-and never fail it; one that fails only logs. The reconcile script
-re-completes the default automatic tenant steps of every live, tracked,
-started customer tenant (one still `awaiting_owner` is skipped) from what
-members provably did, each stamped with the time it happened:
-`configure_settings` from the earliest settings save audited with member
-access, `invite_teammate` from the earliest teammate invitation audited with
-member access (both since the clock started), and `teammate_joined` from the
-second member's join (its `invitation.accepted` entry, else its membership's
-`created_at`), or the clock's start when that came later. Settings saves and
-invitations by staff through platform access are never credited. It is best
+**`pnpm onboarding:reconcile`.** Subscribers run after the request commits and
+never fail it; one that fails only logs. The script re-completes the default
+automatic tenant steps of every live, tracked, started customer tenant from
+what members provably did, each stamped with the time it happened. It is best
 effort: it reads the audit log, so entries pruned under
-`RETENTION_AUDIT_LOGS_DAYS` (0, the default, keeps them forever) leave no
-trace, and a restored old event leaves a stuck tenant stuck.
+`RETENTION_AUDIT_LOGS_DAYS` (0 keeps them forever) leave no trace. It exits 1
+when a step that should be done is not.
 
 ## Analytics (PostHog)
 
-Analytics is off until `POSTHOG_PROJECT_KEY` is set: no outbox row is
-written, no drain runs, and `/api/v1/collect/*` answers 503
-`service_unavailable`. With only `POSTHOG_PERSONAL_API_KEY` and
-`POSTHOG_PROJECT_ID` set, the analytics Worker still starts, to delete purged
-users from PostHog. Server events and the browser share one PostHog
-project per environment, keyed by user id (`distinct_id`) and the `tenant`
-group.
+Analytics is off until `POSTHOG_PROJECT_KEY` is set: no outbox row is written,
+no drain runs, and `/api/v1/collect/*` answers 503. With only
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` set, the analytics Worker
+still starts, to delete purged users from PostHog. Server events and the
+browser share one PostHog project per environment. The pipeline, the proxy and
+the staff timelines are in [ARCHITECTURE.md](ARCHITECTURE.md#analytics); what
+is and is not sent is in
+[SECURITY.md](SECURITY.md#analytics-and-error-tracking-privacy).
 
 **Turning it on, once per environment:**
 
@@ -349,109 +269,32 @@ group.
    with the group type `tenant` (index 0).
 2. Set `POSTHOG_PROJECT_KEY`, and `POSTHOG_HOST` when the project is not on
    the US cloud (`https://eu.i.posthog.com` for the EU one). The assets host
-   follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it.
-   Set the same key as the `POSTHOG_KEY` container env var of react and apex.
-   A deployment that runs its workers in separate pods must give those pods
-   `POSTHOG_PROJECT_KEY` too: without it the drain does not run there (and no analytics Worker
-   starts unless the personal key and project id are set), so rows
-   accumulate and are pruned after the retention window with only a `warn` log.
+   follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it. Set
+   the same key as the `POSTHOG_KEY` container env var of react and apex.
+   Workers that run in separate pods need `POSTHOG_PROJECT_KEY` too: without
+   it the drain does not run there.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
    existed before carry their name, status and creation date. It queues one
-   `$groupidentify` marker per tenant in the outbox, which the analytics
-   Worker sends with each tenant's state at send time, and exits 1 if a
-   batch could not be queued; a second run is harmless.
-4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`, enable
-   "Cookieless server hash mode" in the project settings.
+   `$groupidentify` marker per tenant and exits 1 if a batch could not be
+   queued; a second run is harmless.
+4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`,
+   enable "Cookieless server hash mode" in the project settings.
 5. Set `TRUST_PROXY` to the number of proxies in front of this app, counting
-   every hop (the frontend's nginx and the load balancer). The analytics
-   proxy forwards `request.ip` to PostHog; with `TRUST_PROXY=false` behind
-   a proxy that is the proxy's address, so GeoIP is wrong for everyone and, in
+   every hop (the frontend's nginx and the load balancer). The analytics proxy
+   forwards `request.ip` to PostHog; with `TRUST_PROXY=false` behind a proxy
+   that is the proxy's address, so GeoIP is wrong for everyone and, in
    cookieless mode, PostHog's hash merges different people. Boot warns when
    `POSTHOG_PROJECT_KEY` is set, `TRUST_PROXY` is false and `APP_ENV` is not
-   `local`. Events the server sends itself carry `$geoip_disable: true`, so
-   PostHog never locates anyone by the server's address.
-
-**What the server sends.** Every audit action, as its name with `_` for
-`.` (`invitation.created` becomes `invitation_created`, and the
-staff-forced `user.signed_out` becomes `user_sessions_revoked`), with its
-metadata in snake_case, a free-text `reason` reduced to `has_reason`, and a
-tenant's `name` and `slug` left out;
-the product events `user_signed_up`, `user_signed_in`, `user_signed_out`,
-`password_changed`, `other_sessions_revoked`, `password_reset_completed`,
-`email_verified` and `onboarding_step_completed`; and each email tracking
-event as `email_<type>` (`email_delivered`, `email_opened`, ...). Each
-carries `source` (`audit`, `product` or `email`), `access`, `app: 'api'`,
-`$groups.tenant` when it belongs to a tenant, and, only when tracing is on
-(`OTEL_EXPORTER_OTLP_ENDPOINT` set), the request's `trace_id` and `span_id`,
-so PostHog's events line up with the API's traces; with tracing off they carry
-neither. No name, full address, reason, subject or recipient is ever sent; the
-tenant's name goes only into the tenant group's properties, which a
-`$groupidentify` event sends when a tenant is created, updated or changes
-state. The exception is an address's domain: invitation, auto-join, user and
-email audit events carry `email_domain` (`onboarding_reminder_sent` carries
-`email_domains`). A tenant invitation's email events carry `tenant_id` as a
-plain property and join no group, because the recipient is not a member.
-`distinct_id` and `$session_id` are pseudonymous identifiers. `$session_id`
-is sent only on an event of the user whose browser sent it (a sign-in,
-sign-up or sign-out counts, as the request carries no access token); `$groupidentify`, a
-`$set` for another user and `system` events never carry it. A user purge
-deletes the person, their events and their recordings from PostHog an hour
-later, once `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and a
-tenant purge clears the group's name: see
-[SECURITY.md](SECURITY.md#purge-the-only-hard-delete) for what stays there.
-
-**How it is delivered.** The request that causes an event writes one
-`analytics_outbox` row in its own transaction (in a savepoint, so a failed
-insert never fails the request) and never calls PostHog's API. The analytics
-Worker drains the outbox every `ANALYTICS_DRAIN_INTERVAL_MS` (5 s) in batches
-of `ANALYTICS_DRAIN_BATCH_SIZE` (500). A row leaves the outbox when PostHog
-acknowledges it, by retention after `ANALYTICS_OUTBOX_RETENTION_DAYS` (7), by
-poison drop after three rejections, by user purge, or by the deletion tick.
-Undelivered rows retry with a backoff of up to 10 minutes and are dropped by
-retention with a `warn` log (`analyticsOutboxDropped`). Poison-dropped rows are
-logged as `error` naming the event and id.
-If PostHog refuses a claimed batch, both of its halves, and the first row of
-each half sent alone, it is treated as a fault of the endpoint, not of any
-row: no row is counted, the rows wait and are retried, and the drain logs one
-`error` with the status only. If it accepts either lone row, the batch is
-split as usual and only the rows it refuses alone are counted; if a lone row
-answers with a retryable status instead, no row is counted and every row not
-acknowledged is retried. A claim of a single row has no halves to compare, so
-during an outage in which PostHog answers 400 to everything, an outbox
-holding one queued row counts a rejection against it on each drain and drops
-it at the third.
-An answer about the endpoint rather than the batch (401, 403, 404, 405, 407
-or 408, so a wrong `POSTHOG_PROJECT_KEY` or `POSTHOG_HOST`) is never counted
-against a row: the rows wait and are retried, and each drain logs one `error`
-naming those two variables.
-A resend after a crash carries the same `uuid`; PostHog deduplicates on it
-eventually and without a guarantee, so a consumer that needs exactness dedupes
-by `uuid`.
-
-**The proxy.** posthog-js in react and apex sends to `/api/v1/collect`, the
-API's own origin (events and the browsers' `$exception` batches alike), so ad blockers and the CSP's `connect-src 'self'` leave it
-alone. Requests stream through unread, the browser's cookies and bearer
-token are stripped, and PostHog sees the client's real `User-Agent` and the
-address, host, protocol and port of the request (`X-Forwarded-*` are
-overwritten, never taken from the client: `-For` and `-Proto` follow `trust
-proxy`, `-Host` is the request's `Host` header and `-Port` is the listener's
-local port). PostHog's `Set-Cookie` and
-`Access-Control-*` response headers are dropped, and an upstream that stays
-silent for 30 s is answered 504. It has its own limiter
-(`analytics-proxy`, 3000 a minute per IP) and no traces. helmet sets
-`Cross-Origin-Resource-Policy: same-site`, so a frontend on a different
-_site_ from the API cannot load `/api/v1/collect/static/*` scripts; the same
-origin through the frontends' nginx, as shipped, is unaffected.
+   `local`.
 
 ### Staff timelines
 
 `GET /api/v1/platform/users/:id/timeline` and
-`GET /api/v1/platform/tenants/:id/timeline` (platform admin and up) show
-Apex what a user or a tenant did, browser and server events together, read
-from PostHog with a personal API key. They are off until both
-`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and answer
-`{ configured: false }` until then; boot warns when only one is set.
-Independent of `POSTHOG_PROJECT_KEY`.
+`GET /api/v1/platform/tenants/:id/timeline` (platform admin and up) show Apex
+what a user or a tenant did, browser and server events together, read from
+PostHog with a personal API key. They answer `{ configured: false }` until both
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and boot warns
+when only one is. They are independent of `POSTHOG_PROJECT_KEY`.
 
 **Turning them on, once per environment:**
 
@@ -459,67 +302,39 @@ Independent of `POSTHOG_PROJECT_KEY`.
    `person:write` and `group:read`, plus `feature_flag:read` and
    `feature_flag:write` for `pnpm flags:sync`, owned by a service account
    rather than a person.
-2. Set `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` (the numeric id
-   of the project `POSTHOG_PROJECT_KEY` reports to). The app host follows
-   the ingest host's region (`https://us.posthog.com` or
-   `https://eu.posthog.com`); set `POSTHOG_APP_HOST` for a self-hosted
-   PostHog. The apex image needs nothing new. Set them on the worker pods
-   too: the PostHog deletion of purged users runs on the analytics Worker,
-   and boot warns while deletions wait for them.
+2. Set `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` (the numeric id of
+   the project `POSTHOG_PROJECT_KEY` reports to). The app host follows the
+   ingest host's region (`https://us.posthog.com` or `https://eu.posthog.com`);
+   set `POSTHOG_APP_HOST` for a self-hosted PostHog. Set them on the worker
+   pods too: the PostHog deletion of purged users runs on the analytics
+   Worker.
 3. Give a PostHog seat to every staff member who will watch replays: Apex
    links to PostHog's replay, person and group pages and embeds nothing.
 4. Optional: run `pnpm analytics:backfill-groups` once, so existing tenants'
-   group properties converge through markers. It needs `POSTHOG_PROJECT_KEY`
-   too and fails without it.
+   group properties converge. It needs `POSTHOG_PROJECT_KEY` too and fails
+   without it.
 
-**What a request does.** Query `range` is `24h`, `7d` (default), `30d` or
-`90d`; `view` is `all` (default, pageviews and clicks included) or `key`
-(no `$` events); `before` is the opaque `nextCursor` of the page before.
-The server sends one of two fixed HogQL queries, with every id in its
-placeholder values, and returns at most 100 rows built from a fixed property
-allowlist (a page URL is cut to its pathname); a page can hold fewer once
-forged and duplicate rows are removed, and `nextCursor` says whether another
-follows. Every request, a cursor page
-included, writes `user.timeline_viewed` or `tenant.timeline_viewed`, at most
-once per staff member, target and view every 10 minutes
-(`TIMELINE_AUDIT_THROTTLE_SECONDS`), before the 30 s Redis cache is read, so
-a cached page is audited too; with Redis down every request is audited. The
-audit fails closed: if its write fails, so does the read, with a 500. A
-cache miss spends one of `TIMELINE_QUERY_BUDGET_PER_HOUR` (1200) PostHog
-queries per rolling hour, counted across replicas; PostHog allows 2400 an
-hour for the whole organization, its own UI included. Each staff member may
-make `TIMELINE_REQUESTS_PER_MINUTE` (20) timeline requests a minute. A PostHog
-error, a timeout (15 s), a spent budget or, for a tenant timeline, a project
-without a `tenant` group type answers 502 `TIMELINE_UNAVAILABLE`; a 401, 403
-or 404 from PostHog also logs `Timeline key or project misconfigured` at
-`error`. Events reach a timeline only after PostHog has ingested them, and up
-to 30 s later still while a cached page lives.
-
-**Signed server events.** PostHog's project key is public, so anyone can
-send an event under any name. The timeline trusts a row's `source`,
-`access` and target only when its `server_sig` verifies; any other row is
-shown as a browser event, and one that names the user or tenant only
-through a forged target is dropped. Rotating `SESSION_SECRET` makes older
-events show as unverified in timelines: they still appear, without server
-badges.
+A PostHog error, a timeout, a spent query budget or, for a tenant timeline, a
+project without a `tenant` group type answers 502 `TIMELINE_UNAVAILABLE`; a
+401, 403 or 404 from PostHog also logs `Timeline key or project misconfigured`
+at `error`. The limits are `TIMELINE_QUERY_BUDGET_PER_HOUR` and
+`TIMELINE_REQUESTS_PER_MINUTE`. Rotating `SESSION_SECRET` makes older events
+show as unverified in timelines: they still appear, without server badges.
 
 ### Error tracking
 
-With `POSTHOG_PROJECT_KEY` set, an unexpected 5xx, an uncaught exception or
-unhandled rejection, and a BullMQ job's final failure each reach PostHog
-Error Tracking as one `$exception`, scrubbed, with the release
-(`APP_VERSION`, the image's git sha), the route template, the trace id when
-tracing is on, and the user and tenant when the request had them. 4xx
-answers, client aborts and job attempts that will be retried are never
-sent. `ERROR_TRACKING_ENABLED=false` turns sending off without touching the
-rest of analytics. Express needs no sourcemap upload: `node
---enable-source-maps` already rewrites stacks to the `.ts` lines.
+With `POSTHOG_PROJECT_KEY` set, unexpected 5xx answers, uncaught exceptions and
+a BullMQ job's final failure reach PostHog Error Tracking;
+`ERROR_TRACKING_ENABLED=false` turns sending off without touching the rest of
+analytics. What is captured is in
+[ARCHITECTURE.md](ARCHITECTURE.md#error-tracking). Express needs no sourcemap
+upload: `node --enable-source-maps` rewrites stacks to the `.ts` lines.
 
-**Finding an error from its `errorId`.** Every 5xx body carries an
-`errorId`, and so does its `Unhandled server error` log line (except a
-timeline 502, whose id names nothing), so search the logs for it first. In PostHog, Error Tracking's UI does not search by event
-uuid; run this in SQL insights (HogQL) instead, which also gives the issue
-to open:
+**Finding an error from its `errorId`.** Every 5xx body carries an `errorId`,
+and so does its `Unhandled server error` log line (except a timeline 502,
+whose id names nothing), so search the logs for it first. Error Tracking's UI
+does not search by event uuid; run this in SQL insights (HogQL) instead, which
+also gives the issue to open:
 
 ```sql
 select uuid, timestamp, properties.$exception_issue_id, properties.http_route, properties.trace_id
@@ -527,85 +342,79 @@ from events
 where event = '$exception' and uuid = '<errorId>'
 ```
 
-An id that finds nothing names a log line only (or, for a timeline 502, nothing): the error was not reported
-(a deliberate 5xx, or error tracking off or throttled) or PostHog has not
-ingested it yet (allow about 15 s).
+An id that finds nothing names a log line only: the error was not reported (a
+deliberate 5xx, or error tracking off or throttled) or PostHog has not ingested
+it yet (allow about 15 s).
 
 **Staff views.** `GET /api/v1/platform/users/:id/errors` and
-`GET /api/v1/platform/tenants/:id/errors` (platform admin and up) list a
-user's or a tenant's PostHog error issues from the last 30 days, with a link
-to each issue in PostHog. They need what the staff timelines need, answer
-`{ configured: false }` without it, share their limiter and hourly query
-budget, and are audited as `user.errors_viewed` / `tenant.errors_viewed`.
-`GET /api/v1/platform/system/status` (platform admin and up) answers the
-release and the reporter's sent and dropped counts over 15 minutes across
-every process.
+`GET /api/v1/platform/tenants/:id/errors` (platform admin and up) list a user's
+or a tenant's PostHog error issues from the last 30 days. They need what the
+staff timelines need and answer `{ configured: false }` without it.
+`GET /api/v1/platform/system/status` answers the release and the reporter's
+sent and dropped counts.
 
-**`/health` names the release.** It answers `{ status, uptime, release }`
-and is public, so the deployed git sha is too. A private fork that does not
-want that drops `release` in `src/app.ts`.
+**`/health` names the release.** It answers `{ status, uptime, release }` and
+is public, so the deployed git sha is too. A private fork that does not want
+that drops `release` in `src/app.ts`.
 
 ### Feature flags
 
 Flags are declared in `src/constants/flags.constants.ts`, evaluated on the
 server and served to react and apex; how they work is in
 [ARCHITECTURE.md](ARCHITECTURE.md#feature-flags). They are off until both
-`POSTHOG_PROJECT_KEY` and `POSTHOG_FEATURE_FLAGS_KEY` are set: until then
-every flag answers its registry fallback, gated routes answer 404, nothing
-is fetched from PostHog, and the Apex status card shows flags as not set up.
-That is a valid steady state. Boot refuses `POSTHOG_FEATURE_FLAGS_KEY`
-without `POSTHOG_PROJECT_KEY`, since the fetch needs both.
+`POSTHOG_PROJECT_KEY` and `POSTHOG_FEATURE_FLAGS_KEY` are set: until then every
+flag answers its registry fallback, gated routes answer 404, and nothing is
+fetched from PostHog. That is a valid steady state. Boot refuses
+`POSTHOG_FEATURE_FLAGS_KEY` without `POSTHOG_PROJECT_KEY`.
 
-**Turning them on, once per environment** (each environment has its own
-PostHog project, and every registered flag must exist in each):
+**Turning them on, once per environment** (each environment has its own PostHog
+project, and every registered flag must exist in each):
 
-1. In the project's settings (Feature flags), generate the Feature Flags
-   Secure API Key (it starts with `phs_`) and set it as
-   `POSTHOG_FEATURE_FLAGS_KEY`, on the API and worker pods alike. It only
-   reads flag definitions; it is a secret and never reaches a browser.
+1. In the project's settings (Feature flags), generate the Feature Flags Secure
+   API Key (it starts with `phs_`) and set it as `POSTHOG_FEATURE_FLAGS_KEY`,
+   on the API and worker pods alike. It only reads flag definitions; it is a
+   secret and never reaches a browser.
 2. Give the personal API key (`POSTHOG_PERSONAL_API_KEY`) the scopes
-   `feature_flag:read` and `feature_flag:write`, and make sure the project
-   has the `tenant` group type.
-3. Deploy, then run `pnpm flags:sync` with that environment's variables
-   (start with `pnpm flags:sync -- --dry-run`). It creates every registered
-   flag that is missing, inactive at a 0 % rollout and tagged
-   `code-registry`, prints `drift <key>: <field>` for a flag whose kind,
-   variants or scope differ, and exits 0 when clean or after creating, 2 on
-   drift, 1 on a failure. It never edits or deletes a flag; fix drift in
-   PostHog or in the registry.
+   `feature_flag:read` and `feature_flag:write`, and make sure the project has
+   the `tenant` group type.
+3. Deploy, then run `pnpm flags:sync` with that environment's variables (start
+   with `pnpm flags:sync -- --dry-run`). It creates every registered flag that
+   is missing, inactive at a 0 % rollout and tagged `code-registry`, prints
+   `drift <key>: <field>` for a flag whose kind, variants or scope differ, and
+   exits 0 when clean or after creating, 2 on drift, 1 on a failure. It never
+   edits or deletes a flag; fix drift in PostHog or in the registry.
 4. Roll flags out in PostHog. Every API and worker process picks up a change
-   within about a minute; browsers on their next refetch (a page load, a
-   tenant switch, focus after 5 minutes, or every 10 minutes).
-5. Check the Apex status card's Feature flags section and the `/flags` page:
-   a `missing` flag needs `pnpm flags:sync`, an `unsupported` one uses a
+   within about a minute; browsers on their next refetch.
+5. Check the Apex status card's Feature flags section and the `/flags` page: a
+   `missing` flag needs `pnpm flags:sync`, an `unsupported` one uses a
    construct the server can't evaluate (the page names it), and every flag
    PostHog has that the registry lacks is listed for information.
 
 Run `pnpm flags:sync` again in every environment whenever a release adds a
-flag. To run an experiment on a flag, follow the order in
-[ARCHITECTURE.md](ARCHITECTURE.md#feature-flags): sync first, then create the
-experiment in PostHog reusing the flag.
+flag. To run an experiment on a flag, sync first, then create the experiment
+in PostHog reusing the flag.
 
 ## Maintenance mode
 
-A platform owner switches maintenance mode from Apex's Maintenance page;
-how it works is in [ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode).
+A platform owner switches maintenance mode from Apex's Maintenance page; how it
+works is in [ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode), and the
+let-through list and the controls on changing it are in
+[SECURITY.md](SECURITY.md#maintenance-mode).
 
 Runbook:
 
 1. **Confirm staff access before `full`.** In `full` only staff can sign in,
-   and nobody can reset a password, so make sure whoever will switch it off
-   can sign in to Apex with a password or Google.
+   and nobody can reset a password, so make sure whoever will switch it off can
+   sign in to Apex with a password or Google.
 2. **Use `read_only` for data fixes where reads are safe.** Customers keep
    reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
 3. **Before database work, check "0 running" on every queue** on the
    Maintenance page. `full` pauses every queue, but jobs already running
    finish first.
-4. **Staff keep working.** Staff actions in Apex, including the tenant,
-   member, invitation and Staff pages, and staff sign-ins keep working and
-   writing during maintenance.
-5. **Switch off from Apex.** Leaving `full` resumes every queue; notices
-   that were still queued go out then.
+4. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
+   working and writing during maintenance.
+5. **Switch off from Apex.** Leaving `full` resumes every queue; notices that
+   were still queued go out then.
 6. **Restart every replica after restoring the database during maintenance.**
    A replica ignores a row whose version is not above the one it holds, so a
    restore to an earlier version leaves each replica on the old mode until it
@@ -614,8 +423,8 @@ Runbook:
    10 s pause grace and the notice wait are measured from the database's
    commit time on each replica's own clock, so skew shifts when the queues
    pause.
-8. **Failed notice jobs keep personal data.** A notice job that fails keeps
-   the actor's name and the reason in Redis for up to 3 days (the in-app
+8. **Failed notice jobs keep personal data.** A notice job that fails keeps the
+   actor's name and the reason in Redis for up to 3 days (the in-app
    notification) or 7 days (the email) before it is removed.
 
 Every change, switching off and a message edit included, asks for the owner's
@@ -623,6 +432,23 @@ password if it was entered more than 10 minutes ago. Switching on or
 escalating also asks for a reason, the customer message and the environment
 name (`APP_ENV`) typed out. A switch-on, an escalation or a switch-off
 notifies every other platform owner and admin in-app and by email.
+
+## Deploy
+
+- **Image.** The `Dockerfile` builds a non-root production image that starts
+  only the app. Run migrations from the same image with
+  `node dist/database/migrate.js` (`pnpm db:migrate:prod`), which reads only
+  `DATABASE_URL`. The stages, the local `docker run` recipe and the health
+  endpoints are in [ARCHITECTURE.md](ARCHITECTURE.md#docker).
+- **Pipeline.** A push to `main` runs CI, then builds and pushes the image to
+  GHCR (`.github/workflows/deploy.yml`). The `deploy` job there is a
+  placeholder: no deployment target is chosen, so wire your own. Release
+  tagging and the ruleset on `main` are in
+  [ARCHITECTURE.md](ARCHITECTURE.md#deploying) and
+  [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+- **Environment.** The orchestrator supplies the environment; the image has no
+  `.env`. Set `APP_ENV` and `NODE_ENV=production` for every deployment but
+  local, and `TRUST_PROXY` behind a proxy.
 
 ## Make this yours
 
@@ -633,7 +459,7 @@ it, change the things that still say "express-boilerplate":
       `version`.
 - [ ] **`.github/CODEOWNERS`**: it names this repository's maintainer.
 - [ ] **Repository URLs** in `package.json` and the docs, and this README.
-- [ ] **`SECURITY.md`**: the reporting address, and the list of what is not
+- [ ] **`SECURITY.md`**: the reporting section, and the list of what is not
       implemented as you implement it.
 - [ ] **`.github/domain-terms.txt`**: placeholder terms only. Replace them with
       your own never-commit vocabulary, or delete the file and its CI step in
@@ -645,15 +471,15 @@ No gate enforces this list.
 
 ## Documentation index
 
-| Doc                                | Owns                                                                                                           |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [README.md](README.md)             | Quick start, scripts, email tracking setup, onboarding, analytics setup, making the template yours, this index |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, configuration and env vars, Docker, deploying                                   |
-| [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                                                 |
-| [SECURITY.md](SECURITY.md)         | Reporting, supported versions, what is and is not implemented                                                  |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                                                |
-| [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                                                 |
-| [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                                                        |
+| Doc                                | Owns                                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [README.md](README.md)             | Quick start, scripts, operator guides, deploy summary, making the template yours, this index   |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, mechanisms, configuration and the env var table, Docker, deploy |
+| [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                                 |
+| [SECURITY.md](SECURITY.md)         | Threat model, defences, what is and is not implemented, reporting                              |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                                |
+| [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                                 |
+| [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                                        |
 
 ## License
 
