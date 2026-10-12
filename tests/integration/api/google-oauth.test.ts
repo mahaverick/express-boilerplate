@@ -554,6 +554,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(answers.registered).toEqual(answers.unknown)
       expect(answers.unknown).toMatchObject({ statusCode: 403, code: 'email_not_verified' })
       expect(emailReads.registered).toBe(emailReads.unknown)
+      // Refused before the lookup, so neither address is ever read.
+      expect(emailReads.unknown).toBe(0)
     })
 
     it('rejects linking an unverified Google email to an existing user (account-takeover guard)', async () => {

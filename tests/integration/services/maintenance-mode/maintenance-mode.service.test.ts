@@ -269,8 +269,17 @@ describe('Google sign-in in full', () => {
 
   it('refuses every caller that cannot sign in as staff with one indistinguishable answer', async () => {
     const member = await createTrackedUser({ email: googleEmail() })
+    const inactive = await createTrackedUser({ email: googleEmail(), active: false })
     const staff = await createTrackedUser({ email: googleEmail() })
     await makeStaff(staff.id, 'owner')
+    const deleted = await createTrackedUser({ email: googleEmail() })
+    const deletedLink = googleProfile(googleEmail())
+    await new AuthProviderRepository().create({
+      userId: deleted.id,
+      provider: 'google',
+      providerId: deletedLink.id,
+    })
+    await sql`update users set deleted_at = now() where id = ${deleted.id}`
     await storeMaintenanceMode('full', { message: 'Back at noon.' })
     await reloadMaintenanceMode()
     // Only a Google-verified address of a staff account gets past; nothing else is told apart.
@@ -281,6 +290,8 @@ describe('Google sign-in in full', () => {
       memberUnverified: googleProfile(member.email, false),
       staffUnverified: googleProfile(staff.email, false),
       noEmail: googleProfile(undefined),
+      linkToDeleted: deletedLink,
+      inactive: googleProfile(inactive.email),
     }
 
     const answers: Record<string, unknown> = {}
@@ -306,6 +317,21 @@ describe('Google sign-in in full', () => {
       code: 'MAINTENANCE_MODE',
       message: 'Back at noon.',
     })
+  })
+
+  it('refuses a profile with no account even when a row holds the id read in its place', async () => {
+    const [placeholder] = await sql<{ id: string }[]>`
+      insert into users (id, email, email_verified_at)
+      values ('00000000-0000-0000-0000-000000000000', ${googleEmail()}, now())
+      returning id`
+    if (!placeholder) throw new Error('the nil-id user was not inserted')
+    await makeStaff(placeholder.id, 'owner')
+    const profile = googleProfile(googleEmail())
+    await enterFull()
+
+    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+
+    expect(await googleLinks({ providerId: profile.id })).toBe(0)
   })
 
   it('reads a platform role for a profile with no account too, so the refusal costs the same', async () => {

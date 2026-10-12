@@ -90,9 +90,10 @@ const NOTICED_KINDS: ReadonlySet<ChangeKind> = new Set(['switch_on', 'escalate',
 const NO_REASON = 'No reason given.'
 
 /**
- * The nil UUID, an id no account has (`users.id` defaults to `uuidv7()`):
- * read in place of a missing user id, so a sign-in that reaches no account
- * costs the same role read as one that does.
+ * The nil UUID, an id no account is expected to have (`users.id` defaults to
+ * `uuidv7()`): read in place of a missing user id, so a sign-in that reaches
+ * no account costs the same role read as one that does. The read's result is
+ * ignored, so a row imported with this id grants nothing.
  */
 const NO_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000'
 
@@ -112,7 +113,9 @@ export async function assertSignInAllowed(userId: string | undefined): Promise<v
   if (snapshot.mode !== 'full') return
   // The same role read with or without an account, so a refusal's timing does not tell them apart.
   const platformRole = await getPlatformMembership(userId ?? NO_ACCOUNT_ID)
-  if (platformRole === null) throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+  if (userId === undefined || platformRole === null) {
+    throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+  }
 }
 
 /**

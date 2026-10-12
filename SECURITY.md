@@ -841,13 +841,17 @@ refusal is decided in `requireAuth`, which lets platform staff through.
   (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is
   written (`assertSignInAllowed`). The Google callback runs the same check on
   a read-only account lookup before `resolveGoogleUser`, so a non-staff Google
-  sign-in in `full` creates, links and claims nothing (`completeGoogleSignIn`,
-  `src/services/google-auth.service.ts`). The lookup matches an email only
-  when Google verified it, as `resolveGoogleUser` does. A profile that reaches
-  no account cannot be staff, so it is refused too, ahead of the 400 or 403 a
-  missing or unverified email would otherwise get: every refused Google caller
-  gets the same 503 after the same role read, whether the address is unknown,
-  a customer's or staff's.
+  sign-in that starts in `full` creates, links and claims nothing
+  (`completeGoogleSignIn`, `src/services/google-auth.service.ts`). The lookup
+  matches an email only when Google verified it, as `resolveGoogleUser` does.
+  A profile that reaches no account cannot be staff, so it is refused too:
+  every refused Google caller gets the same 503 after the same role read,
+  whether the address is unknown, a customer's or staff's, ahead of the 400
+  (no email), 403 (unverified email) or 401 (a link to a deleted account, or
+  an inactive account) it would otherwise get. The check runs again on the
+  resolved account: a switch to `full`, or a platform role revoked, while a
+  callback is between the two checks is refused there, after
+  `resolveGoogleUser` has written.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
   limiter (10 a minute), and, to switch on or escalate, a `confirm` equal to
   `APP_ENV`. A stale `expectedVersion` answers 409. The change and its audit
