@@ -286,8 +286,9 @@ Logins and rotations take `FOR SHARE`, and their `FOR SHARE` locks never
 conflict with each other. A concurrent login's `last_logged_in_at` update, and
 a login's rehash of an old-cost hash (one UPDATE after its transaction
 commits, outside any transaction), do wait for the `FOR SHARE` transactions
-open on the row; each holds it for one token insert (a login) or one rotation
-(a refresh). The reuse and lifetime
+open on the row; each holds it for one token insert (a login, and, when the
+hash changed since its first read, one password compare) or one rotation (a
+refresh). The reuse and lifetime
 kills run after the rotation's transaction commits, in a transaction of their
 own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE` transaction would
 deadlock two concurrent reuses. `revokeAllSessions`, the pass that a reset and
