@@ -672,10 +672,15 @@ describe('/api/v1/platform route gates', () => {
     ]
 
     /**
-     * Sends one variant to `path` with a bearer token.
+     * Sends one variant to `path`, with a bearer token unless `token` is undefined.
      */
-    function send(path: string, token: string, variant: RequestVariant): Promise<Response> {
-      const pending = request(app)[variant.method](path).set('Authorization', `Bearer ${token}`)
+    function send(
+      path: string,
+      token: string | undefined,
+      variant: RequestVariant
+    ): Promise<Response> {
+      const pending = request(app)[variant.method](path)
+      if (token !== undefined) pending.set('Authorization', `Bearer ${token}`)
       if (variant.origin !== undefined) pending.set('Origin', variant.origin)
       if (variant.contentType !== undefined) pending.set('Content-Type', variant.contentType)
       return variant.body === undefined ? pending : pending.send(variant.body)
@@ -702,10 +707,10 @@ describe('/api/v1/platform route gates', () => {
     }
 
     /**
-     * Sends one variant to the route and to an unknown sibling auth path, with the same token.
+     * Sends one variant to the route and to an unknown sibling auth path, with the same token or none.
      */
     async function againstSibling(
-      token: string,
+      token: string | undefined,
       variant: RequestVariant
     ): Promise<{ route: Response; sibling: Response }> {
       const route = await send(REAUTH_PATH, token, variant)
@@ -717,6 +722,15 @@ describe('/api/v1/platform route gates', () => {
       'answers a signed-in non-staff caller exactly what an unknown auth path answers: $label',
       async (variant) => {
         const { route, sibling } = await againstSibling(await tokenFor(undefined), variant)
+
+        expect(observable(route)).toEqual(observable(sibling))
+      }
+    )
+
+    it.each(VARIANTS.filter((variant) => variant.method === 'options'))(
+      'answers an anonymous caller exactly what an unknown auth path answers: $label',
+      async (variant) => {
+        const { route, sibling } = await againstSibling(undefined, variant)
 
         expect(observable(route)).toEqual(observable(sibling))
       }
