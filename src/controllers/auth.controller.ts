@@ -366,6 +366,8 @@ class AuthController extends BaseController {
    * The one exception: a login or Google sign-in in another tab that lands
    * while a dead-cookie refresh is in flight loses its own fresh cookie too,
    * since the clear is by name — that user just signs in again.
+   * A current cookie sent with an empty value answers 401 and is cleared the
+   * same way; a request with no current cookie clears nothing.
    * The limiter's 429 and a 5xx never clear. Under COOKIE_SECURE a request
    * carrying only an unprefixed `refreshToken` cookie answers 401 and leaves
    * that cookie and its session alone: it is never read.
@@ -374,7 +376,11 @@ class AuthController extends BaseController {
   refresh = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const rawToken = readRefreshTokenCookie(request)
-    if (!rawToken) throw new HttpError('Missing refresh token', 401)
+    if (!rawToken) {
+      // An empty current cookie can never refresh: clear it as any other 401 does, or the browser sends it on every refresh.
+      if (rawToken === '') clearPresentedRefreshCookie(request, response)
+      throw new HttpError('Missing refresh token', 401)
+    }
 
     const refreshed = await refreshOrClearCookie(request, response, rawToken)
 

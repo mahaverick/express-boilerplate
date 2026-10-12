@@ -982,6 +982,66 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     expect(clears.filter((line) => !ANY_DOMAIN.test(line))).toHaveLength(1)
   })
 
+  it('clears both scopes of the plain name for an empty refreshToken when COOKIE_DOMAIN is set', async () => {
+    const app = appWith(PLAIN_SCOPED)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', `${PLAIN_COOKIE}=`)
+
+    expect(refreshed.status).toBe(401)
+    expect((refreshed.body as { message?: string }).message).toBe('Missing refresh token')
+    const clears = cookieLines(refreshed, PLAIN_COOKIE)
+    expect(clears).toHaveLength(2)
+    expect(clears.every((line) => EPOCH_EXPIRY.test(line) && PATH_AUTH.test(line))).toBe(true)
+    expect(clears.filter((line) => SCOPED_DOMAIN.test(line))).toHaveLength(1)
+    expect(clears.filter((line) => !ANY_DOMAIN.test(line))).toHaveLength(1)
+  })
+
+  it.each(SECURE_ROWS)(
+    'clears an empty current cookie under COOKIE_SECURE, and nothing under the unprefixed name ($label)',
+    async ({ env, name, path, domain }) => {
+      const app = appWith(env)
+
+      const refreshed = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${name}=`)
+
+      expect(refreshed.status).toBe(401)
+      const currentLines = cookieLines(refreshed, name)
+      expect(currentLines).toHaveLength(1)
+      expect(currentLines[0]).toMatch(EPOCH_EXPIRY)
+      expectRefreshAttributes(currentLines[0], { path, isSecure: true, domain })
+      expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
+    }
+  )
+
+  it('clears nothing when no refresh cookie came at all', async () => {
+    const app = appWith(PLAIN_SCOPED)
+
+    const refreshed = await request(app).post('/api/v1/auth/refresh')
+
+    expect(refreshed.status).toBe(401)
+    expect(refreshed.headers['set-cookie']).toBeUndefined()
+  })
+
+  it.each(SECURE_ROWS)(
+    'clears nothing under COOKIE_SECURE for an empty unprefixed refreshToken, which is never read ($label)',
+    async ({ env, name }) => {
+      const app = appWith(env)
+
+      const refreshed = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=`)
+
+      expect(refreshed.status).toBe(401)
+      expect(cookieLines(refreshed, name)).toHaveLength(0)
+      expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
+    }
+  )
+
   it.each(SECURE_ROWS)(
     'clears only the current cookie when both came and the current one fails ($label)',
     async ({ env, name, path, domain }) => {

@@ -259,7 +259,7 @@ can never be redeemed as a refresh token.
   answers 401 and the session is revoked. An expired token is refused without
   touching its session.
 - **A 401 clears the cookie it read**, so the browser stops presenting a dead
-  token. A 429 or a 5xx clears nothing.
+  token; an empty cookie is cleared too. A 429 or a 5xx clears nothing.
 
 `POST /auth/logout` needs no access token, since a user whose access token has
 just expired must still be able to sign out. It revokes the presented cookie's
