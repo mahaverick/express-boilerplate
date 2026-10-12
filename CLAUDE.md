@@ -90,9 +90,10 @@ points at the code or doc that holds the detail. How things work is in
   gate runs first:** `requirePlatformRole`, then `requireJsonContentType`, then
   `requireRecentAuth()` where it applies, then the limiter. Anything earlier
   answers a non-staff caller with a 415, `RateLimit-*` headers or a 401
-  `REAUTH_REQUIRED`, and so reveals the route. Keep `refusePlatformOptions`
-  ahead of every staff route, or Express answers OPTIONS with an `Allow`
-  header. A new route needs its row in
+  `REAUTH_REQUIRED`, and so reveals the route. Keep `refusePlatformOptions` on
+  every staff route's path (ahead of every `/platform` route; right after the
+  auth router's JSON gate for `/auth/reauthenticate`), or Express answers
+  OPTIONS with an `Allow` header. A new route needs its row in
   `tests/integration/api/platform-route-gates.test.ts`. See
   [SECURITY.md](SECURITY.md#platform-staff).
 - **Only `src/services/platform-*.service.ts` import the five cross-tenant

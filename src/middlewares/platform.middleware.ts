@@ -60,7 +60,9 @@ export function requirePlatformRole(
  * token with 401, as it does every `/platform` request. The auth router mounts
  * it on `/reauthenticate` alone, after its router-wide JSON gate and with no
  * `requireAuth`, since an unknown auth path answers any caller's OPTIONS with
- * the same 404. Must run before every route it covers.
+ * the same 404. It must sit on the path ahead of any handler that answers
+ * OPTIONS; an OPTIONS skips a route registered for another method, which is
+ * why the auth router can register `POST /reauthenticate` ahead of it.
  * @param request - The incoming request.
  * @param _response - Unused.
  * @param next - Continues the chain, or receives the 404.
