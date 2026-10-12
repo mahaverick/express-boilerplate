@@ -255,6 +255,23 @@ describe('what PostHog sees of the client', () => {
     expect(received?.headers.cookie).toBeUndefined()
     expect(received?.headers.authorization).toBeUndefined()
   })
+
+  // httpxy skips the proxyReq hook for a request carrying Expect, so such a request would reach PostHog unprepared.
+  it('refuses a request carrying Expect with 417 and forwards nothing', async () => {
+    const { app, posthog } = running()
+
+    const response = await request(app)
+      .post('/api/v1/collect/e/')
+      .set('expect', '100-continue')
+      .set('cookie', '__Host-refreshToken=not-a-real-token')
+      .set('authorization', 'Bearer not-a-real-token')
+      .set('x-forwarded-for', '203.0.113.9')
+      .send('x')
+
+    expect(response.status).toBe(417)
+    expect(response.body).toMatchObject({ success: false, code: 'expectation_failed' })
+    expect(posthog.requests).toEqual([])
+  })
 })
 
 describe('what the browser sees of PostHog', () => {
