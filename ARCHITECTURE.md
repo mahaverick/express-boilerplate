@@ -532,12 +532,12 @@ cover both, and boot refuses otherwise.
 ### Email tracking
 
 Every outbound email is one `email_messages` row, created when the mail is
-queued (in the caller's transaction when it has one), or by the email worker
-for a job that reaches it without one: the recipient, the template, the user, tenant and invitation it is
-about, the frontend its link opens (`link_app`), the sender class, its
-`Message-ID`, and the template's `previewVariables`, never a rendered body, a
-link or a token. Each send attempt is an append-only `email_logs` row, and
-each provider event an `email_events` row. A status only moves to a higher
+queued (in the caller's transaction when it has one), or by the email worker for
+a job that reaches it without one: the recipient, the template, the user, tenant
+and invitation it is about, the frontend its link opens (`link_app`), the sender
+class, its `Message-ID`, and the template's `previewVariables`, never a rendered
+body, a link or a token. Each send attempt is an append-only `email_logs` row,
+and each provider event an `email_events` row. A status only moves to a higher
 rank (`EMAIL_STATUS_RANK`, `src/constants/email.constants.ts`), so a fast
 `delivered` event is never overwritten by the worker's `sent`; `opened` and
 `clicked` never change it.
@@ -551,11 +551,14 @@ per provider event id, and a hard bounce or complaint suppresses the address.
 
 The sender follows the template's sender class and nothing else
 (`src/utilities/email-sender.utilities.ts`): a template whose links carry a
-token goes from `MAIL_FROM_TRANSACTIONAL` (or `MAIL_FROM` while that is
-unset), everything else from `MAIL_FROM`. Outside `local`, boot warns when both
-senders share a domain; why is in [SECURITY.md](SECURITY.md#mail-at-rest). The operator guide (the Resend webhook, suppressions,
-preview and resend, and `pnpm email:fire-event`) is
-[Email tracking in README.md](README.md#email-tracking).
+token goes from `MAIL_FROM_TRANSACTIONAL` (or `MAIL_FROM` while that is unset),
+everything else from `MAIL_FROM`. Outside `local`, boot warns when both senders
+share a domain; why is in [SECURITY.md](SECURITY.md#mail-at-rest). The operator
+guide (the Resend webhook, suppressions, preview and resend, and
+`pnpm email:fire-event`) is
+[Email tracking in README.md](README.md#email-tracking). Keep
+`MAIL_FROM_TRANSACTIONAL` on its own domain with click tracking off; the steps
+are under "Two senders" in [README.md](README.md#email-tracking).
 
 ## Background work: queues, schedulers, the outbox, retention
 
@@ -573,16 +576,16 @@ missing from it.
 | `maintenance`  | The retention purge                                                        | 1                    | 3 attempts, backoff from 60 s                                      |
 | `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
 
-Every Worker's `failed` handler first calls
-`reportFinalJobFailure`, which reports the attempt BullMQ will not retry
-(`attemptsMade >= attempts`, or an `UnrecoverableError`) to error tracking. The
-email, notification and maintenance handlers then log a retryable attempt at
-`warn`; on the final one `recordPermanentFailure`
-(`src/jobs/job-failure.job.ts`) scrubs the stored payload, marks an email's
-message `failed`, and logs `job failed permanently` once. What a job payload
-may hold, and for how long, is in [SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a `warn`: a
-failed tick loses nothing. No handler rejects, since an unhandled rejection
-exits the process.
+Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
+reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
+`UnrecoverableError`) to error tracking. The email, notification and maintenance
+handlers then log a retryable attempt at `warn`; on the final one
+`recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
+payload, marks an email's message `failed`, and logs `job failed permanently`
+once. What a job payload may hold, and for how long, is in
+[SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a
+`warn`: a failed tick loses nothing. No handler rejects, since an unhandled
+rejection exits the process.
 
 `startWorkers()` starts the email, notification and maintenance Workers, and
 the analytics Worker when analytics or the staff timelines are configured.
@@ -706,9 +709,10 @@ steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
 
 No request handler calls PostHog's private API (`/api/projects/…`), except the
 staff timeline reads on a cache miss and the Errors reads, which cache nothing,
-both within the hourly query budget. Server events reach PostHog only through the outbox drain and the error
-reporter, both through `sendBatch` (`posthog-batch.service.ts`); browser events
-reach it only through the `/api/v1/collect` proxy.
+both within the hourly query budget. Server events reach PostHog only through
+the outbox drain and the error reporter, both through `sendBatch`
+(`posthog-batch.service.ts`); browser events reach it only through the
+`/api/v1/collect` proxy.
 
 ```
 request ── service transaction ── audit insert ── savepoint: analytics_outbox insert
@@ -835,15 +839,14 @@ passes; it also waits for a request already in flight, which may carry the
 fatal event. A process fault flushes for `ERROR_FATAL_FLUSH_MS` (2 s) and
 graceful shutdown for `ERROR_SHUTDOWN_FLUSH_MS` (3 s).
 
-**`errorId` and the route.** Every 5xx `errorHandler` writes carries an
-`errorId` in its body and on its log line; a reported error's id is its
-`$exception` uuid. A `TimelineUnavailableError` 502 also carries one, but it
-names nothing: that error is neither logged nor reported there. The route
-template on an event comes from `recordRouteTemplate`
+**`errorId` and the route.** Every 5xx `errorHandler` writes, except a
+maintenance refusal, carries an `errorId` in its body and on its log line; a
+reported error's id is its `$exception` uuid. A `TimelineUnavailableError` 502
+also carries one, but it names nothing: that error is neither logged nor
+reported there. The route template on an event comes from `recordRouteTemplate`
 (`route-template.middleware.ts`): Express restores `request.baseUrl` before an
 error reaches `errorHandler`, so the mount path is recorded when the router
-assigns `request.route`, and a mount parameter's value is put back as its
-name.
+assigns `request.route`, and a mount parameter's value is put back as its name.
 
 **Staff views.** `GET /platform/users/:id/errors` and
 `GET /platform/tenants/:id/errors` (`platform-errors.service.ts`) list the
@@ -1247,21 +1250,21 @@ answers 503 at its deadline.
 ### Deploying
 
 A push to `main` runs `.github/workflows/deploy.yml`. It calls `ci.yml` as a
-gate (`workflow_call`), then builds and pushes `ghcr.io/<repo>:sha-<commit>`
-and `:main` to GHCR with an SBOM and a build provenance attestation, passing
-the commit sha as `GIT_SHA`, then runs the `deploy` job in the `production`
-environment. That job is a placeholder: no deployment target is chosen. A
-manual `workflow_dispatch` from another branch builds and pushes only the sha
-image. A `vX.Y.Z` tag builds nothing: its `promote` job waits for the image
-`main` built for that commit and adds `:X.Y.Z`, `:X.Y` and `:X` to the same
-digest ([CONTRIBUTING.md](CONTRIBUTING.md#releases)). The image job also passes
-the frontends' source-map settings (`POSTHOG_SOURCEMAP_PROJECTS`,
+gate (`workflow_call`), then builds and pushes `ghcr.io/<repo>:sha-<commit>` and
+`:main` to GHCR with an SBOM and a build provenance attestation, passing the
+commit sha as `GIT_SHA`, then runs the `deploy` job in the `production`
+environment. That job is a placeholder: no deployment target is chosen. A manual
+`workflow_dispatch` from another branch builds and pushes only the sha image. A
+`vX.Y.Z` tag builds nothing: its `promote` job waits for the image `main` built
+for that commit and adds `:X.Y.Z`, `:X.Y` and `:X` to the same digest
+([CONTRIBUTING.md](CONTRIBUTING.md#releases)). The image job also passes the
+frontends' source-map settings (`POSTHOG_SOURCEMAP_PROJECTS`,
 `POSTHOG_CLI_HOST`, `POSTHOG_CLI_TOKEN`), which the frontend images use to
-upload source maps; this Dockerfile uses only `GIT_SHA`. `ci.yml`'s concurrency group
-is keyed on `github.event_name`, because under `workflow_call`
+upload source maps; this Dockerfile uses only `GIT_SHA`. `ci.yml`'s concurrency
+group is keyed on `github.event_name`, because under `workflow_call`
 `github.workflow` is the caller's name. CI's `docker` job builds the image with
-a known `GIT_SHA` and checks that `/health` reports it and that the process
-runs with `--enable-source-maps`.
+a known `GIT_SHA` and checks that `/health` reports it and that the process runs
+with `--enable-source-maps`.
 
 `release.yml` merges its release PR with `--auto`, falling back to a direct
 merge. Only a ruleset on `main` that requires the checks `lint`, `test`,

@@ -152,14 +152,14 @@ the operator guide.
 `RESEND_WEBHOOK_SECRET`; the adapter is enabled only while that is set, and
 without it the route answers 404. Every other event type is acknowledged and
 ignored. A permanent bounce and a complaint suppress the address; a transient
-bounce is a delay and suppresses nothing. `email.suppressed` (Resend's own
-list blocked the send) marks the message failed and adds no local
-suppression. The webhook's limiters and signature check are in
-[SECURITY.md](SECURITY.md). The rejected-request limiter counts a request
-while it is in flight and refunds it only when it ends under 400, so more than
-60 concurrent deliveries from one provider IP can be throttled (providers
-retry, and the event id makes a retry exact). A wrong `TRUST_PROXY` puts every
-caller in the proxy's single per-IP bucket.
+bounce is a delay and suppresses nothing. `email.suppressed` (Resend's own list
+blocked the send) marks the message failed and adds no local suppression. The
+webhook's limiters and signature check are in
+[SECURITY.md](SECURITY.md#mail-at-rest). The rejected-request limiter counts a
+request while it is in flight, so a burst of concurrent deliveries from one
+provider IP past its budget ([SECURITY.md](SECURITY.md#mail-at-rest)) can be
+throttled (providers retry, and the event id makes a retry exact). A wrong
+`TRUST_PROXY` puts every caller in the proxy's single per-IP bucket.
 
 **Two senders.** Token emails (verification, password reset, account setup,
 invitations) go from `MAIL_FROM_TRANSACTIONAL`; the other mail goes from
@@ -196,18 +196,18 @@ the user's address: they belong to the mailbox, not the account.
   reports rates over the messages that left the server. Without a webhook
   every successful send stays `sent`, and every rate except the undelivered
   rate is `null` until a provider event arrives.
-- `GET /platform/emails/:id/preview` re-renders the stored template with
-  every token masked (`••••••`) and the inviter as "A teammate"; a stored
-  variable a legacy row lacks is masked too and sets `partial: true`. Apex
+- `GET /platform/emails/:id/preview` re-renders the stored template with every
+  token masked (`••••••`) and the inviter as "A teammate"; a preview variable
+  the row does not hold as a string is masked too and sets `partial: true`. Apex
   shows it in a sandboxed `srcdoc` iframe under the page's CSP, so a remote
   image added to a template does not load in the preview.
 - `POST /platform/emails/:id/resend` (admin, with a reason) never replays a
   mail. It runs the action that sent it, which issues a fresh token, and that
   action's role rules, errors and audit entry apply unchanged; `email.resent`
-  records the reason beside it. A template with no resend action (`password_changed`,
-  `registration_attempt`, `onboarding_reminder`, `maintenance_mode_changed`)
-  is never resent, nor is a row without the ids its action needs (409
-  `not_resendable`); a suppressed recipient gets 409
+  records the reason beside it. A template with no resend action
+  (`password_changed`, `registration_attempt`, `onboarding_reminder`,
+  `maintenance_mode_changed`) is never resent, nor is a row without the ids its
+  action needs (409 `not_resendable`); a suppressed recipient gets 409
   `recipient_suppressed` and a template this build lacks 409
   `template_unavailable`. Every invitation resend needs a sign-in within the
   last 10 minutes (401 `REAUTH_REQUIRED`).
@@ -246,16 +246,15 @@ completions and the cohort by state; `GET /onboarding/tenants?state=` lists
 active tracked tenants in one state (`stuck` by default);
 `GET /tenants/:id/onboarding` returns one tenant's steps, members, reminder
 history and whether a reminder may go now;
-`POST /tenants/:id/onboarding/steps/:key/complete` (admin, with a reason)
-marks a step done. `POST /tenants/:id/onboarding/remind` (admin, with a
-reason) sends one `onboarding_reminder`
-email to each active owner, and goes only when the tenant is active, in progress or stuck, has an owner,
-and was not reminded in the last 24 hours (409 `tenant_state_conflict`,
-`not_in_progress`, `no_owner` or `reminded_recently`, whose
-`errors.retryAfter` says when the next may go). The reminder's email rows and
-audit entry commit together and the sends queue after; if queueing fails the
-audit entry stays, the email row is marked failed, and the answer says
-`emailSent: false`.
+`POST /tenants/:id/onboarding/steps/:key/complete` (admin, with a reason) marks
+a step done. `POST /tenants/:id/onboarding/remind` (admin, with a reason) sends
+one `onboarding_reminder` email to each active owner, and goes only when the
+tenant is active, in progress or stuck, has an owner, and was not reminded in
+the last 24 hours (409 `tenant_state_conflict`, `not_in_progress`, `no_owner` or
+`reminded_recently`, whose `errors.retryAfter` says when the next may go). The
+reminder's email rows and audit entry commit together and the sends queue after;
+if queueing fails the audit entry stays, the email row is marked failed, and the
+answer says `emailSent: false`.
 
 **`pnpm onboarding:reconcile`.** Subscribers run after the request commits and
 never fail it; one that fails only logs. The script re-completes the default
@@ -361,11 +360,12 @@ analytics. What is captured is in
 [ARCHITECTURE.md](ARCHITECTURE.md#error-tracking). Express needs no sourcemap
 upload: `node --enable-source-maps` rewrites stacks to the `.ts` lines.
 
-**Finding an error from its `errorId`.** Every 5xx body carries an `errorId`,
-and so does its `Unhandled server error` log line (except a timeline 502,
-whose id names nothing), so search the logs for it first. Error Tracking's UI
-does not search by event uuid; run this in SQL insights (HogQL) instead, which
-also gives the issue to open:
+**Finding an error from its `errorId`.** Every 5xx body that `errorHandler`
+writes, except a maintenance refusal, carries an `errorId`, and so does its
+`Unhandled server error` log line (except a timeline 502, whose id names
+nothing), so search the logs for it first. Error Tracking's UI does not search
+by event uuid; run this in SQL insights (HogQL) instead, which also gives the
+issue to open:
 
 ```sql
 select uuid, timestamp, properties.$exception_issue_id, properties.http_route, properties.trace_id
@@ -385,9 +385,9 @@ audited as `user.errors_viewed` and `tenant.errors_viewed`.
 `GET /api/v1/platform/system/status` answers the release and the reporter's
 sent and dropped counts.
 
-**`/health` names the release.** It answers `{ status, uptime, release }` and
-is public, so the deployed git sha is too. A private fork that does not want
-that drops `release` in `src/app.ts`.
+**`/health` names the release.** It answers `{ status, uptime, release }`; why
+that is public, and how a private fork drops it, is in
+[SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
 
 ### Feature flags
 
@@ -452,24 +452,22 @@ Runbook:
    A replica ignores a row whose version is not above the one it holds, so a
    restore to an earlier version leaves each replica on the old mode until it
    restarts.
-7. **Keep the clocks in sync (NTP) on the database and every replica.** The
-   10 s pause grace and the notice wait are measured from the time the
-   database stamps on the change, on each replica's own clock, so skew shifts when the queues
-   pause.
+7. **Keep the clocks in sync (NTP) on the database and every replica.** The 10 s
+   pause grace and the notice wait are measured from the time the database
+   stamps on the change, on each replica's own clock, so skew shifts when the
+   queues pause.
 8. **Failed notice jobs keep personal data.** A notice job that fails keeps the
    actor's name and the reason in its Redis job data until it is removed; the
    windows are in [SECURITY.md](SECURITY.md#mail-at-rest).
-
-The controls on a change (owner role, recent sign-in, typed environment name)
-are in [SECURITY.md](SECURITY.md#maintenance-mode). A switch-on, an escalation or a switch-off
-notifies every other platform owner and admin in-app and by email.
 
 ## Deploy
 
 - **Image.** The `Dockerfile` builds a non-root production image that starts
   only the app. Run migrations from the same image with
-  `node dist/database/migrate.js`, which reads only `DATABASE_URL`. The stages, the local `docker run` recipe and the health
-  endpoints are in [ARCHITECTURE.md](ARCHITECTURE.md#docker).
+  `node dist/database/migrate.js`, which reads only `DATABASE_URL`. The stages
+  and the local `docker run` recipe are in
+  [ARCHITECTURE.md](ARCHITECTURE.md#docker), and the probes in
+  [Health checks](ARCHITECTURE.md#health-checks).
 - **Pipeline.** A push to `main` runs CI, then builds and pushes the image to
   GHCR (`.github/workflows/deploy.yml`). The `deploy` job there is a
   placeholder: no deployment target is chosen, so wire your own. Release
@@ -505,7 +503,7 @@ No gate enforces this list.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, mechanisms, configuration and the env var table, Docker, deploy |
 | [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                                 |
 | [SECURITY.md](SECURITY.md)         | Threat model, defences, what is and is not implemented, reporting                              |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                                |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, extending the Apex API, docs to update        |
 | [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                                 |
 | [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                                        |
 

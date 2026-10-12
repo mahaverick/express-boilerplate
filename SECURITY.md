@@ -306,11 +306,11 @@ change or reset commits.
 - A reset, and a Google account claim, first run `revokeAllSessions`
   (`src/services/session.service.ts`) in a transaction of its own that takes the
   same lock and commits before the main transaction starts. It fails closed: if
-  it throws, the reset never stores the new password and the claim never
-  changes the account (the reset token is already spent by then). If the main transaction then fails,
-  every session that existed, and the successor of a rotation that was in
-  flight, stays revoked. The main transaction revokes again, for a session
-  created between the two.
+  it throws, the reset never stores the new password and the claim never changes
+  the account (the reset token is already spent by then). If the main
+  transaction then fails, every session that existed, and the successor of a
+  rotation that was in flight, stays revoked. The main transaction revokes
+  again, for a session created between the two.
 - A login re-reads the user row `FOR SHARE` before it issues its token, and
   a rotation holds the same lock while it claims. So either the login or
   rotation commits first and the password write revokes its session, or it waits
@@ -341,7 +341,9 @@ page's URL (`?token=`), so the frontend's access logs and its
 | Tenant invitation  | 32 random bytes, base64url, SHA-256 stored | `INVITATION_TTL` (`7d`)          | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
 
 `claimToken` spends a token before it judges its expiry, so presenting an
-expired token also spends it: one presentation is one attempt. The reset link is
+expired token also spends it: one presentation is one attempt. `claimToken` also
+matches the token's purpose, so a reset or account-setup token never verifies an
+address and a verification token never resets a password. The reset link is
 shorter-lived than the verification link because redeeming it takes the account
 over. Staff never set a user's password: a staff-created account gets a
 set-password link.
@@ -411,9 +413,12 @@ RATE_LIMITED`. The recipient ceiling fails open when Redis does not answer.
 - An `email_messages` row refuses template variables whose key ends in `Url` or
   `Token` (`src/repositories/email-message.repository.ts`), so no stored row
   holds a link or a token.
-- Token mails go out from their own sender, on a domain with click tracking
-  off, so a provider never rewrites a token link through itself; the rule and
-  the boot warning are in [README.md](README.md#email-tracking).
+- Token mails go out from `MAIL_FROM_TRANSACTIONAL`, which belongs on a
+  domain with click tracking off, so a provider never rewrites a token link
+  through itself. While it is unset they go from `MAIL_FROM`, and outside
+  `local` boot warns whenever the two share a domain
+  (`src/configs/env-consistency.config.ts`). Setting it up is in
+  [README.md](README.md#email-tracking).
 - The email webhook is public, so each adapter verifies the provider's
   signature over the raw body before reading it (Resend: Svix HMAC-SHA256 with a
   5-minute timestamp tolerance, `src/services/email-webhook-resend.service.ts`).
@@ -517,15 +522,16 @@ Step-up guards:
   a removal, and an invitation's send, resend or revoke
   (`requireRecentAuthAndReasonOnPlatformAccess`).
 
-Staff actions that change an account's, a tenant's or a mail's state record
-why: deactivating, reactivating, signing out, deleting and purging a user;
+Staff actions that change an account's, a tenant's or a mail's state record why:
+deactivating, reactivating, signing out, deleting and purging a user;
 suspending, reactivating, archiving and purging a tenant; re-inviting its owner;
 resending an email; lifting a suppression; completing an onboarding step or
 sending a reminder; and the member and invitation writes made through platform
 access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
-`src/validators/platform.validators.ts`) goes into the audit entry's metadata. Staff acting in a customer tenant through their platform
-role send it in the body or get `400 REASON_REQUIRED`, and the services check it
-again under the lock.
+`src/validators/platform.validators.ts`) goes into the audit entry's metadata.
+Staff acting in a customer tenant through their platform role send it in the
+body or get `400 REASON_REQUIRED`, and the services check it again under the
+lock.
 
 ### The audit log
 
@@ -534,15 +540,15 @@ same transaction as the change, platform joins and grants, every staff action on
 a user, a tenant, an email or a suppression, each staff step-up, staff visits,
 and throttled staff reads of a timeline, an errors view or a flag evaluation.
 Each action's metadata has a strict schema (`src/constants/audit.constants.ts`);
-invitation entries keep the address's domain, never the address or the token.
-A `BEFORE UPDATE OR DELETE` trigger refuses every update and delete except
-the retention purge and the owner purges (created in
-`0016_platform_access.sql`, its function extended in `0017_retention.sql` and
-`0019_audit_redact.sql`). `TRUNCATE` is left open on purpose, for test and ops
-resets. The trigger guards against a stray statement in application code; it is
-not a privilege boundary, since any role that can run arbitrary SQL can set the
-same transaction settings or truncate the table, so revoke `UPDATE`, `DELETE`
-and `TRUNCATE` on `audit_logs` from every role but the app's. A tenant's audit log is readable by
+invitation entries keep the address's domain, never the address or the token. A
+`BEFORE UPDATE OR DELETE` trigger refuses every update and delete except the
+retention purge and the owner purges (created in `0016_platform_access.sql`, its
+function extended in `0017_retention.sql` and `0019_audit_redact.sql`).
+`TRUNCATE` is left open on purpose, for test and ops resets. The trigger guards
+against a stray statement in application code; it is not a privilege boundary,
+since any role that can run arbitrary SQL can set the same transaction settings
+or truncate the table, so revoke `UPDATE`, `DELETE` and `TRUNCATE` on
+`audit_logs` from every role but the app's. A tenant's audit log is readable by
 its owners and admins; the platform audit log by platform owners and admins. The
 IP, user agent and request id are stored and never returned.
 
@@ -555,7 +561,8 @@ purge removes the row, nulls their actor id, IP and user agent in the audit
 entries they acted in, and queues the deletion of their PostHog person with its
 events and recordings. A tenant purge removes the tenant and its own audit
 entries. Each purge is recorded in the platform tenant.
-[ARCHITECTURE.md](ARCHITECTURE.md) describes what stays in PostHog.
+[ARCHITECTURE.md](ARCHITECTURE.md#analytics), under Purges and what stays in
+PostHog, describes what stays there.
 
 ## Input and output
 
@@ -577,10 +584,10 @@ entries. Each purge is recorded in the platform tenant.
 - **The error envelope.** `errorHandler` (`src/middlewares/error.middleware.ts`)
   answers every 5xx but a maintenance refusal with `Internal server error` and
   an `errorId`, whatever the error says. A maintenance `503` shows the owner's
-  message and `Retry-After`, and carries no `errorId`. Below 500, an `HttpError`'s message is shown, since it is written
-  for the client; any other error's message only when it is marked for exposure,
-  else the status's reason phrase. `errorId` grants nothing: it names a log line
-  and an error event.
+  message and `Retry-After`, and carries no `errorId`. Below 500, an
+  `HttpError`'s message is shown, since it is written for the client; any other
+  error's message only when it is marked for exposure, else the status's reason
+  phrase. `errorId` grants nothing: it names a log line and an error event.
 - **Logged errors lose their bound query values.** A failed query's error
   message embeds its bound parameters, which for a failed `insert into users`
   are the address and the bcrypt hash. The logger replaces every query error
@@ -675,8 +682,11 @@ The refresh cookie does not depend on it.
 
 ## Analytics and error tracking privacy
 
-With `POSTHOG_PROJECT_KEY` unset, the API sends nothing to PostHog and the
-collect proxy answers 503 (`src/configs/analytics.config.ts`).
+With `POSTHOG_PROJECT_KEY` unset, no event reaches PostHog and the collect
+proxy answers 503 (`src/configs/analytics.config.ts`). The staff timeline and
+Errors reads and the deletion of purged users use the personal API key
+instead, and run whenever `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`
+are set.
 
 ### The analytics proxy
 
@@ -804,10 +814,10 @@ The auth limiters each answer a specific threat:
   refresh token is 256 random bits. Logout's budget is generous because a 429
   leaves the cookie uncleared.
 
-There is no global limiter: most authenticated reads mount none.
-Notification streams are capped per process: `SSE_MAX_STREAMS_PER_USER`
-(default 5) answers `429 too_many_streams`, and `SSE_MAX_STREAMS_TOTAL` (default 2000) answers `503 stream_capacity`; a stream ends when its access token
-expires.
+There is no global limiter: most authenticated reads mount none. Notification
+streams are capped per process: `SSE_MAX_STREAMS_PER_USER` (default 5) answers
+`429 too_many_streams`, and `SSE_MAX_STREAMS_TOTAL` (default 2000) answers
+`503 stream_capacity`; a stream ends when its access token expires.
 
 ## Maintenance mode
 
@@ -835,8 +845,8 @@ refusal is decided in `requireAuth`, which lets platform staff through.
 - The public `GET /status/maintenance` returns the mode, the customer message
   and when it began, never the internal reason or who changed it.
 
-[ARCHITECTURE.md](ARCHITECTURE.md) describes the store, the reload and the queue
-pause.
+[ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode) describes the store, the
+reload and the queue pause.
 
 ## What this boilerplate does not implement
 

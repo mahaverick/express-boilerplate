@@ -3,11 +3,11 @@
 ## Setup
 
 Follow the [README](README.md) quick start first. Running tests locally needs
-the compose stack up: `tests/integration/**` needs Postgres and Redis. The
-suite loads `.env.test.local` and then `.env.test`, never `.env`. `tests/unit/**` needs neither, but only under
-`pnpm test:unit`; `pnpm test`'s globalSetup provisions the test databases
-before any test runs, so it needs the stack even for unit tests
-([DATABASE.md](DATABASE.md#the-test-database)).
+the compose stack up: `tests/integration/**` needs Postgres and Redis. The suite
+loads `.env.test.local` and then `.env.test`, never `.env`. `tests/unit/**`
+needs neither, but only under `pnpm test:unit`; `pnpm test`'s globalSetup
+provisions the test databases before any test runs, so it needs the stack even
+for unit tests ([DATABASE.md](DATABASE.md#the-test-database)).
 
 ## Before you open a PR
 
@@ -61,8 +61,8 @@ version. The `pr-title` workflow runs commitlint over the title, so a PR title
 must be a conventional commit too.
 
 **A breaking change puts its migration text in the PR body, inside a commit
-override block.** The repository's squash-merge setting (a GitHub setting to confirm, not
-something in the repo files) commits the PR title and drops the PR
+override block.** The repository's squash-merge setting (a GitHub setting to
+confirm, not something in the repo files) commits the PR title and drops the PR
 description, so a `BREAKING CHANGE:` footer written in the description never
 reaches the commit, and the release notes carry the `!` but no migration text.
 release-please reads the merged PR's body, not only the commit, and uses the
@@ -173,9 +173,9 @@ Two more workflows run beside it:
 
 Never commit a real secret, even a test one that resembles a production value.
 `.env`, `.env.local`, `.env.development.local`, `.env.test.local` and
-`.env.production.local` are git-ignored; other `.env.*.local` names are not. `.env.test` is
-committed on purpose: every value in it is a fixture, and it is its own
-example, so do not add a copy beside it.
+`.env.production.local` are git-ignored; other `.env.*.local` names are not.
+`.env.test` is committed on purpose: every value in it is a fixture, and it is
+its own example, so do not add a copy beside it.
 
 ## Releases
 

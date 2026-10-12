@@ -412,16 +412,16 @@ as described so it does not build them a second time under the lock, then run
   and with no foreign key, and its `not_before` index, so it applies
   instantly on any database.
 
-- **`0024` blocks writes to `audit_logs` and `users` until the batch
-  commits.** It creates `maintenance_mode_state` (empty, so instant) and
-  inserts its one row. Swapping `audit_logs_target_type_check` drops the
-  constraint, which takes an `ACCESS EXCLUSIVE` lock on `audit_logs`, and
-  re-adds it, which scans every audit row while the lock is held; every
-  audited write waits. `maintenance_mode_state`'s foreign key (`changed_by`) to `users` takes
-  `SHARE ROW EXCLUSIVE` on `users`, so writes to a user row wait; reads do
-  not. There is no manual step, because the batch is one transaction and the
-  validation scan runs under the lock whatever order the statements take.
-  Apply it in a quiet window.
+- **`0024` blocks writes to `audit_logs` and `users` until the batch commits.**
+  It creates `maintenance_mode_state` (empty, so instant) and inserts its one
+  row. Swapping `audit_logs_target_type_check` drops the constraint, which takes
+  an `ACCESS EXCLUSIVE` lock on `audit_logs`, and re-adds it, which scans every
+  audit row while the lock is held; every audited write waits.
+  `maintenance_mode_state`'s foreign key (`changed_by`) to `users` takes
+  `SHARE ROW EXCLUSIVE` on `users`, so writes to a user row wait; reads do not.
+  There is no manual step, because the batch is one transaction and the
+  validation scan runs under the lock whatever order the statements take. Apply
+  it in a quiet window.
 
 - **`0025` holds `tenant_invitations` briefly.** Its nullable `ADD COLUMN
 last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on

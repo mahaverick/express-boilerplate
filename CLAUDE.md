@@ -18,7 +18,7 @@ points at the code or doc that holds the detail. How things work is in
   `lastLoggedInAt` and `autoJoinSafely` outside the transaction that re-reads
   the hash `FOR SHARE` and issues the token, so that lock covers only the
   re-read and the insert. The refresh kills run after the rotation commits,
-  never inside it. The full table is in
+  never inside it. The lock each of them takes is in
   [SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
 - **A wrong step-up password answers 400, never 401** (`reauthenticate`,
   `src/services/auth.service.ts`): clients sign out on a 401.
@@ -56,7 +56,8 @@ points at the code or doc that holds the detail. How things work is in
 
 - **A tenant route composes `resolveTenant()` and `requireRole(...)`, and the
   tenant comes from `:slug` only.** A header selector that can name a different
-  tenant than the path is a confused-deputy hole. Non-members get 404, not 403. To scope a new model: give it a `tenantId` column, take the tenant from
+  tenant than the path is a confused-deputy hole. Non-members get 404, not 403.
+  To scope a new model: give it a `tenantId` column, take the tenant from
   `tenantPrincipal(request)` (`src/controllers/helpers.controller.ts`), filter
   on it in the repository, and mount the route under `/tenants/:slug/…`.
 - **Services re-read the actor's role under lock and never trust
@@ -487,10 +488,9 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   type-aware rules. Bump TypeScript past that range only once a
   `typescript-eslint` release admits it, and lift the matching hold in
   `renovate.json` with it.
-- **Lift the TypeScript and Node holds in `renovate.json` deliberately, never
-  by merging a Renovate PR,** and bump `engines.node` and
-  `devEngines.runtime.version` by hand with them: Renovate leaves `>=` ranges
-  alone. See [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy).
+- **Lift the TypeScript and Node holds in `renovate.json` by hand, never by
+  merging a Renovate PR;** the steps are in
+  [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy).
 
 ## Never install
 
