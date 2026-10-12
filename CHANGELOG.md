@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.0.0](https://github.com/mahaverick/express-boilerplate/compare/v3.0.2...v4.0.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** every password-setting endpoint (register, reset, change password, verify-email and invitation sign-up) now rejects a password shorter than 15 characters, counted in code points. Existing shorter passwords still sign in. A second click on a used verification link now answers 409 email_already_verified instead of 400.
+
+### Features
+
+* **auth:** require passwords of at least 15 characters ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+
+
+### Bug Fixes
+
+* **analytics:** refuse proxied requests that carry Expect with 417 ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+* **auth:** rehash an old-cost password hash on a successful login ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+* **env:** refuse an opaque origin in CORS_ALLOWED_ORIGINS ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+* **maintenance-mode:** count removal attempts honestly in dedupeSchedulerJobs ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+* **retention:** bound every batch delete at its limit ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+* **sessions:** make revokeAllSessions fail closed on its own ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+* **verification:** answer 409 to a second click on a used link ([863a7f7](https://github.com/mahaverick/express-boilerplate/commit/863a7f71621045e80b1618bdb4de3e80388f567d))
+
 ## [3.0.2](https://github.com/mahaverick/express-boilerplate/compare/v3.0.1...v3.0.2) (2026-10-12)
 
 
