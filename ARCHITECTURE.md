@@ -277,8 +277,9 @@ in this order:
 
 1. the user row (`lockById`, `user.repository.ts`), for password writes,
    login, Google sign-in, refresh rotation, logout, the refresh kills, step-up,
-   the Google account claim, tenant creation and an owner invitation's accept
-   (`lockUserForOwnership`, `tenant-membership.service.ts`, before the claim);
+   the Google account claim, tenant creation, and an owner invitation's or
+   any platform-tenant invitation's accept (`lockUserForOwnership`,
+   `tenant-membership.service.ts`, before the claim);
    none of these goes on to lock a membership or tenant row;
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);

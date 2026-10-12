@@ -47,12 +47,13 @@ const userRepository = new UserRepository()
 /**
  * Lock a user's row `FOR SHARE` before a write that makes them a tenant
  * owner (`createTenant`, an owner invitation's `accept`, `changeRole` to
- * owner). It conflicts with the `FOR NO KEY UPDATE` a staff delete holds on
- * the same row (`lockStaffPair`, `platform-user.service.ts`), so the grant
- * either commits first and the delete's second ownership read finds the
- * tenant, or waits for the delete and finds the user gone. SHARE lets logins,
- * rotations and other grants through.
- * @param userId - The user about to become an owner.
+ * owner) or platform staff (any platform-tenant invitation's `accept`). It
+ * conflicts with the `FOR NO KEY UPDATE` a staff delete holds on the same row
+ * (`lockStaffPair`, `platform-user.service.ts`), so the grant either commits
+ * first and the delete sees it (its second ownership read finds a new tenant,
+ * its platform-role re-read finds a new role), or waits for the delete and
+ * finds the user gone. SHARE lets logins, rotations and other grants through.
+ * @param userId - The user about to become an owner or platform staff.
  * @param missing - The error for a user who is gone (soft-deleted, or never existed).
  * @param tx - The grant's transaction.
  * @returns Resolves once the row is locked.

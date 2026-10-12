@@ -97,8 +97,8 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
    * `'no key update'` is for password writes, the Google claim, logout and
    * the refresh kills, and still lets inserts that reference the user
    * through. `'share'` is for a login's re-read of the hash, a refresh
-   * rotation, or a write that makes the user a tenant owner
-   * (`lockUserForOwnership`), which wait for that write and let each other
+   * rotation, or a write that makes the user a tenant owner or platform
+   * staff (`lockUserForOwnership`), which wait for that write and let each other
    * through; a single-statement update of the row (last login, a profile
    * edit, verification) waits for a `'share'` holder to commit.
    * @param id - The user's id.
