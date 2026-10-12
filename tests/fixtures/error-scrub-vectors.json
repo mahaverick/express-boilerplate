@@ -2390,6 +2390,21 @@
     "expected": "Bearer [token],[redacted]"
   },
   {
+    "rule": "bearer",
+    "input": "x-auth: bearer realm=zqL9TcRAza, uri=zqS4WTGZ6E?+1 415 555 0100",
+    "expected": "x-auth: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "4ff95d0eaee22db9a64dca666708805d9bearer zqC3CYwbMo; csrf=zqI2ikjxQA",
+    "expected": "[secret]Bearer [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "+1 415 555 0100Basic zqR4FrSdmxY3HOMH, redirect_uri=/cb",
+    "expected": "[phone]Basic [token],[redacted]"
+  },
+  {
     "rule": "email",
     "input": "mailto:a@x.com%2Cb@y.com?body=secret",
     "expected": "mailto:[email][email]?[query]"

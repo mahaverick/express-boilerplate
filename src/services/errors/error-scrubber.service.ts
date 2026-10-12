@@ -251,13 +251,17 @@ const SCHEME_TAIL_PAIR = String.raw`[,;][ \t]*[\w.-]+=(?:${PLACEHOLDER}|[^\s"'\\
 
 /**
  * The `Bearer [token]` or `Basic [token]` an earlier rule wrote, with the pairs
- * joined to it. Group 1 is kept; the pairs become `,[redacted]`. It runs after
- * the key rules: a header-valued key (`, cookie=OAuth abc`) or an array value
- * is redacted past the first whitespace or `]`, where this rule would stop, so
- * taking its key first would leave the rest of its value in view.
+ * joined to it. Group 1 is kept; the pairs become `,[redacted]`. It runs
+ * after every other rule but the last key redaction. A header-valued key
+ * (`, cookie=OAuth abc`) or an array value is redacted past the first
+ * whitespace or `]`, where this rule stops, and a phone number, address or
+ * secret in a pair is replaced whole, so taking the pair first would leave
+ * the rest of the value, or of the number, in view. It may follow any
+ * character (`0100Bearer [token]`), so a pass that turns what precedes it
+ * into a placeholder does not change whether it matches.
  */
 const SCHEME_TAIL_PATTERN = new RegExp(
-  String.raw`\b((?:Bearer|[Bb]asic|BASIC) \[token\])(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
+  String.raw`((?:Bearer|[Bb]asic|BASIC) \[token\])(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
   'g'
 )
 
@@ -629,8 +633,9 @@ const EMAIL_PATTERN = new RegExp(
  * with whitespace after, or by an encoded `%2C` or `%3B` that the email rule
  * already took into the next address (`mailto:[email][email]?…`). The query
  * rule takes no word after `@`, so this query is left to this rule, which
- * runs after every other rule but the last key redaction, so a phone number,
- * IP address or secret in the query is replaced whole first. Group 1, the
+ * runs after every other rule but `SCHEME_TAIL_PATTERN` and the last key
+ * redaction, so a phone number, IP address or secret in the query is
+ * replaced whole first. Group 1, the
  * scheme and the addresses, is kept and the rest of the query, up to
  * whitespace, a quote, `<` or `>`, becomes `?[query]`, as the query rule
  * writes it. A bare address before `?` (`jane@localhost?x=1`) is not a URL,
@@ -1235,7 +1240,6 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
     redactRunningThrough(scrub, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
   const keyRanges = tokenKeyRanges(scrub, innerKeys)
   rejoinQueries(scrub)
-  apply(scrub, SCHEME_TAIL_PATTERN, afterGroup(',[redacted]'))
   apply(scrub, JWT_PATTERN, whole('[jwt]'))
   apply(scrub, SLASHED_SECRET_EMAIL_PATTERN, (match) =>
     isSlashedSecret(`${match[1] ?? ''}${LEADING_BASE64_PATTERN.exec(match[2] ?? '')?.[0] ?? ''}`)
@@ -1256,6 +1260,7 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
     isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
   apply(scrub, EMAIL_QUERY_PATTERN, afterGroup('?[query]'))
+  apply(scrub, SCHEME_TAIL_PATTERN, afterGroup(',[redacted]'))
   redactRanges(scrub, keyRanges)
   return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
 }
@@ -1319,10 +1324,7 @@ const PASSES_MAX = 3
  *    value step 3 already replaced (`AUTH_HEADER_PATTERN`). A value that takes a
  *    later such key runs on to the end of that key's value
  *    (`redactRunningThrough`). A query or fragment that a replaced value
- *    joins to its path is then replaced as in step 2 (`rejoinQueries`). Any
- *    `,key=value` or `;key=value` pairs still glued to a `Bearer [token]` or
- *    `Basic [token]` become `,[redacted]` (`SCHEME_TAIL_PATTERN`), while prose
- *    after a comma is kept.
+ *    joins to its path is then replaced as in step 2 (`rejoinQueries`).
  * 5. A JWT becomes `[jwt]`; an email address (`EMAIL_PATTERN`) becomes
  *    `[email]`, together with a secret-looking base64 run joined to its local
  *    part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`) or forming its domain
@@ -1337,7 +1339,10 @@ const PASSES_MAX = 3
  *    more base64 characters that `isSecretRun` accepts becomes `[secret]`. A
  *    UUID on its own matches none of these and is kept. Then the query of a
  *    URL whose path is addresses (`mailto:[email]?subject=…`), or straight
- *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`).
+ *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`). Last, any
+ *    `,key=value` or `;key=value` pairs still glued to a `Bearer [token]` or
+ *    `Basic [token]` become `,[redacted]` (`SCHEME_TAIL_PATTERN`), while prose
+ *    after a comma is kept.
  * 7. The value of a secret-named key that an earlier rule took into its
  *    placeholder, found again in the original text (`tokenKeyRanges`),
  *    becomes `[redacted]`. When there is one, the rules run again over the
