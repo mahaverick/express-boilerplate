@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2](https://github.com/mahaverick/express-boilerplate/compare/v3.0.1...v3.0.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **errors:** close the AWS-key, email-query and compass scrubber gaps ([#111](https://github.com/mahaverick/express-boilerplate/issues/111)) ([10de5c0](https://github.com/mahaverick/express-boilerplate/commit/10de5c021cbf1f5827ba31449fbe9a33c37bba1d))
+
 ## [3.0.1](https://github.com/mahaverick/express-boilerplate/compare/v3.0.0...v3.0.1) (2026-10-10)
 
 
