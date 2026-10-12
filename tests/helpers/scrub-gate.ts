@@ -10,7 +10,8 @@
  * - `hunt`: mutated cases from a fresh or given seed, for a count or a time;
  * - `vectors`: each row of the shared fixture against its expectation;
  * - `replay`: one case, `--replay corpus:<seed>:<index>` or `hunt:<seed>:<index>`;
- * - `slice`: rewrites the unit suite's slice file from the baseline.
+ * - `slice`: rewrites the unit suite's slice file from the baseline: per case,
+ *   the windows of each planted value the baseline leaves in view.
  *
  * Options: `--seed n`, `--count n`, `--seconds n`, `--baseline <sha>`,
  * `--candidate-sha <sha>` (compare two commits instead of the working
@@ -253,23 +254,26 @@ function checkVectors(candidate: Scrub): VectorReport {
 
 /**
  * Write the slice file the unit suite checks, formatted with the repository's
- * Prettier config. It records, per case index, which planted values (by
- * position) the baseline leaves partly in view (`allowed`), and which cases
- * the baseline changes on a second pass (`unstable`).
+ * Prettier config. It records, per case index and per planted value (by
+ * position), the windows of that value the baseline leaves in view
+ * (`allowed`), and which cases the baseline changes on a second pass
+ * (`unstable`).
  * @param baseline - The baseline scrubber.
  * @param options - The options.
  */
 async function writeSlice(baseline: Scrub, options: Options): Promise<void> {
   const seed = options.seed ?? CORPUS_SEED
-  const allowed: Record<string, number[]> = {}
+  const allowed: Record<string, Record<string, string[]>> = {}
   const unstable: number[] = []
   for (let index = 0; index < options.count; index += 1) {
     const testCase = corpusCase(seed, index)
     const output = baseline(testCase.input)
-    const shown = testCase.planted.flatMap((value, at) =>
-      visibleWindows(output, value).length > 0 ? [at] : []
-    )
-    if (shown.length > 0) allowed[index] = shown
+    const shown: Record<string, string[]> = {}
+    for (const [at, value] of testCase.planted.entries()) {
+      const windows = visibleWindows(output, value)
+      if (windows.length > 0) shown[at] = windows
+    }
+    if (Object.keys(shown).length > 0) allowed[index] = shown
     if (baseline(output) !== output) unstable.push(index)
   }
   const slice = {
