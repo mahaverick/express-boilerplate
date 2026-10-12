@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { findMailpitMessages } from '../../helpers/mailpit'
 
 /**
- * Stub `fetch` with an one-message search result and return the spy.
+ * Stub `fetch` with a one-message search result and return the spy.
  * @returns The stubbed fetch.
  */
 function stubFetch(): ReturnType<typeof vi.fn> {

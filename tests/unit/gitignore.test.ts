@@ -15,12 +15,17 @@ const checkIgnore = (file: string): number | null =>
   spawnSync('git', ['check-ignore', '-q', file], { cwd: process.cwd() }).status
 
 describe('.gitignore env files', () => {
-  it.each(['.env', '.env.local', '.env.qa.local', '.env.staging.local', '.env.test.local'])(
-    'ignores %s',
-    (file) => {
-      expect(checkIgnore(file)).toBe(0)
-    }
-  )
+  it.each([
+    '.env',
+    '.env.local',
+    '.env.development.local',
+    '.env.production.local',
+    '.env.qa.local',
+    '.env.staging.local',
+    '.env.test.local',
+  ])('ignores %s', (file) => {
+    expect(checkIgnore(file)).toBe(0)
+  })
 
   it.each(['.env.example', '.env.test'])('does not ignore %s', (file) => {
     expect(checkIgnore(file)).toBe(1)

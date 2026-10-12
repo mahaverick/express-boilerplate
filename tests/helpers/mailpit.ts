@@ -11,7 +11,7 @@ import { settle } from './timing'
  * @returns The API base URL, with one trailing slash, if any, dropped.
  */
 function mailpitApi(): string {
-  const base = process.env.MAILPIT_URL ?? 'http://localhost:8025'
+  const base = process.env.MAILPIT_URL?.trim() || 'http://localhost:8025'
   return `${base.replace(/\/$/, '')}/api/v1`
 }
 
