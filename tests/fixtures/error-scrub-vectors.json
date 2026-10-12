@@ -2405,6 +2405,11 @@
     "expected": "[phone]Basic [token],[redacted]"
   },
   {
+    "rule": "bearer",
+    "input": "Bearer zqT3,k=/reset/x.tspwd=\"zqS7hunter2\"",
+    "expected": "Bearer [token],[redacted]\"[redacted]\""
+  },
+  {
     "rule": "email",
     "input": "mailto:a@x.com%2Cb@y.com?body=secret",
     "expected": "mailto:[email][email]?[query]"
