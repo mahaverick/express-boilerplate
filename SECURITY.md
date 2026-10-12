@@ -888,9 +888,10 @@ names only routes the frontends already call.
 
 - In `full`, password login refuses a user with no platform role
   (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is
-  written (`assertSignInAllowed`). The Google callback runs the same check on
-  a read-only account lookup before `resolveGoogleUser`, so a non-staff Google
-  sign-in that starts in `full` creates, links and claims nothing
+  written (`assertSignInAllowed`). A Google callback that starts in `full`
+  runs the same check on a read-only account lookup before
+  `resolveGoogleUser`, so a non-staff Google sign-in that starts in `full`
+  creates, links and claims nothing
   (`completeGoogleSignIn`, `src/services/google-auth.service.ts`). The lookup
   matches an email only when Google verified it, as `resolveGoogleUser` does.
   A profile that reaches no account cannot be staff, so it is refused too:

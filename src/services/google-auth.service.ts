@@ -11,6 +11,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import {
@@ -243,15 +244,18 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
  * is refused the same way, so none is created, linked or claimed, and every
  * refused caller gets the same 503, ahead of any 400 or 403
  * `resolveGoogleUser` would give. The controller redirects with
- * `error=MAINTENANCE_MODE`.
+ * `error=MAINTENANCE_MODE`. In any other mode the lookup is skipped: that
+ * check would allow the sign-in without reading it.
  * @param profile - The raw Google profile from the callback.
  * @returns The new session's refresh token, for the controller to set as a cookie.
  * @throws {HttpError} 503 `MAINTENANCE_MODE` in `full` unless the account is staff (checked before `resolveGoogleUser` and again after it), any `resolveGoogleUser` error, or 401 `google_auth_failed` for an inactive or deleted account.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
   // Before any write: in `full` only staff get a session, and a profile that reaches no account cannot be staff.
-  const reachable = await findReachableGoogleUser(profile)
-  await assertSignInAllowed(reachable?.id)
+  if (getMaintenanceMode().mode === 'full') {
+    const reachable = await findReachableGoogleUser(profile)
+    await assertSignInAllowed(reachable?.id)
+  }
 
   const { user, isNew } = await resolveGoogleUser(profile)
 

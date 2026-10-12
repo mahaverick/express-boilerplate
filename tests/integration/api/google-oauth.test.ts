@@ -558,6 +558,29 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(emailReads.unknown).toBe(0)
     })
 
+    it('looks the account up once outside full maintenance, where the sign-in check reads nothing', async () => {
+      const { getMaintenanceMode } =
+        await import('@/services/maintenance-mode/maintenance-mode-store.service')
+      expect(getMaintenanceMode().mode).toBe('off')
+      const { AuthProviderRepository: Providers } =
+        await import('@/repositories/auth-provider.repository')
+      const { UserRepository: Users } = await import('@/repositories/user.repository')
+      const findByProviderAndId = vi.fn(
+        Providers.prototype.findByProviderAndId.bind(authProviderRepository)
+      )
+      const findByEmail = vi.fn(Users.prototype.findByEmail.bind(userRepository))
+
+      await withMutatedMethod(Providers.prototype, 'findByProviderAndId', findByProviderAndId, () =>
+        withMutatedMethod(Users.prototype, 'findByEmail', findByEmail, async () => {
+          await signInWithGoogle(googleProfile({ email: uniqueEmail(), emailVerified: true }))
+        })
+      )
+
+      // Only `resolveGoogleUser`'s own lookups: the link, then the address.
+      expect(findByProviderAndId).toHaveBeenCalledTimes(1)
+      expect(findByEmail).toHaveBeenCalledTimes(1)
+    })
+
     it('rejects linking an unverified Google email to an existing user (account-takeover guard)', async () => {
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
