@@ -213,6 +213,10 @@ describe('scrubText', () => {
       `/reset/${',Bearer;basic'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
     [
+      'a run of IPv6-like groups before a long base64 run',
+      `${'a:'.repeat(2 * ERROR_VALUE_MAX - 30)}7334/${'Ab1'.repeat(15)}`,
+    ],
+    [
       'a mailto address before repeated encoded-comma addresses and no query',
       `mailto:a@x.com${'%2Cb@y.com'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],

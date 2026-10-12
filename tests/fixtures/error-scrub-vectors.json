@@ -2460,6 +2460,11 @@
     "expected": "/reset/[token],Bearer [token],[redacted]"
   },
   {
+    "rule": "ip",
+    "input": "/=2001:db8::8a2e:370:7334/X6ozNXWURAKk4WsxkrBQXXkhWOctoOHUeD9@xU0kDkZEgQQQDQCItaAjVZOfrMRp.com",
+    "expected": "/=[ip][email]"
+  },
+  {
     "rule": "email",
     "input": "mailto:a@x.com%2Cb@y.com?body=secret",
     "expected": "mailto:[email][email]?[query]"

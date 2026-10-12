@@ -723,6 +723,16 @@ const IPV6_PATTERN =
   /(?<![\w:])(?:(?:[\dA-Fa-f]{1,4}:){7}[\dA-Fa-f]{1,4}|(?:[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6})?::[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}|[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}::)(?![\w:])/g
 
 /**
+ * The head of an IPv6 address whose last group an earlier rule took into a
+ * `[secret]` or `[email]` (`2001:db8::8a2e:370:[secret]`, where an AWS-shaped
+ * run took `7334/…`): colon-joined hex groups, or bare colons, that start
+ * after neither a word character nor a `:` and end in the `:` before the
+ * placeholder. `IPV6_PATTERN` refuses an address followed by `[`, so the
+ * head would stay in view.
+ */
+const IPV6_HEAD_PATTERN = /(?<![\w:])(?:[\dA-Fa-f]{1,4}:|:){2,8}(?=\[(?:secret|email)\])/g
+
+/**
  * An international phone number: `+`, then 8 to 15 digits, single spaces,
  * dots or hyphens between them (`+1 415 555 0100`).
  */
@@ -1278,6 +1288,7 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
   apply(scrub, BASE64_RUN_PATTERN, (match) =>
     isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
+  apply(scrub, IPV6_HEAD_PATTERN, whole('[ip]'))
   apply(scrub, EMAIL_QUERY_PATTERN, afterGroup('?[query]'))
   apply(scrub, SCHEME_TAIL_PATTERN, (match) => ({
     offset: (match[1] ?? '').length,
@@ -1358,7 +1369,9 @@ const PASSES_MAX = 3
  *    IPv6 address becomes `[ip]` and an international phone number `[phone]`;
  *    a run of 32 or more hex digits becomes `[secret]`, and the PostHog,
  *    vendor and AWS rules run again for a key glued to it; a run of 40 or
- *    more base64 characters that `isSecretRun` accepts becomes `[secret]`. A
+ *    more base64 characters that `isSecretRun` accepts becomes `[secret]`,
+ *    and the head of an IPv6 address whose last group went into a `[secret]`
+ *    or `[email]` becomes `[ip]` (`IPV6_HEAD_PATTERN`). A
  *    UUID on its own matches none of these and is kept. Then the query of a
  *    URL whose path is addresses (`mailto:[email]?subject=…`), or straight
  *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`). Last, any
