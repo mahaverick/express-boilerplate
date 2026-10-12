@@ -596,13 +596,19 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(freshProviders.map((provider) => provider.provider)).toEqual(['email'])
     })
 
-    it('rejects a Google profile that carries no email at all', async () => {
+    it('rejects a Google profile that carries no email at all, and writes no row', async () => {
       const profile = googleProfile({ includeEmails: false })
-
-      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
-        statusCode: 400,
-        code: 'google_email_missing',
-      })
+      try {
+        await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
+          statusCode: 400,
+          code: 'google_email_missing',
+        })
+      } finally {
+        const links = await sql<{ user_id: string }[]>`
+          select user_id from auth_providers where provider = 'google' and provider_id = ${profile.id}`
+        createdIds.push(...links.map((link) => link.user_id))
+        expect(links).toHaveLength(0)
+      }
     })
 
     it('lowercases the Google email before matching it against an existing user', async () => {
