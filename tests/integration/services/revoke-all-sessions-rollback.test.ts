@@ -1,8 +1,8 @@
 /**
  * @file `revokeAllSessions` fails closed against a rotation in flight even
  * when its caller's transaction rolls back: a password reset whose locked
- * transaction fails must still leave no session alive, the successor token a
- * concurrent rotation minted included. A seam holds the rotation's
+ * transaction fails must still leave no session alive and every session
+ * denied, the successor token a concurrent rotation minted included. A seam holds the rotation's
  * transaction open after its claim; the reset is started while it is held,
  * and its write is made to fail so its locked pass rolls back.
  */
@@ -12,6 +12,7 @@ import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { resetPassword } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
+import { isSessionDenied } from '@/services/session-denylist.service'
 import { issueRefreshToken, issueToken, rotateRefreshToken } from '@/services/session.service'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -35,7 +36,7 @@ describe('revokeAllSessions against a rotation in flight', () => {
     createdIds.length = 0
   })
 
-  it("revokes the rotation's successor even when the reset's transaction rolls back", async () => {
+  it("revokes and denies the rotation's successor even when the reset's transaction rolls back", async () => {
     const user = await userRepository.create({
       email: `revoke-all-rollback-${randomUUID()}@example.test`,
       emailVerifiedAt: new Date(),
@@ -74,6 +75,8 @@ describe('revokeAllSessions against a rotation in flight', () => {
 
         await expect(resetting).rejects.toThrow('write failed')
 
+        // Before the rotation below, whose reuse kill would deny the session itself.
+        expect(await isSessionDenied(successor.sessionId)).toBe(true)
         await expect(rotateRefreshToken(successor.raw)).rejects.toMatchObject({
           statusCode: 401,
         })
