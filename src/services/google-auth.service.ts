@@ -117,6 +117,22 @@ interface ResolvedGoogleUser {
 }
 
 /**
+ * The account this profile would sign in to, found without writing anything:
+ * the same two lookups `resolveGoogleUser` makes, in the same order (the
+ * Google link, then the profile's primary email), so both find the same
+ * account. Whether Google verified the email does not matter here; the
+ * caller only needs the account's platform role.
+ * @param profile - The raw Google profile.
+ * @returns The linked or email-matched account, or undefined when none matches.
+ */
+async function findExistingGoogleUser(profile: GoogleProfile): Promise<User | undefined> {
+  const link = await authProviderRepository.findByProviderAndId('google', profile.id)
+  if (link) return userRepository.findById(link.userId)
+  const address = profile.emails?.[0]?.value
+  return address ? userRepository.findByEmail(address.toLowerCase()) : undefined
+}
+
+/**
  * Resolve the user a Google Sign-In resolves to, linking or creating one
  * when needed.
  *
@@ -214,20 +230,27 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
  * is issued, a sign-in that created the account emits `user_signed_up`, and
  * every one emits `user_signed_in`.
  *
- * In `full` maintenance a user with no platform role is refused after the
- * active check (`assertSignInAllowed`); the controller redirects with
- * `error=MAINTENANCE_MODE`. A new account is created before that refusal.
+ * In `full` maintenance a user with no platform role is refused before
+ * anything is written: `assertSignInAllowed` runs on a read-only lookup
+ * (`findExistingGoogleUser`), ahead of `resolveGoogleUser`. A profile that
+ * matches no account is refused too, so none is created, linked or claimed,
+ * and that refusal comes before any 400 or 403 `resolveGoogleUser` would
+ * give. The controller redirects with `error=MAINTENANCE_MODE`.
  * @param profile - The raw Google profile from the callback.
  * @returns The new session's refresh token, for the controller to set as a cookie.
- * @throws {HttpError} Any `resolveGoogleUser` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
+ * @throws {HttpError} 503 `MAINTENANCE_MODE` in `full` for a profile with no staff account, then any `resolveGoogleUser` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
+  // Before any write: in `full` only staff get a session, and a profile with no account yet cannot be staff.
+  const existing = await findExistingGoogleUser(profile)
+  await assertSignInAllowed(existing?.id)
+
   const { user, isNew } = await resolveGoogleUser(profile)
 
   if (!user.active) {
     throw new HttpError('Account is inactive', 401, 'google_auth_failed')
   }
-  // Before any sign-in write: in `full` only staff get a session.
+  // Again on the resolved account: the mode, or the account a lookup finds, can change between the two checks.
   await assertSignInAllowed(user.id)
 
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })

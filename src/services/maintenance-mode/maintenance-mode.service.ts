@@ -91,18 +91,20 @@ const NO_REASON = 'No reason given.'
 
 /**
  * Refuse a sign-in in `full` unless the user is staff (holds any platform
- * role). Called by password login and the Google callback after the user is
- * identified and before a session is created. In any other mode, or while
- * the mode is unknown, it allows the sign-in without reading the user's role.
- * @param userId - The user signing in.
+ * role). Password login calls it once the credentials pass; the Google
+ * callback calls it on a read-only account lookup before anything is written,
+ * and again once the account is resolved. Both call it before a session is
+ * created. In any other mode, or while the mode is unknown, it allows the
+ * sign-in without reading the user's role.
+ * @param userId - The user signing in; undefined for a sign-in that matches no account, which cannot be staff.
  * @returns Resolves when the sign-in may go ahead.
- * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` for a non-staff user in `full`.
+ * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` for a non-staff user, or no account, in `full`.
  */
-export async function assertSignInAllowed(userId: string): Promise<void> {
+export async function assertSignInAllowed(userId: string | undefined): Promise<void> {
   const snapshot = getMaintenanceMode()
   if (snapshot.mode !== 'full') return
-  const platformRole = await getPlatformMembership(userId)
-  if (platformRole === null) throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+  const isStaff = userId !== undefined && (await getPlatformMembership(userId)) !== null
+  if (!isStaff) throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
 }
 
 /**

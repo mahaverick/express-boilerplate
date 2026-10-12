@@ -837,11 +837,12 @@ refusal is decided in `requireAuth`, which lets platform staff through.
 
 - In `full`, password login refuses a user with no platform role
   (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is
-  written (`assertSignInAllowed`). The Google callback refuses the same user
-  only after `resolveGoogleUser` has run, so a non-staff Google sign-in in
-  `full` can create an account, link a Google identity or claim an unverified
-  account before it gets the 503 (`completeGoogleSignIn`,
-  `src/services/google-auth.service.ts`); see the gaps table.
+  written (`assertSignInAllowed`). The Google callback runs the same check on
+  a read-only account lookup before `resolveGoogleUser`, so a non-staff Google
+  sign-in in `full` creates, links and claims nothing (`completeGoogleSignIn`,
+  `src/services/google-auth.service.ts`). A profile that matches no account
+  cannot be staff, so it is refused too, ahead of the 400 or 403 a missing or
+  unverified email would otherwise get.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
   limiter (10 a minute), and, to switch on or escalate, a `confirm` equal to
   `APP_ENV`. A stale `expectedVersion` answers 409. The change and its audit
@@ -863,7 +864,6 @@ reload and the queue pause.
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                         |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                   |
-| Google sign-in writes before the maintenance refusal  | **Gap**             | In `full`, a non-staff Google sign-in can create, link or claim an account before `assertSignInAllowed` refuses it with a 503.                 |
 | HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                             |
 | Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                   |
 | OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role to an existing verified user.                     |
