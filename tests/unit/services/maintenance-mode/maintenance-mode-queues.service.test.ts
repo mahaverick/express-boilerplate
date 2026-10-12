@@ -157,12 +157,25 @@ describe('dedupeSchedulerJobs against a stubbed queue', () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({ queue: 'stub', jobId: 'repeat:tick:1' })
   })
 
-  it('counts nothing and stays quiet for a duplicate another replica already removed', async () => {
+  // BullMQ 6.3.8's removeJob returns 1 for an unlocked id that no longer exists, so the removal resolves.
+  it('counts and stays quiet for a duplicate another replica already removed, whose removal resolves', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const kept = run('repeat:tick:99', 1000)
-    const gone = run('repeat:tick:1', 500, () => Promise.reject(new Error('missing')))
+    const gone = run('repeat:tick:1', 500)
 
     const removed = await dedupeSchedulerJobs(queueOf([kept, gone], 'unknown'))
+
+    expect(removed).toBe(1)
+    expect(gone.remove).toHaveBeenCalledTimes(1)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('counts nothing and stays quiet when a removal throws and the job is gone by then', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const kept = run('repeat:tick:99', 1000)
+    const vanished = run('repeat:tick:1', 500, () => Promise.reject(new Error('locked')))
+
+    const removed = await dedupeSchedulerJobs(queueOf([kept, vanished], 'unknown'))
 
     expect(removed).toBe(0)
     expect(warn).not.toHaveBeenCalled()

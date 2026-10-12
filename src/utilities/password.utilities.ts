@@ -56,13 +56,29 @@ export async function isPasswordValid(plain: string, hash: string): Promise<bool
 }
 
 /**
+ * Whether a stored hash was made at a lower cost than `BCRYPT_COST`, so a
+ * successful login should rewrite it. Never throws: a hash bcrypt cannot
+ * read the cost of is left alone.
+ * @param hash - A stored bcrypt hash.
+ * @returns Whether the hash's cost is below `BCRYPT_COST`.
+ */
+export function isHashCostOutdated(hash: string): boolean {
+  try {
+    return bcrypt.getRounds(hash) < BCRYPT_COST
+  } catch {
+    return false
+  }
+}
+
+/**
  * A bcrypt hash of a fixed, non-secret plaintext, so `login` (auth.service.ts)
  * pays a real compare for an unknown email or an account with no password.
  * Hashed lazily through `hashPassword` and memoised, so it always costs the
  * current `BCRYPT_COST`.
- * A stored hash keeps the cost it was written with, so raising the cost
- * makes an unknown email slower than a wrong password until rows are
- * rehashed; see `BCRYPT_COST` (auth.constants.ts).
+ * A stored hash keeps the cost it was written with until a successful
+ * login rewrites it, so raising the cost makes an unknown email slower than
+ * a wrong password for an account that has not signed in since; see
+ * `BCRYPT_COST` (auth.constants.ts).
  */
 export const getDummyHash: () => Promise<string> = (() => {
   let cached: Promise<string> | undefined

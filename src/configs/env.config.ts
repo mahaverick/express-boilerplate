@@ -36,6 +36,23 @@ function isLowercaseDomain(value: string): boolean {
   return EMAIL_DOMAIN_PATTERN.test(value) && TOP_LEVEL_LABEL.test(value.split('.').at(-1) ?? '')
 }
 
+/**
+ * Whether no entry of a comma-separated origin list has an opaque origin.
+ * A `file:`, `data:`, `chrome-extension:` or other opaque URL's origin is the string
+ * `"null"`, which `isAllowedOrigin` (origin.utilities.ts) would then match
+ * against `Origin: null`, the header sandboxed iframes and file pages send.
+ * An entry that is not a URL at all is left to `isAllowedOrigin`, which skips it.
+ * @param value - The raw CORS_ALLOWED_ORIGINS value.
+ * @returns True when every parseable entry has a tuple origin.
+ */
+function hasNoOpaqueOrigin(value: string): boolean {
+  return value.split(',').every((entry) => {
+    const trimmed = entry.trim()
+    if (!URL.canParse(trimmed)) return true
+    return new URL(trimmed).origin !== 'null'
+  })
+}
+
 const NO_QUERY_OR_FRAGMENT = 'must not contain a query (?) or a fragment (#)'
 
 /**
@@ -344,6 +361,10 @@ const EnvSchema = z.object({
 
   CORS_ALLOWED_ORIGINS: z
     .string()
+    .refine(hasNoOpaqueOrigin, {
+      message:
+        'CORS_ALLOWED_ORIGINS must not list an entry with an opaque origin (file:, data:, about:, or a non-http scheme such as chrome-extension:): its origin is "null", which would grant every sandboxed iframe and file page.',
+    })
     .optional()
     .describe(
       'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. Browsers send Origin on a same-origin POST, and POST /auth/refresh and /auth/logout refuse a present Origin that is none of WEB_URL, APEX_URL or an entry here unless Sec-Fetch-Site is same-origin, so a frontend served on any other origin must be listed. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'

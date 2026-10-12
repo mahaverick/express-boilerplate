@@ -23,8 +23,7 @@ import { db, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 
 /**
- * The batch size each rule asks for. Every rule except `analytics_outbox` can
- * delete more than this in one batch, so it is a target, not a bound.
+ * The most rows one batch of a rule deletes.
  */
 export const RETENTION_BATCH_SIZE = 5000
 
@@ -97,7 +96,7 @@ export function retentionDays(env: Env): RetentionDays {
  * One audit batch. The trigger allows these deletes only in a transaction
  * that set both settings, transaction-locally, and only below the cutoff.
  * @param cutoff - Entries older than this go.
- * @param limit - The batch size aimed for; more rows may go.
+ * @param limit - The most rows to delete in this call.
  * @param tx - The batch's transaction.
  * @returns How many rows were deleted.
  */
@@ -184,7 +183,8 @@ async function runRule(rule: RetentionRule, cutoff: Date): Promise<RetentionResu
   let deleted = 0
   try {
     let batch = RETENTION_BATCH_SIZE
-    while (batch === RETENTION_BATCH_SIZE) {
+    // `>=` keeps the loop going if a purge ever returns more than its limit.
+    while (batch >= RETENTION_BATCH_SIZE) {
       batch = await db.transaction((tx) => rule.purge(cutoff, RETENTION_BATCH_SIZE, tx))
       deleted += batch
     }

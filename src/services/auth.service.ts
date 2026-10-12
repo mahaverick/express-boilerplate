@@ -2,7 +2,8 @@
  * @file Email-and-password authentication. An unknown email and a wrong password
  * get the same status and body and each pay one bcrypt comparison (`getDummyHash`),
  * so status and body do not tell a registered address from an unregistered one, and
- * the timing matches while stored hashes use the current `BCRYPT_COST`. Work that
+ * the timing matches while stored hashes use the current `BCRYPT_COST`; a successful
+ * login rewrites an older-cost hash at it. Work that
  * runs after the reply (register's mail, requestPasswordReset) never rejects: the
  * controller does not await it, so a rejection would be unhandled and treated as a
  * process fault (index.ts), and on one branch only that would tell a free address
@@ -54,7 +55,12 @@ import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.te
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import type { EmailResendOptions } from '@/types/email-context'
 import { requireDurationMs } from '@/utilities/duration.utilities'
-import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import {
+  getDummyHash,
+  hashPassword,
+  isHashCostOutdated,
+  isPasswordValid,
+} from '@/utilities/password.utilities'
 import type {
   ChangePasswordInput,
   LoginInput,
@@ -231,6 +237,29 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
 }
 
 /**
+ * Rewrite a just-verified password's hash at `BCRYPT_COST` when it was made
+ * at a lower cost. Runs only after a successful login, so a wrong password
+ * never pays for it, and never throws: a failure is logged and the login
+ * goes on with the old hash.
+ * @param userId - The user who signed in.
+ * @param password - The password that matched.
+ * @param comparedHash - The stored hash it matched; the write lands only while it is unchanged.
+ */
+async function rehashIfOutdated(
+  userId: string,
+  password: string,
+  comparedHash: string
+): Promise<void> {
+  if (!isHashCostOutdated(comparedHash)) return
+  try {
+    const newHash = await hashPassword(password)
+    await userRepository.replacePasswordHash(userId, comparedHash, newHash)
+  } catch (error) {
+    logger.warn('Password rehash on login failed', { error: redactedForLog(error), userId })
+  }
+}
+
+/**
  * Log in with an email and password.
  *
  * Unknown, wrong-password, inactive and unverified all fail through ONE
@@ -241,6 +270,10 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
  * The token is issued in a transaction that re-reads the user FOR SHARE. A
  * password change or reset still in flight is waited for, and one that
  * committed after the compare answers the same 401, so no session outlives it.
+ * A hash that changed since the first read is compared again under the lock:
+ * one the submitted password still matches (another login's rehash, or a
+ * reset to the same password) signs in after that write committed; any other
+ * change answers the same 401.
  * A deactivation or soft delete that committed after the first read answers
  * the same 401 there too. In `full` maintenance a user with no platform role
  * is refused (`assertSignInAllowed`) once the credentials have passed and
@@ -267,16 +300,27 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // After the guard, so a failed attempt never reaches it; it never throws.
   await autoJoinSafely(user)
 
-  const comparedHash = user.passwordHash
   const sessionId = randomUUID()
-  const refreshToken = await withTransaction(async (tx) => {
+  const { refreshToken, verifiedHash } = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
     // Re-checked under the lock: a deactivation or delete that committed since the first read wins.
-    if (!locked?.active || locked.passwordHash !== comparedHash) {
+    if (!locked?.active || !locked.passwordHash) {
       throw new HttpError('Invalid email or password', 401)
     }
-    return issueRefreshToken(user.id, sessionId, tx)
+    // A changed hash still signs in when the submitted password matches it: a rehash, or a reset to the same password.
+    if (
+      locked.passwordHash !== user.passwordHash &&
+      !(await isPasswordValid(input.password, locked.passwordHash))
+    ) {
+      throw new HttpError('Invalid email or password', 401)
+    }
+    return {
+      refreshToken: await issueRefreshToken(user.id, sessionId, tx),
+      verifiedHash: locked.passwordHash,
+    }
   })
+  // After the token's transaction, whose re-read compares the hash this would change.
+  await rehashIfOutdated(user.id, input.password, verifiedHash)
   const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   await emitDomainEvent({
@@ -392,11 +436,11 @@ export async function requestPasswordReset(email: string, app: FrontendApp = 'we
  * Reset a password with a token from the mailed link.
  *
  * Any claim failure (unknown, wrong purpose, used, expired) and a deleted
- * account answer the same 400. Every token is revoked first, on its own, so
- * every refresh token that existed is already revoked if the write fails, and
- * every purpose goes, so older reset links die too. A rotation already in
- * flight can still mint a successor, which only the locked pass below revokes.
- * The user row is then locked, the hash stored and the tokens revoked again in
+ * account answer the same 400. Every token is revoked first, in a committed
+ * transaction of its own under the user row lock (`revokeAllSessions`), so
+ * every refresh token that existed, and the successor of a rotation that was
+ * in flight, is already revoked if the write fails, and every purpose goes,
+ * so older reset links die too. The user row is then locked, the hash stored and the tokens revoked again in
  * one transaction. That second revoke catches a session a login or refresh
  * created after the first: either it committed before the lock and is revoked
  * here, or it waited on the lock and sees the new state. Those sessions are

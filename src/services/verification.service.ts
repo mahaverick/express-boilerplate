@@ -15,7 +15,7 @@ import { db, type DbExecutor } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { autoJoinSafely } from '@/services/platform.service'
-import { claimToken, issueToken } from '@/services/session.service'
+import { claimToken, hashToken, issueToken } from '@/services/session.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import type { EmailResendOptions } from '@/types/email-context'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -44,6 +44,15 @@ export const MISSING_FIRST_NAME_FALLBACK = 'there'
  * The one failure verify-email answers, whatever went wrong.
  */
 export const INVALID_VERIFICATION_TOKEN_MESSAGE = 'Invalid or expired verification token.'
+
+/**
+ * The message and code of verify-email's answer to a link that was already
+ * used while valid, for an account that is now verified.
+ */
+const EMAIL_ALREADY_VERIFIED = {
+  message: 'This email is already verified. Sign in to continue.',
+  code: 'email_already_verified',
+} as const
 
 /**
  * Build an absolute frontend URL for one page, carrying a raw token. Links
@@ -168,8 +177,29 @@ export async function markEmailVerified(
 }
 
 /**
+ * Whether a raw token is an `email_verification` link that was used while
+ * it was valid and whose account is now verified: the second click on a
+ * link that already worked. Reads only; it never claims or writes anything.
+ * @param token - The raw verification token.
+ * @returns Whether that link was spent and its account is verified.
+ */
+async function isUsedLinkOfVerifiedUser(token: string): Promise<boolean> {
+  const row = await userTokenRepository.findByHash(hashToken(token))
+  const wasUsedInTime =
+    row?.purpose === 'email_verification' &&
+    row.consumedAt !== null &&
+    row.consumedAt.getTime() < row.expiresAt.getTime()
+  if (!row || !wasUsedInTime) return false
+  const user = await userRepository.findById(row.userId)
+  return Boolean(user?.emailVerifiedAt)
+}
+
+/**
  * Verify an email with a token from the mailed link and the account's
- * password. Every failure throws the same 400. The password is required:
+ * password. Every failure throws the same 400 but one: a link already used
+ * while valid, for an account that is now verified, answers 409
+ * `email_already_verified`, which never applies the submitted password. The
+ * password is required:
  * without it, someone who registered another person's address with a password
  * they chose would get the account verified by the owner's own click.
  *
@@ -181,7 +211,7 @@ export async function markEmailVerified(
  * @param token - The raw verification token.
  * @param password - The account's password.
  * @returns Resolves once the account is verified (or already was).
- * @throws {HttpError} 400 INVALID_VERIFICATION_TOKEN_MESSAGE, for any failure.
+ * @throws {HttpError} 409 `email_already_verified` for a used link of a verified account; 400 INVALID_VERIFICATION_TOKEN_MESSAGE for every other failure.
  */
 export async function verifyEmail(token: string, password: string): Promise<void> {
   const claimed = await claimToken(token, 'email_verification')
@@ -190,6 +220,9 @@ export async function verifyEmail(token: string, password: string): Promise<void
   const hashToCompare = user?.passwordHash ?? (await getDummyHash())
   const isPasswordCorrect = await isPasswordValid(password, hashToCompare)
 
+  if (!claimed && (await isUsedLinkOfVerifiedUser(token))) {
+    throw new HttpError(EMAIL_ALREADY_VERIFIED.message, 409, EMAIL_ALREADY_VERIFIED.code)
+  }
   if (!isPasswordCorrect || !claimed || !user || !user.passwordHash) {
     throw new HttpError(INVALID_VERIFICATION_TOKEN_MESSAGE, 400)
   }

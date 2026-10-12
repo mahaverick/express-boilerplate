@@ -82,9 +82,12 @@ export function queuePauseTarget(snapshot: MaintenanceModeSnapshot, now: Date): 
  * `repeat:<key>:<next>` is kept, or else the one due latest; every other is
  * removed. A scheduler's only pending job is never removed: its chain lives
  * there. A removal BullMQ refuses is logged, unless the job is gone by then,
- * and not counted.
+ * and not counted. The count is of duplicate runs whose removal did not
+ * throw, so a run another replica already removed is counted too: BullMQ
+ * 6.3.8's `removeJob` returns 1 for any unlocked id, present or not. It is
+ * only reported.
  * @param queue - A paused queue.
- * @returns How many removals succeeded, a job another replica removed first included.
+ * @returns How many duplicate runs' removals did not throw, runs another replica removed first included.
  */
 export async function dedupeSchedulerJobs(queue: Queue): Promise<number> {
   const schedulers = await queue.getJobSchedulers(0, -1)
@@ -129,10 +132,11 @@ function dueAt(job: Job): number {
 
 /**
  * Remove one duplicate run. A removal BullMQ refuses is logged, unless the
- * job is gone by then.
+ * job is gone by then. BullMQ 6.3.8 resolves the removal of a job another
+ * replica already removed, so true does not mean this call removed it.
  * @returns True when the removal did not throw.
  */
-// eslint-disable-next-line unicorn/consistent-boolean-name -- `try…` names an attempt; the boolean says whether this call removed the job
+// eslint-disable-next-line unicorn/consistent-boolean-name -- `try…` names an attempt; the boolean says whether the removal did not throw, not whether this call removed the job
 async function tryRemove(queue: Queue, job: Job): Promise<boolean> {
   try {
     await job.remove()

@@ -3,7 +3,7 @@
  * table has no `deletedAt`/`updatedAt`, `deleteOne` is a hard delete, and its one
  * unique index (`dedupe_key`) is handled by `createOnce`'s ON CONFLICT, not a 409.
  */
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import {
   notificationModel,
   type NewNotification,
@@ -207,15 +207,15 @@ export class NotificationRepository {
   }
 
   /**
-   * Delete about `limit` notifications read before `cutoff`.
+   * Delete at most `limit` notifications read before `cutoff`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Rows read before this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -227,20 +227,22 @@ export class NotificationRepository {
       .orderBy(notificationModel.id)
       .limit(limit)
       .for('update', { skipLocked: true })
-    const result = await tx.delete(notificationModel).where(inArray(notificationModel.id, batch))
+    const result = await tx
+      .delete(notificationModel)
+      .where(sql`${notificationModel.id} = any(array(${batch}))`)
     return result.count
   }
 
   /**
-   * Delete about `limit` unread notifications created before `cutoff`.
+   * Delete at most `limit` unread notifications created before `cutoff`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Unread rows created before this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -257,7 +259,9 @@ export class NotificationRepository {
       .orderBy(notificationModel.id)
       .limit(limit)
       .for('update', { skipLocked: true })
-    const result = await tx.delete(notificationModel).where(inArray(notificationModel.id, batch))
+    const result = await tx
+      .delete(notificationModel)
+      .where(sql`${notificationModel.id} = any(array(${batch}))`)
     return result.count
   }
 }

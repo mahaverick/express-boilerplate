@@ -112,7 +112,7 @@ describe('verifyAccessToken', () => {
 
   it('omits auth_time when the session has no authentication time', () => {
     const user = { id: 'user-1' } as User
-    // eslint-disable-next-line unicorn/no-null -- a session that predates migration 0018 carries null
+    // eslint-disable-next-line unicorn/no-null -- a session row whose authenticated_at is null passes null
     const explicitNull = verifyAccessToken(signAccessToken(user, 'session-abc', null))
     const omitted = verifyAccessToken(signAccessToken(user, 'session-abc'))
     if (!explicitNull.ok || !omitted.ok) throw new Error('unreachable')

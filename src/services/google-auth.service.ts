@@ -69,12 +69,12 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  * email, that it matches this account's address, and that the account's email
  * was never verified (checked before the lock). Nothing here checks any of it.
  *
- * Sessions are revoked first on their own, so every refresh token that
- * existed is already revoked if the claim fails. A rotation already in flight
- * can still mint a successor in its session, which only the locked pass
- * below revokes. That pass runs in the claim's transaction, under the user
- * row lock: a refresh rotation in flight either commits before the lock
- * and is revoked there, or waits and finds its token revoked. The
+ * Sessions are revoked first, in a committed transaction of their own under
+ * the user row lock (`revokeAllSessions`), so every refresh token that
+ * existed, and the successor of a rotation that was in flight, is already
+ * revoked if the claim fails. The claim's transaction revokes again under
+ * the same lock: a session created between the two either commits before
+ * the lock and is revoked there, or waits and finds its token revoked. The
  * revoked sessions' access tokens are denied after the commit, best effort
  * (`denySessionsAfterCommit`), so they can stay valid for up to
  * `ACCESS_TOKEN_TTL` when Redis refuses.

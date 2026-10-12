@@ -5,25 +5,22 @@
  * into the log.
  */
 import { randomUUID } from 'node:crypto'
+import * as bcrypt from 'bcrypt'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
+import { BCRYPT_COST, MIN_PASSWORD_LENGTH } from '@/constants/auth.constants'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { login, register, requestPasswordReset } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { addressDigest } from '@/services/mail-cooldown.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { prepareResendVerification } from '@/services/verification.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
-import { settle } from '../../helpers/timing'
-
-vi.mock('@/configs/env.config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/configs/env.config')>()
-  return { ...actual, getEnv: vi.fn(actual.getEnv) }
-})
-
-const realEnv = getEnv()
 
 const VALID_PASSWORD = 'correct horse battery staple'
 
@@ -162,7 +159,6 @@ describe('requestPasswordReset mail cooldown', () => {
   const createdIds: string[] = []
 
   afterEach(async () => {
-    vi.mocked(getEnv).mockReturnValue(realEnv)
     if (createdIds.length === 0) return
     await sql`delete from users where id = any(${createdIds})`
     createdIds.length = 0
@@ -187,15 +183,23 @@ describe('requestPasswordReset mail cooldown', () => {
     expect(await resetTokenCount(id)).toBe(1)
   })
 
+  // The cooldown is a Redis key with a PX expiry; deleting it is what that expiry does, with no wall-clock wait.
   it("queues the owner's request once the cooldown has passed", async () => {
-    vi.mocked(getEnv).mockReturnValue({ ...realEnv, PASSWORD_RESET_MAIL_COOLDOWN: '300ms' })
     const { id, email } = await seedActiveUser()
     for (let index = 0; index < 20; index += 1) {
       await requestPasswordReset(email)
     }
     expect(await resetTokenCount(id)).toBe(1)
 
-    await settle(400, 'the cooldown key expires on a timer; there is no event to await')
+    const key = redisKey('password-reset-notice', addressDigest(email))
+    const redis = await getRedis()
+    const remainingMs = await redis.pTTL(key)
+    expect(remainingMs).toBeGreaterThan(0)
+    expect(remainingMs).toBeLessThanOrEqual(
+      requireDurationMs(getEnv().PASSWORD_RESET_MAIL_COOLDOWN)
+    )
+
+    await redis.del(key)
     await requestPasswordReset(email)
 
     expect(await resetTokenCount(id)).toBe(2)
@@ -210,5 +214,150 @@ describe('requestPasswordReset mail cooldown', () => {
 
     expect(await resetTokenCount(first.id)).toBe(1)
     expect(await resetTokenCount(second.id)).toBe(1)
+  })
+})
+
+/**
+ * The password hash stored for an address.
+ */
+async function storedHash(email: string): Promise<string> {
+  const [row] = await sql<{ passwordHash: string }[]>`
+    select password_hash as "passwordHash" from users where lower(email) = ${email.toLowerCase()}
+  `
+  if (!row) throw new Error('user not found')
+  return row.passwordHash
+}
+
+/**
+ * A successful login rewrites a hash made at a lower cost than `BCRYPT_COST`,
+ * leaves a current-cost hash alone, and never fails or changes its answer
+ * because of the rewrite.
+ */
+describe('login rehashes an old-cost password hash', () => {
+  const OLD_COST = 4
+  const createdEmails: string[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    if (createdEmails.length === 0) return
+    await sql`delete from users where lower(email) = any(${createdEmails.map((email) => email.toLowerCase())})`
+    createdEmails.length = 0
+  })
+
+  /**
+   * Register a verified user, optionally with its hash replaced by one at `cost`.
+   * @param cost - The cost to store the hash at; omitted keeps the hash register wrote.
+   * @returns The user's email and the hash now stored.
+   */
+  async function verifiedUser(cost?: number): Promise<{ email: string; hash: string }> {
+    const email = uniqueEmail()
+    createdEmails.push(email)
+    await register({ email, password: VALID_PASSWORD, app: 'web' })
+    await sql`update users set email_verified_at = now() where lower(email) = ${email.toLowerCase()}`
+    if (cost !== undefined) {
+      const oldHash = await bcrypt.hash(VALID_PASSWORD, cost)
+      await sql`update users set password_hash = ${oldHash} where lower(email) = ${email.toLowerCase()}`
+    }
+    return { email, hash: await storedHash(email) }
+  }
+
+  it('rewrites an old-cost hash at BCRYPT_COST on a successful login', async () => {
+    const { email, hash } = await verifiedUser(OLD_COST)
+    expect(bcrypt.getRounds(hash)).toBe(OLD_COST)
+
+    await login({ email, password: VALID_PASSWORD })
+
+    const rewritten = await storedHash(email)
+    expect(bcrypt.getRounds(rewritten)).toBe(BCRYPT_COST)
+    expect(await bcrypt.compare(VALID_PASSWORD, rewritten)).toBe(true)
+  })
+
+  // B read the row before A's rehash committed; B's locked re-read then sees A's new hash of the same password.
+  it('signs in a login whose first read predates a concurrent login’s rehash', async () => {
+    const { email } = await verifiedUser(OLD_COST)
+    const staleRow = await new UserRepository().findByEmail(email)
+    if (!staleRow) throw new Error('user not found')
+    await login({ email, password: VALID_PASSWORD })
+    expect(bcrypt.getRounds(await storedHash(email))).toBe(BCRYPT_COST)
+
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'findByEmail',
+      () => Promise.resolve(staleRow),
+      async () => {
+        const result = await login({ email, password: VALID_PASSWORD })
+        expect(result.accessToken).toEqual(expect.any(String))
+      }
+    )
+  })
+
+  it('still answers 401 when the hash changed to a different password after the first read', async () => {
+    const { email } = await verifiedUser(OLD_COST)
+    const staleRow = await new UserRepository().findByEmail(email)
+    if (!staleRow) throw new Error('user not found')
+    const otherHash = await bcrypt.hash('a different password entirely', OLD_COST)
+    await sql`update users set password_hash = ${otherHash} where lower(email) = ${email.toLowerCase()}`
+
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'findByEmail',
+      () => Promise.resolve(staleRow),
+      async () => {
+        await expect(login({ email, password: VALID_PASSWORD })).rejects.toMatchObject({
+          statusCode: 401,
+        })
+      }
+    )
+    expect(await storedHash(email)).toBe(otherHash)
+  })
+
+  it('signs in an account whose password is shorter than MIN_PASSWORD_LENGTH', async () => {
+    const shortPassword = 'eight-ch'
+    expect(shortPassword.length).toBeLessThan(MIN_PASSWORD_LENGTH)
+    const { email } = await verifiedUser()
+    const shortHash = await bcrypt.hash(shortPassword, BCRYPT_COST)
+    await sql`update users set password_hash = ${shortHash} where lower(email) = ${email.toLowerCase()}`
+
+    const result = await login({ email, password: shortPassword })
+
+    expect(result.accessToken).toEqual(expect.any(String))
+  })
+
+  it('leaves a current-cost hash unchanged', async () => {
+    const { email, hash } = await verifiedUser()
+    expect(bcrypt.getRounds(hash)).toBe(BCRYPT_COST)
+
+    await login({ email, password: VALID_PASSWORD })
+
+    expect(await storedHash(email)).toBe(hash)
+  })
+
+  it('leaves an old-cost hash unchanged when the password is wrong', async () => {
+    const { email, hash } = await verifiedUser(OLD_COST)
+
+    await expect(login({ email, password: 'not the password' })).rejects.toMatchObject({
+      statusCode: 401,
+    })
+
+    expect(await storedHash(email)).toBe(hash)
+  })
+
+  it('still signs the user in, and logs a warning, when the rewrite fails', async () => {
+    const { email, hash } = await verifiedUser(OLD_COST)
+    const warnSpy = vi.spyOn(logger, 'warn')
+
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'replacePasswordHash',
+      failingQuery,
+      async () => {
+        const result = await login({ email, password: VALID_PASSWORD })
+        expect(result.accessToken).toEqual(expect.any(String))
+      }
+    )
+
+    expect(warnSpy).toHaveBeenCalledWith('Password rehash on login failed', expect.anything())
+    expect(loggedText(warnSpy)).not.toContain(LEAKED_PARAM)
+    expect(await storedHash(email)).toBe(hash)
   })
 })

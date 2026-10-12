@@ -21,7 +21,7 @@ export type MailCooldownFallback = 'send' | 'skip'
  * @param email - The address, as submitted.
  * @returns The digest of the trimmed, lowercased address.
  */
-function addressDigest(email: string): string {
+export function addressDigest(email: string): string {
   return hashRateLimitIdentity(email.trim().toLowerCase())
 }
 

@@ -2,7 +2,7 @@
  * @file Query access to the append-only `email_events` table. It does not
  * extend `BaseRepository`: an event is never updated or soft-deleted.
  */
-import { eq, inArray, sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { EMAIL_DETAIL_MAX_LENGTH, EMAIL_DETAIL_PATTERN } from '@/constants/email.constants'
 import {
   emailEventModel,
@@ -52,16 +52,16 @@ export class EmailEventRepository {
   }
 
   /**
-   * Delete about `limit` events whose message was created before `cutoff`:
+   * Delete at most `limit` events whose message was created before `cutoff`:
    * retention is dated by the message, not the event. Takes the batch oldest
    * id first (ids are time-ordered `uuidv7`) with FOR UPDATE SKIP LOCKED on
    * the events only, so a message row a webhook is updating is never waited
    * on.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Events of messages created before this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -78,7 +78,9 @@ export class EmailEventRepository {
       .orderBy(emailEventModel.id)
       .limit(limit)
       .for('update', { of: emailEventModel, skipLocked: true })
-    const result = await tx.delete(emailEventModel).where(inArray(emailEventModel.id, batch))
+    const result = await tx
+      .delete(emailEventModel)
+      .where(sql`${emailEventModel.id} = any(array(${batch}))`)
     return result.count
   }
 }

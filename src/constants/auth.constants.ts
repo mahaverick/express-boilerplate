@@ -9,16 +9,15 @@
  * every password this boilerplate hashes. Each +1 doubles the time per hash.
  *
  * bcrypt stores the cost in each hash, so raising this affects only
- * passwords hashed afterwards.
+ * passwords hashed afterwards, and a successful `login` (auth.service.ts)
+ * rewrites a hash made at a lower cost.
  *
- * Before raising it: `login` (auth.service.ts) answers an unknown email by
+ * Raising it opens a timing gap: `login` answers an unknown email by
  * verifying against a dummy hash made at the current cost, while each stored
  * hash verifies at the cost it was written with. A higher cost makes an
- * unknown email measurably slower than a wrong password for an existing
- * account, reopening the login timing oracle (whether an email is
- * registered). Nothing rehashes on login, so the gap lasts until every
- * active user has a new hash. Build rehash-on-login first, or accept that
- * trade.
+ * unknown email measurably slower than a wrong password for an account whose
+ * hash is still at the old cost, which tells whether that email is
+ * registered. The gap closes for each account at its next successful login.
  */
 export const BCRYPT_COST = 12
 
@@ -36,13 +35,15 @@ export const MAX_PASSWORD_BYTES = 72
  * The shortest password `auth.validators.ts` accepts at registration,
  * password reset and password change.
  *
- * 8 is the NIST SP 800-63B revision 3 minimum for a human-chosen password,
- * with no composition rules, which this boilerplate does not impose. It is
- * this app's chosen floor, not a claim of compliance with the current
- * revision. `loginSchema` does not enforce it, so a too-short password fails
- * login with the same 401 as a wrong one rather than a distinguishable 400.
+ * 15 is the NIST SP 800-63B revision 4 minimum for a password used as a
+ * single factor, with no composition rules, which this boilerplate does not
+ * impose. Only a password being set must meet it: `loginSchema`, step-up and
+ * change-password's current password do not enforce it, so an account whose
+ * password was set under a shorter floor still signs in, and a too-short
+ * password fails login with the same 401 as a wrong one rather than a
+ * distinguishable 400.
  */
-export const MIN_PASSWORD_LENGTH = 8
+export const MIN_PASSWORD_LENGTH = 15
 
 /**
  * The longest email address this API stores, in characters, and therefore

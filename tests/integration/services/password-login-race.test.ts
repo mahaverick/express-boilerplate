@@ -352,7 +352,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       const releasePassword = deferred()
       const loginPid = deferred<number>()
       // A holder object: TypeScript does not see assignments made inside the callback.
-      const flags = { passwordLocked: false }
+      const flags = { passwordLocked: false, exclusiveLocks: 0 }
+      // A reset first runs revokeAllSessions under its own lock; the hash is written under the next one.
+      const writeLockNumber = flow === 'reset' ? 2 : 1
 
       /**
        * Pauses login after its `lastLoggedInAt` update until released.
@@ -369,14 +371,16 @@ describe.each<PasswordFlow>(['change', 'reset'])(
         return row
       }
       /**
-       * Marks the password side locked once it holds its lock, and reports
-       * login's backend pid when it takes `FOR SHARE`, replacing that locked
-       * re-read with a plain read if the mutation proof asks.
+       * Marks the password side locked once it holds the lock of the
+       * transaction that writes the hash, and reports login's backend pid
+       * when it takes `FOR SHARE`, replacing that locked re-read with a plain
+       * read if the mutation proof asks.
        */
       const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
         if (mode !== 'share') {
           const row = await realLockById.call(this, id, mode, tx)
-          flags.passwordLocked = true
+          flags.exclusiveLocks += 1
+          if (flags.exclusiveLocks === writeLockNumber) flags.passwordLocked = true
           return row
         }
         loginPid.resolve(await backendPid(tx))
@@ -1021,9 +1025,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
      * No mutation proof, either flow: for `change`, the claim waits on
      * the presented row, which the in-transaction revoke holds, and then
      * finds it revoked even with the rotation's user lock removed; for
-     * `reset`, the unlocked first-pass `revokeAllSessions` has already
-     * committed before the claim runs, so the claim refuses regardless, and
-     * the kill that follows queues on the user row lock.
+     * `reset`, the first-pass `revokeAllSessions` has already committed,
+     * in its own transaction, before the claim runs, so the claim refuses
+     * regardless, and the kill that follows queues on the user row lock.
      */
     it('refuses a rotation that waited behind a committed password write', async () => {
       const user = await seedUser()
@@ -1050,9 +1054,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
 
     /**
      * No mutation proof for the `reset` flow, same reasoning as the
-     * non-grace password-first test above: reset's unlocked first-pass
-     * `revokeAllSessions` has already committed before the grace check runs, so
-     * it refuses regardless of
+     * non-grace password-first test above: reset's first-pass
+     * `revokeAllSessions` has already committed, in its own transaction,
+     * before the grace check runs, so it refuses regardless of
      * the rotation's user lock. The `change` flow does have one; see the
      * `it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')`
      * test below.

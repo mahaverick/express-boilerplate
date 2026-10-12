@@ -211,7 +211,9 @@ verified flag to an address nobody verified.
   For a taken address it mails a registration-attempt notice instead.
 - `POST /api/v1/auth/verify-email` (`verification.controller.ts`) takes the
   token **and** the account's password, and a wrong password spends the token
-  like a right one. SECURITY.md, "Email verification", explains why.
+  like a right one. SECURITY.md, "Email verification", explains why. A
+  second click on a link that already verified the account answers 409
+  `email_already_verified`; every other failure answers one 400.
 - `POST /api/v1/auth/resend-verification` revokes an unverified user's live
   verification tokens and mails a new link. The response is identical for an
   unknown, an unverified and a verified address.
@@ -862,8 +864,9 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   refresh cookie (`Path=/`) never reaches PostHog, and overwrites
   `X-Forwarded-For` (`request.ip`), `-Host`, `-Proto` and `-Port`. It strips
   PostHog's `Set-Cookie` and `Access-Control-*` response headers, and answers
-  504 when PostHog stays silent for 30 s. Without `POSTHOG_PROJECT_KEY` it answers
-  503 `service_unavailable`.
+  504 when PostHog stays silent for 30 s. A request carrying `Expect` is
+  refused 417 `expectation_failed` before it is proxied. Without
+  `POSTHOG_PROJECT_KEY` it answers 503 `service_unavailable`.
 - **Groups.** A tenant's `name`, `status` and `created_at` reach PostHog only
   as `$groupidentify` properties. The outbox stores a marker
   (`$group_type`, `$group_key`, `source` and the trace id) and never the

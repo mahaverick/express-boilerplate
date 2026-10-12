@@ -187,4 +187,29 @@ describe('UserRepository', () => {
       expect(await userRepository.markEmailVerified(randomUUID())).toBeUndefined()
     })
   })
+  describe('replacePasswordHash', () => {
+    // Fixed strings stand in for bcrypt hashes: the method compares and stores them as text.
+    const H1 = 'hash-the-login-verified'
+    const H2 = 'hash-a-password-change-wrote'
+    const H3 = 'hash-the-rehash-would-write'
+
+    it('replaces the hash while it still equals the expected one', async () => {
+      const created = await userRepository.create({ email: uniqueEmail(), passwordHash: H1 })
+      createdIds.push(created.id)
+
+      expect(await userRepository.replacePasswordHash(created.id, H1, H3)).toBe(true)
+      const stored = await userRepository.findById(created.id)
+      expect(stored?.passwordHash).toBe(H3)
+    })
+
+    it('writes nothing once a password change replaced the expected hash', async () => {
+      const created = await userRepository.create({ email: uniqueEmail(), passwordHash: H1 })
+      createdIds.push(created.id)
+      await sql`update users set password_hash = ${H2} where id = ${created.id}`
+
+      expect(await userRepository.replacePasswordHash(created.id, H1, H3)).toBe(false)
+      const stored = await userRepository.findById(created.id)
+      expect(stored?.passwordHash).toBe(H2)
+    })
+  })
 })

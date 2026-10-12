@@ -6,10 +6,11 @@
  * `/i/v0/e/`, `/s/`, `/batch/`, `/flags/`, `/decide/`) to the ingest host,
  * each under the same sub-path. Bodies stream through unread: a replay POST
  * can be megabytes of gzip, and a parsed body never reaches the upstream.
- * Without `POSTHOG_PROJECT_KEY` every request answers 503.
+ * Without `POSTHOG_PROJECT_KEY` every request answers 503; with it, a request
+ * carrying `Expect` answers 417.
  */
 import type { ClientRequest, IncomingMessage } from 'node:http'
-import { Router, type Request, type Response } from 'express'
+import { Router, type NextFunction, type Request, type Response } from 'express'
 import { createProxyMiddleware, definePlugin } from 'http-proxy-middleware'
 import { isAnalyticsEnabled, posthogAssetsHost } from '@/configs/analytics.config'
 import { getEnv } from '@/configs/env.config'
@@ -27,6 +28,14 @@ export const ANALYTICS_PROXY_PATH = '/api/v1/collect'
 const ANALYTICS_UNCONFIGURED = {
   message: 'Analytics is not configured',
   code: 'service_unavailable',
+} as const
+
+/**
+ * The message and code of the answer to a request carrying `Expect`.
+ */
+const EXPECT_REFUSED = {
+  message: 'Expect is not supported',
+  code: 'expectation_failed',
 } as const
 
 /**
@@ -49,7 +58,7 @@ const UPSTREAM_TIMEOUT_MS = 30_000
  * the ones the client did not send, which would let any client choose the
  * address PostHog geolocates.
  * httpxy, which http-proxy-middleware runs on, skips this hook for a request
- * that carries `Expect`, which browsers never send.
+ * that carries `Expect`, so `refuseExpect` answers such a request first.
  * @param proxyRequest - The request about to go upstream.
  * @param request - The incoming request.
  */
@@ -132,6 +141,24 @@ function withoutTrailingSlash(url: string): string {
 }
 
 /**
+ * Answer 417 to a request carrying `Expect`, before it reaches a proxy:
+ * httpxy skips the `proxyReq` hook for it, so its cookies, bearer token and
+ * a client-chosen `X-Forwarded-For` would reach PostHog. Browsers never send
+ * `Expect`. Node answers every expectation but `100-continue` with 417
+ * itself; this covers that one.
+ * @param request - The incoming request.
+ * @param response - The response.
+ * @param next - Passes a request without `Expect` on to the proxies.
+ */
+function refuseExpect(request: Request, response: Response, next: NextFunction): void {
+  if (request.headers.expect === undefined) {
+    next()
+    return
+  }
+  errorResponse(response, EXPECT_REFUSED.message, 417, EXPECT_REFUSED.code)
+}
+
+/**
  * The answer to every request while analytics is not configured. A plain
  * middleware rather than a controller: the proxy has no handlers of its own.
  * @param _request - Unused.
@@ -154,6 +181,7 @@ export function createAnalyticsProxyRouter(timeoutMs = UPSTREAM_TIMEOUT_MS): Rou
     router.use(answerUnconfigured)
     return router
   }
+  router.use(refuseExpect)
   const assetsHost = withoutTrailingSlash(posthogAssetsHost())
   router.use('/static', proxyTo(`${assetsHost}/static`, timeoutMs))
   router.use('/array', proxyTo(`${assetsHost}/array`, timeoutMs))

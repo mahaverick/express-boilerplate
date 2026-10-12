@@ -139,13 +139,67 @@ describe('POST /api/v1/auth/verify-email', () => {
     expect(retried.status).toBe(400)
   })
 
-  it('refuses the same token twice', async () => {
-    const { token } = await seedUnverifiedUser()
+  it('answers a second click on a used link with 409 already verified, and never applies its password', async () => {
+    const { user, token } = await seedUnverifiedUser()
     const first = await verify(token, VALID_PASSWORD)
     expect(first.status).toBe(200)
+    const before = await userRepository.findById(user.id)
+
+    const second = await verify(token, 'a different password entirely')
+
+    expect(second.status).toBe(409)
+    expect(second.body).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: 'email_already_verified',
+        message: 'This email is already verified. Sign in to continue.',
+      })
+    )
+    const after = await userRepository.findById(user.id)
+    expect(after?.passwordHash).toBe(before?.passwordHash)
+    expect(after?.emailVerifiedAt?.getTime()).toBe(before?.emailVerifiedAt?.getTime())
+  })
+
+  it('answers a used link 400 while its account is still unverified', async () => {
+    const { token } = await seedUnverifiedUser()
+    await verify(token, 'not-the-right-password')
 
     const second = await verify(token, VALID_PASSWORD)
+
     expect(second.status).toBe(400)
+    expect(second.body).toEqual(
+      expect.objectContaining({ message: 'Invalid or expired verification token.' })
+    )
+  })
+
+  it('answers an expired link 400 even when its account is verified', async () => {
+    const { user } = await seedUnverifiedUser()
+    const expired = await issueToken(user.id, 'email_verification', -1000)
+    await sql`update users set email_verified_at = now() where id = ${user.id}`
+
+    const response = await verify(expired.raw, VALID_PASSWORD)
+
+    expect(response.status).toBe(400)
+  })
+
+  it('answers a used password_reset token 400 even when its account is verified', async () => {
+    const { user } = await seedUnverifiedUser()
+    const reset = await issueToken(user.id, 'password_reset', 60_000)
+    await sql`update user_tokens set revoked_at = now(), consumed_at = now() where user_id = ${user.id} and purpose = 'password_reset'`
+    await sql`update users set email_verified_at = now() where id = ${user.id}`
+
+    const response = await verify(reset.raw, VALID_PASSWORD)
+
+    expect(response.status).toBe(400)
+  })
+
+  it('answers an unknown token 400 with the old message', async () => {
+    const response = await verify('deadbeef', VALID_PASSWORD)
+
+    expect(response.status).toBe(400)
+    expect(response.body).toEqual(
+      expect.objectContaining({ message: 'Invalid or expired verification token.' })
+    )
   })
 
   it('refuses a password_reset token', async () => {

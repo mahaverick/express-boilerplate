@@ -168,18 +168,18 @@ export class EmailLogRepository {
   }
 
   /**
-   * Delete about `limit` attempt rows past retention: a row with a message
+   * Delete at most `limit` attempt rows past retention: a row with a message
    * goes when its message was created before `cutoff` (the group is dated by
    * the message, so a mail's attempts go together), and a row without one
    * (an untracked attempt) goes by its own `created_at`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
-   * `limit` is a target, not a bound: the ids come from an `in (...)`
-   * subquery, which the planner may rescan per outer row and so delete more
-   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the delete takes at most `limit` rows (see
+   * `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Rows older than this go.
-   * @param limit - The batch size aimed for; more rows may go.
+   * @param limit - The most rows to delete in this call.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -200,7 +200,9 @@ export class EmailLogRepository {
       .orderBy(emailLogModel.id)
       .limit(limit)
       .for('update', { of: emailLogModel, skipLocked: true })
-    const result = await tx.delete(emailLogModel).where(inArray(emailLogModel.id, batch))
+    const result = await tx
+      .delete(emailLogModel)
+      .where(sql`${emailLogModel.id} = any(array(${batch}))`)
     return result.count
   }
 

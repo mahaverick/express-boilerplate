@@ -203,7 +203,7 @@ describe('canResendFor', () => {
     expect(canResendFor(ACTOR, message(), context())).toBe(true)
   })
 
-  // eslint-disable-next-line unicorn/no-null -- no longer staff
+  // eslint-disable-next-line unicorn/no-null -- null is an actor with no platform role
   it.each<MembershipRole | null>(['viewer', 'editor', 'manager', null])(
     'is false for a %s',
     (role) => {

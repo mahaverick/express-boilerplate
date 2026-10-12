@@ -18,8 +18,10 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     setupFiles: ['./tests/helpers/setup-global.ts'],
     /**
-     * Runs once in the main process before any worker starts, unlike
-     * `setupFiles`, so parallel workers never race to apply the same migration.
+     * Runs once in the main process before any worker starts: it creates and
+     * migrates every worker's own database and clears leftover rate-limit
+     * counters from Redis. `setupFiles` runs once per test file in every
+     * worker, so the migrator would run again for each file.
      */
     globalSetup: ['./tests/helpers/global-setup.ts'],
     alias: [

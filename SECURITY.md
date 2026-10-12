@@ -202,18 +202,22 @@ passwords sharing a 72-byte prefix would hash identically and either would
 verify against the other's hash. Hashing or verifying refuses an over-length
 password outright instead of silently truncating it.
 
-Raising `BCRYPT_COST` opens a timing difference on `/login` until every stored
-hash is rewritten at the new cost; `BCRYPT_COST`'s own comment explains why,
-and the remedy (rehash on login) is not built.
+Raising `BCRYPT_COST` opens a timing difference on `/login` for each account
+until its stored hash is rewritten at the new cost; `BCRYPT_COST`'s own comment
+explains why. A successful login rewrites a hash made at a lower cost
+(`isHashCostOutdated`), so the gap lasts only until each active user next signs
+in. The rewrite lands only while the stored hash is the one the login verified,
+and a failed rewrite is logged and never fails the login.
 
-### Password policy: an 8-character floor, no composition rules
+### Password policy: a 15-character floor, no composition rules
 
 Every password a user sets — `registerSchema`, `resetPasswordSchema` and
 `changePasswordSchema`'s `newPassword` (`src/validators/auth.validators.ts`) —
-must be at least `MIN_PASSWORD_LENGTH` (8) characters and at most
+must be at least `MIN_PASSWORD_LENGTH` (15) characters and at most
 `MAX_PASSWORD_BYTES` bytes, and nothing else — no required uppercase, digit,
-or symbol. This follows [NIST SP
-800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html): length matters more
+or symbol. 15 is [NIST SP 800-63B revision
+4](https://pages.nist.gov/800-63-4/sp800-63b.html)'s minimum for a password
+used as a single factor. The guidance behind it: length matters more
 than complexity, and mandatory composition rules push real users toward
 _more_ predictable passwords (a capitalised first letter, a `1` or `!`
 appended). Bolting composition requirements back on is a regression against
@@ -226,6 +230,12 @@ real account — see "User enumeration" below. A distinct validation error for
 a bad-length login password would leak that distinction to an
 unauthenticated caller.
 
+The floor applies only where a password is set. Login, step-up
+(`reauthenticateSchema`) and change-password's `currentPassword` verify a
+password without a length rule, so an account whose password was set under an
+earlier, shorter floor still signs in; it meets the floor at its next change or
+reset.
+
 ### Password change and reset against a concurrent login
 
 A login that checked the old password can't keep a session once a password
@@ -233,14 +243,21 @@ change or reset commits. Both writes run in one transaction that locks the
 user row `FOR NO KEY UPDATE`, writes the new hash, and revokes the user's
 `user_tokens` rows: every session for a reset, every session but the caller's
 for a change (every session, the caller's included, when the caller's access
-token carries no session id). A reset also revokes every token once before
-that transaction, without the lock, so a failed write still leaves no session
-alive. Login still checks the password outside any transaction. It then opens
+token carries no session id). A reset (and a Google account claim) also
+revokes every token once before that transaction, in a transaction of its own
+that takes the same lock and commits first (`revokeAllSessions`), so a failed
+write still leaves no session alive, including the successor of a rotation
+that was in flight. Login still checks the password outside any transaction. It then opens
 a short one that locks the same row `FOR SHARE` and re-reads the hash. If the
-hash changed, it answers the same `401 Invalid email or password`; otherwise
-it issues the refresh token inside that transaction. So either the login
-commits first and the password write revokes its session, or the login sees
-the new hash and fails. There is no third ordering.
+hash changed, it compares the submitted password against the hash it found:
+when that still matches (another login's rehash at a higher cost, or a reset
+to the same password), it issues the token, after that write committed and
+against the password now stored; any other change answers the same
+`401 Invalid email or password`. An unchanged hash issues the refresh token
+inside that transaction. So either the login commits first and the password
+write revokes its session, or the login sees the committed write and holds a
+session only if its password is the one now stored. There is no third
+ordering.
 
 Refresh rotation also locks the user row `FOR SHARE`, so a refresh racing a
 password write either has its new token revoked or gets 401.
@@ -259,21 +276,25 @@ Every path that locks the user row:
 | Path                                                                                            | User row lock       | Why                                                                                                                                                                                                                        |
 | ----------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Password change, password reset, sign out other sessions                                        | `FOR NO KEY UPDATE` | Writes the hash (a password change or reset) and revokes sessions atomically                                                                                                                                               |
-| Google account claim, logout, reuse kill, lifetime kill                                         | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                                                                                                                                                                         |
+| Google account claim, `revokeAllSessions`, logout, reuse kill, lifetime kill                    | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                                                                                                                                                                         |
 | Step-up (`markSessionReauthenticated`, `POST /auth/reauthenticate`)                             | `FOR NO KEY UPDATE` | Re-checks the account is active and moves the session's `authenticated_at`                                                                                                                                                 |
 | Login (after the password compare), Google sign-in (after the account lookup), refresh rotation | `FOR SHARE`         | Issues a token only against the hash, account state and session state it checked: login and Google sign-in re-check `active` under the lock, so a deactivation or deletion that committed since the first read answers 401 |
 | A staff write's actor (`assertStillPlatformRole`)                                               | `FOR SHARE`         | A deactivation of the acting staff member waits for the write or is seen by it                                                                                                                                             |
 | A staff user action's target (`lockStaffPair`)                                                  | `FOR NO KEY UPDATE` | Deactivate, reactivate, sign-out, edit and delete act on the row they read                                                                                                                                                 |
 
 Logins and rotations take `FOR SHARE`, and their `FOR SHARE` locks never
-conflict with each other. A concurrent login's `last_logged_in_at` update does
-wait for the `FOR SHARE` transactions open on the row; each holds it for one
-token insert (a login) or one rotation (a refresh). The reuse and lifetime
+conflict with each other. A concurrent login's `last_logged_in_at` update, and
+a login's rehash of an old-cost hash (one UPDATE after its transaction
+commits, outside any transaction), do wait for the `FOR SHARE` transactions
+open on the row; each holds it for one token insert (a login, and, when the
+hash changed since its first read, one password compare) or one rotation (a
+refresh). The reuse and lifetime
 kills run after the rotation's transaction commits, in a transaction of their
 own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE` transaction would
-deadlock two concurrent reuses. The session revocation that takes no user row
-lock is `revokeAllSessions`, the unlocked pass that a reset and a Google
-account claim run before their locked transaction.
+deadlock two concurrent reuses. `revokeAllSessions`, the pass that a reset and
+a Google account claim run before their own locked transaction, takes the user
+row `FOR NO KEY UPDATE` in a transaction of its own and commits before that
+transaction begins, so a rollback there never undoes it.
 
 Two effects are accepted:
 
@@ -382,6 +403,14 @@ genuine link fails exactly like an unknown token, and the link is then dead.
 One link is one attempt. A legitimate typo costs the user a resend, not a
 retry, and generates its own support tickets ("my verification link stopped
 working"); that trade is deliberate.
+
+**A second click on a link that worked answers 409.** When the claim fails,
+`verifyEmail` looks the token up by its hash: an `email_verification` row
+consumed before it expired, whose account is now verified, answers 409
+`email_already_verified` ("This email is already verified. Sign in to
+continue."). It writes nothing and never applies the submitted password. Every
+other failure, including a link burnt by a wrong password on an account that is
+still unverified, keeps the one 400.
 
 **Why the token alone is not enough — the squatting scenario.** An attacker
 registers `victim@example.com` with a password of their own choosing. The row
@@ -1147,7 +1176,9 @@ proxies the browsers' posthog-js traffic; without it, neither happens.
   origin, so the browser sends it the `__Host-refreshToken` cookie
   (`Path=/`) like any other request. The proxy removes the `Cookie` and
   `Authorization` headers before the request leaves, so PostHog never
-  receives a session (`analytics-proxy.test.ts`).
+  receives a session (`analytics-proxy.test.ts`). A request carrying `Expect`
+  is refused 417 before it is proxied: the proxy library skips the header
+  rewrite for such a request.
 - **The client address is the one Express resolved.** `X-Forwarded-For`
   upstream is `request.ip` under `TRUST_PROXY`, not a header the client
   sent (`X-Forwarded-Host`, `-Proto` and `-Port` are overwritten too), so a
@@ -1349,7 +1380,6 @@ None of these is built, except where the Status column says Partial:
 | MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
 | General-purpose rate limiting                         | **Partial**         | 30 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
-| Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |
 | Session list                                          | **Not implemented** | `POST /auth/sessions/revoke-others` ends every other session (as a password change does), and a staff admin can end all of a user's sessions.                                                                                       |
