@@ -169,7 +169,9 @@ the user and refuses one that is soft-deleted or inactive. Loading the user on
 every request is deliberate: deactivation and deletion take effect on the next
 request, and a cache of known-good ids would reopen that window. Every response
 behind it is `Cache-Control: no-store`, as are the login and refresh responses,
-so a browser keeps no authenticated body on disk after sign-out. A verified
+so a browser keeps no authenticated body on disk after sign-out. Every error
+response is `no-store` too (`errorHandler`), so a refusal carries the same
+header whichever gate answered. A verified
 token with no `sid` skips the denylist and is admitted until it expires.
 
 ### The refresh cookie
