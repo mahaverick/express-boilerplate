@@ -1,574 +1,1051 @@
 # Architecture
 
-How the pieces of this boilerplate fit together. What it does not build is
-listed in [SECURITY.md](SECURITY.md#what-this-boilerplate-does-not-implement).
+How this API is put together: how a process boots and stops, where code goes,
+what a request passes through, what runs in the background, and the decisions
+that constrain a change. The threat model and every defence are in
+[SECURITY.md](SECURITY.md), the tables and migrations in
+[DATABASE.md](DATABASE.md), and the quick start, scripts and operator steps in
+[README.md](README.md).
 
-## Boot sequence: `index.ts` -> `server.ts` -> `app.ts`
+## Boot and process model
 
-The app is split into three files:
+### Boot sequence
+
+Three files, one job each:
 
 ```
-src/index.ts    entrypoint — validates the environment, then boots
+src/index.ts    entrypoint: validates the environment, then boots
 src/server.ts   owns the listening socket and the shutdown sequence
-src/app.ts      builds the Express app — no listen, no side effects
+src/app.ts      builds the Express app: no listen, no workers, so tests import it
 ```
 
-`createApp()` in `app.ts` returns a plain, unstarted `Express` instance, so
-tests import it without binding a port.
+`main()` in `src/index.ts` raises `Error.stackTraceLimit` to
+`ERROR_FRAME_LIMIT` (50), because V8 keeps 10 frames by default and error
+tracking keeps 50. It then calls `getEnv()` and `assertEnvConsistent` inside a
+`try`. An invalid environment prints one list (`Invalid environment:` from the
+schema, or `Inconsistent environment:` from the cross-field rules) and sets
+exit code 1 before any socket opens. Only then does `boot()` run.
 
-**`index.ts`** first calls `getEnv()` and `assertEnvConsistent` inside a
-`try/catch`. If the environment is invalid, it prints the named list of what
-is wrong and exits 1, before anything else runs. Only then does it
-`import('@/server')` **dynamically**. A static import would be evaluated before
-`main()`'s `try/catch` ran, and `@/server` transitively imports
-`database.service.ts`, which calls `getEnv()` at module scope: an invalid
-environment would surface as a stack trace from inside a dependency instead of
-the named list.
+`boot()` imports `@/server` and the worker supervisor **dynamically**.
+`@/server` reaches `database.service.ts`, which calls `getEnv()` at module
+scope, so a static import would throw on a bad environment before `main()`
+could report it; a static worker import would load BullMQ into processes that
+never start Workers. Then, in order:
 
-`boot()` then starts the server and routes `SIGTERM`, `SIGINT`, an unhandled
-rejection, an uncaught exception and a server `error` event through one
-shutdown handler (`createShutdownHandler`, `lifecycle.service.ts`). It runs
-`gracefulShutdown` once and exits 1 if that takes longer than
-`SHUTDOWN_TIMEOUT_MS`.
+1. When flags are configured, the flag snapshot finishes a first load
+   ([Feature flags](#feature-flags)).
+2. Every replica subscribes `reconcileQueuePause` to maintenance-mode reloads
+   (API-only replicas hold producer connections too), and the maintenance-mode
+   store finishes a first read ([Maintenance mode](#maintenance-mode)).
+   Neither start rejects or waits for its pub/sub subscription, so the first
+   request already sees both.
+3. `startServer()` listens. A bind failure (`EADDRINUSE`, `EACCES`) logs one
+   line, and the server's `error` event exits 1 through the shutdown handler.
+4. `warnIfDeletionsPending` warns once when purged users wait in
+   `analytics_deletions` while the PostHog personal key or project id is
+   missing ([Analytics](#analytics)).
+5. `SIGTERM`, `SIGINT`, an unhandled rejection and an uncaught exception all go
+   through one shutdown handler (`createShutdownHandler`,
+   `src/services/lifecycle.service.ts`). It runs `gracefulShutdown` once, exits
+   with the highest code any caller asked for, and exits 1 if shutdown takes
+   longer than `SHUTDOWN_TIMEOUT_MS`. A process fault first marks shutdown, so
+   readiness answers 503, then is reported and logged with one `errorId` and
+   the error-report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` (2 s);
+   a signal during that flush still exits 1.
+6. With `WORKER_ENABLED`, `startWorkers()` starts the Workers
+   ([Queues and Workers](#queues-and-workers)). It is skipped when shutdown
+   began during the import, and a failure to start rejects `boot()`, which the
+   unhandled-rejection handler turns into exit 1.
 
-Every process also warns once at boot, after `startServer()`, when purged
-users wait in `analytics_deletions` while `POSTHOG_PERSONAL_API_KEY` and
-`POSTHOG_PROJECT_ID` are not both set (`warnIfDeletionsPending`,
-`analytics-deletion.service.ts`). The warning says it matters on the worker
-deployment and can be ignored on a pod that runs no Workers.
+`startServer(port)` takes the port as a parameter because `getEnv()` is
+memoised: a test cannot change `APP_PORT` after import, so it calls
+`startServer(0)`.
 
-With `WORKER_ENABLED`, `index.ts` then starts the Workers through
-`startWorkers()` (`worker-supervisor.service.ts`): email, notification and
-maintenance, and analytics when `POSTHOG_PROJECT_KEY` is set or the personal
-API key and project id are (`isTimelineEnabled`). Each time the
-supervisor starts a worker generation (boot is the first) it also registers
-the daily retention schedule (`ensureRetentionSchedule`,
-`src/jobs/maintenance.job.ts`), with analytics on the analytics drain
-schedule (`ensureAnalyticsDrainSchedule`, `src/jobs/analytics.job.ts`), and
-with the personal key on the PostHog deletion schedule
-(`ensureAnalyticsDeletionSchedule`, `src/jobs/analytics-deletion.job.ts`). A
-failed registration logs a `warn` and is retried with the next generation. A new
-generation starts only when a worker connection gives up before its first
-ready, so a registration that fails while the Workers stay healthy waits
-for the next restart. The scheduler is stored in Redis, so one registered
-earlier keeps running meanwhile.
+`createApp()` (`src/app.ts`) also registers the domain-event subscribers
+(onboarding and analytics). Registration is idempotent, so a test may build the
+app more than once and still have them.
 
-**`server.ts`** exports `startServer(port?)` and `gracefulShutdown(server, workers?)`.
-`startServer` takes the port as a parameter so tests can bind an ephemeral
-port (`startServer(0)`): `getEnv()` is memoised, so a test cannot change
-`APP_PORT` after import. `gracefulShutdown` runs in this order:
+### Graceful shutdown
 
-1. readiness starts answering 503 (`markShuttingDown`), and open SSE streams
-   are ended, since they would hold the socket open;
-2. the socket closes and drains; connections still open after
-   `SERVER_DRAIN_TIMEOUT_MS` (5 s) are force-closed;
-3. the Workers close, finishing their current job, while the database and
-   Redis are still up;
-4. the database, Redis, queue and notification-subscriber clients close;
-5. OpenTelemetry flushes and shuts down, last, so no span from the steps
-   above is dropped.
+`gracefulShutdown(server, workers?)` (`src/server.ts`) runs in this order, and
+the order matters:
 
-**`app.ts`** wires, in order: `x-powered-by` off, `trust proxy` from
-`TRUST_PROXY`, `helmet`, `cors`, `requestId`, `requestContext`, the email
-webhook router (`/api/v1/webhooks/email`) and the analytics proxy
-(`/api/v1/collect`, behind its own limiter), both ahead of the JSON (1 MB)
-and urlencoded (100 KB) body parsers, which would consume or refuse their
-bodies, then `GET /health`,
-`GET /health/ready`, the versioned API router (`createApiRouter()` at
-`/api/v1`), a 404 catch-all, then `errorHandler`. Express matches in
-registration order, and the error handler must be last to see errors from
-everything before it.
+1. Readiness starts answering 503 (`markShuttingDown`), and every open SSE
+   stream is ended (`closeAllStreams`): an SSE response never ends by itself,
+   so it would hold `server.close()` open until the force-close.
+2. The socket closes. Idle keep-alive connections are swept every 250 ms, and
+   connections still open after `SERVER_DRAIN_TIMEOUT_MS` (5 s) are
+   force-closed. No new request finds a closed pool.
+3. The Workers close. `Worker#close()` lets the in-flight job finish, and that
+   job needs the database and Redis, which are still open.
+4. The error-report queue is flushed for at most `ERROR_SHUTDOWN_FLUSH_MS`
+   (3 s): after the Workers, so a job's final failure is included, and before
+   Redis closes, since the flush counts its outcome there.
+5. The database, Redis, queue and notification-subscriber clients close, and
+   the flag snapshot and maintenance-mode store stop.
+6. OpenTelemetry flushes and shuts down last, so it exports the spans the
+   earlier steps produce.
 
-## Request path: auth and beyond
+Every `close*()` is safe to call twice. `gracefulShutdown` never calls
+`process.exit`; the `SHUTDOWN_TIMEOUT_MS` backstop is the shutdown handler's.
 
-`createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
-feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
-`invitations`, `platform` and `flags`. A new feature router is one more `router.use(...)`
-line there, never a change to `app.ts`. The one exception is
-`POST /api/v1/webhooks/email/:provider` (`src/routes/email-webhook.routes.ts`),
-which `app.ts` mounts after `requestContext` and before the global
-`express.json`: a provider's signature covers the exact body bytes, so the
-route reads them with its own `express.raw` (256kb). It is public (the
-signature authenticates it); an unknown or disabled provider gets the
-unknown-route 404 before any limiter runs, and a bad signature gets 401
-`INVALID_SIGNATURE`. Two limiters guard it: `emailWebhookRejected` (60 a minute
-per IP, counting only responses of 400 or above) and `emailWebhook` (3000 a
-minute per provider, counting only accepted requests), so forged traffic
-cannot spend the budget a provider's real events need. See
-[Email tracking](#email-tracking).
+### Health checks
 
-Every authenticated OPTIONS that reaches the platform router gets the
-unknown-route 404 (`refusePlatformOptions`), so Express's automatic `Allow`
-answer never lists a staff route's methods. `cors` has already answered an
-allowed-origin preflight, and `requireAuth` refuses an OPTIONS without a
-bearer token; staff routes serve no cross-origin preflight of their own. The
-router serves staff reads to any platform role: `GET /platform/tenants` (with
-`state` and back-paging), `GET /platform/tenants/:id` (any lifecycle state),
-`GET /platform/users` (with `status=deleted` for soft-deleted users), `GET
-/platform/users/:id` (a soft-deleted user too), `GET /platform/stats`, and
-message tracking: `GET /platform/emails`, `/platform/emails/health`,
-`/platform/emails/:id` and its `/preview`, `GET
-/platform/email-suppressions`, and onboarding: `GET
-/platform/onboarding/funnel`, `/platform/onboarding/tenants` and `GET
-/platform/tenants/:id/onboarding`, and the flag inspector's list, `GET
-/platform/flags`.
-Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
-`targetId`, actor, action and access), the PostHog timelines `GET
-/platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline` (each
-read audited as `user.timeline_viewed` / `tenant.timeline_viewed`, at most once per staff member, target and view every 10 minutes; the audit fails closed: if its write fails, so does the read, with a 500, and the throttle key it claimed is released, logging at `error` if that release fails too), the Errors views `GET /platform/users/:id/errors` and `GET /platform/tenants/:id/errors` (audited the same way as `user.errors_viewed` / `tenant.errors_viewed`, see [Error tracking](#error-tracking)), `GET /platform/system/status` (not audited), the flag evaluate view `GET /platform/flags/evaluate` (audited as `user.flags_evaluated`, throttled the same way, see [Feature flags](#feature-flags)), and every create, update and soft
-action: create a tenant and invite its owner, re-invite an owner, suspend,
-reactivate and archive a tenant, create and edit users, deactivate,
-reactivate, sign out and soft-delete users, send set-password or
-verification mail, resend a token email through the action that sent it,
-lift an email suppression, mark a tenant's onboarding step complete and
-send its owners an onboarding reminder. Platform owners also get the two hard deletes, `POST
-/platform/users/:id/purge` and `POST /platform/tenants/:id/purge`, and may act
-on other staff owners. Each route names its own `requirePlatformRole`, which
-answers 404 below it. Deactivate, delete, both purges, suspend, archive and
-the owner re-invitation also need a sign-in within the last 10 minutes
-(`requireRecentAuth`, 401 `REAUTH_REQUIRED`), and so does an email resend of
-an invitation, on any tenant, which the service decides per message with the
-same predicate (`isRecentAuth`, `src/utilities/recent-auth.utilities.ts`);
-`POST /auth/reauthenticate`
-(staff only, password only) renews it. A staff sign-out, deactivation or
-delete revokes every token the user holds, whatever its purpose, so an
-unredeemed verification or set-password link dies with the sessions. Staff
-work inside an active tenant (edit, members, invitations, settings) goes
-through the ordinary `/tenants/:slug/*` routes with the platform role. On the
-platform tenant those member routes are how staff roles change, with step-up
-on a role change, a removal, every invitation whatever its role, a resend and
-leaving the platform tenant, and a last-owner guard that counts active owners
-only. Staff acting on a customer tenant through platform access need a recent
-sign-in and a reason for its member and invitation writes, and the services
-re-check the reason under lock. Every
-successful `/platform` write that the role gate admitted logs one `Staff
-write` line (`logStaffWrites`, `platform.middleware.ts`: method, path, status,
-actor id, and the target's type and id when the path names one; never the
-body); the audit log is the record.
+Two endpoints, deliberately different depths. Neither is traced.
 
-**Open auth routes.** `register`, `login`, `verify-email`,
-`resend-verification`, `forgot-password`, `reset-password`, `refresh` and
-`logout` need no access token. The auth router refuses any body that is not
-`application/json` with 415 (`requireJsonContentType`). `register`,
-`reset-password` and `change-password` **hash** a password; `login`,
-`verify-email` and `change-password` **compare** one. All of them go through
-`src/utilities/password.utilities.ts`, never bcrypt directly. `login` mints an
-access token (`signAccessToken`) and a refresh token (`issueRefreshToken`), set
-as an httpOnly cookie. [SECURITY.md](SECURITY.md) explains both token types,
-password hashing, user-enumeration resistance and rate limiting.
+- **`GET /health`** is liveness. It touches no dependency, so a database blip
+  never makes an orchestrator restart a healthy process. It answers
+  `{ status: 'ok', uptime, release }`, where `release` is `APP_VERSION`, the
+  image's git sha (`dev` outside an image). Both routes are public
+  ([SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog)).
+- **`GET /health/ready`** is readiness. Failing it only removes the pod from
+  rotation, so it checks the database, Redis and both queue connections, in
+  parallel, and answers 503 `not-ready` when any fails, or 503
+  `shutting-down` once shutdown has begun. It names only the dependency, never
+  a host or driver error. Each check is bounded by
+  `READINESS_CHECK_DEADLINE_MS` (500 ms, `createReadinessProbe` in
+  `src/services/readiness.service.ts`); a check that runs past it reports
+  `false` and its name in `timedOut`, which a 200 never carries. Set the
+  orchestrator's probe timeout above 500 ms. A check still running at the
+  deadline is left to finish and is not started again until it does, so a
+  stalled database holds one pool connection, not one per probe. The Redis
+  check has its own 300 ms bound (`waitForRedisProbe`) that neither consults
+  nor opens the request-path stall cooldown described under
+  [Data layer](#data-layer). Before a queue connection's first `ready`, the
+  probe waits for it, so it answers 503 at the deadline while that connection
+  is still connecting.
 
-**Authenticated routes** sit behind `requireAuth`
-(`src/middlewares/auth.middleware.ts`). The profile, notification, tenant and
-platform routers mount it once with `router.use(requireAuth)`, so a route added
-later inherits the gate. `change-password`, `sessions/revoke-others`,
-`reauthenticate`, `providers` and `POST /invitations/accept` mount it per
-route. `requireAuth` verifies the
-bearer access token (`verifyAccessToken`), refuses a token whose session is on
-the Redis denylist (`isSessionDenied`), then reloads the user by id. The reload
-costs one database read per authenticated request; in exchange, a disabled or
-deleted account is refused on its next request instead of when its token
-expires.
+### Data layer
 
-**`POST /api/v1/auth/refresh`** and **`POST /api/v1/auth/logout`** need no
-access token, since it has often expired by the time either is called. Both
-read the refresh-token cookie off the raw `Cookie` header. There is no
-`cookie-parser`: the name is known in advance (`refreshCookieSpec`; see
-SECURITY.md, "Cookies"). Both refuse a disallowed
-`Origin` 403 (`requireAllowedOriginWhenPresent`) before their limiters.
+- **Postgres.** `src/services/database.service.ts` creates exactly one
+  `postgres` client, and one Drizzle instance over it, per process, at module
+  scope. A second client is a second pool and double the connection budget,
+  which shows up only under load. The pool options
+  (`databaseClientOptions`, `src/configs/database.config.ts`) are
+  `max: DB_POOL_MAX`, prepared statements off (transaction pooling breaks
+  them), and `DB_STATEMENT_TIMEOUT_MS` as each connection's
+  `statement_timeout` when it is above 0. `src/database/migrate.ts` and the
+  test global setup build their own clients without these, so a statement
+  timeout never cuts a migration short. `withTransaction(fn, executor)` reuses
+  a transaction it is passed, with no savepoint, so an outer rollback always
+  takes an inner write with it.
+- **Redis.** `src/services/redis.service.ts` holds one shared node-redis
+  client, connected lazily on first use, so importing a repository in a unit
+  test opens no socket. A `closed` flag, set by `closeRedis()` and never reset,
+  stops a readiness probe after shutdown from reopening the socket: node-redis
+  has no permanently-closed state of its own. `createRedisClient()` builds any
+  extra client (the notification subscriber, the snapshot and maintenance-mode
+  subscribers) with the same policy. Every key and channel goes through
+  `redisKey(...parts)`, which prefixes `REDIS_KEY_PREFIX`.
+- **Queues.** `src/services/queue.service.ts` owns the BullMQ queues and the
+  two `ioredis` connections they run over (BullMQ needs `ioredis`, which cannot
+  share node-redis's connection). The Workers' connection keeps the offline
+  queue, which Workers need to ride out an outage. The producers' connection
+  turns it off, so an enqueue during an outage rejects at once instead of
+  holding its HTTP caller.
 
-**The repository layer** (`src/repositories/`) is a thin layer over
-`src/database/models/`. `BaseRepository` owns soft-delete filtering,
-`updatedAt` maintenance and the unique-violation-to-409 translation.
-`UserRepository`, `UserTokenRepository` and `TenantRepository` extend it, each
-supplying the four queries it cannot express generically (`selectOne`,
-`insertOne`, `updateOne`, `markDeleted`). Every public method it defines takes
-a final optional `executor: DbExecutor = db` parameter, so a caller can run it
-inside its own transaction. The other repositories do not extend it, because
-their tables have no soft-delete concept for its policy to apply to:
-`email_logs`, `email_events` and `audit_logs` are append-only outside the
-retention purge and the staff purge, `email_messages` changes only its status
-and `email_suppressions` only its lift,
-`platform-tenant.repository.ts`, `platform-user.repository.ts` and
-`platform-email.repository.ts` are read-only cross-tenant searches and detail
-reads, `platform-stats.repository.ts` holds the read-only Overview
-aggregates, and the rest (auth providers,
-notifications, notification preferences, tenant settings, invitations,
-memberships) have no `deletedAt` column. See [DATABASE.md](DATABASE.md) for
-the models.
+**Through a Redis outage.** Before a client's first `ready`, every Redis
+client gives up after three retries, so boot and `/health/ready` report
+unreachable instead of hanging. After it, every client retries forever, with a
+backoff capped at 5 s (`RECONNECT_DELAY_CAP_MS`), so an outage never leaves a
+dead client behind. While a client reconnects nothing waits for Redis:
+node-redis runs with `disableOfflineQueue`, a producer enqueue rejects, and the
+queue check reports `false` for a connection in any post-ready status but
+`ready`.
 
-## Email verification and password recovery wiring
+A queue connection that gives up before its first `ready` is replaced on next
+use, and Workers on it never recover by themselves, so start Workers only
+through `startWorkers()`, which replaces them on a fresh connection; why is in
+the file JSDoc of `src/services/worker-supervisor.service.ts`. A failed restart
+keeps the queue check `false` until a later one succeeds.
 
-`users.email_verified_at` (`src/database/models/user.model.ts`) gates login,
-and `markEmailVerified` (`verification.service.ts`) is its only writer. It
-never moves an earlier timestamp. `profile.validators.ts` leaves `email` out of
-the profile-update allow-list, because changing an address there would carry a
-verified flag to an address nobody verified.
+**Through a stalled Redis.** node-redis never times out a command it has
+written, and its `connectTimeout` stops at the TCP connect: the handshake after
+it has no timer. So `getRedis()` bounds the shared client's whole connect at
+`REDIS_CONNECT_TIMEOUT_MS` (5 s) and destroys a client that runs out of time,
+and every Redis call a request waits on runs under a deadline
+(`src/services/redis-deadline.service.ts`):
 
-- `POST /api/v1/auth/register` answers the same `202` whether or not the
-  address is free. For a new account it issues an `email_verification` token
-  (`user_tokens`, through `issueToken`) and enqueues a `verify_email`
-  notification; the worker mails a link to `WEB_URL/verify-email?token=…`.
-  For a taken address it mails a registration-attempt notice instead.
-- `POST /api/v1/auth/verify-email` (`verification.controller.ts`) takes the
-  token **and** the account's password, and a wrong password spends the token
-  like a right one. SECURITY.md, "Email verification", explains why. A
-  second click on a link that already verified the account answers 409
-  `email_already_verified`; every other failure answers one 400.
-- `POST /api/v1/auth/resend-verification` revokes an unverified user's live
-  verification tokens and mails a new link. The response is identical for an
-  unknown, an unverified and a verified address.
-- `POST /api/v1/auth/login` refuses an account whose `email_verified_at` is
-  null through the same guard, and the same `401`, as a wrong password.
-- `POST /api/v1/auth/forgot-password` answers the same `202` for every address,
-  replying before the lookup. For an existing account it issues a
-  `password_reset` token and mails a link to `WEB_URL/reset-password?token=…`.
-- `POST /api/v1/auth/reset-password` claims that token, stores the new hash
-  under the user-row lock and revokes every session. On a never-verified account it
-  also sets `email_verified_at`, since the reset proves the same mailbox
-  control, and deletes any federated sign-in linked to it.
-- `POST /api/v1/auth/change-password` (behind `requireAuth`) checks the current
-  password and revokes every other session, or every session when the access
-  token carries no session id. When the browser presents its live refresh
-  cookie, it spares only that chain, so a grace-window sibling in the caller's
-  session ends too (SECURITY.md, "Refresh rotation and reuse detection");
-  `POST /auth/sessions/revoke-others` spares the same way.
-- A Google sign-in marks the address verified too (`google-auth.service.ts`).
+- **`withRedisDeadline`** wraps reads and counters: the session denylist read,
+  the rate-limit store, the staff-visit, view-audit and flag-exposure dedupes,
+  the timeline budget and cache, the invitation recipient budget, the mail
+  cooldowns, the maintenance-mode notice ids and the OAuth session store. A
+  call with no answer in `REDIS_REQUEST_DEADLINE_MS` (300 ms) fails, and for
+  the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call fails at once
+  without asking Redis. The failure takes the caller's existing outage path
+  (fail open, memory, or `next(error)`), so a stall is handled as an outage. A
+  call that misses its deadline while the shared client's first connect is
+  still inside its 5 s bound falls back without opening the cooldown: a slow
+  connect is not a stall. The verdict waits one turn of the event loop after
+  the timer, so a reply already in the socket buffer when a blocked process
+  wakes still wins.
+- **`waitForRedisWrite`** carries the writes whose loss would widen access (a
+  session deny, a maintenance-mode change publish) or let a dedupe or throttle
+  key linger (its release). It is always sent, cooldown or not; the request
+  waits for it at most the deadline, and one still in flight then lands when
+  Redis answers. If the connection drops first the write is lost and its
+  failure logged.
 
-Each route carries its own rate limiters; SECURITY.md, "Rate limiting", lists
-them. The mail goes through the notification and email workers (see CLAUDE.md,
-"Notifications"), and locally lands in Mailpit (`docker-compose.yml`). Rows
-created without `email_verified_at` cannot log in; SECURITY.md, "Email
-verification", covers backfilling them.
+Workers, BullMQ, pub/sub, background publishes and counters, and the staff
+status reads (bounded by `STATUS_READ_TIMEOUT_MS`) are outside both. The
+deadline is a design limit, not a fault detector: a Redis whose latency
+regularly passes 300 ms trips the cooldown. What each caller then does is in
+[SECURITY.md](SECURITY.md#revocation-and-the-session-denylist) and
+[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter).
 
-## Layers
+## Layers and directory rules
 
-| Layer        | Directory           | Job                                                                                             | May import                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | ------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| routes       | `src/routes/`       | Wire middleware to controller methods.                                                          | controllers, middlewares, configs, constants                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services (`resolveTenant` reads the platform role through `platform.service` and writes its staff-access entry through `audit.service`; `requirePlatformRole` reads `platform.service`; `logStaffWrites` logs through `logger.service`), repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), validators (`requireRecentAuthAndReasonOnPlatformAccess` parses the staff reason with `reasonSchema`), errors, configs, utilities, constants, types |
-| configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models` and `types/`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, `middlewares/flag-context.middleware` (the request's memoised flag context and evaluations), and `database/models` types via `import type` only                                                                                                                                                                                                                                                                                                                                                    |
-| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                                                                                                                                                                                                                                                                                                                                         |
-| policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants, utilities (pure helpers: `escapeLikePattern`, `encodeCursor`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| constants    | `src/constants/`    | Shared values: limits, names and keys.                                                          | other constants, types, utilities (pure helpers, e.g. `hashRateLimitIdentity`, `EMAIL_TEMPLATE_KEYS`), validators (`rate-limit.constants.ts` reads `loginSchema`)                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+### Layers
 
-`eslint.config.mjs`'s `import-x/no-restricted-paths` turns six of this
-table's boundaries into `error`-level lint gates: controllers may not
-import a repository or `database.service` directly; controllers may not
-import another controller, except `base.controller.ts` and
-`helpers.controller.ts`; services, repositories, policies, errors and
-presenters may not import controllers, routes or middlewares; repositories
-may not import a service other than `database.service`; policies may not
-import repositories, services or `database`; and configs may not import
-controllers. A seventh boundary is enforced separately, by
-`@typescript-eslint/no-restricted-imports`: controllers may import
-`database/models` for types only (`import type`), never a value. An eighth,
-core `no-restricted-imports` over `src/**` with
-`src/services/platform-*.service.ts` ignored, keeps
-`repositories/platform-tenant.repository.ts` (every customer tenant, for
-staff search), `repositories/platform-stats.repository.ts` (staff Overview
-aggregates), `repositories/platform-user.repository.ts` (every user, for
-the staff directory), `repositories/platform-email.repository.ts` (every
-email) and `repositories/platform-onboarding.repository.ts` (every tenant's
-onboarding) out of every other module, so "your tenants" can never be
-served from it. `tests/unit/lint-gates.test.ts` proves each of the eight
-fires, against a committed violating fixture under
-`tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
-blocklist, not an allowlist, so a "may import" cell above with no zone
-naming it (most of middlewares' own imports, services importing validator
-types, presenters importing constants) is unrestricted by lint: the table
-states the intended shape, and only the eight rules above enforce it. When
-one of them refuses an import, either the import is wrong or the table and the
-zone config change together.
+| Layer        | Directory              | Job                                                                     |
+| ------------ | ---------------------- | ----------------------------------------------------------------------- |
+| routes       | `src/routes/`          | Wire middleware to controller methods; one router per feature.          |
+| middlewares  | `src/middlewares/`     | Cross-cutting request handling: auth, tenant, gates, limits, errors.    |
+| controllers  | `src/controllers/`     | Parse and validate input, call services, shape the response. HTTP only. |
+| services     | `src/services/`        | Business rules, transactions, authorization, side effects. Never send.  |
+| policies     | `src/policies/`        | Pure authorization predicates that return booleans and never throw.     |
+| repositories | `src/repositories/`    | Queries only.                                                           |
+| presenters   | `src/presenters/`      | Pure mappers from a row to its wire shape.                              |
+| validators   | `src/validators/`      | Zod schemas and `parseBody`.                                            |
+| jobs         | `src/jobs/`            | A queue's job payloads, default options and schedules.                  |
+| workers      | `src/workers/`         | One BullMQ Worker per queue.                                            |
+| configs      | `src/configs/`         | The validated environment and library configuration.                    |
+| constants    | `src/constants/`       | Fixed values: limits, names, keys, registries.                          |
+| utilities    | `src/utilities/`       | Small pure helpers.                                                     |
+| errors       | `src/errors/`          | Error classes and Postgres error handling.                              |
+| templates    | `src/templates/email/` | One plain function per email: subject, text and HTML.                   |
 
-Every route handler is a `BaseController` (`src/controllers/base.controller.ts`)
-method, an arrow-function class field. Nearly all are built through
+`eslint.config.mjs` turns the boundaries that matter into `error`-level gates:
+
+- `import-x/no-restricted-paths`: controllers may not import a repository or
+  `database.service`; controllers may not import another controller, except
+  `base.controller.ts` and `helpers.controller.ts`; services, repositories,
+  policies, errors and presenters may not import controllers, routes or
+  middlewares; repositories may not import a service other than
+  `database.service`; policies may not import repositories, services or
+  `database`; configs may not import controllers.
+- `@typescript-eslint/no-restricted-imports`: controllers import
+  `database/models` for types only.
+- `no-restricted-imports` over `src/**`, with `src/services/platform-*.service.ts`
+  exempt: the five cross-tenant repositories (`platform-tenant`,
+  `platform-stats`, `platform-user`, `platform-email`, `platform-onboarding`)
+  stay out of every other module, so "your tenants" is never served from a
+  query that sees every tenant.
+- `import-x/no-cycle` over relative and `@/` imports.
+
+`tests/unit/lint-gates.test.ts` lints the committed violations under
+`tests/fixtures/lint-zones/` and `tests/fixtures/lint-cycle/` to prove each
+rule fires. The zones are a blocklist, so an edge no zone names is unchecked.
+When a rule refuses an import, either the import is wrong or the zone config
+and the zone list above change in the same commit.
+
+**Controllers.** Every route handler is a `BaseController` method
+(`src/controllers/base.controller.ts`), an arrow-function field built through
 `this.handle(handler)`, which forwards a thrown or rejected error to `next()`
-and never sends a response itself. Once `response.headersSent`, it also logs a
-`warn` (without the error object, so it can never bypass `redactedForLog`)
-before calling `next(error)`; `errorHandler` (`error.middleware.ts`) then logs
-the error redacted and destroys the socket rather than attempting a second
-write. The two exceptions are `handleGoogleCallback` (`auth.controller.ts`),
-which redirects every failure to the frontend instead of answering JSON, and
-`streamNotifications` (`notification-stream.controller.ts`), an SSE stream.
-Both still call a service, so they are exceptions to `handle()`, not to the
-layering above. Each controller file exports one singleton instance
-(`export const tenantController = new TenantController()`), which its routes
-file imports.
+and never sends a response. After the headers were sent it logs one `warn` and
+still forwards, and `errorHandler` destroys the socket. Two handlers are not
+wrapped, each with a file-local reason: `handleGoogleCallback`
+(`auth.controller.ts`) redirects every failure to the frontend, and
+`streamNotifications` (`notification-stream.controller.ts`) is an SSE stream.
+Each controller file exports one singleton, which its routes file imports.
 
-**Lock order**, binding for every transaction that locks more than one row
-set:
+**Services.** A service owns its transaction and never sends a response. Where
+a route replies before the work (register and forgot-password answer 202
+first), the service exposes the work as a function the controller calls after
+replying, and that function never rejects. Authorization that matters is
+decided inside the transaction: the router's `requireRole` is the early coarse
+gate, and the service re-reads the actor's role under lock and applies
+`src/policies/tenant.policy.ts`. A controller may report `role` or `access`
+but never authorizes on them.
 
-1. the user row, for password writes, login and Google sign-in (both
-   `FOR SHARE`), refresh rotation, logout, the refresh kills, step-up and
-   the Google account claim (`lockById`, `user.repository.ts`), none of
-   which goes on to lock a membership or tenant row. Staff writes are the
-   one place the user row comes later: they lock owner rows and platform
-   memberships first, then the actor's user row `FOR SHARE`
-   (`assertStillPlatformRole`, `platform.service.ts`) and, for a user
-   action, the target's (`lockStaffPair`, `platform-user.service.ts`).
-   Staff tenant transitions and the owner re-invitation then lock the
-   tenant row (step 5), after the actor's user row. No cycle follows:
-   no transaction that starts on the user row locks anything below it in
-   this list, and nothing that holds a tenant row goes on to lock a user
-   row (`updateTenant`, the transitions, the owner re-invitation and the
-   tenant purge lock no user row after it);
-2. the tenant's owner rows (`lockOwners`, ordered by `id`);
-3. memberships, ordered by `user_id` (`lockMemberships`);
-4. only when the actor has no membership in the tenant, the actor's
-   platform-tenant membership, `FOR SHARE` (`lockTenantAccess`,
-   `tenant-access.service.ts`, via `lockPlatformRole`,
-   `user-membership.repository.ts`);
-5. the row a tenant or settings update writes (`lockById`,
-   `tenant.repository.ts`; `lockByTenantId`,
-   `tenant-settings.repository.ts`).
+**Repositories.** Every public method takes a final optional
+`executor: DbExecutor = db`, so a caller runs it inside its own transaction.
+`BaseRepository` owns soft-delete filtering, `updatedAt` maintenance and the
+unique-violation-to-409 translation; only `users`, `user_tokens` and `tenants`
+have the `deletedAt` and `updatedAt` it needs. Every other repository stands
+alone and says why in its file JSDoc.
 
-A transaction that takes these out of order can deadlock against one that
-follows it. The order is written into the JSDoc of `lockOwners`,
-`lockMemberships` and `lockPlatformRole` (`user-membership.repository.ts`), of
-`lockTenantAccess` (`tenant-access.service.ts`), and of `lockById` and
-`lockByTenantId`. Postgres cannot enforce an application-level lock order, so
-only that convention and a deadlock regression test
-(`tests/integration/services/tenant-membership.service.test.ts`) hold it.
+**Domain events.** A service that needs other features to react calls
+`emitDomainEvent` (`src/services/domain-events.service.ts`) after its own
+transaction commits, since Drizzle has no after-commit hook, and awaits it, so
+every subscriber has run before the request answers. A failing subscriber is
+logged and never fails the emitter or the subscribers after it. Onboarding and
+the analytics forwarder are the subscribers.
+
+**Lock order.** Every transaction that locks more than one row set takes them
+in this order:
+
+1. the user row (`lockById`, `user.repository.ts`), for password writes,
+   login, Google sign-in, refresh rotation, logout, the refresh kills, step-up
+   and the Google account claim; none of these goes on to lock a membership or
+   tenant row;
+2. a tenant's owner rows (`lockOwners`, in id order);
+3. its memberships (`lockMemberships`, in `user_id` order);
+4. when the actor has no membership there, the actor's platform-tenant
+   membership `FOR SHARE` (`lockPlatformRole`, through `lockTenantAccess` in
+   `tenant-access.service.ts`);
+5. the tenant or settings row a write changes (`lockById` in
+   `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`).
+
+Staff writes are the one place a user row comes later: they lock owner rows and
+platform memberships first, then the actor's user row `FOR SHARE`
+(`assertStillPlatformRole`, `platform.service.ts`) and, for a user action, the
+target's (`lockStaffPair`, `platform-user.service.ts`), then the tenant row. A
+transaction that locks membership rows in both a customer tenant and the
+platform tenant locks the customer tenant's first. Postgres cannot enforce an
+application lock order; the JSDoc of each lock method states its place, and a
+deadlock regression test
+(`tests/integration/services/tenant-membership.service.test.ts`) holds it.
 
 **Lock modes.** A lock that only guards a read-then-write takes
-`FOR NO KEY UPDATE`, not `FOR UPDATE`. `FOR UPDATE` also conflicts with the
-`FOR KEY SHARE` lock that every foreign-key insert takes on the row it
-references. Held on a tenant, it would block that tenant's audit inserts
-and invitation accepts for the whole transaction. `FOR UPDATE` is used only
-where the transaction deletes the locked row or changes a key column. A
-repository method that serves both kinds takes a `mode: RowLockMode`
-(`src/types/lock-mode.ts`), defaulting to `'no key update'`. The user row's
-modes are listed in SECURITY.md, "Password change and reset against a
-concurrent login". The two-connection tests detect blocking with
-`pg_blocking_pids` (`tests/helpers/lock-probe.ts`), not with sleeps.
+`FOR NO KEY UPDATE`, because `FOR UPDATE` conflicts with the `FOR KEY SHARE`
+lock every foreign-key insert takes on the row it references: on a tenant it
+would block that tenant's audit inserts and invitation accepts for the whole
+transaction. `FOR UPDATE` is only for a transaction that deletes the locked row
+or changes a key column; a method that serves both takes a `RowLockMode`
+(`src/types/lock-mode.ts`) defaulting to `'no key update'`. The user row's
+modes are in
+[SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
+Lock tests detect blocking with `pg_blocking_pids`
+(`tests/helpers/lock-probe.ts`), not with sleeps.
 
-**Platform access.** These services carry it. Their callers stay in the
-layers above.
+### Platform access
 
-| Service                          | Job                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tenant-access.service.ts`       | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `platform.service.ts`            | `getPlatformMembership` (one indexed read, no cache), `assertStillPlatformRole` (the actor's platform role re-read under lock inside a staff write, 404 below the route's role, 401 for an account gone or inactive), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `platform-tenant.service.ts`     | `searchAll` (state filter, keyset both ways), `getTenantDetail`, `createTenant` (no members, owner invited in the same transaction), `reissueOwnerInvitation`, `suspendTenant`/`reactivateTenant`/`archiveTenant` (one conditional UPDATE each, `transitionLifecycle`; archive also revokes pending invitations). The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `platform-user.service.ts`       | The staff user directory and user actions: search, detail, create with a set-password mail, edit, password-setup, resend-verification, deactivate, reactivate, sign-out, soft delete. State changes re-read the actor's platform role and the target under lock (`lockStaffPair`); the two mail actions check rank without a lock.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard deletes. With `retention.service.ts`, the only code that names the audit trigger's settings. `purgeUser` also queues the PostHog deletion (`analytics_deletions`) and deletes the user's outbox rows; `purgeTenant` queues the group's scrub marker.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `platform-stats.service.ts`      | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emailMessages[]` counts messages (`email_messages`) by current status in five disjoint groups. `totals.stuckTenants` comes from `countStuckTenants` (`platform-onboarding.service.ts`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `platform-email.service.ts`      | Message tracking for staff: search, detail, masked preview, health, the suppression list and lift, and resend, which delegates to resend-verification, password-setup or the invitation resend with their own gates and audit and adds `email.resent`. `canResendFor` computes the list's `canResend` hint with the same predicates (`canStaffMailTarget`, `canActorGrantRole`). The only importer of `platform-email.repository.ts`.                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `platform-onboarding.service.ts` | Staff onboarding: the funnel, the per-state tenant list, one tenant's onboarding with reminder history, `countStuckTenants` for the Overview, marking a tenant step complete through `completeOnboardingStep`, and the reminder (one `onboarding_reminder` per active owner; the owners' `email_messages` rows and the `onboarding.reminder_sent` audit entry are written in one transaction holding the tenant row's lock, which makes the 24-hour limit, read from the latest such entry, race-safe; the jobs are enqueued after commit, and a queue failure leaves the entry and a `failed` row and answers `emailSent: false`), both audited in the tenant; `reconcileOnboarding` for `pnpm onboarding:reconcile`. Progress is derived in SQL by `platform-onboarding.repository.ts`, its only importer, with `deriveOnboardingState`'s rules. |
-| `tenant-invitation.service.ts`   | Besides member invitations, `createOwnerInvitation`/`sendOwnerInvitation`: the staff-only owner invitation for a tenant with no active owner, which skips `canActorGrantRole` (the route's platform-admin gate authorizes it).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `audit.service.ts`               | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset; the platform read also filters by `tenantId` and `targetId`, served by `audit_logs_target_occurred_idx`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+Staff are the members of the one tenant with `is_platform` set. These services
+carry staff access; the routes in front of them check the platform role first,
+and every write re-checks it under lock.
 
-`platform-user.service.ts` and `platform-purge.service.ts` are the only
-importers of `platform-user.repository.ts`.
+| Service                          | Job                                                                                                                                                                                                                                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant-access.service.ts`       | `lockTenantAccess`: locks owners, memberships and, when the actor has no membership, the platform membership, and returns the actor's access. Membership wins; the platform tenant is members-only.                                                |
+| `platform.service.ts`            | Reads a user's platform role (one indexed read, no cache), `assertStillPlatformRole` inside a staff write, auto-join as viewer for verified addresses on `PLATFORM_EMAIL_DOMAINS`, and the grant behind `pnpm platform:grant`.                     |
+| `platform-tenant.service.ts`     | Staff tenant search and detail, create with an owner invitation, owner re-invitation, and the suspend, reactivate and archive transitions (`transitionLifecycle`).                                                                                 |
+| `platform-user.service.ts`       | The staff user directory and user actions (create, edit, set-password and verification mail, deactivate, reactivate, sign out, soft delete). Edits and state changes lock through `lockStaffPair`; the two mail actions check rank without a lock. |
+| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard delete of a user or a tenant. With `retention.service.ts`, the only code that names the audit trigger's purge settings, and the only code that names `app.audit_redact`.                              |
+| `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                           |
+| `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                               |
+| `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                  |
+| `platform-timeline.service.ts`   | The PostHog timelines of a user or a tenant ([Analytics](#analytics)).                                                                                                                                                                             |
+| `platform-errors.service.ts`     | The staff Errors views ([Error tracking](#error-tracking)).                                                                                                                                                                                        |
+| `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                            |
+| `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                            |
+| `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                        |
 
-## Extending Apex
+Each cross-tenant repository is imported by its own `platform-*` service only;
+`platform-user.repository.ts` also by `platform-purge.service.ts` and
+`platform-timeline.service.ts`. What staff may do, and the gates on it, are in
+[SECURITY.md](SECURITY.md#platform-staff).
+
+### Extending Apex
 
 Apex is a template: a product adds its own fields, states and staff actions.
-Each recipe below lists every place that must change together.
+The step-by-step recipes are in
+[CONTRIBUTING.md](CONTRIBUTING.md#extending-the-apex-api). The rules a recipe
+does not make obvious:
 
-- **A user or tenant field staff can see.** Add the column (model +
-  `pnpm db:migration:generate`), select it in `platform-user.repository.ts`
-  (`recordSelection`) or `platform-tenant.repository.ts` (`searchAll`,
-  `findDetail`), and mirror it in apex's `src/types/api.types.ts`. If staff
-  may edit a user field, add it to `updatePlatformUserSchema`
-  (`platform.validators.ts`, strict); a tenant field is edited through
-  `PATCH /tenants/:slug` (`updateTenantSchema`, `tenant.validators.ts`).
-  Either way, list it in `changed` in the `user.updated` / `tenant.updated`
-  audit metadata (field names only, never values).
-- **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES` (the
-  model's CHECK reads it; generate the migration that changes the CHECK),
-  decide what `statesFor` (`platform.constants.ts`) lists by default, give it
-  a transition in `platform-tenant.service.ts` (`transition` with its `from`
-  states, which calls `transitionLifecycle`) and an audit action, and decide
-  whether `resolveTenant` and invitations treat it like `suspended`.
-- **A staff action.** A POST under `/platform/users/:id/<verb>` or
-  `/platform/tenants/:id/<verb>`: `requirePlatformRole(<least role>)`,
-  `requireJsonContentType`, `requireRecentAuth()` when it is destructive,
-  then the shared `writeLimiter`. Body `reasonBodySchema` (or a strict schema
-  that includes `reason`). In the service: one transaction that re-reads the
-  actor's platform role under lock (`assertStillPlatformRole`, or
-  `lockStaffPair` for a user target), applies `canPlatformActorModifyTarget`
-  to a staff target, writes, and records an `AUDIT_ACTIONS` entry with
-  `{ reason }`. Add its row to
-  `tests/integration/api/platform-route-gates.test.ts` (the completeness
-  check fails until you do) and mirror the action in apex's
-  `src/constants/audit-actions.ts`.
-- **An onboarding step.** Add it to `ONBOARDING_STEPS`
-  (`src/constants/onboarding.constants.ts`); the staff funnel, list and
-  tenant tab, the customer checklist and both apps pick it up with no other
-  change. An `auto` step needs a trigger that some service emits after
-  commit, or a direct `completeOnboardingStep` call. See
-  [Onboarding in README.md](README.md#onboarding).
-- **An email template.** Add the template module with its variables and
-  its `…_TEMPLATE_META` (sender class, `previewVariables`, `resendAction`),
-  add its key to `EMAIL_TEMPLATE_KEYS` and `MailMessage`, and give
-  `buildPreviewMessage` (`platform-email.service.ts`) a case that masks its
-  token links (a `…Link` variable, which carries no token, is stored and
-  shown as sent, as in `onboarding_reminder`). A mail that carries a token must be `transactional` (the type
-  enforces it) and needs a `resendAction` that re-issues the token, or
-  `null` if it must never be resent. Mirror the key and its label in apex's
-  `EMAIL_TEMPLATES`.
+- A new staff route is not done until its row is in
+  `tests/integration/api/platform-route-gates.test.ts` (the completeness check
+  fails without it) and its audit action is mirrored in
+  `apex-boilerplate/src/constants/audit-actions.ts`.
+- `TENANT_LIFECYCLE_STATES` also feeds the `tenants` CHECK constraint, so a
+  new state needs a generated migration.
+- A template whose variables carry a token must be `transactional` (the type
+  enforces it) and needs a `resendAction` that re-issues the token, or `null`.
+- An audit entry for an edit lists the changed field names, never their values.
 
-- **Adding a flag.** Add an entry to `FLAGS`
-  (`src/constants/flags.constants.ts`): a snake_case key, a description
-  (it becomes the PostHog flag's name), `kind` and, for a multivariate flag,
-  `variants` with `control` first, the fallback (`false`, or `variants[0]`),
-  `scope` (`tenant` when the tenant should all see the same value),
-  `client` and `apps`, and `experiment`. Read it on the server with
-  `isEnabled` or `variantOf` (`flags.service.ts`; `flagContextFor(request)`
-  in request code), or gate a route with `requireFlag(key)` after
-  `resolveTenant()` for a tenant-scoped flag. For a client flag, mirror the
-  entry in the app's `src/observability/flags/flag-keys.ts` (react, apex).
-  Then run `pnpm flags:sync` in every environment (see
-  [README.md](README.md#feature-flags)); until it runs, the flag is
-  `missing` there and everything uses the fallback. For an experiment, follow
-  [Experiments](#feature-flags) to create it in PostHog.
+### Directory rules
 
-## Directory rules
+Every file in a governed directory carries its role as a suffix
+(`*.controller.ts`, `*.service.ts`, `*.repository.ts` and so on): the
+`check-file/filename-naming-convention` map in `eslint.config.mjs` is the list,
+and `pnpm lint` fails on a misnamed file. The suffix is the singular of the
+role, except `.validators`, `.utilities`, `.constants` and `.routes`.
+Subfolders inherit their parent's rule, and every folder under `src/` is
+kebab-case.
 
-Where new code goes, and what it must be named. `eslint-plugin-check-file` in
-[`eslint.config.mjs`](eslint.config.mjs) enforces the filename rules below, and
-`pnpm lint` fails on a misnamed file in a governed directory. This section
-mirrors that config by hand; when they disagree, the config is right and this
-section is stale.
+Directories with no filename rule:
 
-### Governed directories (filename suffix enforced)
+- `src/errors/`: error classes and Postgres error handling (`HttpError`,
+  `isUniqueViolation`, `redactedForLog`).
+- `src/types/`: the `Express.Request` augmentation (`express.d.ts`) and the
+  shared and domain types several layers use (`actor.ts`, `flags.ts`,
+  `timeline.ts`).
+- `src/scripts/`: tools a `package.json` script runs through `tsx`, never
+  imported by the app. They live under `src/` so `tsc` and type-aware lint see
+  them.
+- `src/database/`: `migrate.ts` beside `models/` and `migrations/`. Migrations
+  are generated by `drizzle-kit` and committed; see
+  [DATABASE.md](DATABASE.md).
+- `src/observability/`: `tracing.ts`, loaded by path through `--import`.
+- `scripts/` (repo root): repo tooling (`lint-docs.mjs`, `comment-style.mjs`,
+  `history-patterns.mjs`), imported by `eslint.config.mjs` and the tests, never
+  by the app.
 
-Every file in a governed directory carries its role as a filename suffix.
-
-| Directory              | Required suffix   | Example                      |
-| ---------------------- | ----------------- | ---------------------------- |
-| `src/controllers/`     | `*.controller.ts` | `tenant.controller.ts`       |
-| `src/repositories/`    | `*.repository.ts` | `user.repository.ts`         |
-| `src/services/`        | `*.service.ts`    | `database.service.ts`        |
-| `src/policies/`        | `*.policy.ts`     | `tenant.policy.ts`           |
-| `src/presenters/`      | `*.presenter.ts`  | `user.presenter.ts`          |
-| `src/validators/`      | `*.validators.ts` | `auth.validators.ts`         |
-| `src/routes/`          | `*.routes.ts`     | `auth.routes.ts`             |
-| `src/middlewares/`     | `*.middleware.ts` | `error.middleware.ts`        |
-| `src/database/models/` | `*.model.ts`      | `user.model.ts`              |
-| `src/utilities/`       | `*.utilities.ts`  | `response.utilities.ts`      |
-| `src/constants/`       | `*.constants.ts`  | `global.constants.ts`        |
-| `src/configs/`         | `*.config.ts`     | `env.config.ts`              |
-| `src/jobs/`            | `*.job.ts`        | `email.job.ts`               |
-| `src/workers/`         | `*.worker.ts`     | `email.worker.ts`            |
-| `src/templates/`       | `*.template.ts`   | `password-reset.template.ts` |
-
-The suffix is usually the **singular** of the directory's role (`controller`,
-`service`, `model`, `config`, ...), but `src/validators/`, `src/utilities/`,
-`src/constants/` and `src/routes/` keep the **plural** (`.validators`,
-`.utilities`, `.constants`, `.routes`). Test files are exempt: the suffix rule is off under
-`tests/`, and no test file lives under `src/`.
-
-### Directories with no filename rule
-
-- `src/errors/`: error classes and Postgres error handling, `http-error.ts`
-  (`HttpError`) and `postgres-errors.ts` (`isUniqueViolation`, `redactedForLog`).
-- `src/types/`: ambient type augmentation (`express.d.ts` extending
-  `Express.Request`) and small cross-cutting types with no other home, such as
-  `actor.ts` and `lock-mode.ts`.
-- `src/scripts/`: standalone tools run through `tsx` from a `package.json`
-  script, never imported by the app (`generate-env-example.ts`,
-  `platform-grant.ts`). They live under `src/` so `tsconfig.json`'s `include`
-  and the type-aware lint rules see them.
-- `src/database/`: `migrate.ts`, the migration runner behind `pnpm db:migrate`,
-  beside `models/` and `migrations/`.
-- `src/database/migrations/`: generated by `drizzle-kit generate` and
-  **committed**; CI and deployments replay them and never regenerate them.
-  Don't hand-edit a file here except as a documented exception, and don't
-  git-ignore the directory; see [DATABASE.md](DATABASE.md).
-- `src/observability/`: `tracing.ts`, the OpenTelemetry bootstrap loaded
-  through `--import` before the app. It is a single fixed-name entrypoint, so
-  `check-file` is off here. See [Observability](#observability).
-- `scripts/` (repo root): repo tooling outside `src/`. `lint-docs.mjs`
-  (`pnpm lint:docs`), `comment-style.mjs` (the `local/comment-style` ESLint
-  rule), `history-patterns.mjs` (shared by both) and their `.d.mts` types.
-  `eslint.config.mjs` and the tests import them; the app never does. They are
-  linted without type information.
-
-### Root files
-
-`src/app.ts`, `src/server.ts` and `src/index.ts` sit directly under `src/` and
-name the three stages of the [boot sequence](#boot-sequence-indexts---serverts---appts)
-rather than a role a suffix could encode. There is only one of each.
-
-### Folder naming
-
-Every folder under `src/` must be `kebab-case`
-(`check-file/folder-naming-convention`).
-
-### No barrel files
-
-There is no `index.ts` re-export file anywhere in `src/`, and none should be
-added. Import the module directly:
-
-```ts
-import { getEnv } from '@/configs/env.config'
-```
-
-not through a barrel:
-
-```ts
-import { getEnv } from '@/configs'
-```
-
-A barrel fails `check-file/filename-naming-convention` in every governed
-directory (an `index.ts` under `src/services/` cannot end in `.service`). It
-also hides real edges from `import-x/no-cycle`: a cycle routed through a
-barrel is invisible to that rule.
-
-### Adding a new governed directory
+`src/index.ts`, `src/server.ts` and `src/app.ts` sit directly under `src/`:
+they name the three stages of the [boot sequence](#boot-sequence), not a role a
+suffix could encode. No test file lives under `src/`.
 
 A new top-level concern under `src/` gets its naming rule in
-`check-file/filename-naming-convention` in `eslint.config.mjs` **and** a row in
-[Governed directories](#governed-directories-filename-suffix-enforced), in the
-same change.
+`eslint.config.mjs` in the same change.
+
+#### No barrel files
+
+There is no re-exporting `index.ts` anywhere in `src/`. Import the module
+directly (`@/configs/env.config`, never `@/configs`). A barrel fails the
+filename rule in every governed directory, and it hides real edges from
+`import-x/no-cycle`. `src/routes/index.routes.ts` builds a router and
+re-exports nothing, so it is not a barrel.
+
+## Request lifecycle
+
+### Request path: auth and beyond
+
+`createApp()` mounts, in this order, and Express runs them in registration
+order:
+
+| Step                                         | Why it sits there                                                                                                                                               |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `x-powered-by` off, `trust proxy`            | `TRUST_PROXY` decides what `request.ip`, and so every IP-keyed limiter, sees; a malformed value throws at boot.                                                 |
+| `helmet`                                     | First, so a preflight, a 404 or an error response already carries the headers.                                                                                  |
+| `cors`                                       | An allowed preflight ends here; a disallowed origin gets no grant header and the request carries on.                                                            |
+| `requestId`                                  | Every later response carries `X-Request-Id`.                                                                                                                    |
+| `recordRouteTemplate`                        | Ahead of every router, so an error's `http_route` keeps the mount path ([Error tracking](#error-tracking)).                                                     |
+| `requestContext`                             | Opens the per-request store the logger reads ([Request correlation](#request-correlation)).                                                                     |
+| `maintenanceModeGate`                        | After `cors`, so a refusal carries the grant; before every router, the webhooks, the proxy and the body parsers ([Maintenance mode](#maintenance-mode)).        |
+| `posthogSession`                             | Copies `X-POSTHOG-SESSION-ID` into the request context, for server events.                                                                                      |
+| `/api/v1/webhooks/email`                     | Before the body parsers: a provider's signature covers the exact bytes, so the route reads them with its own `express.raw` ([Email tracking](#email-tracking)). |
+| `/api/v1/collect`                            | Before the body parsers too: replay bodies stream to PostHog unread ([Analytics](#analytics)).                                                                  |
+| `express.json` (1 MB), `urlencoded` (100 KB) | The body parsers.                                                                                                                                               |
+| `GET /health`, `GET /health/ready`           | [Health checks](#health-checks).                                                                                                                                |
+| `/api/v1`                                    | `createApiRouter()` (`src/routes/index.routes.ts`).                                                                                                             |
+| 404, then `errorHandler`                     | Last, so it sees errors from everything before it.                                                                                                              |
+
+`createApiRouter()` mounts one router per feature: `auth`, `profile`,
+`notifications`, `tenants`, `invitations`, `platform`, `flags` and `status`. A
+new feature router is one more `router.use(...)` there, never a change to
+`app.ts`.
+
+- **Auth.** The auth router refuses any body that is not `application/json`
+  with 415 (`requireJsonContentType`, router-wide). Its open routes need no
+  access token; `POST /auth/refresh` and `/auth/logout` read the refresh cookie
+  off the raw `Cookie` header (there is no `cookie-parser`) and check `Origin`
+  first. How each credential works is in
+  [SECURITY.md](SECURITY.md#authentication).
+- **`requireAuth`** (`src/middlewares/auth.middleware.ts`) is mounted
+  router-wide on the profile, notification, tenant, platform and flags
+  routers, so a route added there inherits it, and per route elsewhere. It
+  verifies the bearer token, refuses a session on the Redis denylist, then
+  reloads the user by id. That reload is one database read per request,
+  deliberately not cached: a deactivated or deleted account is refused on its
+  next request, not when its token expires. Every response behind it is
+  `Cache-Control: no-store`, except the SSE stream, which sends `no-cache`.
+- **Tenant routes** compose `resolveTenant()` and `requireRole(...)` per
+  route; the tenant comes from `:slug` only. See
+  [SECURITY.md](SECURITY.md#tenant-roles).
+- **Platform routes** mount `requireAuth` router-wide; their gates, the
+  OPTIONS refusal and the staff-write log line are in
+  [SECURITY.md](SECURITY.md#platform-staff).
+- **Every authenticated write has a limiter**, built once per router and
+  reused, so the in-memory fallback keeps one budget;
+  `tests/unit/routes/route-limiters.test.ts` fails a write route without one.
+
+### Errors and the response envelope
+
+Every response `errorHandler` and the controllers write uses one envelope,
+defined once in
+`src/utilities/response.utilities.ts`:
+
+```json
+{ "success": true, "message": "Success", "statusCode": 200, "data": {} }
+{ "success": false, "message": "Not found", "statusCode": 404, "requestId": "…" }
+{ "success": false, "message": "Access token expired", "statusCode": 401, "code": "ACCESS_TOKEN_EXPIRED", "requestId": "…" }
+```
+
+`code` is one stable token a client branches on; `errors` is field-level
+validation detail, shaped by the validator. They are separate fields, so a
+client parsing `errors` never gets a different shape when `code` is present. A
+success with no payload goes through `messageResponse`, which always sends
+`data: null`. Every 5xx `errorHandler` writes, except a maintenance refusal,
+also carries `errorId`. `/health`, `/health/ready` and the SSE stream-capacity
+503 write their own bodies.
+The envelope is not RFC 9457 `problem+json`: switching would change what every
+client parses on every response.
+
+`errorHandler` (`src/middlewares/error.middleware.ts`) is the terminal
+middleware. It takes four parameters because Express recognises an error
+handler by arity. It decides:
+
+- **After the headers were sent**, nothing more can be written: it reports the
+  error as a 500 (unless the client went away), logs it redacted with its
+  `errorId`, and destroys the socket.
+- **A maintenance refusal** gets its own body and `Retry-After`, unmasked and
+  never logged.
+- **The status** is the `HttpError`'s, else a foreign error's 4xx `status` (the
+  body parser's 400 or 413), else 400 for text Postgres cannot store, else 500.
+- **A 4xx** shows the `HttpError`'s message, or a foreign error's only when it
+  marks it `expose`, and is not logged, except one value-free `warn` when
+  Postgres refused a character in client text.
+- **A 5xx** is masked (`Internal server error`), gets an `errorId`, and is
+  logged redacted (`redactedForLog`, `src/errors/postgres-errors.ts`), except a
+  `TimelineUnavailableError`, whose thrower already logged why. It is reported
+  to error tracking only when the capture rule admits it
+  ([Error tracking](#error-tracking)).
+
+### Request correlation
+
+`requestId` (`src/middlewares/request-id.middleware.ts`) honours a
+caller-supplied `X-Request-Id` only when it is a UUID, since reflecting an
+arbitrary header is how log injection starts, and otherwise generates one.
+`requestContext` then opens an `AsyncLocalStorage` store
+(`src/services/request-context.service.ts`) for the request, and
+`resolveTenant` adds the tenant to it. The logger's pino `mixin` reads that
+store on every call, so each line logged during a request carries `requestId`,
+and `tenantId` once the tenant is resolved, plus `traceId` and `spanId` while a
+span is active. Callers never pass them, and `mixinMergeStrategy`
+(`logger.service.ts`) makes the mixin's fields win over a caller's field of the
+same name, so log meta cannot spoof them.
+
+### A second frontend: Apex
+
+`APEX_URL` (optional) names the Apex staff dashboard. Links and redirects pick
+a frontend with `frontendUrl(app)` (`src/services/verification.service.ts`),
+where `app` is `'web'` or `'apex'`, never a URL: it returns `APEX_URL` for
+`'apex'` when that is set, and `WEB_URL` otherwise.
+
+- Invitations to the platform tenant link to Apex; every other invitation
+  links to `WEB_URL` (`tenant-invitation.service.ts`).
+- `register`, `resend-verification` and `forgot-password` take an optional
+  `app` that picks the frontend of the link they mail.
+- Staff mail about a user (set-password and verification) takes no `app`: the
+  server links a staff target to Apex and anyone else to `WEB_URL`
+  (`platform-user.service.ts`).
+- `GET /auth/google?app=apex` stores the choice in the OAuth session
+  (`rememberOAuthApp`), and the callback redirects to that frontend
+  (`oauthAppOf`, `src/controllers/helpers.controller.ts`).
+
+`isAllowedOrigin` (`src/utilities/origin.utilities.ts`) always grants
+`WEB_URL`, `APEX_URL` and `CORS_ALLOWED_ORIGINS`, so an Apex served at
+`APEX_URL` needs no CORS entry. Google calls back to `APP_URL` only, so with
+Google sign-in on and an Apex host other than `APP_URL`'s, `COOKIE_DOMAIN` must
+cover both, and boot refuses otherwise.
+
+### Email tracking
+
+Every outbound email is one `email_messages` row, created when the mail is
+queued (in the caller's transaction when it has one), or by the email worker for
+a job that reaches it without one: the recipient, the template, the user, tenant
+and invitation it is about, the frontend its link opens (`link_app`), the sender
+class, its `Message-ID`, and the template's `previewVariables`, never a rendered
+body, a link or a token. Each send attempt is an append-only `email_logs` row,
+and each provider event an `email_events` row. A status only moves to a higher
+rank (`EMAIL_STATUS_RANK`, `src/constants/email.constants.ts`), so a fast
+`delivered` event is never overwritten by the worker's `sent`; `opened` and
+`clicked` never change it.
+
+A write that must commit the message row with its own writes creates it in its
+transaction (`createTrackedEmail`) and enqueues after commit
+(`enqueueTrackedEmail`), so the worker never dequeues a job whose row it cannot
+see. Provider webhooks (`src/services/email-webhook.service.ts`) apply every
+event of a request in one transaction, matched by `Message-ID` and stored once
+per provider event id, and a hard bounce or complaint suppresses the address.
+
+The sender follows the template's sender class and nothing else
+(`src/utilities/email-sender.utilities.ts`): a template whose links carry a
+token goes from `MAIL_FROM_TRANSACTIONAL` (or `MAIL_FROM` while that is unset),
+everything else from `MAIL_FROM`. Outside `local`, boot warns when both senders
+share a domain; why is in [SECURITY.md](SECURITY.md#mail-at-rest). The operator
+guide (the Resend webhook, suppressions, preview and resend, and
+`pnpm email:fire-event`) is
+[Email tracking in README.md](README.md#email-tracking). Keep
+`MAIL_FROM_TRANSACTIONAL` on its own domain with click tracking off; the steps
+are under "Two senders" in [README.md](README.md#email-tracking).
+
+## Background work: queues, schedulers, the outbox, retention
+
+### Queues and Workers
+
+Four BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
+returns every one, and is what maintenance mode pauses;
+`tests/integration/services/queue-registry.test.ts` fails when a queue is
+missing from it.
+
+| Queue          | Carries                                                                    | Worker concurrency   | Job options                                                        |
+| -------------- | -------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `email`        | One tracked email per job (`addEmailJob`)                                  | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
+| `maintenance`  | The retention purge                                                        | 1                    | 3 attempts, backoff from 60 s                                      |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
+
+Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
+reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
+`UnrecoverableError`) to error tracking. The email, notification and maintenance
+handlers then log a retryable attempt at `warn`; on the final one
+`recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
+payload, marks an email's message `failed`, and logs `job failed permanently`
+once. What a job payload may hold, and for how long, is in
+[SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a
+`warn`: a failed tick loses nothing. No handler rejects, since an unhandled
+rejection exits the process.
+
+`startWorkers()` starts the email, notification and maintenance Workers, and
+the analytics Worker when analytics or the staff timelines are configured.
+`WORKER_ENABLED` (default `true`) runs them in the API process. To split them,
+set it to `false` on API-only pods and `true` on a worker deployment that
+shares the Redis queues; the schedules below then run only on the worker
+deployment.
+
+### Schedulers
+
+Each Worker generation upserts its schedules (BullMQ job schedulers, stored in
+Redis under the prefix, so every replica shares one schedule and each tick runs
+on one Worker):
+
+| Scheduler             | Queue         | When                                | Registered when                         |
+| --------------------- | ------------- | ----------------------------------- | --------------------------------------- |
+| `retention-purge`     | `maintenance` | daily at 03:00 UTC                  | always                                  |
+| `analytics-drain`     | `analytics`   | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
+| `analytics-deletions` | `analytics`   | every 60 s                          | the personal key and project id are set |
+| `flag-definitions`    | `analytics`   | every 30 s                          | flags are configured                    |
+
+A failed registration logs a `warn` and is retried with the next generation. A
+new generation starts only when the Worker connection gives up before its first
+`ready`, so a registration that fails while the Workers stay healthy waits for
+the next restart; a scheduler stored earlier keeps running meanwhile.
+
+The analytics Worker runs one job at a time, so this process never has two of
+its jobs talking to PostHog at once. Two replicas may; the drain and the
+deletion tick each lease their rows.
+
+### The outbox
+
+Server analytics events reach PostHog through a transactional outbox
+(`analytics_outbox`), never from a request. A row is written in the same
+transaction as the change it describes, inside a savepoint, or on the pool
+right after commit for a product event; a failed insert is logged at `warn` and
+never fails the user's action (`src/services/analytics/analytics-outbox.service.ts`).
+The drain leases a batch in one autocommit statement, so no pool connection is
+held while PostHog is called. The full pipeline is under
+[Analytics](#analytics).
+
+### Retention
+
+The daily `retention-purge` job (`runRetentionPurge`,
+`src/services/retention.service.ts`) runs one rule per table, in this order:
+`user_tokens`, `tenant_invitations`, `email_events`, `email_logs`,
+`email_messages`, read notifications, unread notifications, `audit_logs` and
+`analytics_outbox`. Each rule's window is its `RETENTION_*_DAYS` (or
+`ANALYTICS_OUTBOX_RETENTION_DAYS`) variable, and 0 turns it off.
+
+- A rule deletes in batches of 5000 by primary key, each in its own short
+  transaction, until a batch comes back short. A batch skips locked rows,
+  which the next run deletes.
+- A failing rule is logged and the others still run; the job then throws,
+  naming each failed table, so BullMQ retries it. Every rule is idempotent.
+- The three email tables share `RETENTION_EMAIL_LOGS_DAYS` and are dated by
+  the message's `created_at`: events, then attempts, then the messages left
+  with neither, so no batch cascades. Suppressions never expire.
+- The audit rule is off by default (`RETENTION_AUDIT_LOGS_DAYS=0`). Its batch
+  sets `app.audit_purge` and `app.audit_purge_before` transaction-locally,
+  which is the only way past the append-only trigger
+  ([SECURITY.md](SECURITY.md#the-audit-log)).
+- An outbox row still there after `ANALYTICS_OUTBOX_RETENTION_DAYS` has never
+  been delivered, so that rule logs what it drops at `warn`.
+
+## Realtime (SSE)
+
+`GET /api/v1/notifications/stream`
+(`src/controllers/notification-stream.controller.ts`) pushes a user's
+notifications live, behind `requireAuth`.
+
+```
+notification Worker ── insert notifications row ── emitNotification
+   └─ PUBLISH redisKey('notifications')   (on failure: deliver to this process only)
+every replica with an open stream: one subscriber ── local emitter ── each stream of that user
+```
+
+- **Opening.** Every refusal is thrown before `writeHead`, so `errorHandler`
+  answers it with the JSON envelope: 503 while shutting down, 429
+  `too_many_streams` over `SSE_MAX_STREAMS_PER_USER`, and 401 with code
+  `ACCESS_TOKEN_EXPIRED` for a token without a session id, because the
+  heartbeat closes streams by session id and a sid-less stream would outlive a
+  logout. At `SSE_MAX_STREAMS_TOTAL` for the process it writes 503
+  `stream_capacity` with `Retry-After: 30` itself, since `errorHandler` would
+  mask a 503 and log it as a fault. The stream sends `X-Accel-Buffering: no`
+  (nginx buffers proxied responses otherwise) and `retry: 3000`.
+- **Replay.** On reconnect the client sends `Last-Event-ID`, and the stream
+  replays what it missed, at most the 100 newest. The live listener is
+  registered before the replay query, and notifications arriving during it are
+  queued and written after, skipping ids the replay sent, so nothing falls
+  between the two.
+- **Upkeep.** Every `SSE_HEARTBEAT_INTERVAL_MS` the stream checks its session
+  against the denylist, closing it when denied, and writes `:ping`. It ends at
+  the access token's expiry, so the client reconnects and `requireAuth` runs
+  again. A client with more than 1 MiB unread is destroyed.
+- **Fanout.** Live delivery crosses replicas over Redis pub/sub on one
+  channel (`src/services/notification-emitter.service.ts`). Each process opens
+  its own subscriber client (`createRedisClient()`, not `duplicate()`, which
+  would copy the shared client's reconnect state) on the first stream, so a
+  publish-only pod never opens one. Delivery is best effort, not durable: the
+  database row and `Last-Event-ID` are the durable path, which is why this is
+  pub/sub and not Redis Streams. When the subscriber reconnects, or starts late
+  while streams are open, every open stream is closed so its client replays
+  the gap. A publish that fails is delivered locally instead, and one whose
+  reply is lost may arrive twice.
+- **Shutdown.** The stream registry (`src/services/lifecycle.service.ts`)
+  lets `gracefulShutdown` end every stream first.
+
+## Analytics, flags and error tracking
+
+All three run on PostHog and are off until configured
+(`src/configs/analytics.config.ts`): analytics needs `POSTHOG_PROJECT_KEY`; the
+staff timelines, the Errors views and person deletion need
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`; error tracking needs the
+project key and `ERROR_TRACKING_ENABLED`; flags need `POSTHOG_FEATURE_FLAGS_KEY`
+and the project key. What each sends, and what it never does, is in
+[SECURITY.md](SECURITY.md#analytics-and-error-tracking-privacy); the operator
+steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
+
+### Analytics
+
+No request handler calls PostHog's private API (`/api/projects/…`), except the
+staff timeline reads on a cache miss and the Errors reads, which cache nothing,
+both within the hourly query budget. Server events reach PostHog only through
+the outbox drain and the error reporter, both through `sendBatch`
+(`posthog-batch.service.ts`); browser events reach it only through the
+`/api/v1/collect` proxy.
+
+```
+request ── service transaction ── audit insert ── savepoint: analytics_outbox insert
+        ├─ after commit: product domain event ─── analytics_outbox insert (pool)
+        ├─ email webhook transaction ─────────── savepoint: analytics_outbox insert
+        └─ purgeUser transaction ──────────────── analytics_deletions insert + the user's outbox rows deleted
+
+analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS
+  claimBatch: one autocommit UPDATE … FOR UPDATE SKIP LOCKED, 60 s lease
+  resolveGroupMarkers: one tenant read
+  (connection released) ── POST <POSTHOG_HOST>/batch/ (10 s timeout)
+
+analytics Worker, every 60 s
+  claimDue: up to 10 due rows, one autocommit UPDATE, 180 s lease
+  (connection released) ── POST <app host>/api/projects/<id>/persons/bulk_delete/
+
+browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ── ingest or assets host
+```
+
+- **Writes** go only through `enqueueAnalytics` and, for an audit entry,
+  `enqueueAuditAnalytics`. The audit hook covers every audited action; product
+  events come from domain-event subscribers (`analytics-forwarder.service.ts`);
+  email events from the webhook transaction. The event builder
+  (`analytics-event-builder.service.ts`) holds every PII rule.
+  `enqueueAnalyticsOrThrow` is for a caller that handles the failure itself:
+  the groups backfill and flag exposure.
+- **The drain** (`analytics-drain.service.ts`) deletes an acknowledged row.
+  A retryable answer (no answer, 429, 5xx, or an endpoint-level 401, 403, 404,
+  405, 407 or 408) keeps every row under its lease with a backoff of
+  `least(2^attempts × 5 s, 600 s)`, and ends the drain, so an outage costs one
+  timeout per tick; a wrong key or host drops nothing and logs one `error` per
+  tick. A rejected batch is split in halves until the refused row is alone; a
+  row refused alone three times is dropped. When a batch and both its halves
+  are rejected, the first row of each half is sent alone: if PostHog refuses
+  both, it is refusing everything, so no row is counted and the drain logs one
+  `error`. During an outage of any length only the retention rule removes rows.
+- **At least once.** A row is deleted only after PostHog acknowledged it, so a
+  crash between the two resends it with the same `uuid` (the row id). PostHog
+  deduplicates on `uuid` eventually, without a guarantee, so a consumer that
+  needs exactness dedupes by `uuid`.
+- **Signing and GeoIP.** `toPosthogBatchEvent` adds `server_sig` to every event
+  it sends ([SECURITY.md](SECURITY.md#server-events)), and
+  `$geoip_disable: true`, since server events reach PostHog from the data
+  centre's address.
+- **Groups.** A tenant's name, status and creation date reach PostHog only as
+  `$groupidentify` properties. The outbox stores a marker (`$group_type`,
+  `$group_key`), never the name, and the drain fills in `$group_set` from the
+  tenant row when it sends the batch (`resolveGroupMarkers`,
+  `analytics-group-marker.service.ts`). A process drains one batch at a time,
+  so on one Worker whichever marker reaches PostHog last carries the latest
+  committed state; two Worker replicas whose drains overlap can deliver an
+  older one after a newer one, and the next marker for that tenant corrects
+  it. `pnpm analytics:backfill-groups` queues one marker per tenant.
+- **Purges and what stays in PostHog.** `purgeUser` writes an
+  `analytics_deletions` row due an hour later (PostHog deletes only events it
+  ingested before the request) and deletes the user's undelivered outbox rows,
+  in its own transaction. The `analytics-deletions` tick deletes the claimed
+  ids' outbox rows again, so an event committed after the purge cannot
+  recreate the person, then asks `persons/bulk_delete/` to delete each person
+  with their events and recordings. Anything but a 2xx with an empty
+  `deletion_errors` keeps the rows with a backoff of `least(2^attempts, 360)`
+  minutes, logged at `warn`, or at `error` when PostHog refused the key or
+  project (401, 403, 404) or a row is a day old. PostHog
+  cannot delete a group, so `purgeTenant` queues a marker that the drain sends
+  with the group's name cleared and its status `purged`; the tenant's events
+  stay, under its id.
+- **The proxy** (`src/routes/analytics-proxy.routes.ts`) sends `/static/*` and
+  `/array/*` to the assets host and everything else to the ingest host,
+  streaming bodies untouched. It sits ahead of the body parsers and has no
+  `on.error` handler, which would make http-proxy-middleware skip its own error
+  response. Without `POSTHOG_PROJECT_KEY` it answers 503.
+- **Staff timelines** (`platform-timeline.service.ts`) send PostHog only the
+  two fixed HogQL templates in `timeline-query.service.ts`, with every id, the
+  range and the cursor as placeholders, and keep only the `TIMELINE_PROP_KEYS`
+  properties. Each read is audited at most once per staff member, target and
+  view every 10 minutes (`auditThrottledView`), before the 30 s cache and the
+  hourly budget (`TIMELINE_QUERY_BUDGET_PER_HOUR`, counted in Redis across
+  replicas) are consulted.
+
+### Error tracking
+
+Server errors go to PostHog Error Tracking as `$exception` events, from one
+capture point per kind of failure and never from a logger transport:
+
+| Where                                                                                   | When                                                                                  | `capture_point` |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------- |
+| `errorHandler` (`error.middleware.ts`), through `reportErrorWithSpan`                   | a 5xx the capture rule admits; a failure after the headers were sent, recorded as 500 | `http`          |
+| `uncaughtException` and `unhandledRejection` (`index.ts`), through `reportError`        | always                                                                                | `process`       |
+| each Worker's `failed` listener, through `reportFinalJobFailure` (`job-failure.job.ts`) | the attempt BullMQ will not retry                                                     | `job`           |
+
+**The capture rule** (`shouldCaptureHttpError`). An error that is not an
+`HttpError` and resolves to 500 is reported. An `HttpError` of 500 or more is a
+deliberate answer, reported only when it wraps a `cause`. A
+`TimelineUnavailableError` never is: PostHog being unreachable is its meaning,
+and its thrower already logged why. A 4xx, and a client that went away, never
+are. Each analytics tick has one attempt, so every failed tick is a final
+failure and is reported; the throttle bounds a run of them.
+
+**The reporter** (`src/services/errors/error-reporter.service.ts`).
+`reportError` checks the global cap first; past it, nothing is built. Then it
+builds, scrubs, throttles and queues one event synchronously, with no I/O, and
+returns its id. The id (a UUIDv7) is minted first, so it is returned also when
+error tracking is off, the event is throttled, or building failed; it then
+names a log line, not an event. The limits (`error-tracking.constants.ts`):
+
+- at most 10 events per fingerprint and 100 in all per process in any rolling
+  minute;
+- a flush every 5 s, or at once when 50 events wait, one request at a time
+  outside a deadline flush;
+- at most 500 queued, the oldest dropped as `buffer_full` past that;
+- while PostHog asks to retry, a back-off from 5 s doubling to 300 s, and a
+  batch dropped as `retry_exhausted` after 5 retried sends.
+
+The queue is in memory, not the outbox, because errors often happen while the
+database is down, and the reporter never depends on Redis, which only counts
+outcomes for the status page. A failure inside the reporter is caught, logged
+at most once a minute and never reported, so the reporter cannot recurse.
+`errorHandler` reports through `reportErrorWithSpan`, which also returns the
+scrubbed stand-in the active span records, so a 5xx is built once.
+
+**Flushes on the way out.** `flushErrorReports(deadline)` ignores any back-off
+and sends until the queue is empty, PostHog asks to retry, or the deadline
+passes; it also waits for a request already in flight, which may carry the
+fatal event. A process fault flushes for `ERROR_FATAL_FLUSH_MS` (2 s) and
+graceful shutdown for `ERROR_SHUTDOWN_FLUSH_MS` (3 s).
+
+**`errorId` and the route.** Every 5xx `errorHandler` writes, except a
+maintenance refusal, carries an `errorId` in its body and on its log line; a
+reported error's id is its `$exception` uuid. A `TimelineUnavailableError` 502
+also carries one, but it names nothing: that error is neither logged nor
+reported there. The route template on an event comes from `recordRouteTemplate`
+(`route-template.middleware.ts`): Express restores `request.baseUrl` before an
+error reaches `errorHandler`, so the mount path is recorded when the router
+assigns `request.route`, and a mount parameter's value is put back as its name.
+
+**Staff views.** `GET /platform/users/:id/errors` and
+`GET /platform/tenants/:id/errors` (`platform-errors.service.ts`) list the
+error issues a user or a tenant hit in the last 30 days from the fixed HogQL in
+`errors-query.service.ts`, sharing the timelines' limiter, budget and throttled
+audit. Every column describing an issue's most recent event is read with
+`argMax(column, (timestamp, uuid))`, so all of them come from one event and its
+signature can be verified (`errors-mapper.service.ts`).
+
+**System status.** `GET /platform/system/status` (platform admin, not
+audited) answers `{ release, errorTracking, flags, maintenance }`: the image's
+`APP_VERSION`, the reporter's sent and dropped counts over the last 15 minutes
+summed from Redis across every process, the flags' snapshot state, and the
+maintenance mode as the answering replica sees it. Each section that reads
+Redis is bounded by `STATUS_READ_TIMEOUT_MS` (2 s), so a stalled Redis answers
+that section with what it reports when Redis fails.
+
+### Feature flags
+
+Flags are declared in code, evaluated on the server from a snapshot of
+PostHog's flag definitions, enforced on API routes and served to react and
+apex. Rollouts, kills and experiments are edited in PostHog; the registry
+(`src/constants/flags.constants.ts`) says which flags exist and what they fall
+back to.
+
+```
+PostHog project (one per environment)
+  │ GET <POSTHOG_HOST>/flags/definitions, with the feature flags key and the stored ETag
+  ▼
+flag-definitions job (analytics queue, every 30 s)
+  │ 200: parse, mark unsupported constructs, SET <prefix>:flags:v1:snapshot, PUBLISH reload
+  │ 304: touch checkedAt (compare-and-set) · failure: keep the snapshot
+  ▼
+every API and worker process: in-memory snapshot (reload on message, 60 s backstop)
+  ├─ requireFlag(key)                   route gate: unknown-route 404 unless on
+  ├─ flagsFor / isEnabled / variantOf   service reads; variantOf records exposure
+  ├─ GET …/flags                        the app's client flags
+  ├─ POST …/flags/exposures             re-evaluate, dedupe, $feature_flag_called → outbox
+  └─ /platform/flags, /platform/flags/evaluate, system status
+```
+
+- **Registry.** Each entry has a key, a description, `boolean` or
+  `multivariate` with `variants`, a fallback, a scope (`user` or `tenant`),
+  which apps' browsers receive it, and whether it is an experiment.
+  `assertFlagRegistry` refuses a malformed registry when the module loads; an
+  experiment is multivariate with `control` first. `FlagKey` makes an
+  unregistered key a type error.
+- **Traits** are only `FLAG_TRAITS`: `platform_role`, `tenant_role`,
+  `app_env`, `account_created_days` and `tenant_created_days`, built from the
+  database at evaluation time and never stored in PostHog. There is no `app`
+  trait, so a route gate and the UI always agree.
+- **Snapshot** (`flag-snapshot.service.ts`). Each process loads it at boot,
+  reloads on a `reload` message and every 60 s, and keeps its copy when a
+  reload fails or reads an older one; a process that never loaded one answers
+  every fallback. The stored snapshot carries a fingerprint of the registry and
+  the parser version; when it differs from the running code's, the job fetches
+  without `If-None-Match`, so a 200 re-parses with the current rules.
+- **Evaluation** (`flag-evaluator.service.ts`) is pure and never throws: with
+  no snapshot, a missing, inactive or unsupported flag, or a tenant-scoped flag
+  with no tenant, it answers the registry fallback with a `fallback:*` reason.
+  A definition using a construct the evaluator cannot reproduce, or a key it
+  does not know, is marked unsupported and never evaluated.
+- **Route gates** (`requireFlag`, `flag.middleware.ts`) mount after
+  `requireAuth`, after `resolveTenant()` for a tenant-scoped flag, and before
+  validators; a closed gate answers the unknown-route 404 and records no
+  exposure. `tests/unit/routes/flag-gates.test.ts` fails a tenant-scoped gate
+  outside `/tenants/:slug/…`.
+- **Client reads and exposure.** `GET /tenants/:slug/flags` and `GET /flags`
+  serve react, `GET /platform/me/flags` serves apex; the route fixes the app,
+  and the answer carries values, never traits or reasons. The matching
+  `POST …/exposures` takes `{ keys }`, re-evaluates each key on the server and
+  records `$feature_flag_called` once per session, tenant, key and response,
+  only for a matched condition or a holdout.
+- **Inspector.** `GET /platform/flags` lists every flag's live state;
+  `GET /platform/flags/evaluate` answers one user's traits and values, the one
+  place traits leave the server, so each read is audited as
+  `user.flags_evaluated` before anything is evaluated. Neither calls PostHog.
+- **Kill-switch latency.** An edit in PostHog reaches every process on the next
+  30 s fetch and its `reload` message, or the 60 s backstop. The fetch shares
+  the one-at-a-time `analytics` Worker with the drain and the deletion tick, so
+  with PostHog slow it can wait behind both.
+
+`pnpm flags:sync` creates every registered flag the project lacks, inactive at
+0 %, and never edits or deletes one; the steps, and how to start an experiment,
+are in [README.md](README.md#feature-flags).
+
+### Observability
+
+**Tracing.** `src/observability/tracing.ts` loads through Node's `--import`,
+before `index.ts` and before environment validation, so it reads `process.env`
+directly and never `getEnv()` or the logger. Without
+`OTEL_EXPORTER_OTLP_ENDPOINT` it starts nothing. node-redis (the shared
+client) and postgres.js have no installed instrumentation, so their calls
+appear as gaps in a trace; `/health`, `/health/ready` and `/api/v1/collect/`
+get no spans. How it is set up is in the file's JSDoc.
+
+**Logs.** `src/services/logger.service.ts` is the one logger; each record
+carries `source` (the caller's `file:line`) and the correlation fields from
+[Request correlation](#request-correlation), and an Error-valued field is
+redacted with `redactedForLog` when it carries a database query.
+
+**Slack.** With `SLACK_WEBHOOK_URL` set, records at or above `SLACK_LOG_LEVEL`
+also go to Slack. Repeats of one `source` and message within 60 s are counted
+and summarised once, and the message, source, request id and stack are
+scrubbed with the error tracker's `scrubText` first.
+
+## Maintenance mode
+
+A platform owner puts the product into maintenance from Apex, without a
+deploy: `read_only` refuses customer writes with 503 `READ_ONLY_MODE`, and
+`full` refuses every route not on its let-through list with 503
+`MAINTENANCE_MODE`, refuses a non-staff sign-in, and pauses every queue. The
+let-through list, and the controls on changing the mode, are in
+[SECURITY.md](SECURITY.md#maintenance-mode); the operator steps in
+[README.md](README.md#maintenance-mode).
+
+- **State.** One row, `maintenance_mode_state` (its migration seeds `off`,
+  version 0), is the source of truth. A change is a compare-and-set on
+  `version`, written with its `platform.maintenance_mode_changed` audit entry
+  in one transaction; a stale `expectedVersion` answers 409
+  `MAINTENANCE_MODE_CONFLICT`.
+- **Propagation.** Each replica keeps the mode in memory
+  (`src/services/maintenance-mode/maintenance-mode-store.service.ts`). A change
+  publishes `reload` on `redisKey('maintenance-mode')`, and every replica
+  rereads the row on that message, on a subscriber reconnect, and every 10 s
+  (`MAINTENANCE_MODE_RELOAD_INTERVAL_MS`) whatever happens. A row whose version
+  is not above the copy's is ignored, so overlapping reloads never roll the
+  state back. A replica whose first read fails serves `off` with
+  `known: false`, logs an error and keeps retrying; a later failure keeps the
+  last known mode, so a replica never flips open or closed on its own.
+- **The gate.** `maintenanceModeGate`
+  (`src/middlewares/maintenance-mode.middleware.ts`) reads only the replica's
+  store, never Postgres or Redis. The only request-path reads of the row are
+  the staff view and change behind `/platform/maintenance-mode`
+  (`getPlatformMaintenanceMode` and the change's row lock). The gate stamps
+  `Maintenance-Mode: off | read_only | full` on every response it sees and
+  decides by method and path from `MAINTENANCE_ROUTE_RULES`
+  (`src/constants/maintenance-mode.constants.ts`); an unclassified path gets
+  the default, reads through in `read_only` and nothing in `full`. On the
+  customer routes Apex calls (`MAINTENANCE_STAFF_ROUTES`) the gate only marks
+  the refusal, and `requireAuth` lets platform staff through.
+  `tests/unit/routes/maintenance-mode-gates.test.ts` fails on a route with no
+  rule, a rule with no route, and a staff-pass route outside `requireAuth`.
+- **Refusal.** 503 with `Retry-After: 30` and
+  `{ success, statusCode, code, message, mode, since, requestId }`, where
+  `message` is the owner's customer message. CORS exposes `Maintenance-Mode`
+  and `Retry-After`. Clients detect maintenance by the 503 and its `code`,
+  never by a bare 502 or 503.
+- **Queues** (`maintenance-mode-queues.service.ts`). `full` pauses every queue
+  in `getAllQueues()` with BullMQ's queue-wide `pause()`, a flag in Redis that
+  every replica's Workers obey: running jobs finish, waiting ones stay. Every
+  replica reconciles on every reload, which repairs a crash between the commit
+  and the pause and a Redis outage. A reload pauses only once the mode has been
+  `full` for `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s), so the change's notices
+  go out first, and resumes in any other mode after removing the duplicate
+  scheduler runs gathered while paused (`dedupeSchedulerJobs`): each Worker
+  start re-upserts its schedulers, and a paused queue keeps every extra run.
+  Pause and resume are idempotent, so replicas reconciling at once are
+  harmless.
+- **A change** (`PUT /api/v1/platform/maintenance-mode`,
+  `maintenance-mode.service.ts`) commits, then publishes, rereads its own copy
+  and queues an in-app and email notice to every other platform owner and admin
+  for a switch-on, an escalation or a switch-off. Entering `full` waits for
+  those notices up to `MAINTENANCE_MODE_NOTICE_WAIT_MS` (10 s), then pauses the
+  queues unless a later change superseded it. Once the row has committed, no
+  later failure turns the change into an error.
+- **Status.** `GET /api/v1/status/maintenance` is public and answers the
+  mode, the customer message and when it began, from memory. The system status
+  has a `maintenance` section with the queues' pause state and whether the
+  last change's notices are still pending.
 
 ## Configuration
 
-All configuration is read through `getEnv()` in
-[`src/configs/env.config.ts`](src/configs/env.config.ts), which validates
-`process.env` against a Zod schema once, on first call, and memoises the
-result. `APP_ENV` (`local`/`dev`/`qa`/`prod`) is required and names the
-deployment. Environment-dependent defaults such as `COOKIE_SECURE`,
-`LOG_FORMAT` and SMTP's TLS requirement derive from it through helpers in
-that file. Before anything starts, `index.ts` runs `assertEnvConsistent`
-([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
-which refuses unsafe or inconsistent combinations. No other application
-module reads `process.env`; the exceptions are listed in CLAUDE.md.
-`tracing.ts` is the notable one, since it loads before validation. Every
-Redis key and channel is namespaced by `REDIS_KEY_PREFIX` through
-`redisKey()`. See [DATABASE.md](DATABASE.md) for `getDatabaseUrl()`, the
-narrower sibling function `drizzle.config.ts` uses.
+All configuration is read through `getEnv()` (`src/configs/env.config.ts`),
+which validates `process.env` against a Zod schema once, on first call, and
+memoises the result. An empty value counts as unset, since a `.env` copied from
+`.env.example` keeps `KEY=` lines. `getEnv()` is lazy because a module-scope
+parse would throw during import resolution. In `src/`, only `env.config.ts`,
+`tracing.ts`, `logger.service.ts` and `index.ts` may read `process.env`
+(`no-restricted-properties`); `tracing.ts` is the notable one, since it loads
+before validation.
 
-`.env` is loaded twice over, on purpose. `pnpm dev` and `pnpm start` pass
+`.env` is loaded twice, on purpose. `pnpm dev` and `pnpm start` pass
 `--env-file-if-exists=.env` to Node, so the values reach `tracing.ts`, which
 loads before any app module. `env.config.ts` also loads `.env` with `dotenv`,
-which never overrides a key that is already set, so it only fills keys Node
-left unset; `tsx` scripts such as `pnpm db:migrate` rely on it. It is skipped
-under Vitest, whose environment `tests/helpers/setup-global.ts` assembles. The
-Docker image's `CMD` passes no env file: the image has no `.env`, and the
-orchestrator supplies the environment.
+which never overrides a key already set, so it only fills keys Node left unset;
+`tsx` scripts such as `pnpm db:migrate` rely on it. It is skipped under Vitest,
+whose environment `tests/helpers/setup-global.ts` assembles. The Docker
+image's `CMD` passes no env file: the image has no `.env`, and the orchestrator
+supplies the environment.
+
+`.env.example` and the table below are generated from the schema: each row's
+text is that variable's `.describe()`. Change the schema, then regenerate with
+`pnpm env:example` and `pnpm --silent env:table`
+([CONTRIBUTING.md](CONTRIBUTING.md#adding-renaming-or-removing-an-environment-variable)).
+`tests/unit/architecture-env-table.test.ts` fails when the table differs from
+what `pnpm env:table` prints.
 
 ### Environment variables
-
-`.env.example` is **generated** from the Zod schema in
-[`src/configs/env.config.ts`](src/configs/env.config.ts). Don't edit it by
-hand; `pnpm env:example` regenerates it, and the pre-commit hook does so when
-`env.config.ts` is staged. Required keys are blank, except `APP_ENV=local`
-and `NODE_ENV=development`, which carry a working local value. Keys with a
-default carry it. Optional keys with no default are commented out, including
-`COOKIE_SECURE` and `LOG_FORMAT`, whose defaults come from `APP_ENV`.
-
-The table is generated from the same schema: each row's text is that
-variable's `.describe()`. To change a row, change the schema and regenerate
-the table with `pnpm env:table` (see CONTRIBUTING.md).
-`tests/unit/architecture-env-table.test.ts` fails when the table differs from
-what it prints.
 
 | Variable                               | Required | Default                    | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------------- | -------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -649,928 +1126,113 @@ what it prints.
 | `SMTP_SOCKET_TIMEOUT_MS`               | no       | `7000`                     | Milliseconds of inactivity before an open SMTP connection is closed. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `SHUTDOWN_TIMEOUT_MS`                  | no       | `25000`                    | Milliseconds graceful shutdown may take before the process exits with code 1 anyway. Defaults to 25000, under Kubernetes' default 30s termination grace period.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
-#### `APP_ENV` and `NODE_ENV`
+### `APP_ENV` and `NODE_ENV`
 
 `APP_ENV` names the deployment: `local`, `dev`, `qa` or `prod`. It has no
-default, and boot fails without it. The Docker image sets
-`NODE_ENV=production` but not `APP_ENV`, so the deployment must supply it.
+default and boot fails without it, so a deploy that forgets it cannot run with
+local settings; the Docker image sets `NODE_ENV=production` but never
+`APP_ENV`. `NODE_ENV` is what Express reads, and only `production` hides stack
+traces in its built-in error handler. Behaviour that depends on the
+deployment derives from `APP_ENV` only through the helpers in `env.config.ts`
+(`isCookieSecure`, `logFormat`, `requiresSmtpTls`,
+`isFakeEmailWebhookAllowed`), never at a call site.
 
-`NODE_ENV` is what Express itself reads; it must be `production` in every
-environment except `local`.
+### Boot-time consistency checks
+
+Cross-variable rules live in `assertEnvConsistent`
+(`src/configs/env-consistency.config.ts`), not in the schema: an object-level
+`.refine()` would break `getDatabaseUrl()`'s `.pick()`. It lists every problem
+in one message, each naming the variable and the fix, and exits 1.
 
 |                                                                                                                        | `local`  | `dev`, `qa`, `prod` |
 | ---------------------------------------------------------------------------------------------------------------------- | -------- | ------------------- |
 | `COOKIE_SECURE` when unset                                                                                             | `false`  | `true`              |
 | `LOG_FORMAT` when unset                                                                                                | `pretty` | `json`              |
 | SMTP must upgrade to TLS                                                                                               | no       | yes                 |
-| `NODE_ENV` other than `production`                                                                                     | allowed  | refused at boot     |
-| `SMTP_HOST` `localhost`/`127.0.0.1`, `SMTP_PORT` 1025, `MAIL_FROM` or `MAIL_FROM_TRANSACTIONAL` `no-reply@example.com` | allowed  | refused at boot     |
+| `NODE_ENV` other than `production`                                                                                     | allowed  | refused             |
+| `SMTP_HOST` `localhost`/`127.0.0.1`, `SMTP_PORT` 1025, `MAIL_FROM` or `MAIL_FROM_TRANSACTIONAL` `no-reply@example.com` | allowed  | refused             |
 | `MAIL_FROM_TRANSACTIONAL` unset or on `MAIL_FROM`'s domain                                                             | allowed  | warning             |
-| SMTP timeouts summing to more than `SHUTDOWN_TIMEOUT_MS` − 10000                                                       | warning  | refused at boot     |
-| Trace attribute `deployment.environment.name`                                                                          | `local`  | the `APP_ENV` value |
+| SMTP timeouts summing to more than `SHUTDOWN_TIMEOUT_MS` − 10000                                                       | warning  | refused             |
+| `POSTHOG_PROJECT_KEY` set with `TRUST_PROXY=false`                                                                     | allowed  | warning             |
 
-The 10000 is the 5-second HTTP drain that runs before the in-flight send is
-awaited, plus 5 seconds of headroom for closing the database, Redis and queues and
-flushing traces. The error-report flush (`ERROR_SHUTDOWN_FLUSH_MS`, 3 s) also
-runs after the workers close, so with SMTP and PostHog both hanging it comes
-out of those 5 seconds, leaving 2 for the closes. The timeouts bound each connection attempt, the greeting
-and socket inactivity, and the first try of each DNS query. They are not a
-per-send deadline: the resolver doubles the DNS timeout on each retry, the
-OS-lookup fallback has no timeout, and a host that resolves to several
-addresses can take the connection timeout once per address. The check
-assumes one address and no DNS delay, so it is a sanity check.
+The 10000 is the 5 s HTTP drain, which runs before the in-flight send is
+awaited, plus 5 s of headroom for the closes; the 3 s error-report flush comes
+out of that headroom. The check assumes one address and no DNS delay, so it is
+a sanity check, not a per-send deadline.
 
 Everywhere:
 
-- setting only one of `SMTP_USERNAME` and `SMTP_PASSWORD` is refused;
-- a `COOKIE_DOMAIN` that `APP_URL`'s host is neither equal to nor a
-  subdomain of is refused, because browsers reject every auth cookie it
-  would set;
-- `COOKIE_SECURE` resolving to `true` while `GOOGLE_CLIENT_ID` is set and
-  `TRUST_PROXY=false` logs a warning (see SECURITY.md).
-
-#### Secrets
-
-`JWT_ACCESS_SECRET` signs access tokens. `SESSION_SECRET` signs the session
-cookie of the Google OAuth round-trip. Generate each with
-`openssl rand -hex 32`, even in development.
-
-There is no refresh-token secret: refresh tokens are opaque random strings,
-not JWTs, so nothing signs one (see [SECURITY.md](SECURITY.md)).
-
-#### Invalid configuration fails before anything starts
-
-Unsetting or malforming any variable fails fast with a named list, not a
-stack trace. Dropping `JWT_ACCESS_SECRET` prints
-
-```
-Invalid environment:
-✖ Invalid input: expected string, received undefined
-  → at JWT_ACCESS_SECRET
-```
-
-and exits 1 before any socket opens. After the schema parses, `index.ts`
-runs `assertEnvConsistent`
-([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
-which refuses the combinations above. It lists every problem in one
-message, each naming the variable and the fix, and exits 1.
-
-### A second frontend: Apex
-
-`APEX_URL` (optional) names the Apex staff dashboard. Links and redirects pick
-a frontend with `frontendUrl(app)` (`verification.service.ts`), where `app` is
-`'web'` or `'apex'`, never a URL. It returns `APEX_URL` for `'apex'` when that
-is set, and `WEB_URL` otherwise, so leaving `APEX_URL` unset sends every link
-to `WEB_URL`.
-
-- Invitations to the platform tenant always link to Apex; every other
-  invitation links to `WEB_URL` (`tenant-invitation.service.ts`).
-- `register`, `resend-verification` and `forgot-password` take an optional
-  `app` (default `'web'`) that picks the frontend of the verification or
-  reset link. The "address already registered" mail carries no link, so it
-  has no `app`.
-- Staff mail about a user (the set-password mail of `POST /platform/users`,
-  password-setup and resend-verification) takes no `app`: the server links
-  a staff target to Apex and anyone else to `WEB_URL`, so a newly created
-  user, who holds no platform role, gets a web link.
-- `GET /auth/google?app=apex` stores the choice in the OAuth session
-  (`rememberOAuthApp`), and the callback redirects to that frontend
-  (`oauthAppOf`, `src/controllers/helpers.controller.ts`).
-
-`APEX_URL`'s origin is always granted, beside `WEB_URL` (`isAllowedOrigin`
-grants `WEB_URL`, `APEX_URL` and `CORS_ALLOWED_ORIGINS`), so an Apex served at
-`APEX_URL` that calls this API directly needs no entry. An Apex served on any
-other origin must still be listed in `CORS_ALLOWED_ORIGINS`, or
-`POST /auth/refresh` and `/auth/logout` refuse it 403 (`ORIGIN_NOT_ALLOWED`)
-unless the browser marks the request same-origin; one that proxies `/api`
-through its own host needs no entry. Google calls back to `APP_URL` only, so
-when Google sign-in is on (`GOOGLE_CLIENT_ID`) and the Apex host differs from
-`APP_URL`'s, `COOKIE_DOMAIN` must cover both; boot refuses otherwise
-(`apexCookieDomainProblem`, `env-consistency.config.ts`).
-
-## Email tracking
-
-Every outbound email is one `email_messages` row, written when the mail is
-queued: the recipient, the template, the user, tenant and invitation it is
-about, the frontend its link opens (`link_app`), the sender class, its
-`Message-ID`, and the template's non-secret `previewVariables`. Never a
-rendered body, a link or a token. Each send attempt stays an append-only
-`email_logs` row pointing at its message, and each provider event an
-`email_events` row. A status only moves to a higher rank
-(`EMAIL_STATUS_RANK`, `src/constants/email.constants.ts`), so a fast
-`delivered` event is never overwritten by the worker's `sent`; `opened` and
-`clicked` never change it. `RETENTION_EMAIL_LOGS_DAYS` purges messages,
-their attempts and their events together; suppressions never expire.
-
-Token emails (verification, password reset, account setup, invitations)
-always go from `MAIL_FROM_TRANSACTIONAL`, and the two security notices from
-`MAIL_FROM`; no caller picks the sender. Keep click tracking **off** at the
-provider for the transactional sender's domain: a tracked link is rewritten
-through the provider's redirector, which would then see every token. Left
-unset, `MAIL_FROM_TRANSACTIONAL` falls back to `MAIL_FROM`, and outside
-`local` the boot check warns when both senders share a domain.
-
-The operator guide (the Resend webhook and its secret, the two senders, the
-suppression list, the staff preview and resend, and `pnpm email:fire-event`
-for local) is [Email tracking in README.md](README.md#email-tracking).
-
-## Analytics
-
-Server events reach PostHog through a transactional outbox, and browser
-events through a proxy. No request handler calls PostHog's private API (`/api/projects/…`), with one exception: the
-staff timeline read (`GET /platform/users/:id/timeline`,
-`GET /platform/tenants/:id/timeline`), on a cache miss and within the hourly
-query budget. The `/api/v1/collect` proxy forwards browser requests, including the frontends' `$exception` batches, to PostHog's ingest. Deleting a purged user from PostHog runs on the analytics
-Worker, never in the purge's request.
-
-```
-request ── service transaction ── audit insert ── savepoint: analytics_outbox insert
-        ├─ after commit: product domain event ─── analytics_outbox insert (pool)
-        ├─ email webhook transaction ─────────── savepoint: analytics_outbox insert
-        └─ purgeUser transaction ──────────────── analytics_deletions insert + the user's outbox rows deleted
-
-analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS, concurrency 1
-  claimBatch: one autocommit UPDATE … FOR UPDATE SKIP LOCKED, 60 s lease
-  resolveGroupMarkers: one tenant read, each $groupidentify gets the tenant's current $group_set
-  (connection released) ── POST <POSTHOG_HOST>/batch/ (10 s timeout)
-  ack: delete · retry (no answer, 429, 5xx, 401/403/404/405/407/408): keep, lease and backoff
-  rejected (400, 413, 415, 422, other 4xx): bisect; a row refused alone counts a rejection, dropped at 3;
-  a batch and both its halves rejected: each half's first row sent alone; both refused:
-  endpoint fault, rows kept, one error; either accepted: settle those rows, bisect the rest
-
-analytics Worker, every 60 s (with POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID)
-  claimDue: up to 10 rows with not_before <= now, one autocommit UPDATE, 180 s lease
-  (connection released) ── POST <app host>/api/projects/<id>/persons/bulk_delete/ (15 s timeout)
-  deleteForDistinctIds: the claimed ids' outbox rows are deleted before the request
-  2xx with an empty deletion_errors list: delete · anything else (a 2xx with no list too): keep, last_error, least(2^attempts, 360) min
-  a batch of several ids answered ok with a non-empty deletion_errors: each id is sent alone, in the same tick
-
-browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ── stream ── ingest or assets host
-```
-
-- **Writes** go only through `enqueueAnalytics` and, for an audit entry,
-  `enqueueAuditAnalytics` (`src/services/analytics/analytics-outbox.service.ts`):
-  a savepoint inside a transaction, a plain insert on the pool, a `warn` and
-  nothing more on failure. The audit hook in `writeEntry` (`audit.service.ts`)
-  covers every audited action; product events come from domain-event
-  subscribers (`analytics-forwarder.service.ts`); email events from
-  `processEmailWebhook`. The builder (`analytics-event-builder.service.ts`)
-  holds every PII rule.
-- **The drain** (`drainAnalyticsOutbox`,
-  `src/services/analytics/analytics-drain.service.ts`) claims in one
-  statement, so its connection is back in the pool before the HTTP call:
-  a hanging PostHog never holds one. The lease and `SKIP LOCKED` keep two
-  replicas' drains apart. Retryable failures only grow `attempts`, which sets
-  the backoff (`least(2^attempts × 5 s, 600 s)` after the lease); during an
-  outage of any length only the retention rule (`analytics_outbox`,
-  `ANALYTICS_OUTBOX_RETENTION_DAYS`) removes rows. A rejected batch is split
-  in halves until the refused row is alone. When both of its halves are
-  rejected as well, the first row of each half is sent alone: if PostHog
-  refuses both it is refusing everything, so no row is counted, the rows are
-  kept and the drain logs one `error` with the status; if it accepts either,
-  each lone row is settled by its answer and the rest of each half is split
-  as usual, so a refused row in each half does not hold back the others. The
-  first retryable answer ends the drain, so an outage costs one timeout per
-  tick. The endpoint-level
-  4xx answers (401, 403, 404, 405, 407, 408) are retryable, never a
-  rejection, so a wrong key or host drops nothing; the drain logs one `error`
-  per tick naming `POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`.
-- **Signing.** `toPosthogBatchEvent` (`posthog-batch.service.ts`) adds
-  `server_sig` to every event the drain sends, markers and `$set` rows
-  included: HMAC-SHA256, its first 32 hex characters, over the uuid, event,
-  `distinct_id`, `source`, `access`, `target_type`, `target_id` and
-  `$groups.tenant`, keyed by an HKDF of `SESSION_SECRET`
-  (`analytics-signature.service.ts`). The outbox row is not changed. The
-  signer and the timeline mapper (`timeline-mapper.service.ts`) read those
-  fields through one function, `signedFieldsOf`, which keeps a non-empty
-  string and reads anything else (absent, empty, another type) as no value.
-  The mapper trusts a row's server fields only when its signature verifies.
-- **GeoIP off for server events.** `toPosthogBatchEvent` also sets
-  `$geoip_disable: true` on every event it builds, the drain's rows and the
-  error reporter's `$exception` events alike, overriding any stored value.
-  They reach PostHog from this server's address, so PostHog's GeoIP would
-  otherwise place the person in the data centre. It is added at send time,
-  so rows queued before it existed get it too, and it is not a signed
-  field. Browser events through `/api/v1/collect` are forwarded unchanged
-  and keep GeoIP, from the forwarded client address.
-- **At least once.** A row is deleted after PostHog acknowledged
-  it, so a crash between the two resends it with the same `uuid` (the row
-  id), `timestamp`, `event` and `distinct_id`. PostHog deduplicates on `uuid`
-  eventually and without a guarantee (ClickHouse merges), so a consumer that
-  needs exactness dedupes by `uuid`.
-- **The proxy** (`src/routes/analytics-proxy.routes.ts`) sends `/static/*`
-  and `/array/*` to the assets host and everything else to the ingest host,
-  streaming bodies untouched. It removes `Cookie` and `Authorization`, so the
-  refresh cookie (`Path=/`) never reaches PostHog, and overwrites
-  `X-Forwarded-For` (`request.ip`), `-Host`, `-Proto` and `-Port`. It strips
-  PostHog's `Set-Cookie` and `Access-Control-*` response headers, and answers
-  504 when PostHog stays silent for 30 s. A request carrying `Expect` is
-  refused 417 `expectation_failed` before it is proxied. Without
-  `POSTHOG_PROJECT_KEY` it answers 503 `service_unavailable`.
-- **Groups.** A tenant's `name`, `status` and `created_at` reach PostHog only
-  as `$groupidentify` properties. The outbox stores a marker
-  (`$group_type`, `$group_key`, `source` and the trace id) and never the
-  name: the audit hook queues one when a tenant is created, updated or
-  changes state, `purgeTenant` queues one, and `pnpm analytics:backfill-groups`
-  queues one per tenant. The drainer fills in `$group_set` from the tenant row
-  when it sends the batch (`resolveGroupMarkers`,
-  `analytics-group-marker.service.ts`), and a tenant with no row (purged)
-  goes out as `{ name: null, status: 'purged' }`, which clears the name.
-  Because the drain is the only sender and a process runs one batch at a
-  time, the marker PostHog receives last from one Worker carries the latest
-  committed state, whatever order markers were written, retried or backfilled
-  in. Two Worker replicas whose drains overlap can deliver an older resolved
-  marker after a newer one; the next marker for that tenant corrects it. A `$group_set`
-  stored by an earlier release is replaced, never sent. If the tenant read
-  fails, nothing is sent and every claimed row waits for its lease, as after
-  a retryable answer.
-- **Purged users.** `purgeUser` writes an `analytics_deletions` row with
-  `not_before` an hour out (PostHog deletes only events it ingested before
-  the request) and deletes the user's undelivered outbox rows, in its own
-  transaction and whatever the analytics config. The `analytics-deletions`
-  job (`processAnalyticsDeletions`, `analytics-deletion.service.ts`) sends
-  due ids to `persons/bulk_delete/` with `delete_events` and
-  `delete_recordings`, through the personal-key client
-  (`posthog-api.service.ts`). Before the request it deletes the claimed ids'
-  outbox rows again (`deleteForDistinctIds`), so an event committed after the
-  purge cannot recreate the person. A 2xx with an empty `deletion_errors`
-  deletes the rows, including an id PostHog does not know; anything else
-  keeps them with a backoff and logs `warn`, or `error` once a row is a day
-  old. When a batch of several ids is answered 2xx with a non-empty
-  `deletion_errors`, which does not say which id, the job logs one `warn` and
-  sends each id alone in the same tick, so one refused id does not hold back
-  the others; a timeout, a network error or an HTTP error does not split.
-  Without the personal key and project id the job does nothing and the rows
-  wait.
-
-The operator steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
-
-## Error tracking
-
-Server errors go to PostHog Error Tracking as `$exception` events. There is
-one capture point per kind of failure, and no logger transport:
-
-| Where                                                                                   | When                                                                                                  | `capture_point` |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------- |
-| `errorHandler` (`error.middleware.ts`)                                                  | a 5xx the capture rule admits; a failure after the headers were sent, recorded as 500                 | `http`          |
-| `process.on('uncaughtException' / 'unhandledRejection')` (`index.ts`)                   | always                                                                                                | `process`       |
-| each Worker's `failed` listener, through `reportFinalJobFailure` (`job-failure.job.ts`) | the attempt BullMQ will not retry (`isTerminalFailure`: attempts used up, or an `UnrecoverableError`) | `job`           |
-
-`errorHandler` reports through `reportErrorWithSpan`, which returns the
-event's id and the active span's stand-in, taken from the exception list
-the report built, so a 5xx is built once and its span never carries what
-the event may not. The process-fault handlers and `reportFinalJobFailure`
-call `reportError`.
-
-**The capture rule** (`shouldCaptureHttpError`): an error that is not an
-`HttpError` and resolves to 500 is always reported. An `HttpError` with a
-status of 500 or more is a deliberate answer, reported only when it wraps a
-`cause` (`new HttpError(message, 503, code, errors, { cause })`); without
-one it is an expected state, such as the notification stream's 503 while
-shutting down. A `TimelineUnavailableError` is never reported: PostHog
-being unreachable is its meaning. A 4xx, and a client that went away (a
-connection-reset or `aborted` error on a socket the client already closed),
-never are. The analytics Worker's ticks have one attempt each, so every
-failed drain or deletion tick is a final failure and is reported; the
-reporter's throttle bounds a run of them.
-
-**`errorId`.** Every 5xx `errorHandler` writes carries an `errorId` in its
-body and on its log line (`Unhandled server error`, `Error after response
-headers were sent`), except a `TimelineUnavailableError` 502, whose id names
-nothing: `errorHandler` neither reports nor logs it, because its thrower
-logged before the id existed. A reported error's id is its `$exception`
-uuid; an unreported one's names only the log line. `Uncaught exception` and
-`Unhandled promise rejection` log lines carry the id too. The route
-template on an event comes from `recordRouteTemplate`
-(`route-template.middleware.ts`), mounted ahead of every router: Express
-restores `request.baseUrl` before an error reaches `errorHandler`, so the
-mount path is recorded when the router assigns `request.route`, and a mount
-parameter's value is put back as its name.
-
-**Order on the way out.** A process fault first marks shutdown, so
-`/health/ready` answers 503 from then on, is reported (synchronously, no
-I/O) and logged with its id, then the queue is flushed for at most
-`ERROR_FATAL_FLUSH_MS` (2 s) before the shutdown handler runs; a SIGTERM or
-SIGINT during that flush still exits 1.
-`gracefulShutdown` flushes for at most `ERROR_SHUTDOWN_FLUSH_MS` (3 s)
-after the Workers close, so a job's final failure is included, and before
-Redis closes and OTel shuts down. `index.ts` raises `Error.stackTraceLimit`
-to `ERROR_FRAME_LIMIT` (50) before anything else, since V8 keeps 10 frames
-by default.
-
-**Staff views.** `GET /platform/users/:id/errors` and
-`GET /platform/tenants/:id/errors` (platform admin and up, the timelines'
-limiter and hourly query budget) list the error issues a user or a tenant
-hit in the last 30 days, one row per PostHog issue
-(`properties.$exception_issue_id`), from the fixed HogQL in
-`errors-query.service.ts`. A user's issues are the `$exception` events sent
-under their distinct id; a tenant's, its group's. Every column describing
-an issue's most recent event is read with `argMax(column, (timestamp,
-uuid))`, so all of them come from one event and its `server_sig` can be
-verified (`errors-mapper.service.ts`). Each read is audited as
-`user.errors_viewed` / `tenant.errors_viewed` (empty metadata), at most once
-per staff member and target every 10 minutes, by the same throttled audit
-as the timelines (`auditThrottledView`, `platform-view-audit.service.ts`).
-They answer `{ configured: false }` until the timelines are configured, and
-`{ configured: true, items, nextCursor: null }` otherwise; a PostHog failure
-or a spent budget is the timelines' 502 `TIMELINE_UNAVAILABLE`. The
-timelines leave out `$exception` and both `*_errors_viewed` events.
-
-**System status.** `GET /platform/system/status` (platform admin and up,
-not audited) answers `{ release, errorTracking, flags, maintenance }`: the
-image's `APP_VERSION`, the reporter's sent and dropped counts over the last
-15 minutes, summed from Redis across every API and worker process, the
-flags' status (see [Feature flags](#feature-flags)) and the maintenance
-mode's state (see [Maintenance mode](#maintenance-mode)). It is an open object;
-later sections are added as keys. Each section that reads Redis (error
-tracking, flags, the maintenance queue states and pending-notice check) is bounded by
-`STATUS_READ_TIMEOUT_MS` (2000 ms, `withStatusTimeout` in
-`status-read.service.ts`): a stalled Redis answers the section with what it
-reports when Redis fails, and one `warn`. The bound covers the handler
-only. A request reaches it after `requireAuth`'s session denylist read and
-the route's rate limiter, which have the shorter request-path deadline
-(see [Data layer](#data-layer)), so a stalled Redis costs this page about
-one 300 ms deadline before the handler runs (one per Redis call while the
-first connect is still in flight).
-
-What an event may carry, and what it never does, is in
-[SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
-
-## Feature flags
-
-Flags are declared in code, evaluated on the server from a snapshot of
-PostHog's flag definitions, enforced on API routes and served to react and
-apex. Rollouts, kills and experiments are edited in PostHog; the registry
-says which flags exist and what they fall back to.
-
-```
-PostHog project (one per environment)
-  │ GET <POSTHOG_HOST>/flags/definitions?token=<POSTHOG_PROJECT_KEY>
-  │ Authorization: Bearer <POSTHOG_FEATURE_FLAGS_KEY>, If-None-Match: <stored weak ETag>
-  ▼
-flag-definitions job (analytics queue, one scheduler, every 30 s)
-  │ 304: touch checkedAt if unchanged since read · 200: parse (zod), mark unsupported constructs
-  │ SET flags:v1:snapshot (no TTL) · PUBLISH flags "reload" · failure: keep the snapshot
-  ▼
-every API and worker process: in-memory snapshot (reload on message, 60 s backstop)
-  │
-  ├─ requireFlag(key)                    route gate: unknown-route 404 unless on
-  ├─ flagsFor / isEnabled / variantOf    service reads (variantOf records server exposure)
-  ├─ GET …/flags                         the app's client flags, Cache-Control: no-store
-  ├─ POST …/flags/exposures              re-evaluate, dedupe, $feature_flag_called → outbox
-  └─ /platform/flags, /platform/flags/evaluate, system status flags
-```
-
-- **Registry** (`src/constants/flags.constants.ts`): key, description,
-  kind (`boolean` or `multivariate` with `variants`), fallback, scope
-  (`user` or `tenant`), `client` and `apps` (which app's browser receives
-  it), `experiment`. `assertFlagRegistry` refuses a malformed registry when
-  the module loads; an experiment must be multivariate with `control`
-  first, because PostHog counts exposures only from string responses.
-  `FlagKey` makes an unregistered key a type error.
-- **Traits** are only `FLAG_TRAITS`: `platform_role`, `tenant_role`,
-  `app_env`, `account_created_days` (person) and `tenant_created_days`
-  (tenant group), built from the database at evaluation time and never
-  stored in PostHog. There is no `app` trait, so a route gate and the UI
-  always agree. The distinct id is the user id and the tenant group key is
-  the tenant id.
-- **Snapshot**: each API and worker process starts its store at boot when
-  flags are configured. Only the first reload is awaited; the Redis
-  subscriber connects in the background, so a slow Redis never holds boot,
-  and the 60 s backstop reloads (and retries the subscription) meanwhile.
-  The subscriber's handshake is bounded by `REDIS_CONNECT_TIMEOUT_MS` (5 s),
-  and `stop()` waits at most 1 s for one still connecting. A
-  stored snapshot that can't be read at boot is treated as none, and the
-  process answers fallbacks until a good one arrives; a later failed reload,
-  or a read checked earlier than the copy in memory, keeps that copy. The snapshot stores a
-  fingerprint of the registry's keys, kinds, variants and scopes, the trait
-  keys a condition may name, and `FLAG_PARSER_VERSION` (bump it when the parse or detection rules
-  change); when it differs from the running code's, the job omits
-  `If-None-Match` so the next run re-parses with the current rules. During
-  a rolling deploy with workers on both versions the stored fingerprint
-  alternates, so each tick fetches a full 200 and registry-dependent
-  verdicts can flip until the old workers drain. A 304 rewrites only the
-  stored `checkedAt`, unpublished, through one Lua compare-and-set
-  (`touchFlagSnapshot`): only while the stored value is still the exact
-  string the run read. Two replicas' runs can overlap (a run outlasting its
-  interval, a stalled job's retry); without the check, a 304 landing after
-  another run's 200 would put the older content back, or an earlier
-  `checkedAt`. A replica holding a copy checked later refuses it, but one
-  without a newer copy (a fresh boot) would load it until the next run
-  replaced it. A skipped touch logs at `info`.
-- **Kill-switch latency**: a PostHog edit reaches every process on the
-  next definitions run (every 30 s) and its `reload` message, or the 60 s
-  backstop if the message is missed. The run shares the `analytics` worker
-  (concurrency 1) with the outbox drain and the deletion tick, so with
-  PostHog slow or hanging and one worker replica it can wait behind a
-  drain (each batch request up to 10 s) and a deletion tick (a bulk
-  request plus, after a partial refusal, one per id: at most 11 requests
-  of up to 15 s), so a kill can take a few minutes to land.
-- **Evaluation** (`flag-evaluator.service.ts`) is pure and never throws to a
-  caller: with no snapshot, a missing, inactive or unsupported flag, or a
-  tenant-scoped flag with no tenant, it returns the registry fallback with a
-  `fallback:*` reason. A definition that uses a construct the evaluator
-  can't reproduce (cohorts, flag dependencies, `is_not_set`, a property
-  outside the traits, experience continuity, early access, another group
-  type, or mixed targeting (a property whose type disagrees with the
-  flag's aggregation, or a group property with no `group_type_index`; both
-  are `group_type`), scope or kind drift against the registry,
-  device-id bucketing, evaluation contexts, an unknown `filters` key, an
-  unknown property type or operator, a negated property, a condition or
-  property key it does not know (`unknown_field`), or a definition that
-  fails the schema) is marked unsupported and never evaluated. Unknown keys
-  fail closed: the only ones let through are the display-only keys PostHog
-  writes, `sort_key` and `description` on a condition and `label`,
-  `cohort_name` and `group_key_names` on a property.
-- **Route gates** (`requireFlag`, `flag.middleware.ts`) mount after
-  `requireAuth`, after `resolveTenant()` for a tenant-scoped flag, and
-  before validators. A closed gate answers the unknown-route 404.
-  `tests/unit/routes/flag-gates.test.ts` walks the router and fails a
-  tenant-scoped gate outside `/tenants/:slug/…`. A gate read records no
-  exposure.
-- **Client reads**: `GET /api/v1/tenants/:slug/flags` (member; react, with
-  the tenant), `GET /api/v1/flags` (signed in; react, no tenant) and
-  `GET /api/v1/platform/me/flags` (platform viewer; apex, no tenant). Each
-  answers `{ flags, evaluatedAt }` in the envelope's `data`, only the
-  registry's `client` flags for that app, never a trait or a reason. The
-  route fixes the app; no request parameter chooses it. With flags
-  unconfigured they answer the fallbacks.
-- **Exposure**: `POST` to the same paths plus `/exposures`, body
-  `{ keys }` (1 to 10 distinct keys, nothing else), behind
-  `requireJsonContentType` and the `flag-exposure` limiter (60 a minute per
-  session; built in each of the three routers, so on Redis they share one
-  budget per session, and on the in-memory fallback each router counts its
-  own). Every key must be one of that app's client experiment flags, or the
-  answer is 400 with one message that names no key. The server
-  evaluates each key itself and records `$feature_flag_called` with
-  `$feature_flag`, `$feature_flag_response` (the variant, or
-  `holdout-<id>` for a holdout user, who sees the fallback) and
-  `exposure_origin`, signed with `source: 'flag'`, once per session, tenant,
-  key and response (`SET NX` in Redis; a Redis failure records anyway). Only
-  a matched condition or a holdout is recorded: a user out of the rollout or
-  matching no condition (PostHog answers them `false`) and every fallback
-  record nothing. The answer is always 204.
-  `POST /platform/me/flags/exposures` takes no step-up and leaves no
-  `Staff write` log line: it is telemetry, not a staff action.
-- **Inspector**: `GET /platform/flags` (platform viewer, `platform-search`
-  limiter) lists every registered flag with its live state (`active`,
-  `inactive`, `missing` or `unsupported` with the reason), its condition
-  count, highest rollout and PostHog link, the flags PostHog has that the
-  registry lacks, the traits reference, and the snapshot's age and whether
-  flags are configured. `GET /platform/flags/evaluate?userId&tenantId&app`
-  (platform admin, `platform-timeline` limiter) answers one user's traits
-  and every registered flag's value, reason, condition index and holdout
-  variant. It is the one place traits leave the server, so each read is
-  audited as `user.flags_evaluated`, at most once per staff member, user,
-  tenant (or none) and app every 10 minutes (`auditThrottledView`), before
-  anything is evaluated.
-  An unknown user is 404; a tenant the user isn't a member of, or a tenant
-  with `app=apex`, is 400. Neither route calls PostHog.
-- **System status** gains `flags`: whether flags are configured, the
-  snapshot's fetch and check times, `stale` (no snapshot, or checked more
-  than 10 minutes ago), the last good and failed fetch, `propertyMatchingVersion` and the
-  registered, active, inactive, missing, unsupported, unregistered and
-  unknown-variant counts.
-
-**`pnpm flags:sync [-- --dry-run]`** (`src/scripts/flags-sync.ts`) creates
-every registered flag the project lacks: inactive, one condition at 0 %,
-named by its description, tagged `code-registry` (a project can require a
-tag), aggregated on the `tenant` group for a tenant-scoped flag, and with
-the variants split evenly as integers summing to 100 (the remainder to the
-first, so 34/33/33). It reads the flag list page by page, taking only the
-`offset` from each `next` link, and the group types; with a tenant-scoped
-flag to create and no `tenant` group type it exits 1 before creating
-anything. A create answered 400 `unique` counts as already present. It never
-edits or deletes a flag: kind, variant or scope differences print as
-`drift <key>: <field>`. Exit codes: 0 when clean or after creating, 2 on
-drift (a dry run too), 1 on a credential, configuration or API failure.
-`--dry-run` prints the plan and writes nothing. It uses
-`POSTHOG_PERSONAL_API_KEY` with `feature_flag:read` and
-`feature_flag:write`, and `POSTHOG_PROJECT_ID`; run it once per environment
-(see [README.md](README.md#feature-flags)).
-
-**Experiments.** An experiment that PostHog creates together with a new flag
-turns on the flag's experience continuity, which the evaluator refuses. So:
-
-1. Run `pnpm flags:sync`, which creates the multivariate flag.
-2. Create the experiment in PostHog reusing that flag. Through the API, pass
-   `feature_flag_key` and omit `parameters.feature_flag_variants`; with
-   variants included PostHog answers 400 because the flag exists.
-3. Launch it. Launching activates the flag and keeps its 0 % rollout;
-   raise the rollout in PostHog. Experience continuity stays off.
-
-A holdout attached to the experiment is evaluated too: its users get the
-fallback (`control`) and are recorded as `holdout-<id>`.
-
-## Maintenance mode
-
-A platform owner puts the product into maintenance from Apex, without a
-deploy: `full` (every customer route answers 503 `MAINTENANCE_MODE`,
-customers cannot sign in, every BullMQ queue pauses) or `read_only` (every
-customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
-
-- **State.** One row, `maintenance_mode_state` (migration 0024 seeds it
-  `off`, version 0), is the source of truth. A change is a compare-and-set
-  on `version` (`updateMaintenanceModeStateIfVersion`), written with its
-  `platform.maintenance_mode_changed` audit entry in one transaction.
-- **Propagation.** Each replica keeps the mode in memory
-  (`src/services/maintenance-mode/maintenance-mode-store.service.ts`). A
-  change publishes `reload` on `redisKey('maintenance-mode')`; every replica
-  rereads the row on the message, on a subscriber reconnect, and every
-  `MAINTENANCE_MODE_RELOAD_INTERVAL_MS` (10 s) whatever happens. A row not
-  newer (by version) than the copy is ignored. The first read happens before
-  the server listens; if it fails the replica serves `off` with
-  `known: false` and retries; a later failure keeps the last known mode. No
-  request reads Postgres or Redis for the mode.
-- **The gate.** `maintenanceModeGate` (`src/middlewares/maintenance-mode.middleware.ts`)
-  runs right after `requestContext`, after `cors`, before every router, the
-  webhooks, the PostHog proxy and the body parsers. It stamps
-  `Maintenance-Mode: off | read_only | full` on every response it sees and
-  decides by method and path from `MAINTENANCE_ROUTE_RULES`
-  (`src/constants/maintenance-mode.constants.ts`). `/health`, `/health/ready`,
-  the email webhooks, `/collect`, `GET /status/maintenance`, `/platform/*`,
-  `GET /profile`, sign-in and the session routes are always let through; in
-  `read_only` reads and the flag exposure reports pass. On the customer routes
-  Apex calls (`MAINTENANCE_STAFF_ROUTES`) the gate only marks the refusal, and
-  `requireAuth` lets platform staff through and refuses everyone else, so
-  staff work in Apex (and write) during maintenance. In `full`, password
-  login and the Google callback refuse a user with no platform role
-  (`assertSignInAllowed`) before any session is created.
-  `tests/unit/routes/maintenance-mode-gates.test.ts` walks every route: a
-  route with no rule, a rule with no route, or a staff-pass route outside
-  `requireAuth` fails it.
-- **Refusal.** 503 with `Retry-After: 30` and
-  `{ success: false, statusCode: 503, code, message, mode, since, requestId }`,
-  where `message` is the owner's customer message. `errorHandler` writes it
-  unmasked and does not log it. CORS exposes `Maintenance-Mode` and
-  `Retry-After`. Clients detect maintenance by the 503 and its `code`, never
-  by a bare 502/503 (nginx answers an HTML 502 when the API is down).
-- **Queues.** `full` pauses every queue in `getAllQueues()` with BullMQ's
-  queue-wide `pause()`: running jobs finish, waiting ones stay. Every
-  replica reconciles on every reload (`reconcileQueuePause`): it pauses only
-  once the mode has been `full` for `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s),
-  leaves the queues as they are while `full` is younger or the replica has
-  not yet read the row, and resumes at once in any other mode. It acts only
-  while its snapshot is still the store's, rereading the version before each
-  pause or resume. Duplicate scheduler runs queued while paused are removed
-  before a resume (`dedupeSchedulerJobs`); a failed cleanup is logged and the
-  resume still happens.
-- **Changing it.** `PUT /api/v1/platform/maintenance-mode` (owner, step-up,
-  `maintenance-mode-change` limiter). Switching on or escalating needs a
-  reason (`reason: null` is refused like a missing one) and `confirm` equal to
-  `APP_ENV`; every change to a mode that stays on, a save that keeps the mode
-  or a de-escalation included, still needs a message, and switching off needs
-  nothing more. A save that keeps the mode is a no-op, answered with the
-  current state and nothing written, when it changes nothing: the same
-  message, and no reason sent or the stored one sent again. A save that keeps
-  `off` is always a no-op. Any other save, one that changes only the reason
-  included, increments `version`, writes an audit entry and publishes.
-  `since` is when the mode last changed, and `changedBy` is who set it: a
-  save that keeps the mode leaves both, and leaves the stored reason unless
-  the body sends one; a reason replaces it and `reason: null` clears it. A
-  change of mode stores the reason sent (none if absent or `null`) and the
-  actor. The audit entry (`platform.maintenance_mode_changed`) records `from`,
-  `to`, the `reason` sent (null when none was), `messageChanged` and
-  `reasonChanged`: whether the stored reason after the save differs from the
-  one before, so a clear is told from a keep (entries written before the key
-  existed lack it). After the commit it publishes, queues a notice (in-app and
-  email, type and template `maintenance_mode_changed`) to every other platform
-  owner and admin for a switch-on, an escalation or a switch-off (never for a
-  save that keeps the mode), and entering `full` waits for them
-  until `MAINTENANCE_MODE_NOTICE_WAIT_MS` after the commit, then pauses the
-  queues unless a later change has superseded this one. The type is staff-only
-  (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does not
-  see it in `GET /notifications/preferences`. `GET` shows the state, the queues
-  and the environment name; `GET /platform/system/status` has a `maintenance`
-  section, whose `since` is null while off and whose `changedAt` is when the
-  mode last changed in every mode, `off` included (null only until the
-  replica first reads the row); `GET /api/v1/status/maintenance` is public (120 a minute per IP,
-  cacheable for 5 s).
-  Once the row has committed, a failed notice lookup or read-back is logged and
-  the request still answers 200 with the committed state (the actor's name then
-  reads 'A staff member').
-
-| Code                        | Status                 | When                                                                          |
-| --------------------------- | ---------------------- | ----------------------------------------------------------------------------- |
-| `MAINTENANCE_MODE`          | 503, `Retry-After: 30` | `full`, a route not let through, or a sign-in by a user with no platform role |
-| `READ_ONLY_MODE`            | 503, `Retry-After: 30` | `read_only`, a write not on the allowlist                                     |
-| `MAINTENANCE_MODE_CONFLICT` | 409                    | a change whose `expectedVersion` is not the stored version                    |
-| `CONFIRMATION_MISMATCH`     | 400                    | switching on or escalating without `confirm` equal to `APP_ENV`               |
-
-## Health checks
-
-Two endpoints, deliberately different depths:
-
-- **`GET /health`** is shallow: it never touches the database or Redis. If
-  it depended on either, a transient blip in a dependency would make an
-  orchestrator restart an otherwise-healthy process, turning a slow query
-  into an outage. It answers `{ status: 'ok', uptime, release }`, where
-  `release` is `APP_VERSION`, the image's git sha (`dev` outside an image).
-  The route is public, so the deployed sha is too.
-- **`GET /health/ready`** is deep: it checks `isDatabaseReachable()`,
-  `isRedisReachable()` and `isQueueReachable()` in parallel and answers 503
-  with `"status":"not-ready"` if any is down. It also answers 503 with
-  `"status":"shutting-down"` once graceful shutdown has begun. A failing
-  readiness probe only removes the instance from load-balancer rotation; it
-  restarts nothing. Every check is bounded by `READINESS_CHECK_DEADLINE_MS`
-  (500 ms, `createReadinessProbe` in `readiness.service.ts`), so a stalled
-  database or queue connection makes the probe answer 503 at the deadline,
-  with the check `false` and its name in a `timedOut` array
-  (`"timedOut":["database"]`); a 200 has no `timedOut`. Set the
-  orchestrator's probe timeout above 500 ms. A check still running at the
-  deadline is left to finish and is not started again until it does: a
-  probe that arrives meanwhile waits on it, so a stalled database holds one
-  pool connection, not one per probe, and the first probe after the stall
-  ends answers 200. The Redis check has its own, shorter
-  `REDIS_REQUEST_DEADLINE_MS` (300 ms) bound, connect included, so a stalled
-  Redis reports `redis: false` rather than a timeout; it neither consults
-  nor opens the request-path stall cooldown, and a slow PING makes only
-  that probe answer not-ready. Before a queue connection's first `ready`,
-  the probe answers 503 at the deadline while that connection is still
-  connecting.
-
-Neither path is traced.
-
-## Data layer
-
-- **Postgres**: [`src/services/database.service.ts`](src/services/database.service.ts)
-  creates exactly one `postgres` client (and one Drizzle instance wrapping
-  it) per process, at module scope. A second client would mean a second
-  connection pool and double the configured connection budget, a bug that
-  only shows up under load. The pool holds up to `DB_POOL_MAX` connections
-  (`databaseClientOptions`, `database.config.ts`), with prepared statements
-  off and `DB_STATEMENT_TIMEOUT_MS` sent as each connection's
-  `statement_timeout`. The test suite opens one pool per Vitest worker, so
-  its connection count is `maxWorkers` × `DB_POOL_MAX`: 8 workers
-  (`WORKER_COUNT`, `tests/helpers/worker-database.ts`) × 2 (`.env.test`) = 16,
-  under Postgres's default 100.
-- **Redis**: [`src/services/redis.service.ts`](src/services/redis.service.ts)
-  connects lazily, on first use. An eager connection at import time would
-  make every unit test that transitively imports a repository open a real
-  socket, and fail on a machine with no Redis. It tracks a `closed` flag:
-  node-redis has no "permanently closed" state of its own (unlike Postgres,
-  where `sql.end()` makes every later query reject), so without the flag a
-  readiness probe after shutdown would reopen the socket the shutdown had just
-  closed.
-- **Queues**: [`src/services/queue.service.ts`](src/services/queue.service.ts)
-  owns BullMQ's queues and the two `ioredis` connections they run over (BullMQ
-  needs `ioredis`, which cannot share node-redis's connection). The Workers'
-  connection keeps the offline queue, which Workers need to ride out an
-  outage; the producers' connection turns it off, so an enqueue during an
-  outage rejects at once instead of holding its HTTP caller.
-
-**Through a Redis outage.** Before a client's first `ready`, every Redis
-client gives up after a few retries, so `isRedisReachable()`,
-`isQueueReachable()` and `GET /health/ready` report unreachable instead of
-hanging at boot. After `ready`, every client retries forever with backoff
-(capped at 5 s), so an outage never leaves a dead client behind. While a client
-reconnects nothing waits for Redis: node-redis runs with
-`disableOfflineQueue`, a producer enqueue rejects, `isQueueReachable` reports
-false for a queue connection in any post-ready status but `ready`, and
-`closeQueue` disconnects instead of queueing a `QUIT`.
-
-**Through a stalled Redis.** node-redis never times out a command it has
-written, and its `connectTimeout` stops at the TCP connect: the handshake
-after it has no timer. So `getRedis()` bounds the shared client's whole
-connect at `REDIS_CONNECT_TIMEOUT_MS` (5 s), destroying a client that runs
-out of time, and every Redis command on the request path carries its own
-deadline of `REDIS_REQUEST_DEADLINE_MS` (300 ms), with `getRedis()` inside it,
-so a connect in flight counts too; a call that misses its deadline while
-that connect is still inside its 5 s bound falls back without opening the
-cooldown described next (a slow connect is not a stall), and a connect that
-runs out of time opens it. Reads and counters (the session denylist
-read, the rate-limit store and its switch to Redis, the staff-visit,
-view-audit and flag-exposure dedupes, the timeline budget and cache, the
-invitation recipient budget, the mail cooldowns, the maintenance-mode notice
-ids and the OAuth session store) run under `withRedisDeadline`
-(`redis-deadline.service.ts`): a call that has not answered by the deadline
-fails, and for the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call
-fails at once without asking Redis, then the next call tries again. A failure
-takes the caller's existing outage path (fail open, memory, or
-`next(error)`), so a stall is handled as an outage. One `warn` marks each
-cooldown (`Redis did not answer in 300 ms; request-path Redis calls fail at
-once for 5000 ms`) and one `info` the first success after it; a connect that
-runs out of time throws `Redis did not finish connecting in 5000 ms`. The verdict waits one
-turn of the event loop after the timer, so a reply already in the socket
-buffer when a blocked process wakes still wins. A write whose loss would widen
-access (the session deny, the dedupe and audit-throttle key releases, the
-maintenance-mode change publish) goes through `waitForRedisWrite` instead: it
-is always sent, cooldown or not, the request waits for it at most the
-deadline, and one still in flight then lands when Redis answers on the same
-connection (one `warn`, `Redis write not answered in time; it lands when
-Redis answers`, marks it; if the connection drops first the write is
-lost and its failure logged). The readiness check has its own bound
-(`waitForRedisProbe`, see [Health checks](#health-checks)). Workers, BullMQ,
-pub/sub, background publishes and counters, and the status reads (bounded
-by `STATUS_READ_TIMEOUT_MS`) are outside all of this. The deadline is a
-design limit, not a fault detector: a Redis whose latency regularly goes
-over 300 ms trips the cooldown, and then the denylist fails open and the
-limiters count per process much of the time, with a `warn` every few
-seconds. While the denylist read fails open, every session denied within the
-last `ACCESS_TOKEN_TTL` is honoured, and the cooldown can outlast a Redis
-that has already recovered by up to 5 s (see
-[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter)).
-
-A queue connection that
-gives up before its first `ready` is replaced on next use, and the producer's
-queues with it. Workers on it never recover by themselves: BullMQ does not
-re-initialise a connection whose init failed, and when that failure is not one
-BullMQ counts as a connection error (ECONNREFUSED, or "Connection is closed."),
-such as ECONNRESET, its fetch loop retries with no delay and starves the event
-loop. So `startWorkers()` (`worker-supervisor.service.ts`) closes them inside
-that connection's `'end'` event, before they can spin, and starts new ones on a
-fresh connection. If starting them throws, it closes any it started. At boot it
-rethrows, so the process exits 1. On a restart it cannot throw from inside
-`'end'`, so `isQueueReachable()` reports false until the next pre-ready
-reconnect restarts them or the process restarts.
-
-All three expose `is*Reachable()` and `close*()`, and each `close*()` is safe to
-call twice.
-
-## Errors and the response envelope
-
-Every JSON response, success or error, uses the same envelope, defined
-once in [`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts):
-
-```json
-{ "success": true, "message": "Success", "statusCode": 200, "data": {} }
-{ "success": false, "message": "Not found", "statusCode": 404, "requestId": "…" }
-{ "success": false, "message": "Access token expired", "statusCode": 401, "code": "ACCESS_TOKEN_EXPIRED", "requestId": "…" }
-```
-
-An error response optionally carries `code`: a single, stable,
-machine-readable token a client branches on (e.g. `ACCESS_TOKEN_EXPIRED`
-from `requireAuth`, `RATE_LIMITED` from every rate limiter; see
-[SECURITY.md](SECURITY.md)), independent of `errors` (field-level
-validation detail, shaped by whatever validator produced it). They are
-separate fields so that a client parsing `errors` for field errors never gets
-a different shape when `code` is also present.
-
-`HttpError` (in [`src/errors/http-error.ts`](src/errors/http-error.ts)) is the
-exception type any handler can throw or forward to `next()` to produce a
-specific status code. `errorHandler` is the terminal middleware. On a 5xx it
-masks the message (`"Internal server error"`) but **logs the original error**,
-redacted (`redactedForLog`,
-[`src/errors/postgres-errors.ts`](src/errors/postgres-errors.ts)), so an
-operator has something to search. A 4xx is never logged. A foreign error that
-carries a 4xx `status` (such as the body parser's 400 for malformed JSON or 413
-for an oversized body) keeps that status, and its message is shown only when
-the error marks it `expose`; any other status becomes 500.
-
-`errorHandler` takes four parameters and is registered last, because
-Express identifies error-handling middleware by arity: a handler with
-fewer than four parameters is treated as ordinary middleware that
-never sees an error. The unused fourth parameter is named `_next`.
-
-Every success with no payload uses `messageResponse(response, message, status?)`
-([`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts)),
-which always sends `data: null`, never a bare `{}` and never an omitted `data`.
-
-Every 5xx `errorHandler` writes also carries `errorId`, the id its log line
-carries (except a timeline 502, whose id names nothing) and, when the error
-is reported, its `$exception` uuid (see
-[Error tracking](#error-tracking)). It is optional in the contract: a 5xx
-from a proxy in front of the app never has one.
-
-The envelope (`{ success, message, statusCode, code?, errors?, errorId? }`) is not RFC
-9457 `problem+json`, the more modern standard. Switching would change what
-every client parses on every response.
-
-## Request correlation
-
-[`src/middlewares/request-id.middleware.ts`](src/middlewares/request-id.middleware.ts)
-runs after `helmet` and `cors`, and is the first middleware that can produce or
-observe a request id; `cors` answers and ends an allowed preflight before it.
-It honours a caller-supplied `X-Request-Id` header, validated against a UUID
-pattern before being echoed back (reflecting an arbitrary header into a
-response is how log injection starts), or generates one. `errorResponse()`
-reads the id back off the response object.
-
-`requestContext` (`request-context.middleware.ts`) then opens an
-`AsyncLocalStorage` store (`request-context.service.ts`) for the request, and
-`resolveTenant` adds the tenant to it. The logger's pino `mixin` reads that
-store on every call, so each line logged during a request carries `requestId`,
-and `tenantId` once the tenant is resolved; callers never pass them. Code
-outside a request simply omits them. `mixinMergeStrategy`
-(`logger.service.ts`) makes the mixin's fields win over a caller-supplied field
-of the same name, so log meta cannot spoof `requestId`, `tenantId`, `traceId`
-or `spanId`.
-
-## Observability
-
-**Tracing.** [`src/observability/tracing.ts`](src/observability/tracing.ts)
-loads through Node's `--import`, before `index.ts`, so its instrumentations
-patch HTTP, Express, `ioredis` and pino before the app imports them. It runs
-before environment validation, so it reads `process.env` directly and cannot
-use `getEnv()` or the app's logger. When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset
-it is a complete no-op: no SDK, no ESM loader hook, no spans. When set, it
-starts a `NodeSDK` that exports traces and logs over OTLP HTTP, reporting
-`service.name` (`OTEL_SERVICE_NAME`) and `deployment.environment.name` from
-`APP_ENV` (omitted when unset). It registers OTel's ESM loader hook, without
-which pino, a CommonJS module imported from ESM, is never patched.
-
-What gets spans:
-
-- incoming HTTP and Express routing, except `/health`, `/health/ready` and
-  everything under `/api/v1/collect/` (the PostHog proxy, one request per
-  browser event batch or replay chunk);
-- BullMQ's Redis traffic, through `IORedisInstrumentation`. It patches
-  `ioredis` only; `redis.service.ts` uses node-redis, which no installed
-  instrumentation covers, so its calls (health checks, rate limits, the
-  denylist) get no spans;
-- not Postgres: the app uses postgres.js, and
-  `@opentelemetry/instrumentation-pg` only instruments `pg`, so database calls
-  appear as gaps in a trace.
-
-**Logs.** `logger.service.ts` builds one lazily-created pino logger. Each
-record carries `level` as a label, an ISO `timestamp`, `message`, and `source`,
-the caller's `file:line`, parsed from a stack trace on each call. The
-correlation fields come from the mixin described under
-[Request correlation](#request-correlation), plus `traceId` and `spanId` while
-a span is active. An Error-valued field is serialised as
-`{ name, message, stack }` and redacted with `redactedForLog` when it, or its
-`cause` chain up to five deep, carries a database query. The format is
-`LOG_FORMAT` when set, else `pretty` on `APP_ENV=local` and `json` elsewhere.
-`pretty` needs the `pino-pretty` devDependency; without it, as in the
-production image, the logger writes JSON.
-
-`PinoInstrumentation` sends every record to the collector as an OTel log record
-(log correlation off, since the mixin already writes `traceId`/`spanId`); the
-collector forwards logs to Loki and traces to Tempo. In Grafana a log line links
-to its trace, and a trace to its logs.
-
-**Slack.** With `SLACK_WEBHOOK_URL` set, records at or above `SLACK_LOG_LEVEL`
-also go to Slack. The destination deduplicates by `${source}:${message}`: the
-first occurrence sends at once, repeats within 60 seconds are counted, and one
-summary is sent when the window closes if any were suppressed. The message,
-source, request id and stack it sends are scrubbed with `scrubText`, a
-stack's frame lines one by one so their paths stay readable; the time is
-sent only as an ISO instant; and a record whose scrub fails is replaced by a
-fixed notice.
-
-## Local infrastructure
-
-`docker-compose.yml` runs the stack the app needs to boot locally; the app
-itself runs on the host.
-
-| Service        | Host port                        | Notes                                                                        |
-| -------------- | -------------------------------- | ---------------------------------------------------------------------------- |
-| Postgres 18    | 5433                             | User, password and database `boilerplate`; also provisions the test database |
-| Redis          | 6380                             |                                                                              |
-| OTel Collector | 4318 (OTLP HTTP), 13133 (health) | Forwards traces to Tempo and logs to Loki                                    |
-| Tempo          | 3200                             | Trace storage                                                                |
-| Loki           | none                             | Log storage; query it through Grafana                                        |
-| Grafana        | 3100                             | Anonymous admin; Tempo (default) and Loki pre-provisioned as data sources    |
-| Mailpit        | 1025 (SMTP), 8025 (web UI)       | Local SMTP sink; the app's SMTP defaults point here                          |
-
-Every published port binds `127.0.0.1` only, so no other machine on the
-network can reach Postgres with its fixed development password, Redis with no
-password, Grafana with anonymous admin, or Mailpit.
-
-**Postgres is pinned to major version 18** because the migrations use
-`uuidv7()` as a column default, which is built into Postgres from 18; on 17 or
-older a migration fails with `function uuidv7() does not exist`.
-
-**Host ports 5433 and 6380 are deliberate.** A native Postgres or Redis on the
-default 5432/6379 wins `localhost` connections over Docker's wildcard bind.
-Postgres then fails loudly (wrong role), but Redis fails silently: any Redis
-answers `PING`, so a dev server or the test suite would appear to work against
-a personal, unrelated instance. Container-internal ports stay 5432/6379, so
-container-to-container URLs (`postgres://…@postgres:5432/…`) are unaffected.
-`tests/unit/connection-target.test.ts` reads `docker-compose.yml` and
-`.env.test` off disk and asserts they agree on the non-default ports. It checks
-the committed files, not `getEnv()` at runtime, because CI's `services:`
-publish the default ports and CI runs against 5432/6379.
-
-The collector's health-check extension answers on `:13133`, but its image has
-no shell, `curl` or `wget`, so it carries no Docker `healthcheck`.
-
-## Docker
-
-`Dockerfile` is a four-stage build (`base` -> `deps` -> `build` -> `runner`):
+- only one of `SMTP_USERNAME` and `SMTP_PASSWORD` set is refused;
+- a `COOKIE_DOMAIN` that `APP_URL`'s host is neither equal to nor within is
+  refused, because browsers reject every cookie it would set;
+- `APEX_URL` on another host than `APP_URL` with `GOOGLE_CLIENT_ID` set is
+  refused unless `COOKIE_DOMAIN` covers the Apex host;
+- `POSTHOG_FEATURE_FLAGS_KEY` without `POSTHOG_PROJECT_KEY` is refused;
+- a warning when `COOKIE_SECURE` resolves true with `GOOGLE_CLIENT_ID` set and
+  `TRUST_PROXY=false` (express-session would never send the OAuth cookie behind
+  a TLS-terminating proxy), and when only one of `POSTHOG_PERSONAL_API_KEY` and
+  `POSTHOG_PROJECT_ID` is set.
+
+`JWT_ACCESS_SECRET` signs access tokens and `SESSION_SECRET` signs the OAuth
+session cookie and keys the analytics signature; there is no refresh-token
+secret, because a refresh token is an opaque random string
+([SECURITY.md](SECURITY.md#sessions-and-tokens)).
+
+## Docker and deploying
+
+### Local infrastructure
+
+`docker-compose.yml` runs the services the app needs; the app itself runs on
+the host.
+
+| Service        | Host port                        | Notes                                                                                 |
+| -------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
+| Postgres 18    | 5433                             | User, password and database `boilerplate`; also provisions the test role and database |
+| Redis          | 6380                             |                                                                                       |
+| OTel Collector | 4318 (OTLP HTTP), 13133 (health) | Forwards traces to Tempo and logs to Loki                                             |
+| Tempo          | 3200                             | Trace storage                                                                         |
+| Loki           | none                             | Log storage; query it through Grafana                                                 |
+| Grafana        | 3100                             | Anonymous admin; Tempo and Loki pre-provisioned                                       |
+| Mailpit        | 1025 (SMTP), 8025 (web UI)       | Local SMTP sink; the app's SMTP defaults point here                                   |
+
+Every published port binds `127.0.0.1` only, so no other machine reaches
+Postgres with its fixed password, Redis with none, Grafana's anonymous admin or
+Mailpit. Postgres is pinned to 18 because the migrations use `uuidv7()` as a
+column default, built in from 18.
+
+**Host ports 5433 and 6380 are deliberate.** A native Postgres or Redis on
+5432/6379 wins `localhost` connections over Docker's wildcard bind. Postgres
+then fails loudly (wrong role), but Redis fails silently: any Redis answers
+`PING`, so a dev server or the test suite would seem to work against an
+unrelated instance. `tests/unit/connection-target.test.ts` reads the committed
+`docker-compose.yml` and `.env.test` and asserts they agree, rather than
+checking `getEnv()`, because CI's services publish the default ports. The
+collector's image has no shell, `curl` or `wget`, so it carries no Docker
+`healthcheck`.
+
+### Docker
+
+`Dockerfile` builds in four stages from a digest-pinned `node:24-alpine`:
 
 - `base` installs Corepack and creates the non-root user (uid 10001).
-- `deps` installs with `--frozen-lockfile`, in a layer cached independently of
-  application code. `pnpm-workspace.yaml` and `.npmrc` are copied with the
-  lockfile, since pnpm reads its build allow-list and release-age settings
+- `deps` installs with `--frozen-lockfile`, in a layer cached apart from the
+  application code. `pnpm-workspace.yaml` and `.npmrc` travel with the
+  lockfile, because pnpm reads its build allow-list and release-age settings
   from them at install time.
-- `build` runs `pnpm build`, then `pnpm prune --prod --ignore-scripts`.
-  `pnpm install --prod` alone unlinks dev dependencies from `node_modules` but
-  leaves them in the pnpm virtual store; `prune` removes them, so neither the
-  TypeScript compiler nor `drizzle-kit` ships in the image.
+- `build` runs `pnpm build`, then `pnpm prune --prod --ignore-scripts`:
+  `pnpm install --prod` would leave dev dependencies in the virtual store, and
+  prune removes them, so neither `tsc` nor `drizzle-kit` ships.
 - `runner` sets `NODE_ENV=production`, copies only `node_modules`, `dist/` and
   `package.json`, runs as uid 10001, and declares `HEALTHCHECK NONE`: the
   orchestrator owns liveness and readiness through `/health` and
-  `/health/ready`, and a second health signal could disagree with them under
-  load. Its `CMD` is
-  `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`:
-  tracing loads before the app, and a logged stack trace names the original
-  `.ts` line. Its `ARG GIT_SHA=dev` becomes `ENV APP_VERSION`, the release
-  `/health` and error tracking report; `deploy.yml` passes the commit sha,
-  and CI's `docker` job builds with a known value and checks `/health`
-  answers it.
+  `/health/ready`, and a second signal could disagree with them under load.
+  `ARG GIT_SHA=dev` becomes `APP_VERSION`. The `CMD` is
+  `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`,
+  so tracing loads before the app and a stack trace names the `.ts` line.
 
-To run the image against the compose stack:
+The image starts only the app. Run migrations from the same image with
+`node dist/database/migrate.js` (`pnpm db:migrate:prod`), which reads only
+`DATABASE_URL`. To run it against the compose stack:
 
 ```bash
 docker build -t express-boilerplate .
@@ -1582,59 +1244,30 @@ docker run --rm -p 4040:4040 --env-file .env \
 ```
 
 The `-e` overrides matter: `.env` says `localhost`, which inside the container
-is the container itself. `host.docker.internal` reaches the host's published
-compose ports. Without the overrides, `/health` still answers 200 (it touches
-no dependency) and `/health/ready` answers 503 at its 500 ms deadline
-(see [Health checks](#health-checks)).
+is the container. Without them `/health` still answers 200 and `/health/ready`
+answers 503 at its deadline.
 
-## Deploying
+### Deploying
 
-A push to `main` runs [`deploy.yml`](.github/workflows/deploy.yml). It calls
-`ci.yml` as a gate (`workflow_call`) and, once that passes, builds and pushes
-`ghcr.io/<repo>:sha-<commit>` and `:main` to GHCR with an SBOM and build
-provenance attestation, then runs the `deploy` job, bound to the `production`
-environment. That job is a placeholder: no deployment target is chosen. A
-manual `workflow_dispatch` from another branch builds and pushes only the
-sha-tagged image; the `:main` tag and the `deploy` job run only from `main`.
-A `vX.Y.Z` release tag builds nothing: its `promote` job adds `:X.Y.Z`, `:X.Y`
-and `:X` to the digest `main` already built (see
-[CONTRIBUTING.md](CONTRIBUTING.md#releases)).
+A push to `main` runs `.github/workflows/deploy.yml`. It calls `ci.yml` as a
+gate (`workflow_call`), then builds and pushes `ghcr.io/<repo>:sha-<commit>` and
+`:main` to GHCR with an SBOM and a build provenance attestation, passing the
+commit sha as `GIT_SHA`, then runs the `deploy` job in the `production`
+environment. That job is a placeholder: no deployment target is chosen. A manual
+`workflow_dispatch` from another branch builds and pushes only the sha image. A
+`vX.Y.Z` tag builds nothing: its `promote` job waits for the image `main` built
+for that commit and adds `:X.Y.Z`, `:X.Y` and `:X` to the same digest
+([CONTRIBUTING.md](CONTRIBUTING.md#releases)). The image job also passes the
+frontends' source-map settings (`POSTHOG_SOURCEMAP_PROJECTS`,
+`POSTHOG_CLI_HOST`, `POSTHOG_CLI_TOKEN`), which the frontend images use to
+upload source maps; this Dockerfile uses only `GIT_SHA`. `ci.yml`'s concurrency
+group is keyed on `github.event_name`, because under `workflow_call`
+`github.workflow` is the caller's name. CI's `docker` job builds the image with
+a known `GIT_SHA` and checks that `/health` reports it and that the process runs
+with `--enable-source-maps`.
 
-The image job passes `GIT_SHA` (the commit sha) as a build arg. It also
-passes `POSTHOG_SOURCEMAP_PROJECTS` and `POSTHOG_CLI_HOST` (repository
-variables) and the `POSTHOG_CLI_TOKEN` secret, after a step that fails the
-job when the variable is set and the secret is empty, and warns when the
-variable is unset. Only the frontends use them, to upload sourcemaps; the
-file is the same in all three repos, so express receives them and its
-Dockerfile ignores them.
-
-The image needs the environment described under
-[Configuration](#configuration), including `APP_ENV`. Its `CMD` starts only the
-app; run migrations from the same image with `node dist/database/migrate.js`,
-the command `pnpm db:migrate:prod` runs.
-`WORKER_ENABLED` (default `true`) runs the API and the BullMQ Workers in one
-process. To split them, set it to `false` on API-only pods and `true` on a
-separate worker deployment that shares the Redis queues. `WORKER_CONCURRENCY`
-(default 5) sets the email and notification Workers' concurrency; the
-maintenance and analytics Workers always run one job at a time, and the daily
-retention purge, the analytics drain and the PostHog deletion of purged users
-run only where Workers run.
-
-One-time repository setup before any of this is live:
-
-- **Renovate**: install the Renovate GitHub App; see
-  [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy).
-- **Releases**: create and install the release GitHub App; see
-  [CONTRIBUTING.md](CONTRIBUTING.md#releases). `release.yml` fails without it.
-- **Merge rules** (Settings → General, then Settings → Rules): enable "Allow
-  auto-merge"; allow squash merging only, with the commit title set to the PR
-  title and the commit message left blank; and add a ruleset on `main`
-  requiring the checks `lint`, `test`, `docker`, `gitleaks` and `pr-title`.
-  Without the ruleset, `release.yml`'s fallback merges the release PR without
-  waiting for CI; without the blank squash message, each squash body carries
-  the branch's commit list, which release-please reads as extra conventional
-  commits.
-- **The `production` environment** (Settings → Environments): add protection
-  rules, at minimum required reviewers, before replacing the placeholder
-  `deploy` step with a real target. Without them, anything merged to `main`
-  deploys unreviewed.
+`release.yml` merges its release PR with `--auto`, falling back to a direct
+merge. Only a ruleset on `main` that requires the checks `lint`, `test`,
+`docker`, `gitleaks` and `pr-title` makes that fallback wait for CI, so add it
+before relying on the release flow. The release App and the merge settings
+are in [CONTRIBUTING.md](CONTRIBUTING.md#releases).
