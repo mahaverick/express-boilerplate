@@ -381,16 +381,34 @@ describe('refresh cookie: name, path and domain per deployment', () => {
 })
 
 /**
+ * The two COOKIE_SECURE deployments: the current cookie's name, and the path
+ * and domain it is set and cleared with.
+ */
+const SECURE_ROWS = [
+  {
+    label: 'no COOKIE_DOMAIN',
+    env: SECURE_HOST_ONLY,
+    name: HOST_COOKIE,
+    path: PATH_ROOT,
+    domain: undefined,
+  },
+  {
+    label: 'COOKIE_DOMAIN',
+    env: SECURE_SCOPED,
+    name: SECURE_COOKIE,
+    path: PATH_AUTH,
+    domain: SCOPED_DOMAIN,
+  },
+] as const
+
+/**
  * Under COOKIE_SECURE the unprefixed name is never read: a sibling
  * subdomain or an on-path attacker on plain http can plant it (cookie
  * tossing), which the `__Host-` prefix exists to stop. No route redeems,
  * revokes or clears it; it stays in the browser until it expires.
  */
 describe('refresh cookie: the unprefixed refreshToken under COOKIE_SECURE', () => {
-  it.each([
-    { label: 'no COOKIE_DOMAIN', env: SECURE_HOST_ONLY, name: HOST_COOKIE },
-    { label: 'COOKIE_DOMAIN', env: SECURE_SCOPED, name: SECURE_COOKIE },
-  ])(
+  it.each(SECURE_ROWS)(
     'answers 401 to a client holding only refreshToken, and neither revokes nor clears it ($label)',
     async ({ env, name }) => {
       const app = appWith(env)
@@ -409,17 +427,20 @@ describe('refresh cookie: the unprefixed refreshToken under COOKIE_SECURE', () =
     }
   )
 
-  it.each([
-    {
-      label: 'the unprefixed name spares the whole session',
-      cookie: PLAIN_COOKIE,
-      isSiblingLive: true,
-    },
-    { label: 'the current name ends the sibling', cookie: HOST_COOKIE, isSiblingLive: false },
-  ])(
-    'never lets the unprefixed cookie name the caller’s chain on revoke-others: $label',
-    async ({ cookie, isSiblingLive }) => {
-      const app = appWith(SECURE_HOST_ONLY)
+  it.each(
+    SECURE_ROWS.flatMap((row) => [
+      {
+        ...row,
+        case: 'the unprefixed name spares the whole session',
+        cookie: PLAIN_COOKIE,
+        isSiblingLive: true,
+      },
+      { ...row, case: 'the current name ends the sibling', cookie: row.name, isSiblingLive: false },
+    ])
+  )(
+    'never lets the unprefixed cookie name the caller’s chain on revoke-others: $case ($label)',
+    async ({ env, cookie, isSiblingLive }) => {
+      const app = appWith(env)
       const user = await userRepository.findByEmail(await createVerifiedUser())
       if (!user) throw new Error('setup: user vanished')
       const caller = await sessionWithSibling(user)
@@ -437,100 +458,115 @@ describe('refresh cookie: the unprefixed refreshToken under COOKIE_SECURE', () =
     }
   )
 
-  it('uses the current cookie when a client holds both, and leaves refreshToken and its session alone', async () => {
-    const app = appWith(SECURE_HOST_ONLY)
-    const email = await createVerifiedUser()
-    const unprefixed = await sessionFor(email)
-    const current = await sessionFor(email)
+  it.each(SECURE_ROWS)(
+    'uses the current cookie when a client holds both, and leaves refreshToken and its session alone ($label)',
+    async ({ env, name }) => {
+      const app = appWith(env)
+      const email = await createVerifiedUser()
+      const unprefixed = await sessionFor(email)
+      const current = await sessionFor(email)
 
-    const refreshed = await request(app)
-      .post('/api/v1/auth/refresh')
-      .set('X-Forwarded-Proto', 'https')
-      .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}; ${HOST_COOKIE}=${current}`)
+      const refreshed = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}; ${name}=${current}`)
 
-    expect(refreshed.status).toBe(200)
-    const currentState = await tokenState(current)
-    expect(currentState?.isConsumed).toBe(true)
-    expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
-    const hostLines = cookieLines(refreshed, HOST_COOKIE)
-    expect(hostLines).toHaveLength(1)
-    expect(hostLines[0]).not.toMatch(EPOCH_EXPIRY)
-    expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
-  })
+      expect(refreshed.status).toBe(200)
+      const currentState = await tokenState(current)
+      expect(currentState?.isConsumed).toBe(true)
+      expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
+      const currentLines = cookieLines(refreshed, name)
+      expect(currentLines).toHaveLength(1)
+      expect(currentLines[0]).not.toMatch(EPOCH_EXPIRY)
+      expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
+    }
+  )
 
-  it('logs out the current cookie only when a client holds both, and leaves refreshToken and its session alone', async () => {
-    const app = appWith(SECURE_HOST_ONLY)
-    const email = await createVerifiedUser()
-    const unprefixed = await sessionFor(email)
-    const current = await sessionFor(email)
+  it.each(SECURE_ROWS)(
+    'logs out the current cookie only when a client holds both, and leaves refreshToken and its session alone ($label)',
+    async ({ env, name, path, domain }) => {
+      const app = appWith(env)
+      const email = await createVerifiedUser()
+      const unprefixed = await sessionFor(email)
+      const current = await sessionFor(email)
 
-    const loggedOut = await request(app)
-      .post('/api/v1/auth/logout')
-      .set('X-Forwarded-Proto', 'https')
-      .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}; ${HOST_COOKIE}=${current}`)
+      const loggedOut = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}; ${name}=${current}`)
 
-    expect(loggedOut.status).toBe(200)
-    const hostLines = cookieLines(loggedOut, HOST_COOKIE)
-    expect(hostLines).toHaveLength(1)
-    expect(hostLines[0]).toMatch(EPOCH_EXPIRY)
-    expectRefreshAttributes(hostLines[0], { path: PATH_ROOT, isSecure: true, domain: undefined })
-    expect(cookieLines(loggedOut, PLAIN_COOKIE)).toHaveLength(0)
-    expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
-    const currentState = await tokenState(current)
-    expect(currentState?.isRevoked).toBe(true)
-  })
+      expect(loggedOut.status).toBe(200)
+      const currentLines = cookieLines(loggedOut, name)
+      expect(currentLines).toHaveLength(1)
+      expect(currentLines[0]).toMatch(EPOCH_EXPIRY)
+      expectRefreshAttributes(currentLines[0], { path, isSecure: true, domain })
+      expect(cookieLines(loggedOut, PLAIN_COOKIE)).toHaveLength(0)
+      expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
+      const currentState = await tokenState(current)
+      expect(currentState?.isRevoked).toBe(true)
+    }
+  )
 
-  it('ignores refreshToken on a logout that carries only it', async () => {
-    const app = appWith(SECURE_HOST_ONLY)
-    const unprefixed = await sessionFor(await createVerifiedUser())
+  it.each(SECURE_ROWS)(
+    'ignores refreshToken on a logout that carries only it ($label)',
+    async ({ env, name }) => {
+      const app = appWith(env)
+      const unprefixed = await sessionFor(await createVerifiedUser())
 
-    const loggedOut = await request(app)
-      .post('/api/v1/auth/logout')
-      .set('X-Forwarded-Proto', 'https')
-      .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}`)
+      const loggedOut = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}`)
 
-    expect(loggedOut.status).toBe(200)
-    // The current cookie is cleared by name whether or not one came.
-    expect(cookieLines(loggedOut, HOST_COOKIE)).toHaveLength(1)
-    expect(cookieLines(loggedOut, PLAIN_COOKIE)).toHaveLength(0)
-    expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
-  })
+      expect(loggedOut.status).toBe(200)
+      // The current cookie is cleared by name whether or not one came.
+      expect(cookieLines(loggedOut, name)).toHaveLength(1)
+      expect(cookieLines(loggedOut, PLAIN_COOKIE)).toHaveLength(0)
+      expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
+    }
+  )
 
-  it('leaves refreshToken and its session alone on a login that carries it', async () => {
-    const app = appWith(SECURE_HOST_ONLY)
-    const email = await createVerifiedUser()
-    const unprefixed = await sessionFor(email)
+  it.each(SECURE_ROWS)(
+    'leaves refreshToken and its session alone on a login that carries it ($label)',
+    async ({ env, name }) => {
+      const app = appWith(env)
+      const email = await createVerifiedUser()
+      const unprefixed = await sessionFor(email)
 
-    const login = await request(app)
-      .post('/api/v1/auth/login')
-      .set('X-Forwarded-Proto', 'https')
-      .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}`)
-      .send({ email, password: PASSWORD })
+      const login = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}`)
+        .send({ email, password: PASSWORD })
 
-    expect(login.status).toBe(200)
-    expect(cookieLines(login, HOST_COOKIE)).toHaveLength(1)
-    expect(cookieLines(login, PLAIN_COOKIE)).toHaveLength(0)
-    expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
-  })
+      expect(login.status).toBe(200)
+      expect(cookieLines(login, name)).toHaveLength(1)
+      expect(cookieLines(login, PLAIN_COOKIE)).toHaveLength(0)
+      expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
+    }
+  )
 
   // A plain cookie planted by a sibling subdomain must not sign a browser with no current cookie into the planter's session.
-  it('SEC-authn-01: does not sign a signed-out browser into a session planted as a plain refreshToken cookie', async () => {
-    const app = appWith(SECURE_HOST_ONLY)
-    const attackerEmail = await createVerifiedUser()
-    const planted = await sessionFor(attackerEmail)
+  it.each(SECURE_ROWS)(
+    'SEC-authn-01: does not sign a signed-out browser into a session planted as a plain refreshToken cookie ($label)',
+    async ({ env, name }) => {
+      const app = appWith(env)
+      const attackerEmail = await createVerifiedUser()
+      const planted = await sessionFor(attackerEmail)
 
-    const refreshed = await request(app)
-      .post('/api/v1/auth/refresh')
-      .set('X-Forwarded-Proto', 'https')
-      .set('Cookie', `${PLAIN_COOKIE}=${planted}`)
+      const refreshed = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=${planted}`)
 
-    expect(refreshed.status).toBe(401)
-    expect(
-      cookieLines(refreshed, HOST_COOKIE).filter((line) => !EPOCH_EXPIRY.test(line))
-    ).toHaveLength(0)
-    expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
-    expect(await tokenState(planted)).toEqual({ isConsumed: false, isRevoked: false })
-  })
+      expect(refreshed.status).toBe(401)
+      expect(cookieLines(refreshed, name).filter((line) => !EPOCH_EXPIRY.test(line))).toHaveLength(
+        0
+      )
+      expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
+      expect(await tokenState(planted)).toEqual({ isConsumed: false, isRevoked: false })
+    }
+  )
 })
 
 describe('refresh cookie: Google callback', () => {
@@ -946,23 +982,26 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     expect(clears.filter((line) => !ANY_DOMAIN.test(line))).toHaveLength(1)
   })
 
-  it('clears only the current cookie when both came and the current one fails', async () => {
-    const app = appWith(SECURE_HOST_ONLY)
-    const unprefixed = await sessionFor(await createVerifiedUser())
+  it.each(SECURE_ROWS)(
+    'clears only the current cookie when both came and the current one fails ($label)',
+    async ({ env, name, path, domain }) => {
+      const app = appWith(env)
+      const unprefixed = await sessionFor(await createVerifiedUser())
 
-    const refreshed = await request(app)
-      .post('/api/v1/auth/refresh')
-      .set('X-Forwarded-Proto', 'https')
-      .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}; ${HOST_COOKIE}=${'b'.repeat(64)}`)
+      const refreshed = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}; ${name}=${'b'.repeat(64)}`)
 
-    expect(refreshed.status).toBe(401)
-    const hostLines = cookieLines(refreshed, HOST_COOKIE)
-    expect(hostLines).toHaveLength(1)
-    expect(hostLines[0]).toMatch(EPOCH_EXPIRY)
-    expectRefreshAttributes(hostLines[0], { path: PATH_ROOT, isSecure: true, domain: undefined })
-    expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
-    expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
-  })
+      expect(refreshed.status).toBe(401)
+      const currentLines = cookieLines(refreshed, name)
+      expect(currentLines).toHaveLength(1)
+      expect(currentLines[0]).toMatch(EPOCH_EXPIRY)
+      expectRefreshAttributes(currentLines[0], { path, isSecure: true, domain })
+      expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
+      expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
+    }
+  )
 
   it('sets a fresh cookie and clears nothing for a replay inside the grace window', async () => {
     const app = appWith(PLAIN_HOST_ONLY)
