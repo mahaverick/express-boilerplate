@@ -486,7 +486,8 @@ their role there is their platform role (`src/services/platform.service.ts`).
   the JSON gate, the step-up check and the limiter, so a refused caller sees no
   `415` and no `RateLimit-*` headers. `cors` answers an `OPTIONS` with no
   `Origin` or an allowed one itself, with the same 204 for every path; any other
-  authenticated `OPTIONS` that reaches the platform router gets the same 404
+  authenticated `OPTIONS` that reaches the platform router, and any other
+  `OPTIONS` on `/auth/reauthenticate`, gets the same 404
   (`refusePlatformOptions`). Either way Express's automatic `Allow` answer never
   lists a route's methods.
 - **In a customer tenant, staff act at their platform role.** With no
@@ -646,9 +647,10 @@ on other routes, this reasoning does not cover it.
   `application/json` with `415`: a form can only send the other three, and JSON
   from a script on another origin needs a preflight that a disallowed origin
   fails. It needs no configuration, so it holds on a same-origin deployment with
-  no allow-list. It is mounted on the whole auth router and on the writes of the
-  tenant, invitation, platform and flags routers. A request with no content type
-  passes, because an untyped body is never parsed.
+  no allow-list. It is mounted on the whole auth router (on
+  `/auth/reauthenticate` it follows the platform role gate) and on the writes of
+  the tenant, invitation, platform and flags routers. A request with no content
+  type passes, because an untyped body is never parsed.
 - **Same-site is not same-origin.** A page on a sibling subdomain is the same
   site, so a body-less `POST` from it carries a `Strict` cookie with no
   preflight. `POST /auth/refresh` and `POST /auth/logout`, the two routes the

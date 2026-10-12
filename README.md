@@ -83,7 +83,9 @@ curl -X POST http://localhost:4040/api/v1/auth/login \
 Login answers `data.user` and `data.accessToken`, and sets the refresh-token
 cookie. Send the token as `Authorization: Bearer <accessToken>` to reach an
 authenticated route such as `GET /api/v1/profile`. Every `/api/v1/auth` route
-refuses a non-JSON body with 415. See
+refuses a non-JSON body with 415, except that the staff-only
+`POST /auth/reauthenticate` answers a non-staff caller the unknown-route 404
+first. See
 [ARCHITECTURE.md](ARCHITECTURE.md#request-path-auth-and-beyond) for the rest.
 
 ## Environment variables

@@ -20,22 +20,29 @@ import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
-import { requirePlatformRole } from '@/middlewares/platform.middleware'
+import { refusePlatformOptions, requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
  * Build the auth routes.
  *
- * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
- * CSRF control (see content-type.middleware.ts). A GET carries no content
- * type, which it allows, so the Google routes pass it too. `/refresh` and
- * `/logout`, which the refresh cookie authenticates and which take no body,
- * also refuse a disallowed `Origin` (origin.middleware.ts): a same-site
- * sibling page could otherwise send them a body-less POST with the cookie
- * attached. `/change-password` and `/sessions/revoke-others` read the cookie
- * too, but only to narrow what they spare; they authenticate with the bearer
- * token, which a browser never attaches on its own, so no other page can make
- * it send one and they need no Origin check.
+ * `requireJsonContentType` is mounted router-wide, ahead of every route but
+ * one, as a CSRF control (see content-type.middleware.ts). A GET carries no
+ * content type, which it allows, so the Google routes pass it too. The
+ * exception is the staff-only `POST /reauthenticate`, registered first with
+ * the gates in the staff-route order: `requireAuth`, the platform role gate,
+ * then its own `requireJsonContentType`, then the limiter, so a non-staff
+ * caller gets the unknown-route 404 and never a 415 or `RateLimit-*` headers.
+ * An OPTIONS on it gets the same 404 (`refusePlatformOptions`), not
+ * Express's automatic `Allow` answer.
+ *
+ * `/refresh` and `/logout`, which the refresh cookie authenticates and which
+ * take no body, also refuse a disallowed `Origin` (origin.middleware.ts): a
+ * same-site sibling page could otherwise send them a body-less POST with the
+ * cookie attached. `/change-password` and `/sessions/revoke-others` read the
+ * cookie too, but only to narrow what they spare; they authenticate with the
+ * bearer token, which a browser never attaches on its own, so no other page
+ * can make it send one and they need no Origin check.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;
@@ -46,8 +53,19 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  */
 export function createAuthRouter(): Router {
   const router = Router()
-  // Router-wide so no route can miss the CSRF gate.
+  // Ahead of the router-wide JSON gate: the platform gate must answer a non-staff caller the unknown-route 404 before any 415, and before this limiter keys on request.user.id.
+  router.post(
+    '/reauthenticate',
+    requireAuth,
+    requirePlatformRole('viewer'),
+    requireJsonContentType,
+    createRateLimiter(RATE_LIMITS.reauthenticate),
+    authController.reauthenticate
+  )
+  // Router-wide so no other route can miss the CSRF gate.
   router.use(requireJsonContentType)
+  // Express would answer OPTIONS on the staff route with an Allow header; an unknown auth path gets this 404.
+  router.use('/reauthenticate', refusePlatformOptions)
   router.post('/register', createRateLimiter(RATE_LIMITS.register), authController.register)
   // ip+email 5/15min, then IP 100/15min, then account 100/h; a rejection spends no later budget.
   router.post(
@@ -107,15 +125,6 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
-  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
-  router.post(
-    '/reauthenticate',
-    requireAuth,
-    requirePlatformRole('viewer'),
-    createRateLimiter(RATE_LIMITS.reauthenticate),
-    authController.reauthenticate
-  )
-
   // No limiter: a read of the caller's own data, with no oracle to probe.
   router.get('/providers', requireAuth, authController.getAuthProviders)
 

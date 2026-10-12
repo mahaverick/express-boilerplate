@@ -5,7 +5,8 @@
  * admitted, and a stale sign-in refused on step-up routes. A completeness
  * check walks the platform router and its sub-routers, so a route added
  * without a row here fails CI (OWASP API5: every function gets an explicit
- * gate).
+ * gate). The one staff route outside /platform, `POST /auth/reauthenticate`,
+ * has its own block with the same non-staff and OPTIONS checks.
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
@@ -13,6 +14,7 @@ import type { Response } from 'supertest'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -599,4 +601,118 @@ describe('/api/v1/platform route gates', () => {
       info.mockRestore()
     }
   )
+
+  describe('POST /api/v1/auth/reauthenticate, the staff route on the auth router', () => {
+    const REAUTH_PATH = '/api/v1/auth/reauthenticate'
+
+    /**
+     * One request body a caller might send: its Content-Type and text, or none.
+     */
+    interface BodyVariant {
+      label: string
+      contentType?: string
+      body?: string
+    }
+    const JSON_BODY: BodyVariant = {
+      label: 'a JSON body',
+      contentType: 'application/json',
+      body: '{"password":"x"}',
+    }
+    const TEXT_BODY: BodyVariant = {
+      label: 'a text/plain body',
+      contentType: 'text/plain',
+      body: 'password=x',
+    }
+    /**
+     * JSON, the three bodies a form can send, and none.
+     */
+    const BODIES: readonly BodyVariant[] = [
+      JSON_BODY,
+      TEXT_BODY,
+      {
+        label: 'a urlencoded body',
+        contentType: 'application/x-www-form-urlencoded',
+        body: 'password=x',
+      },
+      { label: 'a multipart body', contentType: 'multipart/form-data; boundary=x', body: '--x--' },
+      { label: 'no body' },
+    ]
+
+    /**
+     * POSTs to the route with a bearer token and one of `BODIES`.
+     */
+    function post(token: string, variant: BodyVariant): Promise<Response> {
+      const pending = request(app).post(REAUTH_PATH).set('Authorization', `Bearer ${token}`)
+      if (variant.contentType === undefined) return pending
+      return pending.set('Content-Type', variant.contentType).send(variant.body)
+    }
+
+    it.each(BODIES)(
+      "non-staff get the app's own 404 with no RateLimit headers, for $label",
+      async (variant) => {
+        const token = await tokenFor(undefined)
+        const unknown = await request(app)
+          .get('/api/v1/definitely-not-a-route')
+          .set('Authorization', `Bearer ${token}`)
+
+        const refused = await post(token, variant)
+
+        expect(refused.status).toBe(404)
+        expect((refused.body as { message?: string }).message).toBe(
+          (unknown.body as { message?: string }).message
+        )
+        expect(refused.headers).not.toHaveProperty('ratelimit-limit')
+      }
+    )
+
+    it('non-staff with a stale sign-in get 404, never 401', async () => {
+      const token = await tokenFor(undefined, new Date(Date.now() - ELEVEN_MINUTES_MS))
+
+      const refused = await post(token, JSON_BODY)
+
+      expect(refused.status).toBe(404)
+    })
+
+    it('non-staff past the limiter budget still get 404, never 429', async () => {
+      const token = await tokenFor(undefined)
+      const statuses: number[] = []
+      for (let attempt = 0; attempt <= RATE_LIMITS.reauthenticate.limit; attempt += 1) {
+        const response = await post(token, JSON_BODY)
+        statuses.push(response.status)
+      }
+
+      expect(new Set(statuses)).toEqual(new Set([404]))
+    })
+
+    it.each([
+      { label: 'anonymous', role: 'anonymous' as const },
+      { label: 'non-staff', role: undefined },
+      { label: 'viewer', role: 'viewer' as const },
+    ])('OPTIONS gets 404 with no Allow header ($label)', async ({ role }) => {
+      const pending = request(app).options(REAUTH_PATH).set('Origin', DISALLOWED_ORIGIN)
+      const response =
+        role === 'anonymous'
+          ? await pending
+          : await pending.set('Authorization', `Bearer ${await tokenFor(role)}`)
+
+      expect(response.status).toBe(404)
+      expect(response.headers).not.toHaveProperty('allow')
+      expect((response.body as { message?: string }).message).toBe('Not found')
+    })
+
+    it('admits viewer to the JSON gate, which refuses a text/plain body with 415', async () => {
+      const response = await post(await tokenFor('viewer'), TEXT_BODY)
+
+      expect(response.status).toBe(415)
+      expect((response.body as { code?: string }).code).toBe('UNSUPPORTED_MEDIA_TYPE')
+    })
+
+    it('admits viewer past every gate to the limiter and the handler', async () => {
+      const response = await post(await tokenFor('viewer'), JSON_BODY)
+
+      // A wrong password is the handler's own 400, under the limiter's headers.
+      expect(response.status).toBe(400)
+      expect(response.headers).toHaveProperty('ratelimit-limit')
+    })
+  })
 })
