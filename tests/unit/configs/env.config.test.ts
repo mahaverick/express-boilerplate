@@ -741,6 +741,25 @@ describe('PLATFORM_EMAIL_DOMAINS', () => {
   })
 })
 
+describe('CORS_ALLOWED_ORIGINS', () => {
+  it('accepts http and https origins separated by commas', () => {
+    const value = 'https://admin.example.com, http://localhost:3000'
+    expect(parseEnv({ ...valid, CORS_ALLOWED_ORIGINS: value }).CORS_ALLOWED_ORIGINS).toBe(value)
+  })
+
+  // An opaque origin canonicalises to "null", which would grant `Origin: null` (sandboxed iframes, file pages).
+  it.each([
+    'file:///srv/app/index.html',
+    'data:text/html,hi',
+    'https://admin.example.com,file:///tmp/x',
+    'about:blank',
+  ])('refuses an entry with an opaque origin: %s', (value) => {
+    expect(() => parseEnv({ ...valid, CORS_ALLOWED_ORIGINS: value })).toThrow(
+      /CORS_ALLOWED_ORIGINS.*opaque/s
+    )
+  })
+})
+
 describe('the fake email webhook', () => {
   it('defaults FAKE_EMAIL_WEBHOOK_SECRET to fake-webhook, and an empty value takes the default', () => {
     expect(parseEnv(valid).FAKE_EMAIL_WEBHOOK_SECRET).toBe('fake-webhook')
