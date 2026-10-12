@@ -211,7 +211,9 @@ verified flag to an address nobody verified.
   For a taken address it mails a registration-attempt notice instead.
 - `POST /api/v1/auth/verify-email` (`verification.controller.ts`) takes the
   token **and** the account's password, and a wrong password spends the token
-  like a right one. SECURITY.md, "Email verification", explains why.
+  like a right one. SECURITY.md, "Email verification", explains why. A
+  second click on a link that already verified the account answers 409
+  `email_already_verified`; every other failure answers one 400.
 - `POST /api/v1/auth/resend-verification` revokes an unverified user's live
   verification tokens and mails a new link. The response is identical for an
   unknown, an unverified and a verified address.

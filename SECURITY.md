@@ -386,6 +386,14 @@ One link is one attempt. A legitimate typo costs the user a resend, not a
 retry, and generates its own support tickets ("my verification link stopped
 working"); that trade is deliberate.
 
+**A second click on a link that worked answers 409.** When the claim fails,
+`verifyEmail` looks the token up by its hash: an `email_verification` row
+consumed before it expired, whose account is now verified, answers 409
+`email_already_verified` ("This email is already verified. Sign in to
+continue."). It writes nothing and never applies the submitted password. Every
+other failure, including a link burnt by a wrong password on an account that is
+still unverified, keeps the one 400.
+
 **Why the token alone is not enough — the squatting scenario.** An attacker
 registers `victim@example.com` with a password of their own choosing. The row
 now exists, unverified. The harmful step is always the same one:
