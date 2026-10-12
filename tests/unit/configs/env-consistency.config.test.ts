@@ -207,7 +207,7 @@ describe('assertEnvConsistent', () => {
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain('MAIL_FROM_TRANSACTIONAL is unset')
       expect(warnings[0]).toContain('click')
-      expect(warnings[0]).toContain('"Email tracking" in ARCHITECTURE.md')
+      expect(warnings[0]).toContain('"Two senders" in README.md')
     })
 
     it("warns when MAIL_FROM_TRANSACTIONAL is on MAIL_FROM's domain, in any case", () => {

@@ -127,6 +127,7 @@ describe('health probes', () => {
     }
     try {
       const startedAt = Date.now()
+      // Two concurrent probes both answer 503 at the same deadline whether they join one run or start two, so this does not pin single-flight; `joins a check still running instead of starting another` (tests/unit/services/readiness.service.test.ts) does. What it shows is the bound and the body.
       const responses = await Promise.all([
         probeWithinBound('database'),
         probeWithinBound('database'),

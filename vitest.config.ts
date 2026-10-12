@@ -61,7 +61,6 @@ export default defineConfig({
         'tests/**',
         '**/*.test.ts',
         '**/migrations/**',
-        '**/seeders/**',
         'src/database/models/**',
         'src/index.ts',
         'src/observability/tracing.ts',

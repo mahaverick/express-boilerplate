@@ -12,6 +12,7 @@ import { STATUS_CODES } from 'node:http'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import { type NextFunction, type Request, type Response } from 'express'
+import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import {
@@ -20,7 +21,6 @@ import {
   redactedForLog,
 } from '@/errors/postgres-errors'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
-import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
 import { routeTemplateOf } from '@/middlewares/route-template.middleware'
 import {
   reportErrorWithSpan,

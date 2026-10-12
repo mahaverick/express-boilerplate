@@ -4,7 +4,7 @@
  * own copy.
  */
 import { type Response } from 'express'
-import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
+import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 
 /**
  * Send a successful response with a consistent envelope.

@@ -99,7 +99,7 @@ export interface EmailMessageDetail extends EmailMessageSummary {
 
 /**
  * A stored template re-rendered for staff, links masked. `partial` is true
- * when a stored preview variable was missing (a legacy row) and shows as
+ * when a stored preview variable was missing (a message migrated from an old send attempt) and shows as
  * the mask; the masked token and the inviter's placeholder never set it.
  */
 export interface EmailPreview {

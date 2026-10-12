@@ -188,7 +188,8 @@ export default tseslint.config(
         {
           object: 'process',
           property: 'env',
-          message: 'Read configuration from @/configs/env.config, not process.env. See spec §5.1.',
+          message:
+            'Read configuration from @/configs/env.config, not process.env. See ARCHITECTURE.md, "Configuration".',
         },
         {
           object: 'console',
