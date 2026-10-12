@@ -249,14 +249,15 @@ that takes the same lock and commits first (`revokeAllSessions`), so a failed
 write still leaves no session alive, including the successor of a rotation
 that was in flight. Login still checks the password outside any transaction. It then opens
 a short one that locks the same row `FOR SHARE` and re-reads the hash. If the
-hash changed, it answers the same `401 Invalid email or password`; otherwise
-it issues the refresh token inside that transaction. So either the login
-commits first and the password write revokes its session, or the login sees
-the new hash and fails. There is no third ordering. A hash that changed only
-because another login rewrote it at a higher cost (rehash on login) still
-verifies the same password, so the re-read compares the password against the
-hash it finds and issues the token when it matches; a password change or reset
-stores a hash the old password does not match.
+hash changed, it compares the submitted password against the hash it found:
+when that still matches (another login's rehash at a higher cost, or a reset
+to the same password), it issues the token, after that write committed and
+against the password now stored; any other change answers the same
+`401 Invalid email or password`. An unchanged hash issues the refresh token
+inside that transaction. So either the login commits first and the password
+write revokes its session, or the login sees the committed write and holds a
+session only if its password is the one now stored. There is no third
+ordering.
 
 Refresh rotation also locks the user row `FOR SHARE`, so a refresh racing a
 password write either has its new token revoked or gets 401.

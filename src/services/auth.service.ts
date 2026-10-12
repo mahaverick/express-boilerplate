@@ -271,8 +271,9 @@ async function rehashIfOutdated(
  * password change or reset still in flight is waited for, and one that
  * committed after the compare answers the same 401, so no session outlives it.
  * A hash that changed since the first read is compared again under the lock:
- * another login's rehash of the same password still verifies and signs in,
- * a new password does not.
+ * one the submitted password still matches (another login's rehash, or a
+ * reset to the same password) signs in after that write committed; any other
+ * change answers the same 401.
  * A deactivation or soft delete that committed after the first read answers
  * the same 401 there too. In `full` maintenance a user with no platform role
  * is refused (`assertSignInAllowed`) once the credentials have passed and
@@ -306,7 +307,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     if (!locked?.active || !locked.passwordHash) {
       throw new HttpError('Invalid email or password', 401)
     }
-    // A changed hash is a password write or another login's rehash; only the rehash still verifies.
+    // A changed hash still signs in when the submitted password matches it: a rehash, or a reset to the same password.
     if (
       locked.passwordHash !== user.passwordHash &&
       !(await isPasswordValid(input.password, locked.passwordHash))
