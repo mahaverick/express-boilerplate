@@ -840,9 +840,12 @@ refusal is decided in `requireAuth`, which lets platform staff through.
   written (`assertSignInAllowed`). The Google callback runs the same check on
   a read-only account lookup before `resolveGoogleUser`, so a non-staff Google
   sign-in in `full` creates, links and claims nothing (`completeGoogleSignIn`,
-  `src/services/google-auth.service.ts`). A profile that matches no account
-  cannot be staff, so it is refused too, ahead of the 400 or 403 a missing or
-  unverified email would otherwise get.
+  `src/services/google-auth.service.ts`). The lookup matches an email only
+  when Google verified it, as `resolveGoogleUser` does. A profile that reaches
+  no account cannot be staff, so it is refused too, ahead of the 400 or 403 a
+  missing or unverified email would otherwise get: every refused Google caller
+  gets the same 503 after the same role read, whether the address is unknown,
+  a customer's or staff's.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
   limiter (10 a minute), and, to switch on or escalate, a `confirm` equal to
   `APP_ENV`. A stale `expectedVersion` answers 409. The change and its audit

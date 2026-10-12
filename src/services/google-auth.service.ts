@@ -32,16 +32,29 @@ const authProviderRepository = new AuthProviderRepository()
  * `_json.email_verified` is true; passport-google-oauth20's userinfo parser
  * fills both from the same `email_verified` claim.
  * @param profile - The raw Google profile.
+ * @returns The lowercased email and whether Google reports it verified, or undefined when the profile carries no email.
+ */
+function googleEmailClaim(
+  profile: GoogleProfile
+): { email: string; isVerified: boolean } | undefined {
+  const primary = profile.emails?.[0]
+  if (!primary?.value) return undefined
+  const isVerified = primary.verified || profile._json.email_verified === true
+  return { email: primary.value.toLowerCase(), isVerified }
+}
+
+/**
+ * `googleEmailClaim`, refusing a profile that carries no email.
+ * @param profile - The raw Google profile.
  * @returns The lowercased email and whether Google reports it verified.
  * @throws {HttpError} 400 `google_email_missing`, when the profile carries no email.
  */
 function verifiedGoogleEmail(profile: GoogleProfile): { email: string; isVerified: boolean } {
-  const primary = profile.emails?.[0]
-  if (!primary?.value) {
+  const claim = googleEmailClaim(profile)
+  if (!claim) {
     throw new HttpError('Google did not share an email address', 400, 'google_email_missing')
   }
-  const isVerified = primary.verified || profile._json.email_verified === true
-  return { email: primary.value.toLowerCase(), isVerified }
+  return claim
 }
 
 /**
@@ -117,19 +130,20 @@ interface ResolvedGoogleUser {
 }
 
 /**
- * The account this profile would sign in to, found without writing anything:
- * the same two lookups `resolveGoogleUser` makes, in the same order (the
- * Google link, then the profile's primary email), so both find the same
- * account. Whether Google verified the email does not matter here; the
- * caller only needs the account's platform role.
+ * The account this profile could sign in to, found without writing anything:
+ * the same lookups `resolveGoogleUser` makes, in the same order (the Google
+ * link, then the profile's primary email), so both find the same account.
+ * An email Google has not verified reaches no account here, as it reaches
+ * none in `resolveGoogleUser`; matching it would let anyone who adds an
+ * address to a Google account learn whether its owner is staff.
  * @param profile - The raw Google profile.
- * @returns The linked or email-matched account, or undefined when none matches.
+ * @returns The linked account, or the account a verified email matches, or undefined.
  */
-async function findExistingGoogleUser(profile: GoogleProfile): Promise<User | undefined> {
+async function findReachableGoogleUser(profile: GoogleProfile): Promise<User | undefined> {
   const link = await authProviderRepository.findByProviderAndId('google', profile.id)
   if (link) return userRepository.findById(link.userId)
-  const address = profile.emails?.[0]?.value
-  return address ? userRepository.findByEmail(address.toLowerCase()) : undefined
+  const claim = googleEmailClaim(profile)
+  return claim?.isVerified ? userRepository.findByEmail(claim.email) : undefined
 }
 
 /**
@@ -232,18 +246,20 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
  *
  * In `full` maintenance a user with no platform role is refused before
  * anything is written: `assertSignInAllowed` runs on a read-only lookup
- * (`findExistingGoogleUser`), ahead of `resolveGoogleUser`. A profile that
- * matches no account is refused too, so none is created, linked or claimed,
- * and that refusal comes before any 400 or 403 `resolveGoogleUser` would
- * give. The controller redirects with `error=MAINTENANCE_MODE`.
+ * (`findReachableGoogleUser`), ahead of `resolveGoogleUser`. A profile that
+ * reaches no account (none matches, or Google has not verified the address)
+ * is refused the same way, so none is created, linked or claimed, and every
+ * refused caller gets the same 503, ahead of any 400 or 403
+ * `resolveGoogleUser` would give. The controller redirects with
+ * `error=MAINTENANCE_MODE`.
  * @param profile - The raw Google profile from the callback.
  * @returns The new session's refresh token, for the controller to set as a cookie.
- * @throws {HttpError} 503 `MAINTENANCE_MODE` in `full` for a profile with no staff account, then any `resolveGoogleUser` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
+ * @throws {HttpError} 503 `MAINTENANCE_MODE` in `full` unless the account is staff (checked before `resolveGoogleUser` and again after it), any `resolveGoogleUser` error, or 401 `google_auth_failed` for an inactive or deleted account.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
-  // Before any write: in `full` only staff get a session, and a profile with no account yet cannot be staff.
-  const existing = await findExistingGoogleUser(profile)
-  await assertSignInAllowed(existing?.id)
+  // Before any write: in `full` only staff get a session, and a profile that reaches no account cannot be staff.
+  const reachable = await findReachableGoogleUser(profile)
+  await assertSignInAllowed(reachable?.id)
 
   const { user, isNew } = await resolveGoogleUser(profile)
 

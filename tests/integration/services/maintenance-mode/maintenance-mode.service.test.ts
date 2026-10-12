@@ -6,10 +6,11 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql } from '@/services/database.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
@@ -21,6 +22,7 @@ import {
 import { issueRefreshToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../../helpers/maintenance-mode'
+import { withMutatedMethod } from '../../../helpers/mutate'
 import { makeStaff } from '../../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -252,22 +254,82 @@ describe('Google sign-in in full', () => {
     expect(await sessionsOf(user.id)).toBe(1)
   })
 
-  it('still refuses staff whose Google email is unverified, and links nothing', async () => {
+  it('refuses staff whose Google email is unverified with the same 503, and links nothing', async () => {
     const user = await createTrackedUser({ email: googleEmail() })
     await makeStaff(user.id, 'admin')
     await enterFull()
 
-    let refusal: unknown
-    try {
-      await completeGoogleSignIn(googleProfile(user.email, false))
-    } catch (error) {
-      refusal = error
-    }
+    await expect(completeGoogleSignIn(googleProfile(user.email, false))).rejects.toBeInstanceOf(
+      MaintenanceModeError
+    )
 
-    expect(refusal).toBeInstanceOf(HttpError)
-    expect(refusal).toMatchObject({ statusCode: 403, code: 'email_not_verified' })
     expect(await googleLinks({ userId: user.id })).toBe(0)
     expect(await sessionsOf(user.id)).toBe(0)
+  })
+
+  it('refuses every caller that cannot sign in as staff with one indistinguishable answer', async () => {
+    const member = await createTrackedUser({ email: googleEmail() })
+    const staff = await createTrackedUser({ email: googleEmail() })
+    await makeStaff(staff.id, 'owner')
+    await storeMaintenanceMode('full', { message: 'Back at noon.' })
+    await reloadMaintenanceMode()
+    // Only a Google-verified address of a staff account gets past; nothing else is told apart.
+    const profiles: Record<string, GoogleProfile> = {
+      unknown: googleProfile(googleEmail()),
+      unknownUnverified: googleProfile(googleEmail(), false),
+      member: googleProfile(member.email),
+      memberUnverified: googleProfile(member.email, false),
+      staffUnverified: googleProfile(staff.email, false),
+      noEmail: googleProfile(undefined),
+    }
+
+    const answers: Record<string, unknown> = {}
+    for (const [name, profile] of Object.entries(profiles)) {
+      try {
+        await completeGoogleSignIn(profile)
+        answers[name] = 'signed in'
+      } catch (error) {
+        answers[name] =
+          error instanceof HttpError
+            ? { type: error.constructor.name, ...error, message: error.message }
+            : error
+      }
+    }
+
+    const expected = Object.fromEntries(
+      Object.keys(profiles).map((name) => [name, answers.unknown])
+    )
+    expect(answers).toEqual(expected)
+    expect(answers.unknown).toMatchObject({
+      type: 'MaintenanceModeError',
+      statusCode: 503,
+      code: 'MAINTENANCE_MODE',
+      message: 'Back at noon.',
+    })
+  })
+
+  it('reads a platform role for a profile with no account too, so the refusal costs the same', async () => {
+    await enterFull()
+    const member = await createTrackedUser({ email: googleEmail() })
+    const unknownProfile = googleProfile(googleEmail())
+    const memberProfile = googleProfile(member.email)
+    const original = UserMembershipRepository.prototype.findPlatformRole.bind(
+      new UserMembershipRepository()
+    )
+    const findPlatformRole = vi.fn(original)
+
+    await withMutatedMethod(
+      UserMembershipRepository.prototype,
+      'findPlatformRole',
+      findPlatformRole,
+      async () => {
+        for (const profile of [unknownProfile, memberProfile]) {
+          await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+        }
+      }
+    )
+
+    expect(findPlatformRole).toHaveBeenCalledTimes(2)
   })
 })
 
