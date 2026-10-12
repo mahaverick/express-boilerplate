@@ -439,12 +439,10 @@ new feature router is one more `router.use(...)` there, never a change to
 `app.ts`.
 
 - **Auth.** The auth router refuses any body that is not `application/json`
-  with 415 (`requireJsonContentType`, router-wide), except that the staff-only
-  `POST /auth/reauthenticate` answers a non-staff caller the unknown-route 404
-  first: it carries its own JSON gate after the platform role gate. Its open
-  routes need no access token; `POST /auth/refresh` and `/auth/logout` read the
-  refresh cookie off the raw `Cookie` header (there is no `cookie-parser`) and
-  check `Origin` first. How each credential works is in
+  with 415 (`requireJsonContentType`, router-wide). Its open routes need no
+  access token; `POST /auth/refresh` and `/auth/logout` read the refresh cookie
+  off the raw `Cookie` header (there is no `cookie-parser`) and check `Origin`
+  first. How each credential works is in
   [SECURITY.md](SECURITY.md#authentication).
 - **`requireAuth`** (`src/middlewares/auth.middleware.ts`) is mounted
   router-wide on the profile, notification, tenant, platform and flags

@@ -6,7 +6,8 @@
  * check walks the platform router and its sub-routers, so a route added
  * without a row here fails CI (OWASP API5: every function gets an explicit
  * gate). The one staff route outside /platform, `POST /auth/reauthenticate`,
- * has its own block with the same non-staff and OPTIONS checks.
+ * has its own block: a refused caller must get exactly what an unknown path
+ * on the auth router gets.
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
@@ -606,109 +607,149 @@ describe('/api/v1/platform route gates', () => {
     const REAUTH_PATH = '/api/v1/auth/reauthenticate'
 
     /**
-     * One request body a caller might send: its Content-Type and text, or none.
+     * Headers that differ between any two responses, whatever the route.
      */
-    interface BodyVariant {
+    const VOLATILE_HEADERS = new Set([
+      'date',
+      'x-request-id',
+      'etag',
+      'content-length',
+      'connection',
+      'keep-alive',
+      'ratelimit-reset',
+      'ratelimit-remaining',
+    ])
+
+    /**
+     * One request a caller might send: its method, Content-Type and body text, and Origin.
+     */
+    interface RequestVariant {
       label: string
+      method: 'post' | 'options'
       contentType?: string
       body?: string
+      origin?: string
     }
-    const JSON_BODY: BodyVariant = {
-      label: 'a JSON body',
+    const JSON_BODY: RequestVariant = {
+      label: 'POST with a JSON body',
+      method: 'post',
       contentType: 'application/json',
       body: '{"password":"x"}',
     }
-    const TEXT_BODY: BodyVariant = {
-      label: 'a text/plain body',
+    const TEXT_BODY: RequestVariant = {
+      label: 'POST with a text/plain body',
+      method: 'post',
       contentType: 'text/plain',
       body: 'password=x',
     }
     /**
-     * JSON, the three bodies a form can send, and none.
+     * JSON, the three bodies a form can send, no body, and an OPTIONS from a
+     * disallowed origin with and without a content type.
      */
-    const BODIES: readonly BodyVariant[] = [
+    const VARIANTS: readonly RequestVariant[] = [
       JSON_BODY,
       TEXT_BODY,
       {
-        label: 'a urlencoded body',
+        label: 'POST with a urlencoded body',
+        method: 'post',
         contentType: 'application/x-www-form-urlencoded',
         body: 'password=x',
       },
-      { label: 'a multipart body', contentType: 'multipart/form-data; boundary=x', body: '--x--' },
-      { label: 'no body' },
+      {
+        label: 'POST with a multipart body',
+        method: 'post',
+        contentType: 'multipart/form-data; boundary=x',
+        body: '--x--',
+      },
+      { label: 'POST with no body', method: 'post' },
+      { label: 'OPTIONS from a disallowed origin', method: 'options', origin: DISALLOWED_ORIGIN },
+      {
+        label: 'OPTIONS from a disallowed origin with a text/plain type',
+        method: 'options',
+        origin: DISALLOWED_ORIGIN,
+        contentType: 'text/plain',
+      },
     ]
 
     /**
-     * POSTs to the route with a bearer token and one of `BODIES`.
+     * Sends one variant to `path` with a bearer token.
      */
-    function post(token: string, variant: BodyVariant): Promise<Response> {
-      const pending = request(app).post(REAUTH_PATH).set('Authorization', `Bearer ${token}`)
-      if (variant.contentType === undefined) return pending
-      return pending.set('Content-Type', variant.contentType).send(variant.body)
+    function send(path: string, token: string, variant: RequestVariant): Promise<Response> {
+      const pending = request(app)[variant.method](path).set('Authorization', `Bearer ${token}`)
+      if (variant.origin !== undefined) pending.set('Origin', variant.origin)
+      if (variant.contentType !== undefined) pending.set('Content-Type', variant.contentType)
+      return variant.body === undefined ? pending : pending.send(variant.body)
     }
 
-    it.each(BODIES)(
-      "non-staff get the app's own 404 with no RateLimit headers, for $label",
-      async (variant) => {
-        const token = await tokenFor(undefined)
-        const unknown = await request(app)
-          .get('/api/v1/definitely-not-a-route')
-          .set('Authorization', `Bearer ${token}`)
-
-        const refused = await post(token, variant)
-
-        expect(refused.status).toBe(404)
-        expect((refused.body as { message?: string }).message).toBe(
-          (unknown.body as { message?: string }).message
+    /**
+     * What a caller can compare between two responses: the status, the body
+     * without its request id, and every header but the volatile ones.
+     */
+    function observable(response: Response): {
+      status: number
+      body: unknown
+      headers: Record<string, unknown>
+    } {
+      const body = Object.fromEntries(
+        Object.entries(response.body as Record<string, unknown>).filter(
+          ([key]) => key !== 'requestId'
         )
-        expect(refused.headers).not.toHaveProperty('ratelimit-limit')
+      )
+      const headers = Object.fromEntries(
+        Object.entries(response.headers).filter(([name]) => !VOLATILE_HEADERS.has(name))
+      )
+      return { status: response.status, body, headers }
+    }
+
+    /**
+     * Sends one variant to the route and to an unknown sibling auth path, with the same token.
+     */
+    async function againstSibling(
+      token: string,
+      variant: RequestVariant
+    ): Promise<{ route: Response; sibling: Response }> {
+      const route = await send(REAUTH_PATH, token, variant)
+      const sibling = await send(`/api/v1/auth/${randomUUID()}`, token, variant)
+      return { route, sibling }
+    }
+
+    it.each(VARIANTS)(
+      'answers a signed-in non-staff caller exactly what an unknown auth path answers: $label',
+      async (variant) => {
+        const { route, sibling } = await againstSibling(await tokenFor(undefined), variant)
+
+        expect(observable(route)).toEqual(observable(sibling))
       }
     )
 
-    it('non-staff with a stale sign-in get 404, never 401', async () => {
-      const token = await tokenFor(undefined, new Date(Date.now() - ELEVEN_MINUTES_MS))
+    it.each([JSON_BODY, TEXT_BODY])(
+      'answers non-staff with a stale sign-in exactly what an unknown auth path answers: $label',
+      async (variant) => {
+        const token = await tokenFor(undefined, new Date(Date.now() - ELEVEN_MINUTES_MS))
 
-      const refused = await post(token, JSON_BODY)
+        const { route, sibling } = await againstSibling(token, variant)
 
-      expect(refused.status).toBe(404)
-    })
-
-    it('non-staff past the limiter budget still get 404, never 429', async () => {
-      const token = await tokenFor(undefined)
-      const statuses: number[] = []
-      for (let attempt = 0; attempt <= RATE_LIMITS.reauthenticate.limit; attempt += 1) {
-        const response = await post(token, JSON_BODY)
-        statuses.push(response.status)
+        expect(observable(route)).toEqual(observable(sibling))
       }
+    )
 
-      expect(new Set(statuses)).toEqual(new Set([404]))
+    it('answers non-staff past the limiter budget exactly what an unknown auth path answers', async () => {
+      const token = await tokenFor(undefined)
+      for (let attempt = 0; attempt <= RATE_LIMITS.reauthenticate.limit; attempt += 1) {
+        const { route, sibling } = await againstSibling(token, JSON_BODY)
+        expect({ attempt, ...observable(route) }).toEqual({ attempt, ...observable(sibling) })
+      }
     })
 
-    it.each([
-      { label: 'anonymous', role: 'anonymous' as const },
-      { label: 'non-staff', role: undefined },
-      { label: 'viewer', role: 'viewer' as const },
-    ])('OPTIONS gets 404 with no Allow header ($label)', async ({ role }) => {
-      const pending = request(app).options(REAUTH_PATH).set('Origin', DISALLOWED_ORIGIN)
-      const response =
-        role === 'anonymous'
-          ? await pending
-          : await pending.set('Authorization', `Bearer ${await tokenFor(role)}`)
-
-      expect(response.status).toBe(404)
-      expect(response.headers).not.toHaveProperty('allow')
-      expect((response.body as { message?: string }).message).toBe('Not found')
-    })
-
-    it('admits viewer to the JSON gate, which refuses a text/plain body with 415', async () => {
-      const response = await post(await tokenFor('viewer'), TEXT_BODY)
+    it('answers viewer a text/plain body with the router-wide JSON gate', async () => {
+      const response = await send(REAUTH_PATH, await tokenFor('viewer'), TEXT_BODY)
 
       expect(response.status).toBe(415)
       expect((response.body as { code?: string }).code).toBe('UNSUPPORTED_MEDIA_TYPE')
     })
 
     it('admits viewer past every gate to the limiter and the handler', async () => {
-      const response = await post(await tokenFor('viewer'), JSON_BODY)
+      const response = await send(REAUTH_PATH, await tokenFor('viewer'), JSON_BODY)
 
       // A wrong password is the handler's own 400, under the limiter's headers.
       expect(response.status).toBe(400)

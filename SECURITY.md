@@ -483,15 +483,23 @@ their role there is their platform role (`src/services/platform.service.ts`).
   `POST /auth/reauthenticate` lives under `/api/v1/platform`, and each names its
   own `requirePlatformRole`, which reads the role on every request with no cache
   across requests (`src/middlewares/platform.middleware.ts`). The prefix secures
-  nothing, and neither does serving Apex from its own host. A non-staff caller,
-  or staff below the route's role, gets the app's own `404 Not found`, before
-  the JSON gate, the step-up check and the limiter, so a refused caller sees no
-  `415` and no `RateLimit-*` headers. `cors` answers an `OPTIONS` with no
-  `Origin` or an allowed one itself, with the same 204 for every path; any other
-  authenticated `OPTIONS` that reaches the platform router, and any other
-  `OPTIONS` on `/auth/reauthenticate`, gets the same 404
-  (`refusePlatformOptions`). Either way Express's automatic `Allow` answer never
-  lists a route's methods.
+  nothing, and neither does serving Apex from its own host. A signed-in caller
+  the route refuses (non-staff, or staff below the route's role) gets exactly
+  what an unknown path on the same router gets: same status, body and headers.
+  On a `/platform` route the role gate answers the app's own `404 Not found`
+  before the JSON gate, the step-up check and the limiter, so a refused caller
+  sees no `415` and no `RateLimit-*` headers. On `POST /auth/reauthenticate`
+  the auth router's JSON gate runs first, as on every auth path, so a form body
+  gets the same `415` an unknown `/auth/*` path gets; then the role gate's 404
+  comes before the limiter. Every error response is `no-store`, so no header
+  tells the gates apart. An anonymous caller can tell
+  `POST /auth/reauthenticate` exists, since `requireAuth` must run before the
+  role gate and answers 401, as on every `/platform` route; the route table is
+  public anyway. `cors` answers an `OPTIONS` with no `Origin` or an allowed one
+  itself, with the same 204 for every path; any other authenticated `OPTIONS`
+  that reaches the platform router, and any other `OPTIONS` on
+  `/auth/reauthenticate`, gets the same 404 (`refusePlatformOptions`). Either
+  way Express's automatic `Allow` answer never lists a route's methods.
 - **In a customer tenant, staff act at their platform role.** With no
   membership there, `resolveTenant` uses the platform role
   (`access: 'platform'`) and audits the visit (`tenant.accessed_by_platform`,
@@ -649,10 +657,9 @@ on other routes, this reasoning does not cover it.
   `application/json` with `415`: a form can only send the other three, and JSON
   from a script on another origin needs a preflight that a disallowed origin
   fails. It needs no configuration, so it holds on a same-origin deployment with
-  no allow-list. It is mounted on the whole auth router (on
-  `/auth/reauthenticate` it follows the platform role gate) and on the writes of
-  the tenant, invitation, platform and flags routers. A request with no content
-  type passes, because an untyped body is never parsed.
+  no allow-list. It is mounted on the whole auth router and on the writes of the
+  tenant, invitation, platform and flags routers. A request with no content type
+  passes, because an untyped body is never parsed.
 - **Same-site is not same-origin.** A page on a sibling subdomain is the same
   site, so a body-less `POST` from it carries a `Strict` cookie with no
   preflight. `POST /auth/refresh` and `POST /auth/logout`, the two routes the
@@ -860,7 +867,10 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 everything but health, the email webhook, the collect proxy, the public status,
 `/platform`, sign-in, refresh, logout, reauthenticate, `GET /auth/providers`
 and `GET /profile`. On the customer routes Apex calls, the
-refusal is decided in `requireAuth`, which lets platform staff through.
+refusal is decided in `requireAuth`, which lets platform staff through. The
+let-through list is visible during maintenance: a route on it reaches its
+router while an unknown path gets the 503, which is accepted, since the list
+names only routes the frontends already call.
 
 - In `full`, password login refuses a user with no platform role
   (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is

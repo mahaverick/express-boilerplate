@@ -26,14 +26,15 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 /**
  * Build the auth routes.
  *
- * `requireJsonContentType` is mounted router-wide, ahead of every route but
- * one, as a CSRF control (see content-type.middleware.ts). A GET carries no
- * content type, which it allows, so the Google routes pass it too. The
- * exception is the staff-only `POST /reauthenticate`, registered first with
- * the gates in the staff-route order: `requireAuth`, the platform role gate,
- * then its own `requireJsonContentType`, then the limiter, so a non-staff
- * caller gets the unknown-route 404 and never a 415 or `RateLimit-*` headers.
- * An OPTIONS on it gets the same 404 (`refusePlatformOptions`), not
+ * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
+ * CSRF control (see content-type.middleware.ts). A GET carries no content
+ * type, which it allows, so the Google routes pass it too.
+ *
+ * The staff-only `POST /reauthenticate` answers a refused caller exactly what
+ * an unknown auth path answers: the router-wide JSON gate's 415 for a form
+ * body, as on every auth path, and otherwise the platform role gate's 404
+ * before the limiter, so no `RateLimit-*` headers. An OPTIONS on it gets the
+ * unknown path's 404 (`refusePlatformOptions`, right after the JSON gate), not
  * Express's automatic `Allow` answer.
  *
  * `/refresh` and `/logout`, which the refresh cookie authenticates and which
@@ -53,16 +54,7 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  */
 export function createAuthRouter(): Router {
   const router = Router()
-  // Ahead of the router-wide JSON gate: the platform gate must answer a non-staff caller the unknown-route 404 before any 415, and before this limiter keys on request.user.id.
-  router.post(
-    '/reauthenticate',
-    requireAuth,
-    requirePlatformRole('viewer'),
-    requireJsonContentType,
-    createRateLimiter(RATE_LIMITS.reauthenticate),
-    authController.reauthenticate
-  )
-  // Router-wide so no other route can miss the CSRF gate.
+  // Router-wide and first, so no route can miss the CSRF gate.
   router.use(requireJsonContentType)
   // Express would answer OPTIONS on the staff route with an Allow header; an unknown auth path gets this 404.
   router.use('/reauthenticate', refusePlatformOptions)
@@ -125,6 +117,15 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
+  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
+  router.post(
+    '/reauthenticate',
+    requireAuth,
+    requirePlatformRole('viewer'),
+    createRateLimiter(RATE_LIMITS.reauthenticate),
+    authController.reauthenticate
+  )
+
   // No limiter: a read of the caller's own data, with no oracle to probe.
   router.get('/providers', requireAuth, authController.getAuthProviders)
 

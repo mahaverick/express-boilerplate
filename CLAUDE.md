@@ -86,16 +86,21 @@ points at the code or doc that holds the detail. How things work is in
 
 ### Staff routes
 
-- **On every `/platform` route and on `POST /auth/reauthenticate` the role
-  gate runs first:** `requirePlatformRole`, then `requireJsonContentType`, then
-  `requireRecentAuth()` where it applies, then the limiter. Anything earlier
-  answers a non-staff caller with a 415, `RateLimit-*` headers or a 401
-  `REAUTH_REQUIRED`, and so reveals the route. Keep `refusePlatformOptions` on
-  every staff route's path (ahead of every `/platform` route; right after the
-  auth router's JSON gate for `/auth/reauthenticate`), or Express answers
-  OPTIONS with an `Allow` header. A new route needs its row in
-  `tests/integration/api/platform-route-gates.test.ts`. See
-  [SECURITY.md](SECURITY.md#platform-staff).
+- **A staff route answers a refused caller exactly what an unknown path on the
+  same router answers,** for every method, body and header. On a `/platform`
+  route that means the role gate runs first: `requirePlatformRole`, then
+  `requireJsonContentType`, then `requireRecentAuth()` where it applies, then
+  the limiter. Anything earlier answers a non-staff caller a 415, `RateLimit-*`
+  headers or a 401 `REAUTH_REQUIRED`. A staff route inside another router,
+  today only `POST /auth/reauthenticate`, keeps that router's shared gates
+  ahead of its role gate, because an unknown sibling path meets them too: the
+  auth router's JSON gate gives a non-JSON body the same 415 an unknown
+  `/auth/*` path gets, and the role gate then comes before the limiter. Keep
+  `refusePlatformOptions` on every staff route's path, after any shared gate
+  that would answer first, or Express answers OPTIONS with an `Allow` header.
+  Pin each staff route by comparing it with an unknown sibling path, not with
+  `/api/v1/<unknown>`: `tests/integration/api/platform-route-gates.test.ts`.
+  See [SECURITY.md](SECURITY.md#platform-staff).
 - **Only `src/services/platform-*.service.ts` import the five cross-tenant
   `platform-*` repositories** (lint enforces it). "Your tenants" stays on
   `TenantRepository.listForUser`; never serve it from a query that sees every

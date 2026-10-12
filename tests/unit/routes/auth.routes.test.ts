@@ -1,9 +1,8 @@
 /**
- * @file The auth router's one staff route, `POST /reauthenticate`, runs its
- * gates in the staff order (role gate, JSON gate, limiter), registered ahead
- * of the router-wide JSON gate so a non-staff caller never sees a 415; the
- * router-wide gate still follows it for every other route, and an OPTIONS
- * refusal keeps Express's automatic `Allow` answer off the path.
+ * @file The auth router's one staff route, `POST /reauthenticate`, answers a
+ * refused caller what an unknown auth path answers: the router-wide JSON gate
+ * runs first for every path, an OPTIONS refusal follows it on the staff path,
+ * and the route comes after both, with the role gate ahead of its limiter.
  */
 import type { RequestHandler, Router } from 'express'
 import { describe, expect, it } from 'vitest'
@@ -46,47 +45,47 @@ function reauthenticateIndex(layers: RouteLayer[]): number {
   return index
 }
 
+/**
+ * The index of the router-wide `requireJsonContentType` layer.
+ */
+function gateIndex(layers: RouteLayer[]): number {
+  return layers.findIndex(
+    (layer) => layer.route === undefined && layer.handle === requireJsonContentType
+  )
+}
+
 describe('createAuthRouter: POST /reauthenticate', () => {
-  it('runs requireAuth, the role gate, the JSON gate, the limiter, then the handler', () => {
+  it('mounts the router-wide JSON gate ahead of every route', () => {
     const layers = layersOf(createAuthRouter())
-    const handlers = layers[reauthenticateIndex(layers)]?.route?.stack.map(({ handle }) => handle)
+    const gateAt = gateIndex(layers)
 
-    expect(handlers).toHaveLength(5)
-    expect(handlers?.[0]).toBe(requireAuth)
-    // requirePlatformRole builds a fresh closure per route, so the role gate is the one handler here that is neither of the others.
-    expect([requireAuth, requireJsonContentType]).not.toContain(handlers?.[1])
-    expect(Object.hasOwn(handlers?.[1] ?? {}, RATE_LIMITER_MARK)).toBe(false)
-    expect(handlers?.[2]).toBe(requireJsonContentType)
-    expect(Object.hasOwn(handlers?.[3] ?? {}, RATE_LIMITER_MARK)).toBe(true)
-    expect(handlers?.[4]).toBe(authController.reauthenticate)
+    expect(gateAt).not.toBe(-1)
+    expect(layers.slice(0, gateAt).some((layer) => layer.route !== undefined)).toBe(false)
   })
 
-  it('sits ahead of the router-wide JSON gate, which every other route still follows', () => {
+  it('refuses OPTIONS on the staff path right after the JSON gate', () => {
     const layers = layersOf(createAuthRouter())
-    const reauthenticateAt = reauthenticateIndex(layers)
-    const gateAt = layers.findIndex(
-      (layer) => layer.route === undefined && layer.handle === requireJsonContentType
-    )
-    const otherRoutesAt = layers.flatMap((layer, index) =>
-      index !== reauthenticateAt && layer.route ? [index] : []
-    )
-
-    expect(gateAt).toBeGreaterThan(reauthenticateAt)
-    expect(otherRoutesAt.length).toBeGreaterThan(0)
-    expect(otherRoutesAt.every((index) => index > gateAt)).toBe(true)
-  })
-
-  it('refuses OPTIONS on the path with refusePlatformOptions, after the JSON gate and before any later route', () => {
-    const layers = layersOf(createAuthRouter())
-    const gateAt = layers.findIndex(
-      (layer) => layer.route === undefined && layer.handle === requireJsonContentType
-    )
     const refusalAt = layers.findIndex(
       (layer) => layer.route === undefined && layer.handle === refusePlatformOptions
     )
 
-    expect(refusalAt).toBe(gateAt + 1)
+    expect(refusalAt).toBe(gateIndex(layers) + 1)
     expect(layers[refusalAt]?.match('/reauthenticate')).toBe(true)
     expect(layers[refusalAt]?.match('/login')).toBe(false)
+  })
+
+  it('registers the route after both, with requireAuth, the role gate, the limiter, then the handler', () => {
+    const layers = layersOf(createAuthRouter())
+    const routeAt = reauthenticateIndex(layers)
+    const handlers = layers[routeAt]?.route?.stack.map(({ handle }) => handle)
+
+    expect(routeAt).toBeGreaterThan(gateIndex(layers) + 1)
+    expect(handlers).toHaveLength(4)
+    expect(handlers?.[0]).toBe(requireAuth)
+    // requirePlatformRole builds a fresh closure per route, so the role gate is known by what it is not.
+    expect([requireAuth, requireJsonContentType]).not.toContain(handlers?.[1])
+    expect(Object.hasOwn(handlers?.[1] ?? {}, RATE_LIMITER_MARK)).toBe(false)
+    expect(Object.hasOwn(handlers?.[2] ?? {}, RATE_LIMITER_MARK)).toBe(true)
+    expect(handlers?.[3]).toBe(authController.reauthenticate)
   })
 })
