@@ -1164,7 +1164,9 @@ proxies the browsers' posthog-js traffic; without it, neither happens.
   origin, so the browser sends it the `__Host-refreshToken` cookie
   (`Path=/`) like any other request. The proxy removes the `Cookie` and
   `Authorization` headers before the request leaves, so PostHog never
-  receives a session (`analytics-proxy.test.ts`).
+  receives a session (`analytics-proxy.test.ts`). A request carrying `Expect`
+  is refused 417 before it is proxied: the proxy library skips the header
+  rewrite for such a request.
 - **The client address is the one Express resolved.** `X-Forwarded-For`
   upstream is `request.ip` under `TRUST_PROXY`, not a header the client
   sent (`X-Forwarded-Host`, `-Proto` and `-Port` are overwritten too), so a

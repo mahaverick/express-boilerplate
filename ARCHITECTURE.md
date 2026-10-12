@@ -864,8 +864,9 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   refresh cookie (`Path=/`) never reaches PostHog, and overwrites
   `X-Forwarded-For` (`request.ip`), `-Host`, `-Proto` and `-Port`. It strips
   PostHog's `Set-Cookie` and `Access-Control-*` response headers, and answers
-  504 when PostHog stays silent for 30 s. Without `POSTHOG_PROJECT_KEY` it answers
-  503 `service_unavailable`.
+  504 when PostHog stays silent for 30 s. A request carrying `Expect` is
+  refused 417 `expectation_failed` before it is proxied. Without
+  `POSTHOG_PROJECT_KEY` it answers 503 `service_unavailable`.
 - **Groups.** A tenant's `name`, `status` and `created_at` reach PostHog only
   as `$groupidentify` properties. The outbox stores a marker
   (`$group_type`, `$group_key`, `source` and the trace id) and never the
