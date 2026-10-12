@@ -270,6 +270,9 @@ async function rehashIfOutdated(
  * The token is issued in a transaction that re-reads the user FOR SHARE. A
  * password change or reset still in flight is waited for, and one that
  * committed after the compare answers the same 401, so no session outlives it.
+ * A hash that changed since the first read is compared again under the lock:
+ * another login's rehash of the same password still verifies and signs in,
+ * a new password does not.
  * A deactivation or soft delete that committed after the first read answers
  * the same 401 there too. In `full` maintenance a user with no platform role
  * is refused (`assertSignInAllowed`) once the credentials have passed and
@@ -296,18 +299,27 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // After the guard, so a failed attempt never reaches it; it never throws.
   await autoJoinSafely(user)
 
-  const comparedHash = user.passwordHash
   const sessionId = randomUUID()
-  const refreshToken = await withTransaction(async (tx) => {
+  const { refreshToken, verifiedHash } = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
     // Re-checked under the lock: a deactivation or delete that committed since the first read wins.
-    if (!locked?.active || locked.passwordHash !== comparedHash) {
+    if (!locked?.active || !locked.passwordHash) {
       throw new HttpError('Invalid email or password', 401)
     }
-    return issueRefreshToken(user.id, sessionId, tx)
+    // A changed hash is a password write or another login's rehash; only the rehash still verifies.
+    if (
+      locked.passwordHash !== user.passwordHash &&
+      !(await isPasswordValid(input.password, locked.passwordHash))
+    ) {
+      throw new HttpError('Invalid email or password', 401)
+    }
+    return {
+      refreshToken: await issueRefreshToken(user.id, sessionId, tx),
+      verifiedHash: locked.passwordHash,
+    }
   })
   // After the token's transaction, whose re-read compares the hash this would change.
-  await rehashIfOutdated(user.id, input.password, comparedHash)
+  await rehashIfOutdated(user.id, input.password, verifiedHash)
   const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   await emitDomainEvent({

@@ -272,6 +272,45 @@ describe('login rehashes an old-cost password hash', () => {
     expect(await bcrypt.compare(VALID_PASSWORD, rewritten)).toBe(true)
   })
 
+  // B read the row before A's rehash committed; B's locked re-read then sees A's new hash of the same password.
+  it('signs in a login whose first read predates a concurrent login’s rehash', async () => {
+    const { email } = await verifiedUser(OLD_COST)
+    const staleRow = await new UserRepository().findByEmail(email)
+    if (!staleRow) throw new Error('user not found')
+    await login({ email, password: VALID_PASSWORD })
+    expect(bcrypt.getRounds(await storedHash(email))).toBe(BCRYPT_COST)
+
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'findByEmail',
+      () => Promise.resolve(staleRow),
+      async () => {
+        const result = await login({ email, password: VALID_PASSWORD })
+        expect(result.accessToken).toEqual(expect.any(String))
+      }
+    )
+  })
+
+  it('still answers 401 when the hash changed to a different password after the first read', async () => {
+    const { email } = await verifiedUser(OLD_COST)
+    const staleRow = await new UserRepository().findByEmail(email)
+    if (!staleRow) throw new Error('user not found')
+    const otherHash = await bcrypt.hash('a different password entirely', OLD_COST)
+    await sql`update users set password_hash = ${otherHash} where lower(email) = ${email.toLowerCase()}`
+
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'findByEmail',
+      () => Promise.resolve(staleRow),
+      async () => {
+        await expect(login({ email, password: VALID_PASSWORD })).rejects.toMatchObject({
+          statusCode: 401,
+        })
+      }
+    )
+    expect(await storedHash(email)).toBe(otherHash)
+  })
+
   it('leaves a current-cost hash unchanged', async () => {
     const { email, hash } = await verifiedUser()
     expect(bcrypt.getRounds(hash)).toBe(BCRYPT_COST)

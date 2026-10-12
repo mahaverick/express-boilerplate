@@ -243,7 +243,11 @@ a short one that locks the same row `FOR SHARE` and re-reads the hash. If the
 hash changed, it answers the same `401 Invalid email or password`; otherwise
 it issues the refresh token inside that transaction. So either the login
 commits first and the password write revokes its session, or the login sees
-the new hash and fails. There is no third ordering.
+the new hash and fails. There is no third ordering. A hash that changed only
+because another login rewrote it at a higher cost (rehash on login) still
+verifies the same password, so the re-read compares the password against the
+hash it finds and issues the token when it matches; a password change or reset
+stores a hash the old password does not match.
 
 Refresh rotation also locks the user row `FOR SHARE`, so a refresh racing a
 password write either has its new token revoked or gets 401.
@@ -269,9 +273,11 @@ Every path that locks the user row:
 | A staff user action's target (`lockStaffPair`)                                                  | `FOR NO KEY UPDATE` | Deactivate, reactivate, sign-out, edit and delete act on the row they read                                                                                                                                                 |
 
 Logins and rotations take `FOR SHARE`, and their `FOR SHARE` locks never
-conflict with each other. A concurrent login's `last_logged_in_at` update does
-wait for the `FOR SHARE` transactions open on the row; each holds it for one
-token insert (a login) or one rotation (a refresh). The reuse and lifetime
+conflict with each other. A concurrent login's `last_logged_in_at` update, and
+a login's rehash of an old-cost hash (one UPDATE after its transaction
+commits, outside any transaction), do wait for the `FOR SHARE` transactions
+open on the row; each holds it for one token insert (a login) or one rotation
+(a refresh). The reuse and lifetime
 kills run after the rotation's transaction commits, in a transaction of their
 own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE` transaction would
 deadlock two concurrent reuses. The session revocation that takes no user row
