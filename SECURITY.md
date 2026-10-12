@@ -170,10 +170,12 @@ every request is deliberate: deactivation and deletion take effect on the next
 request, and a cache of known-good ids would reopen that window. Every response
 behind it is `Cache-Control: no-store`, as are the login and refresh responses,
 so a browser keeps no authenticated body on disk after sign-out. Every error
-response is `no-store` too: `errorHandler` marks each one it writes, and the
+response is `no-store` too: `errorHandler` marks each one it writes, the
 analytics proxy marks its own 417 and 503 and the proxy library's upstream
-failure answers. So a refusal carries the same header whichever gate answered. A verified
-token with no `sid` skips the denylist and is admitted until it expires.
+failure answers, and `/health/ready` marks its two 503s (shutting down, not
+ready). So a refusal carries the same header whichever gate answered. A
+verified token with no `sid` skips the denylist and is admitted until it
+expires.
 
 ### The refresh cookie
 

@@ -91,10 +91,12 @@ export function createApp(): Express {
   app.get('/health/ready', async (_request, response) => {
     // A draining pod leaves rotation before its dependencies close.
     if (isShuttingDown()) {
-      response.status(503).json({ status: 'shutting-down' })
+      // A 503 is no-store like every other error answer (SECURITY.md "Access tokens").
+      response.set('Cache-Control', 'no-store').status(503).json({ status: 'shutting-down' })
       return
     }
     const { isReady, checks, timedOut } = await probeReadiness()
+    if (!isReady) response.set('Cache-Control', 'no-store')
     // Names only the dependency, never a host or driver error: the route is public.
     response.status(isReady ? 200 : 503).json({
       status: isReady ? 'ready' : 'not-ready',
