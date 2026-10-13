@@ -20,7 +20,7 @@ import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
-import { requirePlatformRole } from '@/middlewares/platform.middleware'
+import { refusePlatformOptions, requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
@@ -28,14 +28,22 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  *
  * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
  * CSRF control (see content-type.middleware.ts). A GET carries no content
- * type, which it allows, so the Google routes pass it too. `/refresh` and
- * `/logout`, which the refresh cookie authenticates and which take no body,
- * also refuse a disallowed `Origin` (origin.middleware.ts): a same-site
- * sibling page could otherwise send them a body-less POST with the cookie
- * attached. `/change-password` and `/sessions/revoke-others` read the cookie
- * too, but only to narrow what they spare; they authenticate with the bearer
- * token, which a browser never attaches on its own, so no other page can make
- * it send one and they need no Origin check.
+ * type, which it allows, so the Google routes pass it too.
+ *
+ * The staff-only `POST /reauthenticate` answers a refused caller exactly what
+ * an unknown auth path answers: the router-wide JSON gate's 415 for a form
+ * body, as on every auth path, and otherwise the platform role gate's 404
+ * before the limiter, so no `RateLimit-*` headers. An OPTIONS on it gets the
+ * unknown path's 404 (`refusePlatformOptions`, right after the JSON gate), not
+ * Express's automatic `Allow` answer.
+ *
+ * `/refresh` and `/logout`, which the refresh cookie authenticates and which
+ * take no body, also refuse a disallowed `Origin` (origin.middleware.ts): a
+ * same-site sibling page could otherwise send them a body-less POST with the
+ * cookie attached. `/change-password` and `/sessions/revoke-others` read the
+ * cookie too, but only to narrow what they spare; they authenticate with the
+ * bearer token, which a browser never attaches on its own, so no other page
+ * can make it send one and they need no Origin check.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;
@@ -46,8 +54,10 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  */
 export function createAuthRouter(): Router {
   const router = Router()
-  // Router-wide so no route can miss the CSRF gate.
+  // Router-wide and first, so no route can miss the CSRF gate.
   router.use(requireJsonContentType)
+  // Express would answer OPTIONS on the staff route with an Allow header; an unknown auth path gets this 404.
+  router.use('/reauthenticate', refusePlatformOptions)
   router.post('/register', createRateLimiter(RATE_LIMITS.register), authController.register)
   // ip+email 5/15min, then IP 100/15min, then account 100/h; a rejection spends no later budget.
   router.post(

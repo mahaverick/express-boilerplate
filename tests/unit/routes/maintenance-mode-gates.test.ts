@@ -3,7 +3,7 @@
  * mounted) and checks them against `MAINTENANCE_ROUTE_RULES`: every route is
  * covered by a rule, every rule covers a route, the let-through set and the
  * read-only write allowlist are exactly the lists spelled out in the tests
- * below (ARCHITECTURE.md's Maintenance mode section describes the let-through
+ * below (SECURITY.md's Maintenance mode section lists the let-through
  * set), and every read is let through in `read_only`. A mount under one of
  * the let-through prefixes (`/api/v1/platform`, the webhooks, the PostHog
  * proxy) counts as one entry, since the prefix rule covers everything below

@@ -7,9 +7,10 @@
  * each under the same sub-path. Bodies stream through unread: a replay POST
  * can be megabytes of gzip, and a parsed body never reaches the upstream.
  * Without `POSTHOG_PROJECT_KEY` every request answers 503; with it, a request
- * carrying `Expect` answers 417.
+ * carrying `Expect` answers 417. Every error answer, the proxy library's own
+ * 5xx included, is `Cache-Control: no-store`, as `errorHandler`'s are.
  */
-import type { ClientRequest, IncomingMessage } from 'node:http'
+import { ServerResponse, type ClientRequest, type IncomingMessage } from 'node:http'
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import { createProxyMiddleware, definePlugin } from 'http-proxy-middleware'
 import { isAnalyticsEnabled, posthogAssetsHost } from '@/configs/analytics.config'
@@ -106,6 +107,21 @@ const logUpstreamFailures = definePlugin<Request, Response>((proxyServer) => {
 })
 
 /**
+ * Mark http-proxy-middleware's own error response `Cache-Control: no-store`,
+ * as `errorHandler` marks every other error response. The library's default
+ * plugins register before this one and its error listener writes the status
+ * line, so this listener is prepended to run first; a response already
+ * started is left alone.
+ */
+const markUpstreamFailuresNoStore = definePlugin<Request, Response>((proxyServer) => {
+  proxyServer.prependListener('error', (_error, _request, response) => {
+    if (response instanceof ServerResponse && !response.headersSent) {
+      response.setHeader('Cache-Control', 'no-store')
+    }
+  })
+})
+
+/**
  * One streaming proxy to `target`. `changeOrigin` sets the upstream `Host`;
  * `xfwd` makes the `X-Forwarded-*` headers present, which
  * `prepareUpstreamRequest` then overwrites; the `User-Agent` is passed
@@ -127,7 +143,7 @@ function proxyTo(
     xfwd: true,
     proxyTimeout: timeoutMs,
     on: { proxyReq: prepareUpstreamRequest, proxyRes: sanitizeUpstreamResponse },
-    plugins: [logUpstreamFailures],
+    plugins: [markUpstreamFailuresNoStore, logUpstreamFailures],
   })
 }
 
@@ -155,6 +171,7 @@ function refuseExpect(request: Request, response: Response, next: NextFunction):
     next()
     return
   }
+  response.set('Cache-Control', 'no-store')
   errorResponse(response, EXPECT_REFUSED.message, 417, EXPECT_REFUSED.code)
 }
 
@@ -165,6 +182,7 @@ function refuseExpect(request: Request, response: Response, next: NextFunction):
  * @param response - The response.
  */
 function answerUnconfigured(_request: Request, response: Response): void {
+  response.set('Cache-Control', 'no-store')
   errorResponse(response, ANALYTICS_UNCONFIGURED.message, 503, ANALYTICS_UNCONFIGURED.code)
 }
 

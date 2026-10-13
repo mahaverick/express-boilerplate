@@ -158,7 +158,7 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
  * memberships are locked first, in the membership lock order),
  * record `tenant.purged` in the platform tenant, and queue a `$groupidentify`
  * marker for it, which the drainer sends with the group's name cleared and
- * its status `purged`: PostHog cannot delete a group (SECURITY.md).
+ * its status `purged`: PostHog cannot delete a group (ARCHITECTURE.md, "Analytics").
  * `memberCount` counts the members whose accounts are not soft-deleted.
  * @param actor - The platform owner, recently authenticated.
  * @param tenantId - The tenant.

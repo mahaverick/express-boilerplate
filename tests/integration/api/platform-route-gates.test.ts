@@ -5,7 +5,9 @@
  * admitted, and a stale sign-in refused on step-up routes. A completeness
  * check walks the platform router and its sub-routers, so a route added
  * without a row here fails CI (OWASP API5: every function gets an explicit
- * gate).
+ * gate). The one staff route outside /platform, `POST /auth/reauthenticate`,
+ * has its own block: a refused caller must get exactly what an unknown path
+ * on the auth router gets.
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
@@ -13,6 +15,7 @@ import type { Response } from 'supertest'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -599,4 +602,172 @@ describe('/api/v1/platform route gates', () => {
       info.mockRestore()
     }
   )
+
+  describe('POST /api/v1/auth/reauthenticate, the staff route on the auth router', () => {
+    const REAUTH_PATH = '/api/v1/auth/reauthenticate'
+
+    /**
+     * Headers that differ between any two responses, whatever the route.
+     */
+    const VOLATILE_HEADERS = new Set([
+      'date',
+      'x-request-id',
+      'etag',
+      'content-length',
+      'connection',
+      'keep-alive',
+      'ratelimit-reset',
+      'ratelimit-remaining',
+    ])
+
+    /**
+     * One request a caller might send: its method, Content-Type and body text, and Origin.
+     */
+    interface RequestVariant {
+      label: string
+      method: 'post' | 'options'
+      contentType?: string
+      body?: string
+      origin?: string
+    }
+    const JSON_BODY: RequestVariant = {
+      label: 'POST with a JSON body',
+      method: 'post',
+      contentType: 'application/json',
+      body: '{"password":"x"}',
+    }
+    const TEXT_BODY: RequestVariant = {
+      label: 'POST with a text/plain body',
+      method: 'post',
+      contentType: 'text/plain',
+      body: 'password=x',
+    }
+    /**
+     * JSON, the three bodies a form can send, no body, and an OPTIONS from a
+     * disallowed origin with and without a content type.
+     */
+    const VARIANTS: readonly RequestVariant[] = [
+      JSON_BODY,
+      TEXT_BODY,
+      {
+        label: 'POST with a urlencoded body',
+        method: 'post',
+        contentType: 'application/x-www-form-urlencoded',
+        body: 'password=x',
+      },
+      {
+        label: 'POST with a multipart body',
+        method: 'post',
+        contentType: 'multipart/form-data; boundary=x',
+        body: '--x--',
+      },
+      { label: 'POST with no body', method: 'post' },
+      { label: 'OPTIONS from a disallowed origin', method: 'options', origin: DISALLOWED_ORIGIN },
+      {
+        label: 'OPTIONS from a disallowed origin with a text/plain type',
+        method: 'options',
+        origin: DISALLOWED_ORIGIN,
+        contentType: 'text/plain',
+      },
+    ]
+
+    /**
+     * Sends one variant to `path`, with a bearer token unless `token` is undefined.
+     */
+    function send(
+      path: string,
+      token: string | undefined,
+      variant: RequestVariant
+    ): Promise<Response> {
+      const pending = request(app)[variant.method](path)
+      if (token !== undefined) pending.set('Authorization', `Bearer ${token}`)
+      if (variant.origin !== undefined) pending.set('Origin', variant.origin)
+      if (variant.contentType !== undefined) pending.set('Content-Type', variant.contentType)
+      return variant.body === undefined ? pending : pending.send(variant.body)
+    }
+
+    /**
+     * What a caller can compare between two responses: the status, the body
+     * without its request id, and every header but the volatile ones.
+     */
+    function observable(response: Response): {
+      status: number
+      body: unknown
+      headers: Record<string, unknown>
+    } {
+      const body = Object.fromEntries(
+        Object.entries(response.body as Record<string, unknown>).filter(
+          ([key]) => key !== 'requestId'
+        )
+      )
+      const headers = Object.fromEntries(
+        Object.entries(response.headers).filter(([name]) => !VOLATILE_HEADERS.has(name))
+      )
+      return { status: response.status, body, headers }
+    }
+
+    /**
+     * Sends one variant to the route and to an unknown sibling auth path, with the same token or none.
+     */
+    async function againstSibling(
+      token: string | undefined,
+      variant: RequestVariant
+    ): Promise<{ route: Response; sibling: Response }> {
+      const route = await send(REAUTH_PATH, token, variant)
+      const sibling = await send(`/api/v1/auth/${randomUUID()}`, token, variant)
+      return { route, sibling }
+    }
+
+    it.each(VARIANTS)(
+      'answers a signed-in non-staff caller exactly what an unknown auth path answers: $label',
+      async (variant) => {
+        const { route, sibling } = await againstSibling(await tokenFor(undefined), variant)
+
+        expect(observable(route)).toEqual(observable(sibling))
+      }
+    )
+
+    it.each(VARIANTS.filter((variant) => variant.method === 'options'))(
+      'answers an anonymous caller exactly what an unknown auth path answers: $label',
+      async (variant) => {
+        const { route, sibling } = await againstSibling(undefined, variant)
+
+        expect(observable(route)).toEqual(observable(sibling))
+      }
+    )
+
+    it.each([JSON_BODY, TEXT_BODY])(
+      'answers non-staff with a stale sign-in exactly what an unknown auth path answers: $label',
+      async (variant) => {
+        const token = await tokenFor(undefined, new Date(Date.now() - ELEVEN_MINUTES_MS))
+
+        const { route, sibling } = await againstSibling(token, variant)
+
+        expect(observable(route)).toEqual(observable(sibling))
+      }
+    )
+
+    it('answers non-staff past the limiter budget exactly what an unknown auth path answers', async () => {
+      const token = await tokenFor(undefined)
+      for (let attempt = 0; attempt <= RATE_LIMITS.reauthenticate.limit; attempt += 1) {
+        const { route, sibling } = await againstSibling(token, JSON_BODY)
+        expect({ attempt, ...observable(route) }).toEqual({ attempt, ...observable(sibling) })
+      }
+    })
+
+    it('answers viewer a text/plain body with the router-wide JSON gate', async () => {
+      const response = await send(REAUTH_PATH, await tokenFor('viewer'), TEXT_BODY)
+
+      expect(response.status).toBe(415)
+      expect((response.body as { code?: string }).code).toBe('UNSUPPORTED_MEDIA_TYPE')
+    })
+
+    it('admits viewer past every gate to the limiter and the handler', async () => {
+      const response = await send(REAUTH_PATH, await tokenFor('viewer'), JSON_BODY)
+
+      // A wrong password is the handler's own 400, under the limiter's headers.
+      expect(response.status).toBe(400)
+      expect(response.headers).toHaveProperty('ratelimit-limit')
+    })
+  })
 })

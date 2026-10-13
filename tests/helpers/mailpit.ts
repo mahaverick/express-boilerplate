@@ -5,7 +5,15 @@
 import { expect } from 'vitest'
 import { settle } from './timing'
 
-const MAILPIT_API = 'http://localhost:8025/api/v1'
+/**
+ * Mailpit's HTTP API: `MAILPIT_URL` (test env, `.env.test.local` or the shell) or the compose stack's.
+ * Read per call, after `tests/helpers/setup-global.ts` has loaded the test env.
+ * @returns The API base URL, with one trailing slash, if any, dropped.
+ */
+function mailpitApi(): string {
+  const base = process.env.MAILPIT_URL?.trim() || 'http://localhost:8025'
+  return `${base.replace(/\/$/, '')}/api/v1`
+}
 
 /**
  * One hit in a Mailpit search result.
@@ -35,7 +43,7 @@ export interface MailpitMessageDetail {
 export async function findMailpitMessages(recipient: string): Promise<MailpitMessage[]> {
   const query = `to:${recipient}`
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
+    const response = await fetch(`${mailpitApi()}/search?query=${encodeURIComponent(query)}`)
     const body = (await response.json()) as { messages: MailpitMessage[] }
     if (body.messages.length > 0) return body.messages
     await settle(100, 'poll interval')
@@ -57,7 +65,7 @@ export async function findMailpitMessages(recipient: string): Promise<MailpitMes
 export async function assertNoMailpitMessage(recipient: string): Promise<void> {
   const query = `to:${recipient}`
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
+    const response = await fetch(`${mailpitApi()}/search?query=${encodeURIComponent(query)}`)
     const body = (await response.json()) as { messages: MailpitMessage[] }
     expect(body.messages).toHaveLength(0)
     await settle(100, 'poll interval: absence has no event, so the whole budget is polled')
@@ -69,7 +77,7 @@ export async function assertNoMailpitMessage(recipient: string): Promise<void> {
  * @param id - The Mailpit message id.
  */
 export async function getMailpitMessage(id: string): Promise<MailpitMessageDetail> {
-  const response = await fetch(`${MAILPIT_API}/message/${id}`)
+  const response = await fetch(`${mailpitApi()}/message/${id}`)
   return (await response.json()) as MailpitMessageDetail
 }
 
@@ -94,7 +102,7 @@ export async function drainMailpit(recipient: string): Promise<void> {
  */
 export async function deleteMailpitMessage(id: string): Promise<void> {
   try {
-    await fetch(`${MAILPIT_API}/messages`, {
+    await fetch(`${mailpitApi()}/messages`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ IDs: [id] }),

@@ -165,9 +165,12 @@ function isHarmlessFragment(fragment: string): boolean {
 
 /**
  * The path segment after `/reset/`, `/verify/`, `/invite/` or `/accept/`:
- * a token however short (`/reset/abc123XYZ`). The prefix is kept.
+ * a token however short (`/reset/abc123XYZ`). The prefix is kept. The
+ * segment stops before a `,` or `;` followed by a `Bearer` or `Basic` scheme
+ * word and whitespace, so that credential is left to its own rule.
  */
-const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<>]+/g
+const PATH_TOKEN_PATTERN =
+  /(\/(?:reset|verify|invite|accept)\/)(?!\[)(?:(?![,;](?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])\s)[^\s/?#"'<>])+/g
 
 /**
  * `Bearer`, in any letter case, and the credential after it, up to
@@ -178,7 +181,7 @@ const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<
 const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
 
 /**
- * HTTP Basic credentials: `Basic`, `basic` or `BASIC`, whitespace, and a
+ * HTTP Basic credentials: `Basic` in any letter case, whitespace, and a
  * base64 value of at least eight characters that holds an uppercase letter, a
  * digit, `+` or `/`. So `Basic validation failed` is left alone, but
  * capitalised prose (`Basic Authentication required`) is taken. Like
@@ -187,7 +190,7 @@ const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
  * credential.
  */
 const BASIC_PATTERN =
-  /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
+  /(?<![G-Zg-z_])([Bb][Aa][Ss][Ii][Cc])\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
 
 /**
  * The separator between a secret-named key and its value: `:`, `=`, `=>`
@@ -241,6 +244,50 @@ const KEPT_VALUE = [
  * delimiter, so a secret key holding it is replaced whole.
  */
 const SCHEMED_PLACEHOLDER_VALUE = String.raw`${AUTH_SCHEMES}[ \t]+${PLACEHOLDER}(?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?`
+
+/**
+ * A `Bearer [token]` or `Basic [token]` an earlier rule wrote, the scheme's
+ * letter case aside.
+ */
+const SCHEME_PLACEHOLDER = String.raw`(?:Bearer|[Bb][Aa][Ss][Ii][Cc]) \[token\]`
+
+/**
+ * One `key=value` pair after a replaced scheme credential, joined by `,` or `;`
+ * with whitespace, line breaks included, on either side
+ * (`Bearer [token],refresh=xyz`): another credential or cookie may sit there.
+ * The `=` may be URL-encoded (`%3D`). The value is a JSON-escaped quoted
+ * string (`\"…\"`) closed before whitespace, `,`, `;`, a quote, a backslash
+ * or the end of the text; a quoted string closed before whitespace, `,`, `;`
+ * or the end; a quoted string left open to the end of its line; or else an
+ * unquoted run that may hold a placeholder a key rule wrote
+ * (`,password=[redacted]`) and stops before another scheme placeholder, so
+ * that credential starts its own match.
+ */
+const SCHEME_TAIL_PAIR = String.raw`\s*[,;]\s*[\w.-]+(?:=|%3[Dd])(?:\\"[^"\\\n]*\\"(?=[\s,;"\\]|$)|"[^"\\\n]*"(?=[\s,;]|$)|"[^"\\\n]*(?=\n|$)|'[^'\\\n]*'(?=[\s,;]|$)|(?:${PLACEHOLDER}|(?!${SCHEME_PLACEHOLDER})[^\s"'\\,;&})\]])*)`
+
+/**
+ * The `Bearer [token]` or `Basic [token]` an earlier rule wrote, with the pairs
+ * joined to it. Group 1, and any whitespace before the first pair's own `,`
+ * or `;`, is kept; the pairs become `[redacted]` after that separator. It runs
+ * after every other rule but the last key redaction. A header-valued key
+ * (`, cookie=OAuth abc`) or an array value is redacted past the first
+ * whitespace or `]`, where this rule stops, and a phone number, address or
+ * secret in a pair is replaced whole, so taking the pair first would leave
+ * the rest of the value, or of the number, in view. It may follow any
+ * character (`0100Bearer [token]`), so a pass that turns what precedes it
+ * into a placeholder does not change whether it matches. It misses a pair
+ * whose credential a secret key's value already took
+ * (`token=Bearer abc,refresh=xyz` keeps `,refresh=xyz`), a quote inside an
+ * unquoted value (`,a=b"x"` keeps `"x"`), a quoted value glued to more text
+ * or split by a line break (`,a=""x`, `,a="x\ny"`), a credential the Bearer
+ * or Basic rule does not take (`xBearer abc`, `_Bearer abc`, `gBasic …`: a
+ * scheme word glued to a letter from `g` to `z` or a `_`), and a fully
+ * URL-encoded header (`Bearer%20abc%2Crefresh%3Dxyz`).
+ */
+const SCHEME_TAIL_PATTERN = new RegExp(
+  `(${SCHEME_PLACEHOLDER})(${SCHEME_TAIL_PAIR}(?:${SCHEME_TAIL_PAIR})*)`,
+  'g'
+)
 
 /**
  * An array value, to its first `]` on the line (`["hunter2", "x"]`).
@@ -607,16 +654,19 @@ const EMAIL_PATTERN = new RegExp(
  * a scheme of at most 32 characters and no `//` (`mailto:[email]?subject=…`,
  * `mailto:[email],[email]?cc=…`, `xmpp:[email]?message;body=…`), or straight
  * after `mailto:` (`mailto:?to=…`); addresses may be joined by `,` or `;`,
- * with whitespace after. The query rule takes no word after `@`, so
- * this query is left to this rule, which runs after every other rule but the
- * last key redaction, so a phone number, IP address or secret in the query is
- * replaced whole first. Group 1, the scheme and the addresses, is kept and
- * the rest of the query, up to whitespace, a quote, `<` or `>`, becomes
- * `?[query]`, as the query rule writes it. A bare address before `?`
- * (`jane@localhost?x=1`) is not a URL, and its query is kept.
+ * with whitespace after, or by an encoded `%2C` or `%3B` that the email rule
+ * already took into the next address (`mailto:[email][email]?…`). The query
+ * rule takes no word after `@`, so this query is left to this rule, which
+ * runs after every other rule but `SCHEME_TAIL_PATTERN` and the last key
+ * redaction, so a phone number, IP address or secret in the query is
+ * replaced whole first. Group 1, the
+ * scheme and the addresses, is kept and the rest of the query, up to
+ * whitespace, a quote, `<` or `>`, becomes `?[query]`, as the query rule
+ * writes it. A bare address before `?` (`jane@localhost?x=1`) is not a URL,
+ * and its query is kept.
  */
 const EMAIL_QUERY_PATTERN =
-  /(?<![a-z\d+.-])((?:mailto:(?:\[email\])?|[a-z][a-z\d+.-]{0,31}:\[email\])(?:[,;]\s*\[email\])*)\?[^\s"'<>]+/gi
+  /(?<![a-z\d+.-])((?:mailto:(?:\[email\])?|[a-z][a-z\d+.-]{0,31}:\[email\])(?:(?:[,;]\s*)?\[email\])*)\?[^\s"'<>]+/gi
 
 /**
  * An email address whose unquoted local part comes straight after a `/`,
@@ -676,6 +726,18 @@ const IPV4_PATTERN = new RegExp(
  */
 const IPV6_PATTERN =
   /(?<![\w:])(?:(?:[\dA-Fa-f]{1,4}:){7}[\dA-Fa-f]{1,4}|(?:[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6})?::[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}|[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}::)(?![\w:])/g
+
+/**
+ * The head of an IPv6 address whose last group an earlier rule took into a
+ * `[secret]` or `[email]` (`2001:db8::8a2e:370:[secret]`, where an AWS-shaped
+ * run took `7334/…`): three to eight colon-joined hex groups, or groups
+ * that hold a `::`, that start after neither a word character nor a `:` and
+ * end in the `:` before the placeholder. So two groups with no `::`, such as
+ * a time or a port pair (`80:443:[email]`), are kept. `IPV6_PATTERN` refuses
+ * an address followed by `[`, so the head would stay in view.
+ */
+const IPV6_HEAD_PATTERN =
+  /(?<![\w:])(?:(?:[\dA-Fa-f]{1,4}:){3,8}|(?:(?:[\dA-Fa-f]{1,4}:){1,7}:|::)(?:[\dA-Fa-f]{1,4}:){0,6})(?=\[(?:secret|email)\])/g
 
 /**
  * An international phone number: `+`, then 8 to 15 digits, single spaces,
@@ -795,7 +857,8 @@ function scanned(value: string): string {
 /**
  * Cut a text to `SCRUB_VALUE_MAX` characters, the marker included.
  * @param value - The scrubbed text.
- * @param wasCut - Whether `scanned` already dropped part of the input.
+ * @param wasCut - Whether `scanned` dropped part of the input or of a text a
+ *   pass wrote.
  * @returns The text, ending in `…[truncated]` when anything was dropped.
  */
 function capped(value: string, wasCut: boolean): string {
@@ -1180,8 +1243,8 @@ function redactRanges(scrub: Scrub, ranges: readonly [number, number][]): void {
 /**
  * Every rule once, in order, then the values of keys found inside
  * replacements.
- * @param input - The scanned text (`scanned`), or the text the previous pass
- *   wrote.
+ * @param input - The scanned text (`scanned`) of the input or of the text
+ *   the previous pass wrote.
  * @returns The scrubbed text, and whether a key inside a replacement was found.
  */
 function scrubOnce(input: string): { text: string; keyInToken: boolean } {
@@ -1232,7 +1295,14 @@ function scrubOnce(input: string): { text: string; keyInToken: boolean } {
   apply(scrub, BASE64_RUN_PATTERN, (match) =>
     isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
+  apply(scrub, IPV6_HEAD_PATTERN, whole('[ip]'))
   apply(scrub, EMAIL_QUERY_PATTERN, afterGroup('?[query]'))
+  apply(scrub, SCHEME_TAIL_PATTERN, (match) => {
+    // The replacement starts at the first separator, so whitespace or a line break before it is kept.
+    const pairs = match[2] ?? ''
+    const at = Math.max(0, pairs.search(/[,;]/))
+    return { offset: (match[1] ?? '').length + at, text: `${pairs.charAt(at)}[redacted]` }
+  })
   redactRanges(scrub, keyRanges)
   return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
 }
@@ -1308,16 +1378,24 @@ const PASSES_MAX = 3
  *    IPv6 address becomes `[ip]` and an international phone number `[phone]`;
  *    a run of 32 or more hex digits becomes `[secret]`, and the PostHog,
  *    vendor and AWS rules run again for a key glued to it; a run of 40 or
- *    more base64 characters that `isSecretRun` accepts becomes `[secret]`. A
+ *    more base64 characters that `isSecretRun` accepts becomes `[secret]`,
+ *    and the head of an IPv6 address whose last group went into a `[secret]`
+ *    or `[email]` becomes `[ip]` (`IPV6_HEAD_PATTERN`). A
  *    UUID on its own matches none of these and is kept. Then the query of a
  *    URL whose path is addresses (`mailto:[email]?subject=…`), or straight
- *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`).
+ *    after `mailto:`, becomes `?[query]` (`EMAIL_QUERY_PATTERN`). Last, any
+ *    `,key=value` or `;key=value` pairs, quoted values included, still glued
+ *    to a `Bearer [token]` or `Basic [token]` become `[redacted]` after the
+ *    first separator (`SCHEME_TAIL_PATTERN`), while prose after a comma is
+ *    kept.
  * 7. The value of a secret-named key that an earlier rule took into its
  *    placeholder, found again in the original text (`tokenKeyRanges`),
  *    becomes `[redacted]`. When there is one, the rules run again over the
  *    result, at most `PASSES_MAX` times in all.
  * 8. The result is cut to `SCRUB_VALUE_MAX` characters, ending in
- *    `…[truncated]`; only the first `SCAN_MAX` characters are scanned.
+ *    `…[truncated]`; every pass scans only the first `SCAN_MAX` characters
+ *    of its input (`scanned`), the later passes included, since a pass can
+ *    lengthen the text.
  *
  * A key-named word is replaced even in prose (`Missing token: please log in`
  * becomes `Missing token: [redacted]`): the rule gives up some readable text
@@ -1330,8 +1408,9 @@ const PASSES_MAX = 3
  * against a URL's or path's query or fragment, end an address with a `.`
  * straight before a query (`jane@example.com.?a=1`), or leave a placeholder
  * in quotes straight before an `@` (a placeholder written by the first pass
- * can open a match for the second, and a replaced quoted address does not
- * stop a path).
+ * can open a match for the second, a replaced quoted address does not stop
+ * a path, and a later rule can shorten a quoted span under the 64-character
+ * quoted local-part limit, as the scheme-tail rule does before a `%40`).
  * @param value - Text bound for a third party, such as an exception's type or
  *   value, a stack frame's filename or function, or a log line.
  * @returns The scrubbed text, at most `SCRUB_VALUE_MAX` characters.
@@ -1339,12 +1418,16 @@ const PASSES_MAX = 3
 export function scrubText(value: string): string {
   const input = scanned(value)
   let pass = scrubOnce(input)
+  let wasCut = input.length < value.length
   if (pass.keyInToken) {
     for (let count = 1; count < PASSES_MAX; count += 1) {
-      const next = scrubOnce(pass.text)
+      // A pass can lengthen the text (`token=a` becomes `token=[redacted]`), so each pass's input is cut to SCAN_MAX again.
+      const rescanned = scanned(pass.text)
+      wasCut ||= rescanned.length < pass.text.length
+      const next = scrubOnce(rescanned)
       if (next.text === pass.text) break
       pass = next
     }
   }
-  return capped(pass.text, input.length < value.length)
+  return capped(pass.text, wasCut)
 }

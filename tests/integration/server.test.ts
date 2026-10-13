@@ -79,11 +79,12 @@ describe('graceful shutdown with open notification streams', () => {
     resetLifecycleForTests()
   })
 
-  it('answers /health/ready with 503 once shutdown has begun', async () => {
+  it('answers /health/ready with a no-store 503 once shutdown has begun', async () => {
     markShuttingDown()
     const response = await request(createApp()).get('/health/ready')
     expect(response.status).toBe(503)
     expect(response.body).toMatchObject({ status: 'shutting-down' })
+    expect(response.get('Cache-Control')).toBe('no-store')
   })
 
   it('flips readiness at once, ends open streams (keep-alive included) and resolves well before the drain timeout', async () => {

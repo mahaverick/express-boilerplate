@@ -6,11 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
-
-/**
- * Header carrying the correlation id in both directions.
- */
-export const REQUEST_ID_HEADER = 'X-Request-Id'
+import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 
 const UUID_PATTERN = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i
 

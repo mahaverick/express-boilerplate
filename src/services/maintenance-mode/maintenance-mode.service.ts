@@ -90,19 +90,32 @@ const NOTICED_KINDS: ReadonlySet<ChangeKind> = new Set(['switch_on', 'escalate',
 const NO_REASON = 'No reason given.'
 
 /**
- * Refuse a sign-in in `full` unless the user is staff (holds any platform
- * role). Called by password login and the Google callback after the user is
- * identified and before a session is created. In any other mode, or while
- * the mode is unknown, it allows the sign-in without reading the user's role.
- * @param userId - The user signing in.
- * @returns Resolves when the sign-in may go ahead.
- * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` for a non-staff user in `full`.
+ * The nil UUID, an id no account is expected to have (`users.id` defaults to
+ * `uuidv7()`): read in place of a missing user id, so a sign-in that reaches
+ * no account costs the same role read as one that does. The read's result is
+ * ignored, so a row imported with this id grants nothing.
  */
-export async function assertSignInAllowed(userId: string): Promise<void> {
+const NO_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000'
+
+/**
+ * Refuse a sign-in in `full` unless the user is staff (holds any platform
+ * role). Password login calls it once the credentials pass; the Google
+ * callback, in `full` only, calls it on a read-only account lookup before
+ * anything is written, and in every mode again once the account is resolved. Both call it before a session is
+ * created. In any other mode, or while the mode is unknown, it allows the
+ * sign-in without reading the user's role.
+ * @param userId - The user signing in; undefined for a sign-in that reaches no account, which cannot be staff.
+ * @returns Resolves when the sign-in may go ahead.
+ * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` for a non-staff user, or no account, in `full`.
+ */
+export async function assertSignInAllowed(userId: string | undefined): Promise<void> {
   const snapshot = getMaintenanceMode()
   if (snapshot.mode !== 'full') return
-  const platformRole = await getPlatformMembership(userId)
-  if (platformRole === null) throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+  // The same role read with or without an account, so a refusal's timing does not tell them apart.
+  const platformRole = await getPlatformMembership(userId ?? NO_ACCOUNT_ID)
+  if (userId === undefined || platformRole === null) {
+    throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+  }
 }
 
 /**

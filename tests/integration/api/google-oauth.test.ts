@@ -284,7 +284,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const cookies = response.headers['set-cookie'] as string[] | undefined
         const refreshCookie = cookies?.find((cookie) => cookie.startsWith('refreshToken='))
         expect(refreshCookie).toBeDefined()
-        // 'strict' (the refresh cookie's attribute everywhere else) would be withheld on the redirect chain this response starts, so the test asserts the literal attribute, not just that a cookie exists.
+        // The callback sets the cookie Lax by decision, unlike the Strict it carries everywhere else (SECURITY.md#the-refresh-cookie), so the test asserts the literal attribute, not just that a cookie exists.
         expect(refreshCookie?.toLowerCase()).toContain('samesite=lax')
         expect(refreshCookie?.toLowerCase()).not.toContain('samesite=strict')
 
@@ -518,6 +518,69 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(user.emailVerifiedAt?.getTime()).toBe(alreadyVerified?.emailVerifiedAt?.getTime())
     })
 
+    it('answers an unverified Google email the same, at the same cost, whether or not the address is registered', async () => {
+      const { getMaintenanceMode } =
+        await import('@/services/maintenance-mode/maintenance-mode-store.service')
+      expect(getMaintenanceMode().mode).toBe('off')
+      const { UserRepository: Users } = await import('@/repositories/user.repository')
+      const registered = await userRepository.create({
+        email: uniqueEmail(),
+        passwordHash: 'not-a-real-hash',
+      })
+      createdIds.push(registered.id)
+      const profiles = {
+        registered: googleProfile({ email: registered.email, emailVerified: false }),
+        unknown: googleProfile({ email: uniqueEmail(), emailVerified: false }),
+      }
+
+      const answers: Record<string, unknown> = {}
+      const emailReads: Record<string, number> = {}
+      for (const [name, profile] of Object.entries(profiles)) {
+        const findByEmail = vi.fn(Users.prototype.findByEmail.bind(userRepository))
+        await withMutatedMethod(Users.prototype, 'findByEmail', findByEmail, async () => {
+          try {
+            await signInWithGoogle(profile)
+            answers[name] = 'signed in'
+          } catch (error) {
+            answers[name] =
+              error instanceof Error
+                ? { type: error.constructor.name, ...error, message: error.message }
+                : error
+          }
+        })
+        emailReads[name] = findByEmail.mock.calls.length
+      }
+
+      expect(answers.registered).toEqual(answers.unknown)
+      expect(answers.unknown).toMatchObject({ statusCode: 403, code: 'email_not_verified' })
+      expect(emailReads.registered).toBe(emailReads.unknown)
+      // Refused before the lookup, so neither address is ever read.
+      expect(emailReads.unknown).toBe(0)
+    })
+
+    it('looks the account up once outside full maintenance, where the sign-in check reads nothing', async () => {
+      const { getMaintenanceMode } =
+        await import('@/services/maintenance-mode/maintenance-mode-store.service')
+      expect(getMaintenanceMode().mode).toBe('off')
+      const { AuthProviderRepository: Providers } =
+        await import('@/repositories/auth-provider.repository')
+      const { UserRepository: Users } = await import('@/repositories/user.repository')
+      const findByProviderAndId = vi.fn(
+        Providers.prototype.findByProviderAndId.bind(authProviderRepository)
+      )
+      const findByEmail = vi.fn(Users.prototype.findByEmail.bind(userRepository))
+
+      await withMutatedMethod(Providers.prototype, 'findByProviderAndId', findByProviderAndId, () =>
+        withMutatedMethod(Users.prototype, 'findByEmail', findByEmail, async () => {
+          await signInWithGoogle(googleProfile({ email: uniqueEmail(), emailVerified: true }))
+        })
+      )
+
+      // Only `resolveGoogleUser`'s own lookups: the link, then the address.
+      expect(findByProviderAndId).toHaveBeenCalledTimes(1)
+      expect(findByEmail).toHaveBeenCalledTimes(1)
+    })
+
     it('rejects linking an unverified Google email to an existing user (account-takeover guard)', async () => {
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
@@ -596,13 +659,19 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(freshProviders.map((provider) => provider.provider)).toEqual(['email'])
     })
 
-    it('rejects a Google profile that carries no email at all', async () => {
+    it('rejects a Google profile that carries no email at all, and writes no row', async () => {
       const profile = googleProfile({ includeEmails: false })
-
-      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
-        statusCode: 400,
-        code: 'google_email_missing',
-      })
+      try {
+        await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
+          statusCode: 400,
+          code: 'google_email_missing',
+        })
+      } finally {
+        const links = await sql<{ user_id: string }[]>`
+          select user_id from auth_providers where provider = 'google' and provider_id = ${profile.id}`
+        createdIds.push(...links.map((link) => link.user_id))
+        expect(links).toHaveLength(0)
+      }
     })
 
     it('lowercases the Google email before matching it against an existing user', async () => {

@@ -8,19 +8,20 @@
  * leaves a matching job on the real "email" queue, not Mailpit delivery.
  */
 import { randomUUID } from 'node:crypto'
-import { UnrecoverableError, type Job, type Worker } from 'bullmq'
+import { UnrecoverableError, type Job } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import type { EmailJobData } from '@/jobs/email.job'
-import { addNotificationJob, type NotificationJobData } from '@/jobs/notification.job'
+import { addNotificationJob } from '@/jobs/notification.job'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { updatePreferences } from '@/services/notification.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
-import { waitForLoggedCall } from '../../helpers/queue-jobs'
+import { waitForJobSettled, waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
  * The email queue's jobs in the waiting, active, completed, delayed and prioritized states,
@@ -48,44 +49,6 @@ const userRepository = new UserRepository()
  */
 function uniqueEmail(label: string): string {
   return `notification-worker-${label}-${randomUUID()}@example.test`
-}
-
-/**
- * Resolves with `'completed'` or `'failed'` once the job `jobId` settles on `worker`. It is
- * scoped to one job id, as `waitForJobSettled` in email.worker.test.ts is, so two tests that
- * run jobs through the same shared Worker never resolve each other's promise.
- */
-function waitForJobSettled(
-  worker: Worker<NotificationJobData>,
-  jobId: string
-): Promise<'completed' | 'failed'> {
-  return new Promise((resolve) => {
-    /**
-     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onCompleted = (job: Job<NotificationJobData>): void => {
-      if (job.id !== jobId) return
-      cleanup()
-      resolve('completed')
-    }
-    /**
-     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onFailed = (job: Job<NotificationJobData> | undefined): void => {
-      if (job?.id !== jobId) return
-      cleanup()
-      resolve('failed')
-    }
-    /**
-     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
-     */
-    const cleanup = (): void => {
-      worker.off('completed', onCompleted)
-      worker.off('failed', onFailed)
-    }
-    worker.on('completed', onCompleted)
-    worker.on('failed', onFailed)
-  })
 }
 
 describe('notification.worker', () => {
@@ -140,7 +103,9 @@ describe('notification.worker', () => {
     })
     if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getNotificationQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
 
     const { notifications } = await notificationRepository.list(userId, { limit: 10 })
     expect(notifications).toHaveLength(1)
@@ -181,10 +146,58 @@ describe('notification.worker', () => {
     })
     if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getNotificationQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
 
     const { notifications } = await notificationRepository.list(userId, { limit: 10 })
     expect(notifications).toEqual([])
+
+    const emailJobs = await emailQueueJobs()
+    expect(emailJobs.some((emailQueueJob) => emailQueueJob.data.to === recipient)).toBe(true)
+  }, 15_000)
+
+  it('skips the in-app row for a type switched off through the preferences service, and keeps the other types', async () => {
+    const userId = await createUser()
+    await updatePreferences(userId, [
+      { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
+    ])
+
+    const recipient = uniqueEmail('in-app-toggled')
+    const quiet = await addNotificationJob({
+      userId,
+      type: 'password_changed',
+      title: 'Password changed',
+      body: 'body',
+      email: {
+        to: recipient,
+        templateKey: 'email_verification',
+        variables: {
+          firstName: 'Ada',
+          verificationUrl: 'https://example.test/verify?token=abc',
+          appName: 'Test',
+        },
+      },
+    })
+    if (!quiet.id) throw new Error('expected addNotificationJob to assign a job id')
+    // Attach each wait right after its add; the helper also sees a job that already settled.
+    const quietSettled = waitForJobSettled(worker, getNotificationQueue(), quiet.id)
+    const loud = await addNotificationJob({
+      userId,
+      type: 'verify_email',
+      title: 'Verify your email',
+      body: 'body',
+    })
+    if (!loud.id) throw new Error('expected addNotificationJob to assign a job id')
+    const loudSettled = waitForJobSettled(worker, getNotificationQueue(), loud.id)
+
+    await expect(Promise.all([quietSettled, loudSettled])).resolves.toEqual([
+      'completed',
+      'completed',
+    ])
+
+    const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+    expect(notifications.map((notification) => notification.type)).toEqual(['verify_email'])
 
     const emailJobs = await emailQueueJobs()
     expect(emailJobs.some((emailQueueJob) => emailQueueJob.data.to === recipient)).toBe(true)
@@ -201,7 +214,9 @@ describe('notification.worker', () => {
     })
     if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getNotificationQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
 
     const { notifications } = await notificationRepository.list(userId, { limit: 10 })
     expect(notifications).toHaveLength(1)
@@ -220,7 +235,7 @@ describe('notification.worker', () => {
     )
     if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('failed')
+    await expect(waitForJobSettled(worker, getNotificationQueue(), job.id)).resolves.toBe('failed')
 
     const failedJob = await getNotificationQueue().getJob(job.id)
     expect(failedJob?.failedReason).toBeDefined()

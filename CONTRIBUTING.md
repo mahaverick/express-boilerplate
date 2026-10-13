@@ -4,7 +4,9 @@
 
 Follow the [README](README.md) quick start first. Running tests locally needs
 the compose stack up: `tests/integration/**` needs Postgres and Redis. The suite
-loads `.env.test.local` and then `.env.test`, never `.env`. `tests/unit/**`
+loads `.env.test.local` and then `.env.test`, never `.env`. To run against an
+isolated Mailpit, set `MAILPIT_URL` (its HTTP API, default
+`http://localhost:8025`) and `SMTP_PORT` there or in the shell. `tests/unit/**`
 needs neither, but only under `pnpm test:unit`; `pnpm test`'s globalSetup
 provisions the test databases before any test runs, so it needs the stack even
 for unit tests ([DATABASE.md](DATABASE.md#the-test-database)).
@@ -172,8 +174,7 @@ Two more workflows run beside it:
 ## Secrets
 
 Never commit a real secret, even a test one that resembles a production value.
-`.env`, `.env.local`, `.env.development.local`, `.env.test.local` and
-`.env.production.local` are git-ignored; other `.env.*.local` names are not.
+`.env`, `.env.local` and every `.env.*.local` are git-ignored.
 `.env.test` is committed on purpose: every value in it is a fixture, and it is
 its own example, so do not add a copy beside it.
 

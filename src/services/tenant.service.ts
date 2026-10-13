@@ -17,7 +17,7 @@ import {
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
-import { lockActorRole } from '@/services/tenant-membership.service'
+import { lockActorRole, lockUserForOwnership } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
 import type {
   CreateTenantInput,
@@ -114,14 +114,22 @@ function changedFields<TValues extends object>(
 
 /**
  * Create a tenant with its settings row and the actor as sole owner, and
- * audit it, in one transaction; then emit `tenant_created`.
+ * audit it, in one transaction; then emit `tenant_created`. The actor's user
+ * row is locked `FOR SHARE` first (`lockUserForOwnership`), so a concurrent
+ * staff delete of the actor either sees the new tenant or wins and this
+ * answers 401.
  * @param actor - The creating user, who becomes the owner.
  * @param input - The validated create body.
  * @returns The new tenant row.
- * @throws {HttpError} 409, when the slug is taken.
+ * @throws {HttpError} 409, when the slug is taken; 401 when the actor's account was deleted meanwhile.
  */
 export async function createTenant(actor: Actor, input: CreateTenantInput): Promise<Tenant> {
   const created = await withTransaction(async (tx) => {
+    await lockUserForOwnership(
+      actor.userId,
+      () => new HttpError('Authentication required', 401),
+      tx
+    )
     const tenant = await tenantRepository.create({ ...input, ownerId: actor.userId }, tx)
     // The creator is the owner from this write on, so they act as a member.
     await record(

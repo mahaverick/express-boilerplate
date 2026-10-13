@@ -1,12 +1,16 @@
 /**
  * @file `assertSignInAllowed` against the real platform membership and this
  * process's store, and the Google sign-in it guards: in `full` a non-staff
- * Google user is refused before any session row, and staff get one.
+ * Google sign-in is refused before anything is written (no account created,
+ * linked or claimed, no session revoked or issued), and staff get a session.
  */
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql } from '@/services/database.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
@@ -15,8 +19,10 @@ import {
   getMaintenanceModeStatus,
   getPublicMaintenanceStatus,
 } from '@/services/maintenance-mode/maintenance-mode.service'
+import { issueRefreshToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../../helpers/maintenance-mode'
+import { withMutatedMethod } from '../../../helpers/mutate'
 import { makeStaff } from '../../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -25,16 +31,17 @@ import {
 } from '../../../helpers/platform-users'
 
 /**
- * Builds a Google profile reporting `email` as verified, with a fresh Google id.
+ * Builds a Google profile for `email` with a fresh Google id, reported
+ * verified unless `isVerified` is false; `email` undefined carries no email claim.
  */
-function googleProfile(email: string): GoogleProfile {
+function googleProfile(email: string | undefined, isVerified = true): GoogleProfile {
   const id = randomUUID()
   return {
     provider: 'google',
     id,
     displayName: 'Test User',
     profileUrl: `https://plus.google.com/${id}`,
-    emails: [{ value: email, verified: true }],
+    ...(email !== undefined && { emails: [{ value: email, verified: isVerified }] }),
     _raw: '{}',
     _json: {
       iss: 'https://accounts.google.com',
@@ -42,10 +49,39 @@ function googleProfile(email: string): GoogleProfile {
       sub: id,
       iat: 0,
       exp: 0,
-      email,
-      email_verified: true,
+      ...(email !== undefined && { email, email_verified: isVerified }),
     },
   }
+}
+
+/**
+ * A fresh address the `afterEach` cleanup matches.
+ */
+function googleEmail(): string {
+  return `mm-google-${randomUUID()}@example.test`
+}
+
+/**
+ * Counts the `google` `auth_providers` rows for a Google id, or for a user.
+ */
+async function googleLinks(by: { providerId: string } | { userId: string }): Promise<number> {
+  const [row] =
+    'providerId' in by
+      ? await sql<{ count: number }[]>`
+          select count(*)::int as count from auth_providers
+          where provider = 'google' and provider_id = ${by.providerId}`
+      : await sql<{ count: number }[]>`
+          select count(*)::int as count from auth_providers
+          where provider = 'google' and user_id = ${by.userId}`
+  return row?.count ?? 0
+}
+
+/**
+ * Switches this process to `full`.
+ */
+async function enterFull(): Promise<void> {
+  await storeMaintenanceMode('full')
+  await reloadMaintenanceMode()
 }
 
 /**
@@ -107,6 +143,19 @@ describe('assertSignInAllowed', () => {
 
     await expect(assertSignInAllowed(user.id)).resolves.toBeUndefined()
   })
+
+  it('lets a sign-in that matches no account through while off or read_only', async () => {
+    await expect(assertSignInAllowed(undefined)).resolves.toBeUndefined()
+    await storeMaintenanceMode('read_only')
+    await reloadMaintenanceMode()
+    await expect(assertSignInAllowed(undefined)).resolves.toBeUndefined()
+  })
+
+  it('refuses a sign-in that matches no account in full', async () => {
+    await enterFull()
+
+    await expect(assertSignInAllowed(undefined)).rejects.toBeInstanceOf(MaintenanceModeError)
+  })
 })
 
 describe('Google sign-in in full', () => {
@@ -130,6 +179,183 @@ describe('Google sign-in in full', () => {
     await completeGoogleSignIn(googleProfile(user.email))
 
     expect(await sessionsOf(user.id)).toBe(1)
+  })
+
+  it('refuses a Google profile with no account, and creates nothing', async () => {
+    const email = googleEmail()
+    const profile = googleProfile(email)
+    await enterFull()
+
+    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+
+    const [users] = await sql<{ count: number }[]>`
+      select count(*)::int as count from users where email = ${email}`
+    expect(users?.count).toBe(0)
+    expect(await googleLinks({ providerId: profile.id })).toBe(0)
+  })
+
+  it('refuses a non-staff, verified account before linking it', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    await enterFull()
+
+    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+      MaintenanceModeError
+    )
+
+    expect(await googleLinks({ userId: user.id })).toBe(0)
+  })
+
+  it('refuses a non-staff, never-verified account before claiming it', async () => {
+    const user = await createTrackedUser({
+      email: googleEmail(),
+      verified: false,
+      hasPassword: true,
+    })
+    await issueRefreshToken(user.id, randomUUID())
+    await enterFull()
+
+    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+      MaintenanceModeError
+    )
+
+    const [row] = await sql<{ hasPassword: boolean; isUnverified: boolean }[]>`
+      select password_hash is not null as "hasPassword", email_verified_at is null as "isUnverified"
+      from users where id = ${user.id}`
+    expect(row).toEqual({ hasPassword: true, isUnverified: true })
+    expect(await googleLinks({ userId: user.id })).toBe(0)
+    const [tokens] = await sql<{ live: number }[]>`
+      select count(*)::int as live from user_tokens
+      where user_id = ${user.id} and revoked_at is null`
+    expect(tokens?.live).toBe(1)
+  })
+
+  it('answers a non-staff profile with no email with the 503, not a 400', async () => {
+    await enterFull()
+
+    await expect(completeGoogleSignIn(googleProfile(undefined))).rejects.toBeInstanceOf(
+      MaintenanceModeError
+    )
+  })
+
+  it('issues staff a session through an existing Google link', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    await makeStaff(user.id, 'viewer')
+    // Google now reports another address: only the link can find this account.
+    const profile = googleProfile(googleEmail())
+    await new AuthProviderRepository().create({
+      userId: user.id,
+      provider: 'google',
+      providerId: profile.id,
+    })
+    await enterFull()
+
+    await completeGoogleSignIn(profile)
+
+    expect(await sessionsOf(user.id)).toBe(1)
+  })
+
+  it('refuses staff whose Google email is unverified with the same 503, and links nothing', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    await makeStaff(user.id, 'admin')
+    await enterFull()
+
+    await expect(completeGoogleSignIn(googleProfile(user.email, false))).rejects.toBeInstanceOf(
+      MaintenanceModeError
+    )
+
+    expect(await googleLinks({ userId: user.id })).toBe(0)
+    expect(await sessionsOf(user.id)).toBe(0)
+  })
+
+  it('refuses every caller that cannot sign in as staff with one indistinguishable answer', async () => {
+    const member = await createTrackedUser({ email: googleEmail() })
+    const inactive = await createTrackedUser({ email: googleEmail(), active: false })
+    const staff = await createTrackedUser({ email: googleEmail() })
+    await makeStaff(staff.id, 'owner')
+    const deleted = await createTrackedUser({ email: googleEmail() })
+    const deletedLink = googleProfile(googleEmail())
+    await new AuthProviderRepository().create({
+      userId: deleted.id,
+      provider: 'google',
+      providerId: deletedLink.id,
+    })
+    await sql`update users set deleted_at = now() where id = ${deleted.id}`
+    await storeMaintenanceMode('full', { message: 'Back at noon.' })
+    await reloadMaintenanceMode()
+    // Only a Google-verified address of a staff account gets past; nothing else is told apart.
+    const profiles: Record<string, GoogleProfile> = {
+      unknown: googleProfile(googleEmail()),
+      unknownUnverified: googleProfile(googleEmail(), false),
+      member: googleProfile(member.email),
+      memberUnverified: googleProfile(member.email, false),
+      staffUnverified: googleProfile(staff.email, false),
+      noEmail: googleProfile(undefined),
+      linkToDeleted: deletedLink,
+      inactive: googleProfile(inactive.email),
+    }
+
+    const answers: Record<string, unknown> = {}
+    for (const [name, profile] of Object.entries(profiles)) {
+      try {
+        await completeGoogleSignIn(profile)
+        answers[name] = 'signed in'
+      } catch (error) {
+        answers[name] =
+          error instanceof HttpError
+            ? { type: error.constructor.name, ...error, message: error.message }
+            : error
+      }
+    }
+
+    const expected = Object.fromEntries(
+      Object.keys(profiles).map((name) => [name, answers.unknown])
+    )
+    expect(answers).toEqual(expected)
+    expect(answers.unknown).toMatchObject({
+      type: 'MaintenanceModeError',
+      statusCode: 503,
+      code: 'MAINTENANCE_MODE',
+      message: 'Back at noon.',
+    })
+  })
+
+  it('refuses a profile with no account even when a row holds the id read in its place', async () => {
+    const [placeholder] = await sql<{ id: string }[]>`
+      insert into users (id, email, email_verified_at)
+      values ('00000000-0000-0000-0000-000000000000', ${googleEmail()}, now())
+      returning id`
+    if (!placeholder) throw new Error('the nil-id user was not inserted')
+    await makeStaff(placeholder.id, 'owner')
+    const profile = googleProfile(googleEmail())
+    await enterFull()
+
+    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+
+    expect(await googleLinks({ providerId: profile.id })).toBe(0)
+  })
+
+  it('reads a platform role for a profile with no account too, so the refusal costs the same', async () => {
+    await enterFull()
+    const member = await createTrackedUser({ email: googleEmail() })
+    const unknownProfile = googleProfile(googleEmail())
+    const memberProfile = googleProfile(member.email)
+    const original = UserMembershipRepository.prototype.findPlatformRole.bind(
+      new UserMembershipRepository()
+    )
+    const findPlatformRole = vi.fn(original)
+
+    await withMutatedMethod(
+      UserMembershipRepository.prototype,
+      'findPlatformRole',
+      findPlatformRole,
+      async () => {
+        for (const profile of [unknownProfile, memberProfile]) {
+          await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+        }
+      }
+    )
+
+    expect(findPlatformRole).toHaveBeenCalledTimes(2)
   })
 })
 

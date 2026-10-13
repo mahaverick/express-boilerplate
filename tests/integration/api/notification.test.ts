@@ -116,6 +116,17 @@ async function seedDedupedNotification(userId: string): Promise<Notification> {
   return row
 }
 
+/**
+ * The stored `email_enabled` values for a user, one per `notification_preferences` row.
+ * @param userId - The user.
+ */
+async function storedEmailFlags(userId: string): Promise<boolean[]> {
+  const rows = await sql<
+    Array<{ email_enabled: boolean }>
+  >`select email_enabled from notification_preferences where user_id = ${userId}`
+  return rows.map((row) => row.email_enabled)
+}
+
 describe('/api/v1/notifications', () => {
   const createdUserIds: string[] = []
 
@@ -514,29 +525,144 @@ describe('/api/v1/notifications', () => {
   })
 
   /**
-   * No test here upserts a preference successfully through the route: `CONFIGURABLE_NOTIFICATION_TYPES`
-   * (notification.validators.ts) is empty because every `NOTIFICATION_TYPES` entry is
-   * non-disableable, so every well-formed update is rejected. The tests below cover that rejection
-   * and the ordinary validation failures; `NotificationPreferenceRepository.upsert` is covered
-   * directly in notification-preference.repository.test.ts, which bypasses the validator.
+   * `inAppEnabled` may be switched either way for any type the caller can see; `emailEnabled`
+   * must stay `true` for all five types, and nothing but a validated body ever reaches `upsert`.
    */
   describe('PUT /api/v1/notifications/preferences', () => {
-    // CONFIGURABLE_NOTIFICATION_TYPES is empty (see the JSDoc above), so this is a rejection, not a bug.
-    it('rejects an update for verify_email with a clear, field-scoped message', async () => {
-      const { token } = await createAuthenticatedUser()
+    it('turns a type in-app off, answers 200, and GET then shows it with email still on', async () => {
+      const { user, token } = await createAuthenticatedUser()
 
       const response = await request(app)
         .put('/api/v1/notifications/preferences')
         .set('Authorization', `Bearer ${token}`)
         .send({
           preferences: [
-            { notificationType: 'verify_email', emailEnabled: false, inAppEnabled: true },
+            { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
           ],
         })
 
-      expect(response.status).toBe(400)
-      const errors = envelopeOf<PreferencesBody>(response).errors
-      expect(errors?.preferences?.[0]).toMatch(/does not support a configurable preference/i)
+      expect(response.status).toBe(200)
+      expect(envelopeOf<PreferencesBody>(response).data?.preferences[0]).toMatchObject({
+        notificationType: 'password_changed',
+        emailEnabled: true,
+        inAppEnabled: false,
+      })
+      const after = await request(app)
+        .get('/api/v1/notifications/preferences')
+        .set('Authorization', `Bearer ${token}`)
+      const matrix = envelopeOf<PreferencesBody>(after).data?.preferences ?? []
+      expect(matrix.find((item) => item.notificationType === 'password_changed')).toEqual({
+        notificationType: 'password_changed',
+        emailEnabled: true,
+        inAppEnabled: false,
+      })
+      expect(await storedEmailFlags(user.id)).toEqual([true])
+    })
+
+    it('turns the in-app channel back on', async () => {
+      const { token } = await createAuthenticatedUser()
+      /**
+       * PUT the in-app toggle for `verify_email`.
+       * @param isInApp - The in-app value to store.
+       */
+      const put = (isInApp: boolean) =>
+        request(app)
+          .put('/api/v1/notifications/preferences')
+          .set('Authorization', `Bearer ${token}`)
+          .send({
+            preferences: [
+              { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: isInApp },
+            ],
+          })
+
+      const off = await put(false)
+      const on = await put(true)
+      expect(off.status).toBe(200)
+      expect(on.status).toBe(200)
+      const after = await request(app)
+        .get('/api/v1/notifications/preferences')
+        .set('Authorization', `Bearer ${token}`)
+      const matrix = envelopeOf<PreferencesBody>(after).data?.preferences ?? []
+      expect(matrix.find((item) => item.notificationType === 'verify_email')?.inAppEnabled).toBe(
+        true
+      )
+    })
+
+    it('lets platform staff switch a staff-only type in-app off', async () => {
+      const { token } = await createTrackedStaff('admin')
+
+      const response = await request(app)
+        .put('/api/v1/notifications/preferences')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          preferences: [
+            {
+              notificationType: 'maintenance_mode_changed',
+              emailEnabled: true,
+              inAppEnabled: false,
+            },
+          ],
+        })
+
+      expect(response.status).toBe(200)
+    })
+
+    it.each(NOTIFICATION_TYPES)(
+      'rejects emailEnabled false for %s with a field-scoped message and stores nothing',
+      async (type) => {
+        const { user, token } = await createTrackedStaff('admin')
+
+        const response = await request(app)
+          .put('/api/v1/notifications/preferences')
+          .set('Authorization', `Bearer ${token}`)
+          .send({
+            preferences: [{ notificationType: type, emailEnabled: false, inAppEnabled: true }],
+          })
+
+        expect(response.status).toBe(400)
+        const errors = envelopeOf<PreferencesBody>(response).errors
+        expect(errors?.preferences?.[0]).toBe(
+          'Email for this notification type cannot be turned off.'
+        )
+        expect(await storedEmailFlags(user.id)).toEqual([])
+      }
+    )
+
+    it('stores nothing from a crafted body: valid entries beside an email-off one, a repeated type, extra keys', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      /**
+       * PUT a raw preferences array.
+       * @param preferences - The array to send.
+       */
+      const attempt = (preferences: unknown[]) =>
+        request(app)
+          .put('/api/v1/notifications/preferences')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ preferences })
+
+      const mixed = await attempt([
+        { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: false },
+        { notificationType: 'password_changed', emailEnabled: false, inAppEnabled: true },
+      ])
+      const repeated = await attempt([
+        { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: true },
+        { notificationType: 'verify_email', emailEnabled: false, inAppEnabled: true },
+      ])
+      const extra = await attempt([
+        {
+          notificationType: 'verify_email',
+          emailEnabled: true,
+          inAppEnabled: false,
+          email_enabled: false,
+          emailEnabledOverride: false,
+        },
+      ])
+
+      expect(mixed.status).toBe(400)
+      expect(repeated.status).toBe(400)
+      expect(extra.status).toBe(200)
+      // Only the extra-key request wrote a row, and its email flag is the validated one.
+      expect(await storedEmailFlags(user.id)).toEqual([true])
     })
 
     it('rejects an update naming a staff-only type from a user with no platform role', async () => {
@@ -549,30 +675,14 @@ describe('/api/v1/notifications', () => {
           preferences: [
             {
               notificationType: 'maintenance_mode_changed',
-              emailEnabled: false,
-              inAppEnabled: true,
+              emailEnabled: true,
+              inAppEnabled: false,
             },
           ],
         })
 
       expect(response.status).toBe(400)
       expect(response.body).toMatchObject({ message: 'Validation failed' })
-      const rows = await sql`select * from notification_preferences where user_id = ${user.id}`
-      expect(rows).toHaveLength(0)
-    })
-
-    it('does not write a preference row when the update is rejected', async () => {
-      const { user, token } = await createAuthenticatedUser()
-
-      await request(app)
-        .put('/api/v1/notifications/preferences')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          preferences: [
-            { notificationType: 'verify_email', emailEnabled: false, inAppEnabled: true },
-          ],
-        })
-
       const rows = await sql`select * from notification_preferences where user_id = ${user.id}`
       expect(rows).toHaveLength(0)
     })

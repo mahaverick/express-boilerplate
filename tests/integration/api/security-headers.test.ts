@@ -184,6 +184,28 @@ describe('Cache-Control', () => {
     expect(response.headers['cache-control']).toBe('no-store')
   })
 
+  it.each([
+    {
+      description: "an unknown path's 404",
+      send: () => request(app).get('/api/v1/definitely-not-a-route'),
+      status: 404,
+    },
+    {
+      description: "the JSON gate's 415",
+      send: () =>
+        request(app)
+          .post('/api/v1/auth/definitely-not-a-route')
+          .set('Content-Type', 'text/plain')
+          .send('x'),
+      status: 415,
+    },
+  ])('is no-store on every error response, $description included', async ({ send, status }) => {
+    const response = await send()
+
+    expect(response.status).toBe(status)
+    expect(response.headers['cache-control']).toBe('no-store')
+  })
+
   it('is no-store on the login and refresh responses that carry an access token', async () => {
     const user = await createTrackedUser({ hasPassword: true })
 

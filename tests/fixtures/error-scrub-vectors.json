@@ -2338,5 +2338,170 @@
     "rule": "secret",
     "input": "qRpWs96At3aj/5WeV4V+HcIgMI+037584/0651cb/52bdf191/b1034bdf8834d544d/38048b9997db+b27ad5b15c559cb98fba8b025ef68d3b",
     "expected": "[secret][secret]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,refresh=xyz",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc; foo=bar; baz=qux",
+    "expected": "Authorization: Bearer [token];[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\"authorization\":\"Bearer abc,refresh=xyz\",\"x\":1}",
+    "expected": "{\"authorization\":\"Bearer [token],[redacted]\",\"x\":1}"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc, retry later",
+    "expected": "Authorization: Bearer [token], retry later"
+  },
+  {
+    "rule": "basic",
+    "input": "Authorization: Basic dXNlcjpwYXNzd29yZA==,refresh=xyz",
+    "expected": "Authorization: Basic [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "authorization: basic dXNlcjpwYXNzd29yZA==;refresh=xyz",
+    "expected": "authorization: basic [token];[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3, cookie=OAuth zqSECRET1",
+    "expected": "Bearer [token],[redacted] [redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,authorization=Digest zqSECRET1",
+    "expected": "Bearer [token],[redacted] [redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,api_key=[\"zqSECRET1\"]",
+    "expected": "Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,password=a,refresh=zqSECRET1",
+    "expected": "Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "x-auth: bearer realm=zqL9TcRAza, uri=zqS4WTGZ6E?+1 415 555 0100",
+    "expected": "x-auth: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "4ff95d0eaee22db9a64dca666708805d9bearer zqC3CYwbMo; csrf=zqI2ikjxQA",
+    "expected": "[secret]Bearer [token];[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "+1 415 555 0100Basic zqR4FrSdmxY3HOMH, redirect_uri=/cb",
+    "expected": "[phone]Basic [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer zqT3,k=/reset/x.tspwd=\"zqS7hunter2\"",
+    "expected": "Bearer [token],[redacted]\"[redacted]\""
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,refresh=\"zqSECRET1\"",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,refresh='zqSECRET1'",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer abc,x=Bearer zqSECRET1,y=zqSECRET2",
+    "expected": "Bearer [token],[redacted]Bearer [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "Bearer abc,authorization=Basic dXNlcjpwYXNzd29yZA==,x=zqSECRET1",
+    "expected": "Bearer [token],[redacted]Basic [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\"h\":\"Bearer abc,a=\",\"x\":1}",
+    "expected": "{\"h\":\"Bearer [token],[redacted]\",\"x\":1}"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,\nrefresh=zqSECRET1",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc ,a=zqSECRET1",
+    "expected": "Authorization: Bearer [token] ,[redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc,a%3DzqSECRET1",
+    "expected": "Authorization: Bearer [token],[redacted]"
+  },
+  {
+    "rule": "basic",
+    "input": "BaSiC dXNlcjpwYXNzd29yZA==,a=zqSECRET1",
+    "expected": "BaSiC [token],[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/xtoken=zqSECRET1,Bearer abc,a=zqSECRET2",
+    "expected": "/reset/[token],Bearer [token],[redacted]"
+  },
+  {
+    "rule": "ip",
+    "input": "/=2001:db8::8a2e:370:7334/X6ozNXWURAKk4WsxkrBQXXkhWOctoOHUeD9@xU0kDkZEgQQQDQCItaAjVZOfrMRp.com",
+    "expected": "/=[ip][email]"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\"h\":\"Bearer abc,refresh=\\\"zqSECRET1\\\"\"}",
+    "expected": "{\"h\":\"Bearer [token],[redacted]\"}"
+  },
+  {
+    "rule": "bearer",
+    "input": "{\\\"h\\\":\\\"Bearer abc,a=\\\",\\\"x\\\":1}",
+    "expected": "{\\\"h\\\":\\\"Bearer [token],[redacted]\\\",\\\"x\\\":1}"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer abc,refresh=\"zqSECRET1\nnext line",
+    "expected": "Bearer [token],[redacted]\nnext line"
+  },
+  {
+    "rule": "bearer",
+    "input": "Bearer abc\n, retry=later is prose",
+    "expected": "Bearer [token]\n,[redacted] is prose"
+  },
+  {
+    "rule": "ip",
+    "input": "ports 80:443:jane@example.com",
+    "expected": "ports 80:443:[email]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:a@x.com%2Cb@y.com?body=secret",
+    "expected": "mailto:[email][email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:a@x.com%3Bb@y.com?body=secret",
+    "expected": "mailto:[email][email]?[query]"
+  },
+  {
+    "rule": "email",
+    "input": "mailto:a@x.com%2C%20b@y.com?cc=c@z.org&body=s",
+    "expected": "mailto:[email][email]?[query]"
   }
 ]

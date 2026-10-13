@@ -46,6 +46,8 @@ function mockResponse(isHeadersSent = false): { response: Response; body: () => 
   const response = {
     headersSent: isHeadersSent,
     getHeader: vi.fn().mockReturnValue('req-id-1'),
+    set: vi.fn().mockReturnThis(),
+    setHeader: vi.fn(),
     status: vi.fn().mockReturnThis(),
     json: vi.fn().mockImplementation((body: unknown) => {
       captured = body

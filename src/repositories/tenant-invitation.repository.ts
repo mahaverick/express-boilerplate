@@ -99,7 +99,14 @@ export interface InvitationWithTenant {
 /**
  * A redeemable invitation, its tenant, and its inviter's name.
  */
-export interface ValidInvitation extends InvitationWithTenant {
+export interface ValidInvitation {
+  invitation: TenantInvitation
+  /**
+   * The tenant, and whether it is the platform tenant: accepting a platform
+   * invitation makes the user staff, so it takes the user-row lock an owner
+   * grant takes.
+   */
+  tenant: InvitationWithTenant['tenant'] & { isPlatform: boolean }
   /**
    * The inviter's name, or null once their account is deleted.
    */
@@ -247,6 +254,7 @@ export class TenantInvitationRepository {
           name: tenantModel.name,
           slug: tenantModel.slug,
           lifecycleState: tenantModel.lifecycleState,
+          isPlatform: tenantModel.isPlatform,
         },
         inviterId: userModel.id,
         inviterFirstName: userModel.firstName,

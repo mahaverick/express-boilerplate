@@ -212,13 +212,12 @@ function setRefreshTokenCookie(
  * OAuth callback: `setRefreshTokenCookie` with `sameSite: 'lax'` in place of
  * its `'strict'` default.
  *
- * The browser reaches `handleGoogleCallback` by a top-level navigation
- * redirected from `accounts.google.com`, a cross-site origin, and a `'strict'`
- * cookie set here would be withheld on the redirect to the frontend's
- * `/auth/callback` that follows (SECURITY.md, "Cookies"). `'lax'` still
- * withholds the cookie on cross-site subresource requests and cross-site
- * unsafe (non-GET) requests, the CSRF surface `'strict'` closes on every other
- * endpoint, while allowing it on this top-level GET redirect chain.
+ * `'lax'` here is a decision, and it costs nothing: a `'lax'` cookie is still
+ * withheld from cross-site `POST`s and subresource requests, and both routes
+ * that act on the cookie, `/refresh` and `/logout`, are `POST`s behind the
+ * Origin check, and the one `GET` that reads it, this callback, only revokes.
+ * It also lasts only until the first rotation, which re-sets the cookie
+ * `'strict'` (SECURITY.md, "The refresh cookie", `#the-refresh-cookie`).
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
@@ -366,6 +365,8 @@ class AuthController extends BaseController {
    * The one exception: a login or Google sign-in in another tab that lands
    * while a dead-cookie refresh is in flight loses its own fresh cookie too,
    * since the clear is by name — that user just signs in again.
+   * A current cookie sent with an empty value answers 401 and is cleared the
+   * same way; a request with no current cookie clears nothing.
    * The limiter's 429 and a 5xx never clear. Under COOKIE_SECURE a request
    * carrying only an unprefixed `refreshToken` cookie answers 401 and leaves
    * that cookie and its session alone: it is never read.
@@ -374,7 +375,11 @@ class AuthController extends BaseController {
   refresh = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const rawToken = readRefreshTokenCookie(request)
-    if (!rawToken) throw new HttpError('Missing refresh token', 401)
+    if (!rawToken) {
+      // An empty current cookie can never refresh: clear it as any other 401 does, or the browser sends it on every refresh.
+      if (rawToken === '') clearPresentedRefreshCookie(request, response)
+      throw new HttpError('Missing refresh token', 401)
+    }
 
     const refreshed = await refreshOrClearCookie(request, response, rawToken)
 

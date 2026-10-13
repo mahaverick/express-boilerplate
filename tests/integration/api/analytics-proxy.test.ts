@@ -257,7 +257,7 @@ describe('what PostHog sees of the client', () => {
   })
 
   // httpxy skips the proxyReq hook for a request carrying Expect, so such a request would reach PostHog unprepared.
-  it('refuses a request carrying Expect with 417 and forwards nothing', async () => {
+  it('refuses a request carrying Expect with a no-store 417 and forwards nothing', async () => {
     const { app, posthog } = running()
 
     const response = await request(app)
@@ -269,6 +269,7 @@ describe('what PostHog sees of the client', () => {
       .send('x')
 
     expect(response.status).toBe(417)
+    expect(response.headers['cache-control']).toBe('no-store')
     expect(response.body).toMatchObject({ success: false, code: 'expectation_failed' })
     expect(posthog.requests).toEqual([])
   })
@@ -325,7 +326,7 @@ describe('the proxy’s limiter', () => {
 })
 
 describe('a silent PostHog', () => {
-  it('answers 504 once the upstream timeout passes and logs it at warn', async () => {
+  it('answers 504, no-store, once the upstream timeout passes and logs it at warn', async () => {
     const { posthog } = running()
     const slowApp = express()
     slowApp.use('/api/v1/collect', createAnalyticsProxyRouter(200))
@@ -336,6 +337,7 @@ describe('a silent PostHog', () => {
       const response = await request(slowApp).post('/api/v1/collect/e/').send('x')
 
       expect(response.status).toBe(504)
+      expect(response.headers['cache-control']).toBe('no-store')
       expect(warn).toHaveBeenCalledWith('Analytics proxy upstream failed', {
         error: expect.anything() as unknown,
       })
@@ -347,7 +349,7 @@ describe('a silent PostHog', () => {
 })
 
 describe('an unreachable PostHog', () => {
-  it('answers 504 at once and logs the failure at warn', async () => {
+  it('answers 504, no-store, at once and logs the failure at warn', async () => {
     const unreachable = await startFakePosthog()
     await unreachable.close()
     target.host = unreachable.url
@@ -358,6 +360,7 @@ describe('an unreachable PostHog', () => {
       const response = await request(app).post('/api/v1/collect/e/').send('x')
 
       expect(response.status).toBe(504)
+      expect(response.headers['cache-control']).toBe('no-store')
       expect(warn).toHaveBeenCalledWith('Analytics proxy upstream failed', {
         error: expect.objectContaining({ code: 'ECONNREFUSED' }) as unknown,
       })

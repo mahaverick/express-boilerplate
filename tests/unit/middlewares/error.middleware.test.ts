@@ -50,6 +50,8 @@ function mockResponse(): { response: Response; body: () => unknown; status: Mock
   const status = vi.fn().mockReturnThis()
   const response = {
     getHeader: vi.fn().mockReturnValue('req-id-1'),
+    set: vi.fn().mockReturnThis(),
+    setHeader: vi.fn(),
     status,
     json: vi.fn().mockImplementation((body: unknown) => {
       captured = body
@@ -497,6 +499,8 @@ describe('errorHandler with error tracking on', () => {
     const response = {
       headersSent: false,
       getHeader: vi.fn().mockReturnValue('req-1'),
+      set: vi.fn().mockReturnThis(),
+      setHeader: vi.fn(),
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
     } as unknown as Response

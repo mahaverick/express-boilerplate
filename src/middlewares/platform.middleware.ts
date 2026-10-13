@@ -1,6 +1,7 @@
 /**
- * @file The gate for `/platform` routes, the OPTIONS refusal that keeps
- * Express's automatic `Allow` answer from revealing them, and the log line
+ * @file The gate for staff routes (every `/platform` route and
+ * `POST /auth/reauthenticate`), the OPTIONS refusal that keeps Express's
+ * automatic `Allow` answer from revealing them, and the log line
  * each successful staff write leaves. The platform role is read on every
  * request, with no cross-request cache, so a revocation takes effect on the
  * next request. `requirePlatformRole` reads it through `platformRoleOf`,
@@ -52,10 +53,15 @@ export function requirePlatformRole(
 /**
  * Answer every OPTIONS request with the same 404 as an unknown route. Without
  * it, Express answers OPTIONS on a registered path itself, 200 with an
- * `Allow` header listing the path's methods, before any role gate runs. Only
- * an authenticated OPTIONS reaches it: `cors` ends an allowed-origin
- * preflight before the routers, and `requireAuth` refuses one without a
- * bearer token. Must run after `requireAuth` and before every route.
+ * `Allow` header listing the path's methods, before any role gate runs.
+ * `cors` ends an OPTIONS with no `Origin` or an allowed one before the
+ * routers, so only one with another `Origin` reaches it. The platform router
+ * mounts it after `requireAuth`, which refuses an OPTIONS without a bearer
+ * token with 401, as it does every `/platform` request. The auth router mounts
+ * it on `/reauthenticate` alone, right after its router-wide JSON gate and
+ * with no `requireAuth`, so an OPTIONS there gets what one on an unknown auth
+ * path gets. Mount it after any gate the router shares with an unknown path,
+ * and before every route on the staff path.
  * @param request - The incoming request.
  * @param _response - Unused.
  * @param next - Continues the chain, or receives the 404.

@@ -1,6 +1,6 @@
 import { type Response } from 'express'
 import { describe, expect, it, vi, type Mock } from 'vitest'
-import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
+import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 import { errorResponse, messageResponse, successResponse } from '@/utilities/response.utilities'
 
 /**

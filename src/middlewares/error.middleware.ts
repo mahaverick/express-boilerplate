@@ -12,6 +12,7 @@ import { STATUS_CODES } from 'node:http'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import { type NextFunction, type Request, type Response } from 'express'
+import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import {
@@ -20,7 +21,6 @@ import {
   redactedForLog,
 } from '@/errors/postgres-errors'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
-import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
 import { routeTemplateOf } from '@/middlewares/route-template.middleware'
 import {
   reportErrorWithSpan,
@@ -148,6 +148,8 @@ function captureHttpError(
  * Terminal error handler. Must be registered last and must take four
  * parameters — Express identifies error handlers by arity, so dropping the
  * unused `next` silently turns this into ordinary middleware.
+ * Every error response it writes is `Cache-Control: no-store`, whichever
+ * middleware refused the request.
  * Once headers are sent (a failure mid-stream), no second response can be
  * written: the error is reported (as a 500, unless the client went away),
  * logged redacted with its `errorId`, and the socket destroyed. It is not
@@ -174,6 +176,9 @@ export function errorHandler(
     request.socket.destroy()
     return
   }
+
+  // An error body is never worth caching, and one header for every refusal keeps a gated route's answer the same as an unknown path's.
+  response.set('Cache-Control', 'no-store')
 
   // A maintenance refusal is not a fault: its message is the owner's, shown as is, and it is never logged.
   if (error instanceof MaintenanceModeError) {

@@ -34,8 +34,9 @@ points at the code or doc that holds the detail. How things work is in
 - **The OAuth refresh cookie stays `SameSite=Lax`** (a decision, set by
   `setOAuthRefreshTokenCookie`, `src/controllers/auth.controller.ts`). It costs
   nothing, since both routes that act on the cookie are `POST`s behind the
-  Origin check, and it lasts only until the first rotation re-sets it
-  `Strict`. See [SECURITY.md](SECURITY.md#the-refresh-cookie).
+  Origin check and the one `GET` that reads it, the callback, only revokes, and
+  it lasts only until the first rotation re-sets it `Strict`. See
+  [SECURITY.md](SECURITY.md#the-refresh-cookie).
 - **Never link a Google identity to an address Google has not verified.**
   `resolveGoogleUser` (`src/services/google-auth.service.ts`) refuses it,
   because linking an unverified address is an account takeover. Don't relax
@@ -86,15 +87,21 @@ points at the code or doc that holds the detail. How things work is in
 
 ### Staff routes
 
-- **On every `/platform` route the role gate runs first:**
-  `requirePlatformRole`, then `requireJsonContentType`, then
-  `requireRecentAuth()` where it applies, then the limiter. Anything earlier
-  answers a non-staff caller with a 415, `RateLimit-*` headers or a 401
-  `REAUTH_REQUIRED`, and so reveals the route. Keep `refusePlatformOptions`
-  ahead of every route, or Express answers OPTIONS with an `Allow` header. A
-  new route needs its row in
-  `tests/integration/api/platform-route-gates.test.ts`. See
-  [SECURITY.md](SECURITY.md#platform-staff).
+- **A staff route answers a refused caller exactly what an unknown path on the
+  same router answers,** for every method, body and header. On a `/platform`
+  route that means the role gate runs first: `requirePlatformRole`, then
+  `requireJsonContentType`, then `requireRecentAuth()` where it applies, then
+  the limiter. Anything earlier answers a non-staff caller a 415, `RateLimit-*`
+  headers or a 401 `REAUTH_REQUIRED`. A staff route inside another router,
+  today only `POST /auth/reauthenticate`, keeps that router's shared gates
+  ahead of its role gate, because an unknown sibling path meets them too: the
+  auth router's JSON gate gives a non-JSON body the same 415 an unknown
+  `/auth/*` path gets, and the role gate then comes before the limiter. Keep
+  `refusePlatformOptions` on every staff route's path, after any shared gate
+  that would answer first, or Express answers OPTIONS with an `Allow` header.
+  Pin each staff route by comparing it with an unknown sibling path, not with
+  `/api/v1/<unknown>`: `tests/integration/api/platform-route-gates.test.ts`.
+  See [SECURITY.md](SECURITY.md#platform-staff).
 - **Only `src/services/platform-*.service.ts` import the five cross-tenant
   `platform-*` repositories** (lint enforces it). "Your tenants" stays on
   `TenantRepository.listForUser`; never serve it from a query that sees every
@@ -196,10 +203,14 @@ points at the code or doc that holds the detail. How things work is in
 - **Some email channels can't be switched off** (`verify_email`,
   `password_reset_requested`, `password_changed`, `tenant_invitation`,
   `maintenance_mode_changed`): disabling them would lock a user out or silence
-  the mail an account owner must see. Change `NON_DISABLEABLE_EMAIL_TYPES`
+  the mail an account owner must see. `PUT /notifications/preferences`
+  answers 400 for `emailEnabled: false` on any of them (the repository's
+  `upsert` refuses it too); `inAppEnabled` can still be switched off for any
+  type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
   (`src/repositories/notification-preference.repository.ts`) and
-  `NON_DISABLEABLE_NOTIFICATION_TYPES` (`src/validators/notification.validators.ts`)
-  together, or a client can save a preference the repository then ignores.
+  `NON_DISABLEABLE_NOTIFICATION_TYPES`
+  (`src/validators/notification.validators.ts`) together, or a client can
+  save an email preference the repository then ignores.
 - **Notification `metadata` never holds `variables`.** Verification tokens
   live there; the worker strips them before the insert and the email fan-out
   reads them from the job payload (`src/workers/notification.worker.ts`).

@@ -27,6 +27,7 @@ import {
 } from '@/policies/tenant.policy'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { db, type DbTransaction } from '@/services/database.service'
 import {
@@ -41,6 +42,31 @@ import { hostnameDomain } from '@/utilities/email.utilities'
 
 const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
+const userRepository = new UserRepository()
+
+/**
+ * Lock a user's row `FOR SHARE` before a write that makes them a tenant
+ * owner (`createTenant`, an owner invitation's `accept`, `changeRole` to
+ * owner) or platform staff (any platform-tenant invitation's `accept`). It
+ * conflicts with the `FOR NO KEY UPDATE` a staff delete holds on the same row
+ * (`lockStaffPair`, `platform-user.service.ts`), so the grant either commits
+ * first and the delete sees it (its second ownership read finds a new tenant,
+ * its platform-role re-read finds a new role), or waits for the delete and
+ * finds the user gone. SHARE lets logins, rotations and other grants through.
+ * @param userId - The user about to become an owner or platform staff.
+ * @param missing - The error for a user who is gone (soft-deleted, or never existed).
+ * @param tx - The grant's transaction.
+ * @returns Resolves once the row is locked.
+ * @throws {HttpError} `missing()` when no live user row matches.
+ */
+export async function lockUserForOwnership(
+  userId: string,
+  missing: () => HttpError,
+  tx: DbTransaction
+): Promise<void> {
+  const locked = await userRepository.lockById(userId, 'share', tx)
+  if (!locked) throw missing()
+}
 
 /**
  * The roles a member holding `role` cannot offer: the offers revoked when a
@@ -350,13 +376,16 @@ async function assertOwnerRemainsFor(
  * role could not grant are revoked in the same transaction; on the platform
  * tenant, so are those they sent in customer tenants that their remaining
  * authority there (a membership, else the new platform role) cannot grant.
+ * A promotion to owner also locks the target's user row `FOR SHARE`
+ * (`lockUserForOwnership`) after the membership locks, so a concurrent staff
+ * delete of the target either sees the new ownership or wins first.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
  * @param role - The new role.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff change.
  * @returns The updated membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is not an owner or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is not an owner or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member, or is promoted to owner and their account is gone; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function changeRole(
   actor: Actor,
@@ -377,6 +406,14 @@ export async function changeRole(
     assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
       throw new HttpError("Insufficient permissions to change this member's role", 403)
+    }
+    // After lockActorAndTarget's owner-row locks: a delete that holds them took them before the target's user row, so this queues there holding nothing the delete wants. The role gate only skips a redundant lock.
+    if (role === 'owner' && target.role !== 'owner') {
+      await lockUserForOwnership(
+        targetUserId,
+        () => new HttpError(MEMBER_NOT_FOUND_MESSAGE, 404, MEMBER_NOT_FOUND_CODE),
+        tx
+      )
     }
     if (role !== 'owner' && target.role === 'owner') {
       await assertOwnerRemainsFor(

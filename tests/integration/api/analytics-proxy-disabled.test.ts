@@ -15,10 +15,11 @@ describe('the analytics proxy while analytics is not configured', () => {
     ['post', '/api/v1/collect/e/?ver=1'],
     ['post', '/api/v1/collect/s/'],
     ['put', '/api/v1/collect/anything'],
-  ] as const)('answers %s %s with 503 service_unavailable', async (method, path) => {
+  ] as const)('answers %s %s with a no-store 503 service_unavailable', async (method, path) => {
     const response = await request(app)[method](path).send('x')
 
     expect(response.status).toBe(503)
+    expect(response.headers['cache-control']).toBe('no-store')
     expect(response.body).toEqual({
       success: false,
       message: 'Analytics is not configured',

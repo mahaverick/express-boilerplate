@@ -7,7 +7,6 @@
  * the default windows delete them in `afterEach`. The real purge is asserted
  * only as a job that completes.
  */
-import type { Job, Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -15,40 +14,7 @@ import { logger } from '@/services/logger.service'
 import { addJob, closeQueue, getMaintenanceQueue } from '@/services/queue.service'
 import { startMaintenanceWorker } from '@/workers/maintenance.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
-import { waitForLoggedCall } from '../../helpers/queue-jobs'
-
-/**
- * Resolves with 'completed' or 'failed' once the job `jobId` settles on the running maintenance Worker.
- */
-function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
-  return new Promise((resolve) => {
-    /**
-     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onCompleted = (job: Job): void => {
-      if (job.id !== jobId) return
-      cleanup()
-      resolve('completed')
-    }
-    /**
-     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
-     */
-    const onFailed = (job: Job | undefined): void => {
-      if (job?.id !== jobId) return
-      cleanup()
-      resolve('failed')
-    }
-    /**
-     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
-     */
-    const cleanup = (): void => {
-      worker.off('completed', onCompleted)
-      worker.off('failed', onFailed)
-    }
-    worker.on('completed', onCompleted)
-    worker.on('failed', onFailed)
-  })
-}
+import { waitForJobSettled, waitForLoggedCall } from '../../helpers/queue-jobs'
 
 describe('maintenance.worker', () => {
   const worker = startMaintenanceWorker()
@@ -62,7 +28,9 @@ describe('maintenance.worker', () => {
   it('runs a queued retention-purge job to completion', async () => {
     const job = await addJob(getMaintenanceQueue(), RETENTION_PURGE_JOB, {}, { attempts: 1 })
     if (!job.id) throw new Error('expected addJob to assign a job id')
-    await expect(waitForJobSettled(worker, job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(worker, getMaintenanceQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
   }, 15_000)
 
   it('logs an unknown job name as a permanent failure on its first attempt', async () => {

@@ -120,10 +120,9 @@ class NotificationController extends BaseController {
    * authenticated user's notification preferences.
    *
    * `updatePreferencesSchemaFor` (notification.validators.ts) is the only gate
-   * on which `notificationType` values reach `upsert`: a type outside
-   * `CONFIGURABLE_NOTIFICATION_TYPES` (empty, since every type is
-   * non-disableable), or a staff-only type for a caller who is not staff,
-   * fails with a per-field 400.
+   * on what reaches `upsert`: a staff-only type for a caller who is not staff,
+   * a duplicate type, or `emailEnabled: false` fails with a per-field 400.
+   * Only `inAppEnabled` can be switched off.
    */
   updatePreferences = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

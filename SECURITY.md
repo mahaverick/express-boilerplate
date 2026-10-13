@@ -141,7 +141,9 @@ minutes and exists only on `/auth/google` and its callback.
 
 - A Google address that Google has not verified never creates an account and
   never links to one (`403 email_not_verified`): anyone can add any address to a
-  Google account.
+  Google account. It is refused before the address is looked up, with the same
+  status, code and message whether or not an account has it, so the answer
+  does not tell whether the address is registered.
 - A verified Google address that matches a verified account links to it.
 - A verified Google address that matches a never-verified account takes it
   over (`claimUnverifiedAccount`): the password and any other Google link are
@@ -167,8 +169,13 @@ the user and refuses one that is soft-deleted or inactive. Loading the user on
 every request is deliberate: deactivation and deletion take effect on the next
 request, and a cache of known-good ids would reopen that window. Every response
 behind it is `Cache-Control: no-store`, as are the login and refresh responses,
-so a browser keeps no authenticated body on disk after sign-out. A verified
-token with no `sid` skips the denylist and is admitted until it expires.
+so a browser keeps no authenticated body on disk after sign-out. Every error
+response is `no-store` too: `errorHandler` marks each one it writes, the
+analytics proxy marks its own 417 and 503 and the proxy library's upstream
+failure answers, and `/health/ready` marks its two 503s (shutting down, not
+ready). So a refusal carries the same header whichever gate answered. A
+verified token with no `sid` skips the denylist and is admitted until it
+expires.
 
 ### The refresh cookie
 
@@ -203,7 +210,10 @@ Every form is `HttpOnly`, and `Secure` when `isCookieSecure` says so
 - **The newest cookie wins.** Within one name the API reads the last value
   sent, the most recently created one, so a stale cookie from an older
   `COOKIE_DOMAIN` never reaches reuse detection (`readCookie`,
-  `src/controllers/auth.controller.ts`).
+  `src/controllers/auth.controller.ts`). After `COOKIE_DOMAIN` is reverted to
+  an earlier value the browser keeps the overwritten cookie's original creation
+  time, so the other scope's cookie reads as newer and refresh fails until the
+  user signs in again or the cookie expires (`REFRESH_TOKEN_TTL`).
 - **Signing in again ends the presented session, for a password login.** Login
   revokes the session of the refresh cookie the request carries once the new
   session is issued, so an overwritten cookie's session does not stay
@@ -257,7 +267,7 @@ can never be redeemed as a refresh token.
   answers 401 and the session is revoked. An expired token is refused without
   touching its session.
 - **A 401 clears the cookie it read**, so the browser stops presenting a dead
-  token. A 429 or a 5xx clears nothing.
+  token; an empty cookie is cleared too. A 429 or a 5xx clears nothing.
 
 `POST /auth/logout` needs no access token, since a user whose access token has
 just expired must still be able to sign out. It revokes the presented cookie's
@@ -317,6 +327,13 @@ change or reset commits.
   and sees the new state: a changed hash is compared again, and only a password
   that matches the stored one (another login's rehash, or a reset to the same
   password) gets a session.
+- A write that makes the user a tenant owner or staff takes the same
+  `FOR SHARE` lock before its write, so a staff delete holding the row
+  `FOR NO KEY UPDATE` either waits for the grant and sees it, or wins and the
+  grant finds the account gone ([Platform staff](#platform-staff)).
+  Single-statement updates of the row on the pool (the last-login time, a
+  profile edit, email verification) queue behind a grant for its few
+  statements.
 
 A correct password still updates `last_logged_in_at` and runs the platform
 auto-join before that re-read, even when the re-read then answers 401.
@@ -472,14 +489,23 @@ their role there is their platform role (`src/services/platform.service.ts`).
   `POST /auth/reauthenticate` lives under `/api/v1/platform`, and each names its
   own `requirePlatformRole`, which reads the role on every request with no cache
   across requests (`src/middlewares/platform.middleware.ts`). The prefix secures
-  nothing, and neither does serving Apex from its own host. A non-staff caller,
-  or staff below the route's role, gets the app's own `404 Not found`, before
-  the JSON gate, the step-up check and the limiter, so a refused caller sees no
-  `415` and no `RateLimit-*` headers. `cors` answers an `OPTIONS` with no
-  `Origin` or an allowed one itself, with the same 204 for every path; any other
-  authenticated `OPTIONS` that reaches the platform router gets the same 404
-  (`refusePlatformOptions`). Either way Express's automatic `Allow` answer never
-  lists a route's methods.
+  nothing, and neither does serving Apex from its own host. A signed-in caller
+  the route refuses (non-staff, or staff below the route's role) gets exactly
+  what an unknown path on the same router gets: same status, body and headers.
+  On a `/platform` route the role gate answers the app's own `404 Not found`
+  before the JSON gate, the step-up check and the limiter, so a refused caller
+  sees no `415` and no `RateLimit-*` headers. On `POST /auth/reauthenticate`
+  the auth router's JSON gate runs first, as on every auth path, so a form body
+  gets the same `415` an unknown `/auth/*` path gets; then the role gate's 404
+  comes before the limiter. Every error response is `no-store`, so no header
+  tells the gates apart. An anonymous caller can tell
+  `POST /auth/reauthenticate` exists, since `requireAuth` must run before the
+  role gate and answers 401, as on every `/platform` route; the route table is
+  public anyway. `cors` answers an `OPTIONS` with no `Origin` or an allowed one
+  itself, with the same 204 for every path; any other authenticated `OPTIONS`
+  that reaches the platform router, and any other `OPTIONS` on
+  `/auth/reauthenticate`, gets the same 404 (`refusePlatformOptions`). Either
+  way Express's automatic `Allow` answer never lists a route's methods.
 - **In a customer tenant, staff act at their platform role.** With no
   membership there, `resolveTenant` uses the platform role
   (`access: 'platform'`) and audits the visit (`tenant.accessed_by_platform`,
@@ -493,6 +519,20 @@ their role there is their platform role (`src/services/platform.service.ts`).
   anything above viewer takes an invitation or `pnpm platform:grant`. Every
   platform role reads every user, tenant and address, so list only domains
   whose mailboxes you control.
+- **Deleting a user never leaves a tenant ownerless.** The delete refuses
+  while the user is the last live owner of a customer tenant or the last
+  active platform owner, re-counting under the owner-row locks, and holds the
+  user's row `FOR NO KEY UPDATE` (`deleteUser`,
+  `src/services/platform-user.service.ts`). Every write that makes a user an
+  owner (creating a tenant, accepting an owner invitation, a role change to
+  owner), and accepting any platform-tenant invitation, locks that user's row
+  `FOR SHARE` before its write (`lockUserForOwnership`). A grant that holds
+  the row first commits before the delete reads on: a new customer tenant
+  answers `409` at the delete's second ownership read, and a new platform role
+  is re-read after the user-row lock, so the staff rank rule (`403`) and the
+  last-owner guard (`409`) apply to it. A grant that waits finds the account
+  gone and grants nothing (`401`, or `404 member_not_found` for a role
+  change).
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
@@ -750,15 +790,23 @@ not through the outbox, since errors often arrive while the database is down
 - **Everything sent is scrubbed first.** `scrubText`
   (`src/services/errors/error-scrubber.service.ts`) removes addresses, IPs,
   `+`-prefixed phone numbers, JWTs and vendor keys, URL logins, query strings
-  and fragments, Authorization and Cookie values, secret-named `key=value`
-  pairs, OAuth codes, the token segment of a link path, and long hex and base64
-  runs, then caps each value at 1024 characters. The span that records the
-  exception gets the same scrubbed text, and so does every log record forwarded
-  to Slack. The react and apex frontends hold the same file byte for byte
+  and fragments, Authorization and Cookie values, Bearer and Basic credentials
+  with the unquoted or quoted `,key=value` or `;key=value` pairs glued to
+  them, secret-named `key=value` pairs, OAuth codes, the token segment of a
+  link path, and long hex and base64 runs, then caps each value at 1024
+  characters. The span that records the exception gets the same scrubbed
+  text, and so does every log record forwarded to Slack. The react and apex
+  frontends hold the same file byte for byte
   (`react-boilerplate/src/observability/errors/scrub.ts`), and all three test it
   against `tests/fixtures/error-scrub-vectors.json`. The file's own comments
-  list what each rule catches and what it misses. Regex scrubbing is
-  best-effort: keep secrets and personal data out of error messages.
+  list what each rule catches and what it misses. Known gaps: a `Bearer` or
+  `Basic` glued to a letter from `g` to `z` or a `_` (`xBearer abc`,
+  `_Bearer abc`) is not taken, nor is a fully URL-encoded header
+  (`Bearer%20abc%2Crefresh%3Dxyz`); pairs after a credential that a secret
+  key's value took (`token=Bearer abc,refresh=xyz`) are kept, and so is a
+  quoted pair value glued to more text or split by a line break. Regex
+  scrubbing is best-effort: keep secrets and personal data out of error
+  messages.
 - **`$exception` events are signed too.** The staff Errors views verify the most
   recent event of each issue and scrub its type and message again, because a
   forged browser event can carry anything
@@ -833,15 +881,27 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 everything but health, the email webhook, the collect proxy, the public status,
 `/platform`, sign-in, refresh, logout, reauthenticate, `GET /auth/providers`
 and `GET /profile`. On the customer routes Apex calls, the
-refusal is decided in `requireAuth`, which lets platform staff through.
+refusal is decided in `requireAuth`, which lets platform staff through. The
+let-through list is visible during maintenance: a route on it reaches its
+router while an unknown path gets the 503, which is accepted, since the list
+names only routes the frontends already call.
 
 - In `full`, password login refuses a user with no platform role
   (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is
-  written (`assertSignInAllowed`). The Google callback refuses the same user
-  only after `resolveGoogleUser` has run, so a non-staff Google sign-in in
-  `full` can create an account, link a Google identity or claim an unverified
-  account before it gets the 503 (`completeGoogleSignIn`,
-  `src/services/google-auth.service.ts`); see the gaps table.
+  written (`assertSignInAllowed`). A Google callback that starts in `full`
+  runs the same check on a read-only account lookup before
+  `resolveGoogleUser`, so a non-staff Google sign-in that starts in `full`
+  creates, links and claims nothing
+  (`completeGoogleSignIn`, `src/services/google-auth.service.ts`). The lookup
+  matches an email only when Google verified it, as `resolveGoogleUser` does.
+  A profile that reaches no account cannot be staff, so it is refused too:
+  every refused Google caller gets the same 503 after the same role read,
+  whether the address is unknown, a customer's or staff's, ahead of the 400
+  (no email), 403 (unverified email) or 401 (a link to a deleted account, or
+  an inactive account) it would otherwise get. The check runs again on the
+  resolved account: a switch to `full`, or a platform role revoked, while a
+  callback is between the two checks is refused there, after
+  `resolveGoogleUser` has written.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
   limiter (10 a minute), and, to switch on or escalate, a `confirm` equal to
   `APP_ENV`. A stale `expectedVersion` answers 409. The change and its audit
@@ -863,7 +923,6 @@ reload and the queue pause.
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                         |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                   |
-| Google sign-in writes before the maintenance refusal  | **Gap**             | In `full`, a non-staff Google sign-in can create, link or claim an account before `assertSignInAllowed` refuses it with a 503.                 |
 | HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                             |
 | Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                   |
 | OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role to an existing verified user.                     |

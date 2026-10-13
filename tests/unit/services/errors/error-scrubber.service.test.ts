@@ -185,6 +185,41 @@ describe('scrubText', () => {
       'a value running through repeated keys',
       `token: ${'a pwd: '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
+    [
+      'a Bearer credential before repeated pairs with no =',
+      `Bearer abc${',k.k-k'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a Basic credential before repeated empty pairs',
+      `Basic dXNlcjpwYXNzd29yZA==${'; k='.repeat(4 * ERROR_VALUE_MAX)}`.slice(
+        0,
+        4 * ERROR_VALUE_MAX - 1
+      ),
+    ],
+    [
+      'a Bearer credential before a pair of repeated cut placeholders',
+      `Bearer abc,k=${'[redacte'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a Bearer credential before repeated quoted pairs that never close',
+      `Bearer abc${',k="x'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a Bearer credential before repeated whitespace-padded separators',
+      `Bearer abc${' \n,\n k%3D'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a reset path of repeated glued scheme words',
+      `/reset/${',Bearer;basic'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a run of IPv6-like groups before a long base64 run',
+      `${'a:'.repeat(2 * ERROR_VALUE_MAX - 30)}7334/${'Ab1'.repeat(15)}`,
+    ],
+    [
+      'a mailto address before repeated encoded-comma addresses and no query',
+      `mailto:a@x.com${'%2Cb@y.com'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
   ])('worst-case 4 KB shapes the timing test does not cover: %s', (_label, shape) => {
     // A trailing space keeps the whole shape inside the scan cap's cut.
     const text = `${shape} `
@@ -193,6 +228,19 @@ describe('scrubText', () => {
     scrubText(text)
     // Proves the worst shapes stay bounded at the scan cap: several are quadratic, and only SCAN_MAX keeps them cheap; each measured at most 60 ms (median of seven runs), so 2 s keeps at least 33x headroom.
     expect(performance.now() - started).toBeLessThan(2000)
+  })
+
+  it('keeps a text the first pass lengthens past the cap under the cap', () => {
+    const scrubbed = scrubText('token=a\n'.repeat(512))
+    expect(scrubbed.length).toBeLessThanOrEqual(ERROR_VALUE_MAX)
+    expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)
+  })
+
+  it('scans only SCAN_MAX characters of a later pass, and marks what that cut', () => {
+    // The swallowed key takes a second pass; the first pass doubles the run of pairs past 4 x ERROR_VALUE_MAX, and the run has no whitespace, so the second pass's scan keeps only the text before it.
+    const text = `/reset/abcpassword="zqS7hunter2" ${'token=a,'.repeat(505)}`
+    expect(text.length).toBeLessThanOrEqual(4 * ERROR_VALUE_MAX)
+    expect(scrubText(text)).toBe(`/reset/[token]"[redacted]" ${TRUNCATION_MARKER}`)
   })
 
   it('scrubs a secret that appears after replacements shortened the text', () => {
