@@ -1,0 +1,6 @@
+# These two files hold fake secrets planted on purpose as inputs the error scrubber must redact.
+version: 2
+secret:
+  ignored_paths:
+    - tests/fixtures/error-scrub-vectors.json
+    - tests/unit/services/errors/error-scrubber.service.test.ts
