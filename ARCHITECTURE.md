@@ -1199,7 +1199,9 @@ secret, because a refresh token is an opaque random string
 ### Local infrastructure
 
 `docker-compose.yml` runs the services the app needs; the app itself runs on
-the host.
+the host. Its `dev` and `prod` profiles can also run the app and both
+frontends in containers; see
+[Run everything with Docker](README.md#run-everything-with-docker).
 
 | Service        | Host port                        | Notes                                                                                 |
 | -------------- | -------------------------------- | ------------------------------------------------------------------------------------- |

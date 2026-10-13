@@ -86,6 +86,57 @@ authenticated route such as `GET /api/v1/profile`. Every `/api/v1/auth` route
 refuses a non-JSON body with 415. See
 [ARCHITECTURE.md](ARCHITECTURE.md#request-path-auth-and-beyond) for the rest.
 
+## Run everything with Docker
+
+`docker-compose.yml` can also run this API, react-boilerplate and
+apex-boilerplate together, through two compose profiles. Plain
+`docker compose up -d --wait` is unchanged and starts only the infrastructure.
+
+- **Sibling checkouts.** The frontends build from `../react-boilerplate` and
+  `../apex-boilerplate`, next to this repo. Point elsewhere with `REACT_DIR`
+  and `APEX_DIR`, for example
+  `REACT_DIR=~/code/react-boilerplate docker compose --profile dev up`.
+- **`.env` first.** The API containers read this repo's `.env`, so create it
+  from `.env.example` as in the [Quickstart](#quickstart). Without it, any
+  `--profile dev` or `--profile prod` command stops with "env file … not
+  found". Compose overrides only what differs inside its network:
+  `DATABASE_URL`, `REDIS_URL`, `SMTP_HOST`, `SMTP_PORT` and `APP_PORT`. Keep
+  `WEB_URL=http://localhost:5173` and `APEX_URL=http://localhost:5174`.
+  Tracing stays off unless `.env` sets `OTEL_EXPORTER_OTLP_ENDPOINT`, and from
+  inside the network that has to be `http://otel-collector:4318`.
+
+```bash
+docker compose --profile dev up           # hot reload, source mounted
+docker compose --profile prod up --build  # the real images, no hot reload
+```
+
+| Profile | Services                                                | API, React, Apex                         |
+| ------- | ------------------------------------------------------- | ---------------------------------------- |
+| `dev`   | `api-dev`, `react-dev`, `apex-dev`                      | `localhost:4040`, `:5173`, `:5174`       |
+| `prod`  | `migrate`, `api`, `react`, `apex`, from each Dockerfile | the same ports; nginx serves the clients |
+
+- **`dev`** runs each repo's source, bind-mounted, in the `node:24-alpine`
+  image the `Dockerfile` pins, with `node_modules` in a named volume per repo
+  so the container keeps Linux binaries. `api-dev` runs migrations, then
+  `pnpm dev`; the frontends run Vite. Edits reload as they do on the host. The
+  first run installs every dependency, which takes a minute or two; later runs
+  reuse the volumes.
+- **`prod`** builds the three images. `migrate` runs
+  `node dist/database/migrate.js` once and `api` starts after it succeeds. The
+  frontends run read-only with a tmpfs `/tmp` and proxy `/api` to `api`. The
+  build skips the source-map upload, since no PostHog project is set.
+- **One profile at a time.** Both publish 4040, 5173 and 5174 on `127.0.0.1`,
+  as do the dev servers on the host: stop those first too.
+- **Why the frontends share `api-dev`'s network.** Both Vite configs proxy
+  `/api` to `http://localhost:4040`, so `react-dev` and `apex-dev` run with
+  `network_mode: service:api-dev`, where `localhost:4040` is the API. That is
+  why their ports are published on `api-dev`. If `api-dev` is recreated, run
+  `docker compose --profile dev up -d` again so the frontends rejoin it.
+
+Stop with `docker compose --profile dev down` (or `--profile prod`).
+`down -v` also deletes the volumes: the `node_modules` volumes, Tempo's data
+and the database, which is the same one a host `pnpm dev` uses.
+
 ## Environment variables
 
 Every variable, with its default and what it does, is in the table in

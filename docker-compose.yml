@@ -1,4 +1,20 @@
-# The local infrastructure the app needs to boot.
+# The local infrastructure the app needs to boot, and two opt-in profiles
+# that also run the API, react-boilerplate and apex-boilerplate in containers.
+#
+# Every service without a `profiles:` key is infrastructure: plain
+# `docker compose up -d --wait` starts only those, and the README, CI and the
+# test suite rely on that. Every app service sits behind a profile:
+#
+#   dev   api-dev, react-dev, apex-dev: source bind-mounted, hot reload.
+#   prod  migrate, api, react, apex: the real images, built from each
+#         repo's own Dockerfile.
+#
+# Both profiles publish the same host ports (4040, 5173, 5174), so run one at
+# a time. The frontends build from sibling checkouts, ../react-boilerplate and
+# ../apex-boilerplate by default; REACT_DIR and APEX_DIR override the paths.
+# The app services read the developer's .env (env_file) and override only what
+# differs inside the compose network: the Postgres, Redis and Mailpit hosts.
+# See "Run everything with Docker" in the README.
 #
 # Postgres is pinned to 18 because the migrations use uuidv7() as a column
 # default, which is built in from 18. On 17 or older the migration aborts
@@ -10,13 +26,38 @@
 # suite would pass against a developer's own instance. Container-internal
 # ports stay 5432/6379.
 #
-# No app service: the app runs on the host with APP_ENV=local (.env.example),
-# which lets it use Mailpit and the defaults below.
+# Without a profile the app runs on the host with APP_ENV=local
+# (.env.example), which lets it use Mailpit and the defaults below.
 #
 # Every host-side port binds 127.0.0.1 explicitly. By default Docker
 # publishes a port on every interface, and on Linux its own iptables rules
 # bypass a host firewall such as ufw, so a default-bound port is reachable
 # from the rest of the network even where the firewall would block it.
+
+# Shared by api-dev, react-dev and apex-dev: the node:24-alpine that express's
+# Dockerfile pins, by the same digest. Each dev command installs corepack the
+# way the Dockerfiles do, since Node 25+ does not bundle it, and corepack then
+# runs the pnpm that package.json's packageManager names. init: true makes
+# `down` stop the shell-started process at once instead of after 10 seconds.
+x-node-dev: &node-dev
+  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
+  working_dir: /app
+  init: true
+
+x-dev-env: &dev-env
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  # Every repo's `prepare` script runs husky, which has no git in here.
+  HUSKY: '0'
+
+# What differs for the API inside the compose network: the infrastructure is
+# reached by service name on its container port, not on localhost's 5433,
+# 6380 and 1025. Postgres's credentials are the ones its service sets below.
+x-in-network: &in-network
+  DATABASE_URL: &database-url postgres://boilerplate:boilerplate@postgres:5432/boilerplate
+  REDIS_URL: redis://redis:6379
+  SMTP_HOST: mailpit
+  SMTP_PORT: '1025'
+
 services:
   postgres:
     image: postgres:18
@@ -116,6 +157,158 @@ services:
       timeout: 5s
       retries: 10
 
+  # ---------------------------------------------------------------------------
+  # Profile dev: `docker compose --profile dev up`. Hot reload, source mounted.
+  # ---------------------------------------------------------------------------
+
+  api-dev:
+    <<: *node-dev
+    profiles: [dev]
+    volumes:
+      - .:/app
+      # A named volume over node_modules, so the container installs and keeps
+      # Linux binaries (bcrypt is native) and never sees or writes the host's.
+      - express-node-modules:/app/node_modules
+    env_file: .env
+    environment:
+      <<: [*in-network, *dev-env]
+      # The published port below is 4040, so the server must listen there
+      # whatever APP_PORT the .env sets.
+      APP_PORT: '4040'
+    # Migrations run in this command, before `pnpm dev`, rather than in a
+    # separate one-shot service: one `pnpm install` on one node_modules
+    # volume (two services would race to install into it), and tsx's watch
+    # restarts never re-run them.
+    command:
+      - sh
+      - -c
+      - >-
+        npm i -g corepack@0.36.0 --silent && corepack enable && corepack install &&
+        pnpm install --frozen-lockfile --config.confirm-modules-purge=false &&
+        pnpm db:migrate && exec pnpm dev
+    # react-dev and apex-dev share this container's network namespace (see
+    # them below), so their ports are published here, on the namespace's owner.
+    ports:
+      - '127.0.0.1:4040:4040'
+      - '127.0.0.1:5173:5173'
+      - '127.0.0.1:5174:5174'
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:4040/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # The first run installs every dependency before the server starts.
+      start_period: 10m
+
+  # react-dev and apex-dev run in api-dev's network namespace
+  # (network_mode: service:api-dev). Both vite configs proxy /api to
+  # http://localhost:4040, and react hard-codes it; inside this namespace
+  # localhost:4040 IS the API, so neither frontend repo needs a change. The
+  # cost: they share api-dev's ports, so their 5173/5174 are published on
+  # api-dev, they can declare no ports or networks of their own, and
+  # recreating api-dev leaves them without a network until they are
+  # recreated too (`docker compose --profile dev up -d` does both).
+  # Browser origins stay http://localhost:5173 and :5174, matching WEB_URL and
+  # APEX_URL in .env. Each frontend's own node_modules lives in a named volume.
+  react-dev:
+    <<: *node-dev
+    profiles: [dev]
+    network_mode: 'service:api-dev'
+    volumes:
+      - ${REACT_DIR:-../react-boilerplate}:/app
+      - react-node-modules:/app/node_modules
+    environment: *dev-env
+    command: &vite-dev
+      - sh
+      - -c
+      - >-
+        npm i -g corepack@0.36.0 --silent && corepack enable && corepack install &&
+        pnpm install --frozen-lockfile --config.confirm-modules-purge=false &&
+        exec pnpm exec vite --host 0.0.0.0 --strictPort
+    depends_on: [api-dev]
+
+  apex-dev:
+    <<: *node-dev
+    profiles: [dev]
+    network_mode: 'service:api-dev'
+    volumes:
+      - ${APEX_DIR:-../apex-boilerplate}:/app
+      - apex-node-modules:/app/node_modules
+    environment: *dev-env
+    command: *vite-dev
+    depends_on: [api-dev]
+
+  # ---------------------------------------------------------------------------
+  # Profile prod: `docker compose --profile prod up --build`. The real images.
+  # ---------------------------------------------------------------------------
+
+  # Runs the image's migration entrypoint once, then exits; api waits for it
+  # to succeed. It reads only DATABASE_URL (src/database/migrate.ts), so it
+  # gets no .env. It carries its own build, the same Dockerfile as api (the
+  # second build is a cache hit), so it never tries to pull an image.
+  migrate:
+    profiles: [prod]
+    build: .
+    command: ['node', 'dist/database/migrate.js']
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # NODE_ENV and APP_ENV come from .env as they are: with APP_ENV=local the
+  # image boots against Mailpit with no further override. LOG_FORMAT falls
+  # back to json, since the image has no pino-pretty.
+  api:
+    profiles: [prod]
+    build: .
+    env_file: .env
+    environment:
+      <<: *in-network
+      APP_PORT: '4040'
+    ports: ['127.0.0.1:4040:4040']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:4040/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Both frontend images build with their Dockerfiles' defaults: GIT_SHA=dev,
+  # and no POSTHOG_SOURCEMAP_PROJECTS, so docker/upload-sourcemaps.sh skips the
+  # upload. With no POSTHOG_KEY the runtime config leaves analytics off. nginx
+  # serves on 8080 and proxies /api to API_UPSTREAM; it resolves that host
+  # when it starts, so the api container must exist first. Read-only root
+  # filesystem with a tmpfs /tmp, as both READMEs run them.
+  react:
+    profiles: [prod]
+    build: ${REACT_DIR:-../react-boilerplate}
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      API_UPSTREAM: http://api:4040
+    ports: ['127.0.0.1:5173:8080']
+    depends_on: [api]
+
+  apex:
+    profiles: [prod]
+    build: ${APEX_DIR:-../apex-boilerplate}
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      API_UPSTREAM: http://api:4040
+    ports: ['127.0.0.1:5174:8080']
+    depends_on: [api]
+
 volumes:
   pgdata:
   tempo-data:
+  express-node-modules:
+  react-node-modules:
+  apex-node-modules:
