@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.0](https://github.com/mahaverick/express-boilerplate/compare/v4.1.0...v4.2.0) (2026-10-13)
+
+
+### Features
+
+* **dev:** run the API, react and apex together with docker compose profiles ([#119](https://github.com/mahaverick/express-boilerplate/issues/119)) ([b7501dc](https://github.com/mahaverick/express-boilerplate/commit/b7501dc238869a5b45d38af26abded0e95d405e6))
+
 ## [4.1.0](https://github.com/mahaverick/express-boilerplate/compare/v4.0.0...v4.1.0) (2026-10-13)
 
 
