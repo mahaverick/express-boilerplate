@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.0](https://github.com/mahaverick/express-boilerplate/compare/v4.0.0...v4.1.0) (2026-10-13)
+
+
+### Features
+
+* **notifications:** let users switch in-app notifications off, and close the express follow-ups ([#116](https://github.com/mahaverick/express-boilerplate/issues/116)) ([630fdaf](https://github.com/mahaverick/express-boilerplate/commit/630fdafc91b4f6681f52f1da0e3f0b52f40b722a))
+
 ## [4.0.0](https://github.com/mahaverick/express-boilerplate/compare/v3.0.2...v4.0.0) (2026-10-12)
 
 
