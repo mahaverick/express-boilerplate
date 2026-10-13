@@ -362,6 +362,10 @@ points at the code or doc that holds the detail. How things work is in
   native Postgres or Redis. `tests/unit/connection-target.test.ts` checks the
   committed `docker-compose.yml` and `.env.test`, never `getEnv()` at runtime,
   because CI's services publish 5432/6379.
+- **A `docker-compose.yml` service without `profiles:` is infrastructure
+  only.** Plain `docker compose up -d --wait` (the Quickstart, CI and the test
+  setup) must start nothing else; every app service sits behind the `dev` or
+  `prod` profile, and every published port binds `127.0.0.1`.
 - **Never break a file under `src/` on disk to prove a test catches it:** the
   broken state is a real vulnerability another session can commit. Use
   `withMutatedMethod` or `withMutatedModule` (`tests/helpers/mutate.ts`), which
