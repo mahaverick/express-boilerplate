@@ -442,3 +442,25 @@ describe('the feature flags key', () => {
     ).toBeUndefined()
   })
 })
+
+describe('the rate-limit scale', () => {
+  it('passes a scale on local', () => {
+    expect(runChecks({ ...local, RATE_LIMIT_SCALE: '10' })).toEqual({
+      error: undefined,
+      warnings: [],
+    })
+  })
+
+  it.each(['dev', 'qa', 'prod'])(
+    'refuses a scale of 10 on APP_ENV=%s, naming both variables',
+    (appEnv) => {
+      const { error } = runChecks({ ...deployed, APP_ENV: appEnv, RATE_LIMIT_SCALE: '10' })
+      expect(error).toContain(`RATE_LIMIT_SCALE is 10, but APP_ENV is ${appEnv}`)
+    }
+  )
+
+  it('passes a scale of 1 outside local, and no scale at all', () => {
+    expect(runChecks({ ...deployed, RATE_LIMIT_SCALE: '1' }).error).toBeUndefined()
+    expect(runChecks(deployed).error).toBeUndefined()
+  })
+})

@@ -339,6 +339,22 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * No schema default, as for COOKIE_SECURE: `rateLimitScale()` reads unset as
+   * 1, and reads any value as 1 outside local. `assertEnvConsistent`
+   * (env-consistency.config.ts) refuses a value other than 1 outside local at
+   * boot.
+   */
+  RATE_LIMIT_SCALE: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'Multiplies the budget of every rate limiter in RATE_LIMITS, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.'
+    ),
+
+  /**
    * No schema default: it depends on APP_ENV, which `.default()` cannot read,
    * so `isCookieSecure()` applies it.
    */
@@ -939,6 +955,18 @@ export function requiresSmtpTls(env: Pick<Env, 'APP_ENV'>): boolean {
  */
 export function isFakeEmailWebhookAllowed(env: Pick<Env, 'APP_ENV'>): boolean {
   return env.APP_ENV === 'local'
+}
+
+/**
+ * The factor `createRateLimiter` multiplies every limiter's budget by:
+ * `RATE_LIMIT_SCALE` on local, unset meaning 1, and 1 everywhere else. A
+ * deployed limit therefore stays as `RATE_LIMITS` declares it even where
+ * `assertEnvConsistent` never ran, as under a test's `createApp()`.
+ * @param env - The RATE_LIMIT_SCALE and APP_ENV slice of the validated environment.
+ * @returns The multiplier, a whole number from 1 to 100.
+ */
+export function rateLimitScale(env: Pick<Env, 'RATE_LIMIT_SCALE' | 'APP_ENV'>): number {
+  return env.APP_ENV === 'local' ? (env.RATE_LIMIT_SCALE ?? 1) : 1
 }
 
 /**
