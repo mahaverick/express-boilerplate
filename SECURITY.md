@@ -844,8 +844,11 @@ fails a write route with no limiter.
   (`src/configs/rate-limit-store.config.ts`). Limits are never switched off, but
   during an outage N replicas allow up to N times a limit.
 - **A scale for end-to-end runs, local only.** `RATE_LIMIT_SCALE` (1 to 100,
-  unset meaning 1) multiplies every limiter's budget; windows and keys stay as
-  they are. It exists because an end-to-end run sends every request from one IP
+  unset meaning 1) multiplies the limit of every limiter `createRateLimiter`
+  builds from its `RATE_LIMITS` spec; windows and keys stay as they are. Not
+  scaled: an explicit override (`platform-timeline`, through
+  `TIMELINE_REQUESTS_PER_MINUTE`) and the counters outside `RATE_LIMITS` (mail
+  cooldowns, the invitation recipient ceiling, the SSE stream cap). It exists because an end-to-end run sends every request from one IP
   and spends the per-IP budgets of several suites at once. Boot refuses any
   value but 1 unless `APP_ENV` is `local` (`assertEnvConsistent`,
   `src/configs/env-consistency.config.ts`), and `rateLimitScale`

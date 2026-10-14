@@ -8,7 +8,9 @@
  * credentials; it exists only so a request has somewhere to land after
  * the limiter lets it through, so these tests prove the limiter's
  * behaviour, not the login controller's (that's
- * tests/integration/api/auth.test.ts's job). getEnv() is a vi.fn over the real one, so the RATE_LIMIT_SCALE tests hand createRateLimiter their own APP_ENV and scale.
+ * tests/integration/api/auth.test.ts's job). getEnv() is a vi.fn over the real
+ * one, so the RATE_LIMIT_SCALE tests hand createRateLimiter their own APP_ENV
+ * and scale.
  */
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -616,7 +618,7 @@ describe('store prefix derivation', () => {
 })
 
 /**
-The environment `getEnv()` answers outside the RATE_LIMIT_SCALE tests.
+ * The environment `getEnv()` answers outside the RATE_LIMIT_SCALE tests.
  */
 const realEnv = getEnv()
 
@@ -630,7 +632,7 @@ function useEnv(overrides: Partial<Env>): void {
 }
 
 /**
-The logout spec with a budget of one, so a test spends exactly the scale.
+ * The logout spec with a budget of one, so a test spends exactly the scale.
  */
 const ONE_PER_WINDOW: RateLimiterSpec = { ...RATE_LIMITS.logout, limit: 1 }
 

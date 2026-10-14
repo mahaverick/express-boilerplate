@@ -351,7 +351,7 @@ const EnvSchema = z.object({
     .max(100)
     .optional()
     .describe(
-      'Multiplies the budget of every rate limiter in RATE_LIMITS, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.'
+      'Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (platform-timeline, via TIMELINE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.'
     ),
 
   /**
