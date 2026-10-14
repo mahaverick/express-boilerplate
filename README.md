@@ -149,7 +149,9 @@ Optional keys have their own sections: `APEX_URL` in
 `RESEND_WEBHOOK_SECRET`, `MAIL_FROM` and `MAIL_FROM_TRANSACTIONAL` in
 [Email tracking](#email-tracking), the `POSTHOG_*` keys in
 [Analytics (PostHog)](#analytics-posthog), and `TRUST_PROXY` for any
-deployment behind a proxy.
+deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
+`APP_ENV=local` only, is in
+[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter).
 
 ## Available scripts
 

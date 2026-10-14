@@ -5,6 +5,7 @@
  */
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { rateLimit } from 'express-rate-limit'
+import { getEnv, rateLimitScale } from '@/configs/env.config'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
 import {
   authenticatedUserRateLimitKey,
@@ -59,8 +60,12 @@ export const RATE_LIMITER_MARK = Symbol('rateLimiter')
  * fallback each instance counts on its own: `authenticatedWrite` (tenant,
  * notification and profile routers: one per-user budget) and `flagExposure`
  * (flags, tenant and platform routers: one per-session budget).
+ *
+ * `spec.limit` is multiplied by `rateLimitScale` (`RATE_LIMIT_SCALE`, which
+ * only `APP_ENV=local` honours), so an end-to-end run whose every request
+ * comes from one IP gets headroom; windows and keys never change.
  * @param spec - The limiter's configuration — see `RateLimiterSpec`.
- * @param overrides - `windowMs`/`limit` to override, e.g. a small window for a test. Every other field is fixed by `spec`.
+ * @param overrides - `windowMs`/`limit` to override, e.g. a small window for a test; an overridden `limit` is used as given, unscaled. Every other field is fixed by `spec`.
  * @returns Express middleware enforcing the limit, tagged with `RATE_LIMITER_MARK` set to `spec.name`.
  */
 export function createRateLimiter(
@@ -71,7 +76,7 @@ export function createRateLimiter(
 
   const handler = rateLimit({
     windowMs: overrides.windowMs ?? spec.windowMs,
-    limit: overrides.limit ?? spec.limit,
+    limit: overrides.limit ?? spec.limit * rateLimitScale(getEnv()),
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore(spec.name),

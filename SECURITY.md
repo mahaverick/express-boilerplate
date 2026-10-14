@@ -843,6 +843,14 @@ fails a write route with no limiter.
   once it answers and falls back to memory for any command that fails or stalls
   (`src/configs/rate-limit-store.config.ts`). Limits are never switched off, but
   during an outage N replicas allow up to N times a limit.
+- **A scale for end-to-end runs, local only.** `RATE_LIMIT_SCALE` (1 to 100,
+  unset meaning 1) multiplies every limiter's budget; windows and keys stay as
+  they are. It exists because an end-to-end run sends every request from one IP
+  and spends the per-IP budgets of several suites at once. Boot refuses any
+  value but 1 unless `APP_ENV` is `local` (`assertEnvConsistent`,
+  `src/configs/env-consistency.config.ts`), and `rateLimitScale`
+  (`src/configs/env.config.ts`) answers 1 outside local even where that check
+  never ran, so it can never raise a deployed limit.
 
 The auth limiters each answer a specific threat:
 
