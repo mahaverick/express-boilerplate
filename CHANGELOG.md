@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.0](https://github.com/mahaverick/express-boilerplate/compare/v4.2.0...v4.3.0) (2026-10-14)
+
+
+### Features
+
+* **rate-limit:** add RATE_LIMIT_SCALE for local end-to-end runs ([#121](https://github.com/mahaverick/express-boilerplate/issues/121)) ([7833af9](https://github.com/mahaverick/express-boilerplate/commit/7833af9c28439c9cb4d3a4fd368cb967aa3f11f4))
+
 ## [4.2.0](https://github.com/mahaverick/express-boilerplate/compare/v4.1.0...v4.2.0) (2026-10-13)
 
 
