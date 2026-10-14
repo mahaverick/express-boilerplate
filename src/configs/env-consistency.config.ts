@@ -170,6 +170,21 @@ function flagsKeyProblems(env: Env): string[] {
 }
 
 /**
+ * A rate-limit scale outside local. `RATE_LIMIT_SCALE` exists for end-to-end
+ * runs, whose every request comes from one IP; on a deployment it would
+ * multiply every attacker's budget, so boot refuses it rather than leaving
+ * `rateLimitScale` to ignore it without a word.
+ * @param env - The validated environment.
+ * @returns One message when the scale is set to anything but 1 outside local, else none.
+ */
+function rateLimitScaleProblems(env: Env): string[] {
+  if (env.APP_ENV === 'local' || (env.RATE_LIMIT_SCALE ?? 1) === 1) return []
+  return [
+    `RATE_LIMIT_SCALE is ${String(env.RATE_LIMIT_SCALE)}, but APP_ENV is ${env.APP_ENV}. Only APP_ENV=local may scale the rate limits: unset RATE_LIMIT_SCALE or set it to 1.`,
+  ]
+}
+
+/**
  * Refuses unsafe or inconsistent configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -232,7 +247,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     )
   }
 
-  problems.push(...flagsKeyProblems(env))
+  problems.push(...flagsKeyProblems(env), ...rateLimitScaleProblems(env))
   warnOnUntrustedProxyForAnalytics(env, warn)
   warnOnHalfTimelineConfig(env, warn)
 

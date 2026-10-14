@@ -8,6 +8,7 @@ import {
   isFakeEmailWebhookAllowed,
   logFormat,
   parseEnv,
+  rateLimitScale,
   requiresSmtpTls,
   trustProxySetting,
   type AppEnv,
@@ -859,5 +860,33 @@ describe('POSTHOG_FEATURE_FLAGS_KEY', () => {
     expect(EnvSchemaShape.POSTHOG_PERSONAL_API_KEY.description).toContain(
       'feature_flag:read and feature_flag:write'
     )
+  })
+})
+
+describe('RATE_LIMIT_SCALE', () => {
+  it('is unset by default, and an empty value counts as unset', () => {
+    expect(parseEnv(valid).RATE_LIMIT_SCALE).toBeUndefined()
+    expect(parseEnv({ ...valid, RATE_LIMIT_SCALE: '' }).RATE_LIMIT_SCALE).toBeUndefined()
+  })
+
+  it('coerces a whole number from 1 to 100', () => {
+    expect(parseEnv({ ...valid, RATE_LIMIT_SCALE: '1' }).RATE_LIMIT_SCALE).toBe(1)
+    expect(parseEnv({ ...valid, RATE_LIMIT_SCALE: '10' }).RATE_LIMIT_SCALE).toBe(10)
+    expect(parseEnv({ ...valid, RATE_LIMIT_SCALE: '100' }).RATE_LIMIT_SCALE).toBe(100)
+  })
+
+  it.each(['0', '-1', '1.5', '101', 'ten'])('rejects %s, naming the variable', (value) => {
+    expect(() => parseEnv({ ...valid, RATE_LIMIT_SCALE: value })).toThrow('RATE_LIMIT_SCALE')
+  })
+
+  it.each([
+    ['local', 10, 10],
+    ['local', undefined, 1],
+    ['dev', 10, 1],
+    ['qa', 10, 1],
+    ['prod', 10, 1],
+    ['prod', undefined, 1],
+  ] as const)('rateLimitScale on %s with RATE_LIMIT_SCALE=%s is %i', (appEnv, scale, expected) => {
+    expect(rateLimitScale({ APP_ENV: appEnv, RATE_LIMIT_SCALE: scale })).toBe(expected)
   })
 })

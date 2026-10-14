@@ -8,15 +8,22 @@
  * credentials; it exists only so a request has somewhere to land after
  * the limiter lets it through, so these tests prove the limiter's
  * behaviour, not the login controller's (that's
- * tests/integration/api/auth.test.ts's job).
+ * tests/integration/api/auth.test.ts's job). getEnv() is a vi.fn over the real
+ * one, so the RATE_LIMIT_SCALE tests hand createRateLimiter their own APP_ENV
+ * and scale.
  */
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
 import type { Test } from 'supertest'
-import { describe, expect, it, vi } from 'vitest'
-import { RATE_LIMITED_CODE, RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getEnv, type Env } from '@/configs/env.config'
+import {
+  RATE_LIMITED_CODE,
+  RATE_LIMITS,
+  type RateLimiterSpec,
+} from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
@@ -25,6 +32,11 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/redis.service')>()),
   getRedis: vi.fn(() => Promise.reject(new Error('no redis in unit tests'))),
 }))
+
+vi.mock('@/configs/env.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/env.config')>()
+  return { ...actual, getEnv: vi.fn(actual.getEnv) }
+})
 
 /**
  * A bare app: a login rate limiter in front of a stub handler that always
@@ -602,5 +614,80 @@ describe('store prefix derivation', () => {
       'utf8'
     )
     expect(source).toMatch(/store:\s*limiterStore\(spec\.name\)/)
+  })
+})
+
+/**
+ * The environment `getEnv()` answers outside the RATE_LIMIT_SCALE tests.
+ */
+const realEnv = getEnv()
+
+/**
+ * Makes every `getEnv()` answer the real environment with `overrides` on top,
+ * until the describe's `afterEach` restores it. `createRateLimiter` reads it
+ * once, when it builds the limiter.
+ */
+function useEnv(overrides: Partial<Env>): void {
+  vi.mocked(getEnv).mockReturnValue({ ...realEnv, ...overrides })
+}
+
+/**
+ * The logout spec with a budget of one, so a test spends exactly the scale.
+ */
+const ONE_PER_WINDOW: RateLimiterSpec = { ...RATE_LIMITS.logout, limit: 1 }
+
+/**
+ * Sends `count` requests to `app` one after another and returns their statuses, in order.
+ */
+async function statuses(app: Express, count: number): Promise<number[]> {
+  const seen: number[] = []
+  for (let index = 0; index < count; index += 1) {
+    const response = await request(app).post('/endpoint')
+    seen.push(response.status)
+  }
+  return seen
+}
+
+describe('RATE_LIMIT_SCALE', () => {
+  afterEach(() => {
+    vi.mocked(getEnv).mockReturnValue(realEnv)
+  })
+
+  it("multiplies the spec's limit by the scale on local, in the 429 and the RateLimit-Limit header", async () => {
+    useEnv({ APP_ENV: 'local', RATE_LIMIT_SCALE: 3 })
+    const app = buildAppBehind(createRateLimiter(ONE_PER_WINDOW))
+
+    expect(await statuses(app, 3)).toEqual([201, 201, 201])
+    const limited = await request(app).post('/endpoint')
+
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+    expect(limited.headers['ratelimit-limit']).toBe('3')
+  })
+
+  it("leaves the spec's limit as it is when RATE_LIMIT_SCALE is unset", async () => {
+    useEnv({ APP_ENV: 'local', RATE_LIMIT_SCALE: undefined })
+    const app = buildAppBehind(createRateLimiter(ONE_PER_WINDOW))
+
+    expect(await statuses(app, 2)).toEqual([201, 429])
+  })
+
+  it.each(['dev', 'qa', 'prod'] as const)(
+    'ignores a scale on APP_ENV=%s, where boot would have refused it',
+    async (appEnv) => {
+      useEnv({ APP_ENV: appEnv, RATE_LIMIT_SCALE: 3 })
+      const app = buildAppBehind(createRateLimiter(ONE_PER_WINDOW))
+
+      expect(await statuses(app, 2)).toEqual([201, 429])
+    }
+  )
+
+  it('uses an overridden limit as given, unscaled', async () => {
+    useEnv({ APP_ENV: 'local', RATE_LIMIT_SCALE: 3 })
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.logout, { limit: 1, windowMs: 60_000 })
+    )
+
+    expect(await statuses(app, 2)).toEqual([201, 429])
   })
 })
