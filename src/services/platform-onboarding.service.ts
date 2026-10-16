@@ -19,17 +19,16 @@ import {
   type OnboardingStep,
   type OnboardingTrigger,
 } from '@/constants/onboarding.constants'
-import type { OnboardingTenantStateFilter } from '@/constants/platform.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { createTrackedEmail, enqueueTrackedEmail } from '@/jobs/email.job'
 import {
   PlatformOnboardingRepository,
   type OnboardingCompletionRow,
   type OnboardingMemberRow,
-  type OnboardingPageCursor,
   type OnboardingProgressOptions,
   type OnboardingProgressRow,
   type OnboardingRegistryKeys,
@@ -64,16 +63,15 @@ import type {
   OnboardingReminderView,
   OnboardingStepDetail,
   OnboardingStepSummary,
-  OnboardingTenantPage,
   OnboardingTenantRow,
   TenantOnboardingDetail,
 } from '@/types/platform-onboarding'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
 import {
   STEP_NOT_FOUND_CODE,
   STEP_NOT_FOUND_MESSAGE,
-  type OnboardingTenantSearchQuery,
+  type OnboardingTenantListQuery,
 } from '@/validators/platform-onboarding.validators'
 
 const platformOnboardingRepository = new PlatformOnboardingRepository()
@@ -248,16 +246,6 @@ export function emailDomainsOf(emails: readonly string[]): string[] {
 }
 
 /**
- * Encode a cursor for the wire.
- * @param cursor - The decoded cursor, if any.
- * @returns The opaque string, or null at that end of the list.
- */
-function encodeOnboardingCursor(cursor: OnboardingPageCursor | undefined): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null at each end of the list
-  return cursor ? encodeCursor({ sortAt: cursor.sortAt, id: cursor.id }) : null
-}
-
-/**
  * The funnel over the active, tracked tenants whose onboarding started in
  * the range: one entry per registry step, in registry order (a member step
  * counts a tenant once any active owner has done it), the cohort's
@@ -332,36 +320,31 @@ function toTenantRow(
 }
 
 /**
- * One page of the active, tracked tenants in one onboarding state: stuck
- * tenants longest stuck first, every other state newest first.
- * @param query - The validated query, with its cursor decoded.
+ * One page of the active, tracked tenants in one onboarding state, each
+ * with its active owners.
+ * @param query - The parsed list query.
  * @param now - The current instant; injectable for tests.
- * @returns The page, and `nextCursor`/`prevCursor` (null at that end).
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-export async function searchOnboardingTenants(
-  query: OnboardingTenantSearchQuery,
+export async function listOnboardingTenants(
+  query: OnboardingTenantListQuery,
   now: Date = new Date()
-): Promise<OnboardingTenantPage> {
-  const state: OnboardingTenantStateFilter = query.state
-  const page = await platformOnboardingRepository.listByState({
+): Promise<ListPage<OnboardingTenantRow>> {
+  const page = await platformOnboardingRepository.listByState(query.params, {
     ...progressOptionsAt(now),
-    state,
-    isAscending: state === 'stuck',
-    limit: query.limit,
-    direction: query.direction,
-    cursor: query.cursor,
+    state: query.filters.state,
   })
-  const owners = await platformOnboardingRepository.activeOwners(page.rows.map((row) => row.id))
+  const owners = await platformOnboardingRepository.activeOwners(page.items.map((row) => row.id))
   return {
-    tenants: page.rows.map((row) =>
+    ...page,
+    items: page.items.map((row) =>
       toTenantRow(
         row,
         owners.filter((owner) => owner.tenantId === row.id),
         now
       )
     ),
-    nextCursor: encodeOnboardingCursor(page.nextCursor),
-    prevCursor: encodeOnboardingCursor(page.prevCursor),
   }
 }
 

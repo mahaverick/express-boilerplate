@@ -1,27 +1,19 @@
 /**
  * @file The staff onboarding queries: the funnel's own ranges (30 days by
  * default, 90 allowed, unlike the Overview), the list's state filter
- * (stuck by default, `not_tracked` refused), the microsecond cursor,
+ * (stuck by default, `not_tracked` refused), its state-chosen default sort,
  * `direction=prev` needing a cursor, and the step-key parameter.
  */
-import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { ONBOARDING_STEP_NOT_FOUND_CODE } from '@/services/onboarding.service'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import {
   onboardingFunnelQuerySchema,
-  onboardingTenantSearchSchema,
+  onboardingTenantListSchema,
   parseStepKeyParameter,
   STEP_NOT_FOUND_CODE,
   STEP_NOT_FOUND_MESSAGE,
 } from '@/validators/platform-onboarding.validators'
-
-/**
- * A cursor in the microsecond form the repository issues, for a random row id.
- */
-const validCursor = (): string =>
-  encodeCursor({ sortAt: '2026-09-30T08:15:02.123456Z', id: randomUUID() })
 
 describe('onboardingFunnelQuerySchema', () => {
   it('defaults to 30d', () => {
@@ -37,44 +29,56 @@ describe('onboardingFunnelQuerySchema', () => {
   })
 })
 
-describe('onboardingTenantSearchSchema', () => {
+describe('onboardingTenantListSchema', () => {
   it('defaults to the stuck list, first page, 20 rows', () => {
-    expect(onboardingTenantSearchSchema.parse({})).toEqual({
-      state: 'stuck',
-      direction: 'next',
-      limit: 20,
-    })
+    const parsed = onboardingTenantListSchema.parse({})
+    expect(parsed.filters).toEqual({ state: 'stuck' })
+    expect(parsed.params).toMatchObject({ direction: 'next', limit: 20, sort: 'progress' })
+  })
+
+  it('sorts the stuck tab by progress and every other tab by start', () => {
+    expect(onboardingTenantListSchema.parse({}).params.sort).toBe('progress')
+    expect(onboardingTenantListSchema.parse({ state: 'complete' }).params.sort).toBe('-started')
+  })
+
+  it('takes an explicit sort over the state default', () => {
+    expect(onboardingTenantListSchema.parse({ sort: 'name' }).params.sort).toBe('name')
+    expect(
+      onboardingTenantListSchema.parse({ state: 'complete', sort: 'progress' }).params.sort
+    ).toBe('progress')
   })
 
   it.each(['stuck', 'in_progress', 'awaiting_owner', 'complete', 'dismissed'])(
     'accepts state=%s',
     (state) => {
-      expect(onboardingTenantSearchSchema.parse({ state }).state).toBe(state)
+      expect(onboardingTenantListSchema.parse({ state }).filters.state).toBe(state)
     }
   )
+
+  it('takes one state, not a list', () => {
+    expect(onboardingTenantListSchema.safeParse({ state: 'stuck,complete' }).success).toBe(false)
+  })
 
   it.each([
     [{ state: 'not_tracked' }],
     [{ state: 'stalled' }],
-    [{ limit: '51' }],
+    [{ limit: '101' }],
     [{ limit: '0' }],
-    [{ cursor: 'not-a-cursor' }],
-    [{ cursor: encodeCursor({ sortAt: '2026-09-30T08:15:02.123Z', id: randomUUID() }) }],
-    [{ cursor: encodeCursor({ sortAt: '2026-09-30T08:15:02.123456Z', id: 'not-a-uuid' }) }],
+    [{ sort: 'started' }],
   ])('refuses %j', (query) => {
-    expect(onboardingTenantSearchSchema.safeParse(query).success).toBe(false)
-  })
-
-  it('decodes a cursor and pages back with it', () => {
-    const parsed = onboardingTenantSearchSchema.parse({ cursor: validCursor(), direction: 'prev' })
-    expect(parsed.cursor?.sortAt).toBe('2026-09-30T08:15:02.123456Z')
-    expect(parsed.direction).toBe('prev')
+    expect(onboardingTenantListSchema.safeParse(query).success).toBe(false)
   })
 
   it('refuses direction=prev without a cursor, naming the cursor field', () => {
-    const result = onboardingTenantSearchSchema.safeParse({ direction: 'prev' })
+    const result = onboardingTenantListSchema.safeParse({ direction: 'prev' })
     expect(result.success).toBe(false)
     expect(result.error?.issues[0]?.path).toEqual(['cursor'])
+  })
+
+  it('binds a cursor to the state: the same search under another state hashes differently', () => {
+    const stuck = onboardingTenantListSchema.parse({ sort: 'name' }).params.scope
+    const complete = onboardingTenantListSchema.parse({ state: 'complete', sort: 'name' }).params
+    expect(complete.scope).not.toBe(stuck)
   })
 })
 

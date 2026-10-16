@@ -9,14 +9,14 @@ import {
   completeTenantStep,
   getOnboardingFunnel,
   getTenantOnboardingDetail,
-  searchOnboardingTenants,
+  listOnboardingTenants,
   sendOnboardingReminder,
 } from '@/services/platform-onboarding.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
   onboardingFunnelQuerySchema,
-  onboardingTenantSearchSchema,
+  onboardingTenantListSchema,
   parseStepKeyParameter,
 } from '@/validators/platform-onboarding.validators'
 import { parseIdParameter, reasonBodySchema } from '@/validators/platform.validators'
@@ -39,11 +39,11 @@ class PlatformOnboardingController extends BaseController {
   })
 
   /**
-   * `GET /platform/onboarding/tenants`: the tenants in one onboarding state.
+   * `GET /platform/onboarding/tenants`: one page of the tenants in one onboarding state, searchable by name and sortable.
    */
   searchTenants = this.handle(async (request, response) => {
-    const query = parseBody(onboardingTenantSearchSchema, request.query)
-    successResponse(response, await searchOnboardingTenants(query), 'Onboarding tenants retrieved.')
+    const query = parseBody(onboardingTenantListSchema, request.query)
+    successResponse(response, await listOnboardingTenants(query), 'Onboarding tenants retrieved.')
   })
 
   /**

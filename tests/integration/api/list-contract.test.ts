@@ -64,6 +64,7 @@ const like = {
   future: `${tag}-f%`,
   emails: `${tag}-e%`,
   suppressions: `${tag}-s%`,
+  onboarding: `${tag}-o%`,
 }
 
 /**
@@ -414,4 +415,50 @@ describeListContract({
     { query: { state: 'lifted' }, count: 1 },
     { query: { state: 'active' }, count: 4 },
   ],
+})
+
+/**
+ * The instant an onboarding item's field names, as a number.
+ * @param field - The item field holding an ISO instant.
+ * @returns A key function over list items.
+ */
+function instantOf(field: 'lastProgressAt' | 'startedAt'): (item: unknown) => number {
+  return (item) => Date.parse(String((item as Record<string, unknown>)[field]))
+}
+
+describeListContract({
+  name: 'GET /api/v1/platform/onboarding/tenants',
+  app: () => app,
+  path: () => '/api/v1/platform/onboarding/tenants',
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({ search: `${tag}-o`, state: 'stuck' }),
+  sorts: ['progress', '-started', 'name'],
+  order: {
+    progress: instantOf('lastProgressAt'),
+    '-started': instantOf('startedAt'),
+    name: (item) => (item as { name: string }).name.toLowerCase(),
+  },
+  // Stuck is the default view, so the default sort is progress; any other state sorts by start.
+  defaultSort: (filters) => (filters.state === 'stuck' ? 'progress' : '-started'),
+  // Names are unique, so the name sort has no tie to test.
+  uniqueKeys: ['name'],
+  setup: createStaff,
+  teardown: removeStaff,
+  seed: async (count) => {
+    // Weeks ago with no step done is stuck; rows 2k and 2k+1 share a start day, a tie.
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      name: `${tag}-o${pad(index)}`,
+      slug: `${tag}-o${pad(index)}`,
+      onboarding_tracked: true,
+      onboarding_started_at: new Date(
+        Date.now() - (30 + Math.floor(index / 2)) * 24 * 60 * 60 * 1000
+      ).toISOString(),
+    }))
+    await sql`insert into tenants ${sql(rows, 'name', 'slug', 'onboarding_tracked', 'onboarding_started_at')}`
+  },
+  clear: async () => {
+    await sql`delete from tenants where slug like ${like.onboarding}`
+  },
+  search: { text: `${tag}-o0001`, count: 1 },
+  filters: [{ query: { state: 'awaiting_owner' }, count: 0 }],
 })

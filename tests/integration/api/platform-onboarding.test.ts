@@ -10,7 +10,6 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addCompletion,
@@ -63,12 +62,11 @@ interface TenantRowBody {
 }
 
 /**
- * One page of the onboarding tenants list, with its cursors.
+ * One page of the onboarding tenants list, with its page info.
  */
 interface PageBody {
-  tenants: TenantRowBody[]
-  nextCursor: string | null
-  prevCursor: string | null
+  items: TenantRowBody[]
+  page: { nextCursor: string | null; prevCursor: string | null; hasNext: boolean; hasPrev: boolean }
 }
 
 const app = createApp()
@@ -186,7 +184,7 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
     const response = await get(await viewerToken(), '/onboarding/tenants', { limit: '50' })
 
     expect(response.status).toBe(200)
-    const rows = dataOf<PageBody>(response).tenants
+    const rows = dataOf<PageBody>(response).items
     const row = rows.find((candidate) => candidate.id === stuck.id)
     expect(row).toMatchObject({
       state: 'stuck',
@@ -206,17 +204,17 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
 
     const pageOne = dataOf<PageBody>(await get(token, '/onboarding/tenants', { limit: '1' }))
     const all = dataOf<PageBody>(await get(token, '/onboarding/tenants', { limit: '50' }))
-    const ids = all.tenants.map((row) => row.id)
+    const ids = all.items.map((row) => row.id)
 
     expect(ids.indexOf(longest.id)).toBeLessThan(ids.indexOf(shorter.id))
-    expect(pageOne.tenants).toHaveLength(1)
-    expect(pageOne.prevCursor).toBeNull()
-    expect(pageOne.nextCursor).not.toBeNull()
+    expect(pageOne.items).toHaveLength(1)
+    expect(pageOne.page.prevCursor).toBeNull()
+    expect(pageOne.page.nextCursor).not.toBeNull()
     const pageTwo = dataOf<PageBody>(
-      await get(token, '/onboarding/tenants', { limit: '1', cursor: pageOne.nextCursor ?? '' })
+      await get(token, '/onboarding/tenants', { limit: '1', cursor: pageOne.page.nextCursor ?? '' })
     )
-    expect(pageTwo.tenants[0]?.id).toBe(ids[1])
-    expect(pageTwo.prevCursor).not.toBeNull()
+    expect(pageTwo.items[0]?.id).toBe(ids[1])
+    expect(pageTwo.page.prevCursor).not.toBeNull()
   })
 
   it.each([
@@ -232,7 +230,7 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
       limit: '50',
     })
 
-    const row = dataOf<PageBody>(response).tenants.find((candidate) => candidate.id === tenant.id)
+    const row = dataOf<PageBody>(response).items.find((candidate) => candidate.id === tenant.id)
     expect(row?.state).toBe(state)
   })
 
@@ -246,7 +244,7 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
       limit: '50',
     })
 
-    const row = dataOf<PageBody>(response).tenants.find((candidate) => candidate.id === tenant.id)
+    const row = dataOf<PageBody>(response).items.find((candidate) => candidate.id === tenant.id)
     expect(row).toMatchObject({ state: 'complete', requiredDone: 2 })
     expect(row?.nextStep).toBeNull()
   })
@@ -259,15 +257,38 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
 
     const response = await get(await viewerToken(), '/onboarding/tenants', { limit: '50' })
 
-    expect(dataOf<PageBody>(response).tenants.map((row) => row.id)).not.toContain(tenant.id)
+    expect(dataOf<PageBody>(response).items.map((row) => row.id)).not.toContain(tenant.id)
+  })
+
+  it('applies the state filter with a search and a non-default sort together', async () => {
+    const tag = `ob${randomUUID().slice(0, 8)}`
+    const { tenant: older } = await createOnboardingTenant({
+      startedAt: daysAgo(20),
+      name: `${tag} older`,
+    })
+    const { tenant: newer } = await createOnboardingTenant({
+      startedAt: daysAgo(10),
+      name: `${tag} newer`,
+    })
+    await createOnboardingTenant({ startedAt: daysAgo(1), name: `${tag} fresh` })
+    await createOnboardingTenant({ startedAt: daysAgo(30), name: `other ${randomUUID()}` })
+
+    const response = await get(await viewerToken(), '/onboarding/tenants', {
+      state: 'stuck',
+      search: tag,
+      sort: '-started',
+    })
+
+    expect(dataOf<PageBody>(response).items.map((row) => row.id)).toEqual([newer.id, older.id])
   })
 
   it.each([
     [{ state: 'not_tracked' }],
     [{ state: 'bogus' }],
-    [{ limit: '51' }],
+    [{ limit: '101' }],
     [{ cursor: 'not-a-cursor' }],
     [{ direction: 'prev' }],
+    [{ sort: 'started' }],
   ])('refuses %j with a 400', async (query) => {
     const response = await get(await viewerToken(), '/onboarding/tenants', query)
     expect(response.status).toBe(400)
@@ -326,27 +347,5 @@ describe('GET /api/v1/platform/tenants/:id/onboarding', () => {
       expect({ id, status: response.status }).toEqual({ id, status: 404 })
       expect((response.body as ApiEnvelope<unknown>).message).toBe('Tenant not found')
     }
-  })
-})
-
-describe('out-of-range staff dates are a 400', () => {
-  const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
-
-  it.each([
-    [
-      '/onboarding/tenants',
-      { cursor: encodeCursor({ sortAt: '2026-13-45T25:61:61.000000Z', id: ID }) },
-    ],
-    [
-      '/onboarding/tenants',
-      { cursor: encodeCursor({ sortAt: '0000-01-01T00:00:00.000000Z', id: ID }) },
-    ],
-  ])('GET %s %j', async (path, query) => {
-    const { token } = await createTrackedStaff('viewer')
-    const response = await request(app)
-      .get(`/api/v1/platform${path}`)
-      .query(query)
-      .set('Authorization', `Bearer ${token}`)
-    expect(response.status).toBe(400)
   })
 })

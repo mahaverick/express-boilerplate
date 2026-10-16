@@ -2,7 +2,7 @@
  * @file The staff request bodies and queries. List queries come from `listParamsSchema`.
  */
 import { z } from 'zod'
-import { PAGE_DIRECTIONS, STATS_RANGES } from '@/constants/platform.constants'
+import { STATS_RANGES } from '@/constants/platform.constants'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
 import {
   TIMELINE_DEFAULT_RANGE,
@@ -16,43 +16,6 @@ import { booleanFilter, listFilter, listParamsSchema } from '@/validators/list.v
 import { updateProfileSchema } from '@/validators/profile.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 import { newTenantSchema } from '@/validators/tenant.validators'
-
-const DEFAULT_SEARCH_PAGE_SIZE = 20
-const MAX_SEARCH_PAGE_SIZE = 50
-const MAX_SEARCH_QUERY_LENGTH = 100
-
-/**
- * Postgres text can't hold NUL, so a value carrying one would fail in the query.
- */
-function hasNoNul(value: string): boolean {
-  return !value.includes('\0')
-}
-
-/**
- * The trimmed `q` of the staff tenant, user, email and suppression searches.
- * Whitespace alone is a 400 rather than a match-everything search.
- */
-export const searchQueryField = z
-  .string()
-  .trim()
-  .min(1, 'q must not be empty.')
-  .max(MAX_SEARCH_QUERY_LENGTH, `q must be at most ${MAX_SEARCH_QUERY_LENGTH} characters.`)
-  .refine(hasNoNul, 'q must not contain a NUL character.')
-
-/**
- * Page size for the staff searches: 1–50, 20 by default.
- */
-export const pageLimitField = z.coerce
-  .number()
-  .int()
-  .min(1)
-  .max(MAX_SEARCH_PAGE_SIZE, `limit must be at most ${MAX_SEARCH_PAGE_SIZE}.`)
-  .default(DEFAULT_SEARCH_PAGE_SIZE)
-
-/**
- * The `direction` query field of a keyset search: forward unless asked otherwise.
- */
-export const directionField = z.enum(PAGE_DIRECTIONS).default('next')
 
 /**
  * `GET /api/v1/platform/tenants` query: the shared list params; `state` is

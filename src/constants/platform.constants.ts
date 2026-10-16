@@ -14,16 +14,6 @@ export const STATS_RANGES = ['7d', '30d'] as const
 export type StatsRange = (typeof STATS_RANGES)[number]
 
 /**
- * Which way a keyset page moves from its cursor.
- */
-export const PAGE_DIRECTIONS = ['next', 'prev'] as const
-
-/**
- * One of PAGE_DIRECTIONS.
- */
-export type PageDirection = (typeof PAGE_DIRECTIONS)[number]
-
-/**
  * The staff onboarding list's state filter: every state a tracked tenant
  * can be in. `not_tracked` is left out, since the list covers tracked
  * tenants only.
@@ -35,11 +25,6 @@ export const ONBOARDING_TENANT_STATE_FILTERS = [
   'complete',
   'dismissed',
 ] as const satisfies readonly OnboardingState[]
-
-/**
- * One of ONBOARDING_TENANT_STATE_FILTERS.
- */
-export type OnboardingTenantStateFilter = (typeof ONBOARDING_TENANT_STATE_FILTERS)[number]
 
 /**
  * The longest each section of the staff system status waits for a read from

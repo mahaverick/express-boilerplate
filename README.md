@@ -295,8 +295,10 @@ never count as customer progress.
 
 **Staff** (`platform-onboarding.service.ts`, under `/api/v1/platform`):
 `GET /onboarding/funnel?range=7d|30d|90d` (default 30d) counts each step's
-completions and the cohort by state; `GET /onboarding/tenants?state=` lists
-active tracked tenants in one state (`stuck` by default);
+completions and the cohort by state; `GET /onboarding/tenants?state=` pages
+active tracked tenants in one state (`stuck` by default) on the shared list
+params, `search` matching the name and `sort` one of `progress`, `-started`,
+`name`;
 `GET /tenants/:id/onboarding` returns one tenant's steps, members, reminder
 history and whether a reminder may go now;
 `POST /tenants/:id/onboarding/steps/:key/complete` (admin, with a reason) marks
