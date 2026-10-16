@@ -17,8 +17,8 @@ import {
 } from '@/services/notification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
-  listNotificationsSchema,
   notificationIdSchema,
+  notificationListSchema,
   updatePreferencesSchemaFor,
 } from '@/validators/notification.validators'
 import { parseBody } from '@/validators/parse.validators'
@@ -31,10 +31,10 @@ type NotificationResponse = Omit<Notification, 'dedupeKey'>
 /**
  * The fields of a notification row the REST API returns. A whitelist, so an
  * internal column (`dedupeKey`, which embeds a queue job id) never leaks.
- * @param notification - The row as read from the database.
+ * @param notification - The row as read from the database, with or without the internal columns.
  * @returns The row without internal columns.
  */
-function toNotificationResponse(notification: Notification): NotificationResponse {
+function toNotificationResponse(notification: NotificationResponse): NotificationResponse {
   return {
     id: notification.id,
     userId: notification.userId,
@@ -53,18 +53,18 @@ function toNotificationResponse(notification: Notification): NotificationRespons
 class NotificationController extends BaseController {
   /**
    * `GET /notifications`: the authenticated user's notifications, newest
-   * first, one page at a time.
+   * first, one page at a time, searchable and filterable by read state.
    *
-   * A malformed `cursor` is a 400 (`listNotificationsSchema` decodes it); a
-   * well-formed one past the last row is an empty page.
+   * A cursor that does not verify is a 400 `CURSOR_INVALID`; a well-formed
+   * one past the last row is an empty page.
    */
   listNotifications = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
-    const { limit, cursor } = parseBody(listNotificationsSchema, request.query)
-    const page = await listNotifications(userId, { limit, cursor })
+    const query = parseBody(notificationListSchema, request.query)
+    const page = await listNotifications(userId, query)
     successResponse(
       response,
-      { ...page, notifications: page.notifications.map((row) => toNotificationResponse(row)) },
+      { ...page, items: page.items.map((row) => toNotificationResponse(row)) },
       'Notifications retrieved.'
     )
   })

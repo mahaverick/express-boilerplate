@@ -817,3 +817,52 @@ describeListContract({
     { query: { role: 'owner,viewer' }, count: 2 },
   ],
 })
+
+/**
+ * The user whose notifications the block reads, and another user for the cursor replay.
+ */
+const recipient = { id: '', token: '', otherToken: '' }
+
+describeListContract({
+  name: 'GET /api/v1/notifications',
+  app: () => app,
+  path: () => '/api/v1/notifications',
+  headers: () => ({ Authorization: `Bearer ${recipient.token}` }),
+  isolate: () => ({}),
+  // The rows depend on the calling user, who is not a query param.
+  otherScope: {
+    path: () => '/api/v1/notifications',
+    headers: () => ({ Authorization: `Bearer ${recipient.otherToken}` }),
+  },
+  sorts: ['-created'],
+  order: {
+    '-created': instantAt((item) => (item as { createdAt: string }).createdAt),
+  },
+  setup: async () => {
+    const user = await createTrackedUser()
+    const other = await createTrackedUser()
+    Object.assign(recipient, { id: user.id, token: tokenFor(user), otherToken: tokenFor(other) })
+  },
+  teardown: deleteTrackedUsers,
+  seed: async (count) => {
+    const now = Date.now()
+    const readAt = new Date(now).toISOString()
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      user_id: recipient.id,
+      type: 'password_changed',
+      title: `${tag} title ${pad(index)}`,
+      body: index === 2 ? `${tag} body with a needle` : `${tag} body`,
+      read_at: index < 2 ? readAt : NONE,
+      created_at: joinedAtOf(now, index),
+    }))
+    await sql`insert into notifications ${sql(rows, 'user_id', 'type', 'title', 'body', 'read_at', 'created_at')}`
+  },
+  clear: async () => {
+    await sql`delete from notifications where user_id = ${recipient.id}`
+  },
+  search: { text: 'needle', count: 1 },
+  filters: [
+    { query: { unread: 'true' }, count: 3 },
+    { query: { unread: 'false' }, count: 2 },
+  ],
+})

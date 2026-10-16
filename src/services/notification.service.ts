@@ -11,39 +11,38 @@ import {
 } from '@/constants/notification.constants'
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import {
   NotificationPreferenceRepository,
   type PreferenceMatrix,
 } from '@/repositories/notification-preference.repository'
-import { NotificationRepository } from '@/repositories/notification.repository'
+import {
+  NotificationRepository,
+  type NotificationListItem,
+} from '@/repositories/notification.repository'
 import { db } from '@/services/database.service'
 import { getPlatformMembership } from '@/services/platform.service'
-import type { UpdatePreferencesInput } from '@/validators/notification.validators'
+import type { ListPage } from '@/utilities/list-page.utilities'
+import type {
+  NotificationListQuery,
+  UpdatePreferencesInput,
+} from '@/validators/notification.validators'
 
 const notificationRepository = new NotificationRepository()
 const notificationPreferenceRepository = new NotificationPreferenceRepository()
 
 /**
- * One page of the user's notifications, newest first. The cursor arrives
- * decoded and validated (`notificationCursorSchema`); a malformed one was
- * already a 400.
+ * One page of the user's notifications, newest first.
  * @param userId - The owner.
- * @param options - The page request.
- * @param options.limit - The page size.
- * @param options.cursor - The previous page's last row, if any.
- * @returns The page, and `nextCursor` when more rows remain.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
 export async function listNotifications(
   userId: string,
-  options: { limit: number; cursor?: { createdAt: string; id: string } | undefined }
-): Promise<{ notifications: Notification[]; nextCursor?: string }> {
-  const { limit, cursor } = options
-  return notificationRepository.list(
-    userId,
-    cursor === undefined
-      ? { limit }
-      : { limit, cursor: { createdAt: new Date(cursor.createdAt), id: cursor.id } }
-  )
+  query: NotificationListQuery
+): Promise<ListPage<NotificationListItem>> {
+  return notificationRepository.list(userId, query.params, { unread: query.filters.unread })
 }
 
 /**
@@ -177,9 +176,7 @@ export async function fetchMissedNotifications(
   const cursor = await notificationRepository.findByIdAndUser(lastEventId, userId)
   if (!cursor) return []
 
-  const { notifications } = await notificationRepository.list(userId, {
-    limit: MAX_NOTIFICATION_PAGE_SIZE,
-  })
+  const recent = await notificationRepository.listRecent(userId, MAX_NOTIFICATION_PAGE_SIZE)
 
-  return notifications.filter((notification) => isNewerThan(notification, cursor)).toReversed()
+  return recent.filter((notification) => isNewerThan(notification, cursor)).toReversed()
 }

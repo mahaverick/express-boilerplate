@@ -9,15 +9,22 @@
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  NotificationRepository,
-  type NotificationCursor,
-} from '@/repositories/notification.repository'
+import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { listNotificationsSchema } from '@/validators/notification.validators'
+import { notificationListSchema } from '@/validators/notification.validators'
 
 const notificationRepository = new NotificationRepository()
+
+/**
+ * The params of a first page of ten with the default sort.
+ */
+const TEN = notificationListSchema.parse({ limit: '10' }).params
+
+/**
+ * No `unread` filter.
+ */
+const NO_FILTERS = { unread: undefined }
 const userRepository = new UserRepository()
 
 /**
@@ -39,29 +46,26 @@ async function pageThroughAll(
   expectedIds: Set<string>
 ): Promise<{ seenIds: Set<string>; pageCount: number }> {
   const seenIds = new Set<string>()
-  let cursor: NotificationCursor | undefined
+  let cursor: string | null | undefined
   let pageCount = 0
   const maxPages = expectedIds.size + 2 // safety valve: real pagination must terminate well before this
 
-  for (;;) {
-    const { notifications, nextCursor } = await notificationRepository.list(
-      userId,
-      cursor === undefined ? { limit: 2 } : { limit: 2, cursor }
+  do {
+    const { params } = notificationListSchema.parse(
+      typeof cursor === 'string' ? { limit: '2', cursor } : { limit: '2' }
     )
+    const { items, page } = await notificationRepository.list(userId, params, { unread: undefined })
     pageCount += 1
     expect(pageCount).toBeLessThanOrEqual(maxPages)
-    expect(notifications.length).toBeLessThanOrEqual(2)
+    expect(items.length).toBeLessThanOrEqual(2)
 
-    for (const notification of notifications) {
+    for (const notification of items) {
       expect(seenIds.has(notification.id)).toBe(false) // no duplicates across pages
       seenIds.add(notification.id)
     }
 
-    if (nextCursor === undefined) break
-    const decoded = listNotificationsSchema.parse({ cursor: nextCursor }).cursor
-    expect(decoded).toBeDefined()
-    cursor = decoded && { createdAt: new Date(decoded.createdAt), id: decoded.id }
-  }
+    cursor = page.nextCursor
+  } while (typeof cursor === 'string')
 
   return { seenIds, pageCount }
 }
@@ -91,7 +95,7 @@ describe('NotificationRepository', () => {
 
     expect(first?.dedupeKey).toBe(data.dedupeKey)
     expect(second).toBeUndefined()
-    const { notifications } = await notificationRepository.list(user.id, { limit: 10 })
+    const notifications = await notificationRepository.listRecent(user.id, 10)
     expect(notifications).toHaveLength(1)
   })
 
@@ -102,6 +106,21 @@ describe('NotificationRepository', () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
     return user.id
+  }
+
+  /**
+   * Seeds a user's four notifications at distinct instants: two unread
+   * (one mentioning "invoice" in the body), two read (one mentioning it in the title).
+   */
+  async function seedInbox(): Promise<string> {
+    const userId = await createUser()
+    const read = new Date(Date.UTC(2026, 1, 1)).toISOString()
+    await sql`insert into notifications (user_id, type, title, body, read_at, created_at) values
+      (${userId}, 'password_changed', 'first', 'plain', ${read}, ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
+      (${userId}, 'password_changed', 'Invoice paid', 'plain', ${read}, ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
+      (${userId}, 'password_changed', 'third', 'unpaid invoice', NULL, ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
+      (${userId}, 'password_changed', 'fourth', 'plain', NULL, ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
+    return userId
   }
 
   describe('create', () => {
@@ -234,7 +253,7 @@ describe('NotificationRepository', () => {
       const count = await notificationRepository.markAllRead(userId)
       expect(count).toBe(3)
 
-      const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+      const notifications = await notificationRepository.listRecent(userId, 10)
       expect(notifications.every((notification) => notification.readAt !== null)).toBe(true)
     })
 
@@ -296,11 +315,10 @@ describe('NotificationRepository', () => {
   describe('list', () => {
     it('returns an empty page with no nextCursor for a user with no notifications', async () => {
       const userId = await createUser()
-      const { notifications, nextCursor } = await notificationRepository.list(userId, {
-        limit: 10,
-      })
-      expect(notifications).toEqual([])
-      expect(nextCursor).toBeUndefined()
+      const { items, page } = await notificationRepository.list(userId, TEN, NO_FILTERS)
+      expect(items).toEqual([])
+      expect(page.hasNext).toBe(false)
+      expect(page.nextCursor).toBeNull()
     })
 
     it('omits nextCursor once every row fits on one page', async () => {
@@ -318,11 +336,10 @@ describe('NotificationRepository', () => {
         body: 'body',
       })
 
-      const { notifications, nextCursor } = await notificationRepository.list(userId, {
-        limit: 10,
-      })
-      expect(notifications).toHaveLength(2)
-      expect(nextCursor).toBeUndefined()
+      const { items, page } = await notificationRepository.list(userId, TEN, NO_FILTERS)
+      expect(items).toHaveLength(2)
+      expect(page.hasNext).toBe(false)
+      expect(page.nextCursor).toBeNull()
     })
 
     it('does not return another user’s notifications', async () => {
@@ -335,8 +352,8 @@ describe('NotificationRepository', () => {
         body: 'body',
       })
 
-      const { notifications } = await notificationRepository.list(userId, { limit: 10 })
-      expect(notifications).toEqual([])
+      const { items } = await notificationRepository.list(userId, TEN, NO_FILTERS)
+      expect(items).toEqual([])
     })
 
     /**
@@ -388,6 +405,56 @@ describe('NotificationRepository', () => {
       const { seenIds, pageCount } = await pageThroughAll(userId, createdIds)
       expect(seenIds).toEqual(createdIds) // no gaps: every row was returned exactly once, and pagination spanned multiple pages
       expect(pageCount).toBeGreaterThan(1)
+    })
+  })
+
+  it('listRecent reads the newest notifications first, at most limit, and only the owner’s', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    const other = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id, other.id)
+    await sql`insert into notifications (user_id, type, title, body, created_at) values
+      (${user.id}, 'password_changed', 'oldest', 'b', ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
+      (${user.id}, 'password_changed', 'middle', 'b', ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
+      (${user.id}, 'password_changed', 'newest', 'b', ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
+      (${other.id}, 'password_changed', 'not mine', 'b', ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
+
+    const recent = await notificationRepository.listRecent(user.id, 2)
+
+    expect(recent.map((notification) => notification.title)).toEqual(['newest', 'middle'])
+  })
+
+  describe('list over real rows', () => {
+    it('reads newest first by default, without the internal columns', async () => {
+      const userId = await seedInbox()
+
+      const { items } = await notificationRepository.list(userId, TEN, NO_FILTERS)
+
+      expect(items.map((item) => item.title)).toEqual(['fourth', 'third', 'Invoice paid', 'first'])
+      expect(Object.keys(items[0] ?? {})).not.toContain('dedupeKey')
+      expect(Object.keys(items[0] ?? {})).not.toContain('sortCreated')
+    })
+
+    it('narrows to unread, and to read, ones', async () => {
+      const userId = await seedInbox()
+
+      const unread = await notificationRepository.list(userId, TEN, { unread: true })
+      const read = await notificationRepository.list(userId, TEN, { unread: false })
+
+      expect(unread.items.map((item) => item.title)).toEqual(['fourth', 'third'])
+      expect(read.items.map((item) => item.title)).toEqual(['Invoice paid', 'first'])
+    })
+
+    it('combines the unread filter with a case-insensitive search of title and body', async () => {
+      const userId = await seedInbox()
+      const { params } = notificationListSchema.parse({ search: 'INVOICE', limit: '10' })
+
+      const both = await notificationRepository.list(userId, params, NO_FILTERS)
+      const unread = await notificationRepository.list(userId, params, { unread: true })
+      const read = await notificationRepository.list(userId, params, { unread: false })
+
+      expect(both.items.map((item) => item.title)).toEqual(['third', 'Invoice paid'])
+      expect(unread.items.map((item) => item.title)).toEqual(['third'])
+      expect(read.items.map((item) => item.title)).toEqual(['Invoice paid'])
     })
   })
 

@@ -1,32 +1,7 @@
 /**
- * @file The cursor query field for keyset endpoints that reject a bad cursor:
- * a malformed cursor is a 400 through `parseBody`, not a silent first page.
- * Also the `sortAt` field the platform email and onboarding cursors share,
- * and the instant field the audit and notification cursors share.
+ * @file The `sortAt` field the platform email and onboarding cursors share.
  */
 import { z } from 'zod'
-import { decodeCursor } from '@/utilities/cursor.utilities'
-import { MAX_CURSOR_LENGTH } from '@/utilities/list-cursor.utilities'
-
-/**
- * A `cursor` query field that decodes against `schema`, or fails validation
- * with "cursor is invalid.".
- * @param schema - The decoded cursor's shape.
- * @returns A Zod field whose output is the decoded cursor.
- */
-export function cursorField<TSchema extends z.ZodType>(schema: TSchema) {
-  return z
-    .string()
-    .max(MAX_CURSOR_LENGTH)
-    .transform((raw, context): z.infer<TSchema> => {
-      const decoded = decodeCursor(raw, schema)
-      if (decoded === undefined) {
-        context.addIssue({ code: 'custom', message: 'cursor is invalid.' })
-        return z.NEVER
-      }
-      return decoded
-    })
-}
 
 const SORT_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
 
@@ -51,15 +26,3 @@ export const sortAtField = z
   .string()
   .regex(SORT_AT_PATTERN)
   .refine(isRealSortAt, 'sortAt is not a real timestamp.')
-
-/**
- * An ISO 8601 UTC instant that is real and in year 0001 or later. Postgres has
- * no year 0, so `0000-…` would pass the format check and then fail a
- * `::timestamptz` cast as a 500.
- */
-export const isoInstantField = z.iso
-  .datetime()
-  .refine(
-    (value) => !Number.isNaN(Date.parse(value)) && new Date(value).getUTCFullYear() >= 1,
-    'Not a real timestamp.'
-  )

@@ -38,15 +38,9 @@ export const STAFF_ONLY_NOTIFICATION_TYPES = ['maintenance_mode_changed'] as con
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
 
 /**
- * How many notifications a list request returns when it names no limit.
- * Applied by notification.validators.ts; `NotificationRepository.list`
- * takes `limit` as a required argument.
- */
-export const DEFAULT_NOTIFICATION_PAGE_SIZE = 20
-
-/**
- * The largest page size a caller may request, enforced by
- * notification.validators.ts before `limit` reaches the repository.
+ * The most notifications the SSE replay sends a reconnecting client
+ * (`fetchMissedNotifications`); the list endpoint's page size comes from
+ * `listParamsSchema`.
  */
 export const MAX_NOTIFICATION_PAGE_SIZE = 100
 

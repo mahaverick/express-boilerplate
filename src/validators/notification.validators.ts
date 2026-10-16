@@ -1,44 +1,27 @@
 /**
- * @file Request shapes for notification.routes.ts: the list query (its cursor
- * decoded here; a malformed one is a 400), the `:id` path parameter and the
- * preferences body, each parsed with `parseBody`.
+ * @file Request shapes for notification.routes.ts: the list query, the `:id` path parameter and the preferences body, each parsed with `parseBody`.
  */
 import { z } from 'zod'
 import {
-  DEFAULT_NOTIFICATION_PAGE_SIZE,
-  MAX_NOTIFICATION_PAGE_SIZE,
   NOTIFICATION_TYPES,
   STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
-import { cursorField, isoInstantField } from '@/validators/cursor.validators'
+import { booleanFilter, listParamsSchema } from '@/validators/list.validators'
 
 /**
- * The notifications cursor's decoded shape: the last row's `createdAt` (as
- * `encodeNotificationCursor` writes it, from `toISOString()` at millisecond
- * precision) and `id`. `createdAt` must be a real instant in year 0001 or
- * later (see `isoInstantField`), or the `::timestamptz` cast would fail as a
- * 500.
+ * `GET /api/v1/notifications` query: the shared list params, newest first
+ * only, `search` matching the title and body, `unread` picking read or unread ones.
  */
-const notificationCursorSchema = z
-  .object({
-    createdAt: isoInstantField,
-    id: z.uuid(),
-  })
-  .strict()
-
-/**
- * `GET /api/v1/notifications` query string: an optional page size (capped,
- * defaulted) and an optional cursor, decoded.
- */
-export const listNotificationsSchema = z.object({
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(MAX_NOTIFICATION_PAGE_SIZE, `limit must be at most ${MAX_NOTIFICATION_PAGE_SIZE}.`)
-    .default(DEFAULT_NOTIFICATION_PAGE_SIZE),
-  cursor: cursorField(notificationCursorSchema).optional(),
+export const notificationListSchema = listParamsSchema({
+  sorts: ['-created'],
+  defaultSort: '-created',
+  filters: { unread: booleanFilter.optional() },
 })
+
+/**
+ * A parsed notification list query.
+ */
+export type NotificationListQuery = z.output<typeof notificationListSchema>
 
 /**
  * A notification id path parameter (`PATCH /:id/read`, `DELETE /:id`).
