@@ -15,7 +15,6 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
@@ -35,11 +34,11 @@ interface AuditEntryBody {
 }
 
 /**
- * A page of entries and the cursor for the next page, null on the last.
+ * A page of entries and its paging block; `nextCursor` is null on the last page.
  */
 interface AuditPage {
-  entries: AuditEntryBody[]
-  nextCursor: string | null
+  items: AuditEntryBody[]
+  page: { nextCursor: string | null; hasNext: boolean; limit: number }
 }
 
 /**
@@ -89,8 +88,6 @@ function withoutRequestId(body: unknown): Record<string, unknown> {
   delete copy.requestId
   return copy
 }
-
-const YEAR_ZERO_CURSOR = encodeCursor({ occurredAt: '0000-01-01T00:00:00.000Z', id: randomUUID() })
 
 /**
  * Read a tenant's audit log as the bearer of `token`.
@@ -255,10 +252,10 @@ describe('audit-log reads', () => {
         occurredAt: '2026-09-25T10:00:00.003Z',
       })
 
-      const { entries } = pageOf(await readTenantLog(tenant.slug, ownerToken))
+      const { items } = pageOf(await readTenantLog(tenant.slug, ownerToken))
 
-      expect(entries.map((entry) => entry.access)).toEqual(['system', 'platform', 'member'])
-      const [system, byStaff, byOwner] = entries
+      expect(items.map((entry) => entry.access)).toEqual(['system', 'platform', 'member'])
+      const [system, byStaff, byOwner] = items
       expect(system?.actor).toBeNull()
       expect(byStaff?.actor).toEqual({
         id: staffUser.id,
@@ -286,9 +283,9 @@ describe('audit-log reads', () => {
       const mine = await insertRow({ tenantId: tenant.id })
       await insertRow({ tenantId: other.id })
 
-      const { entries } = pageOf(await readTenantLog(tenant.slug, ownerToken))
+      const { items } = pageOf(await readTenantLog(tenant.slug, ownerToken))
 
-      expect(entries.map((entry) => entry.id)).toEqual([mine])
+      expect(items.map((entry) => entry.id)).toEqual([mine])
     })
 
     it('pages entries with equal timestamps exactly once each, newest id first', async () => {
@@ -305,8 +302,8 @@ describe('audit-log reads', () => {
         const query: Record<string, string> = { limit: '2' }
         if (typeof cursor === 'string') query.cursor = cursor
         const page = pageOf(await readTenantLog(tenant.slug, ownerToken, query))
-        walked.push(...page.entries.map((entry) => entry.id))
-        cursor = page.nextCursor
+        walked.push(...page.items.map((entry) => entry.id))
+        cursor = page.page.nextCursor
       }
 
       expect(walked).toHaveLength(5)
@@ -328,12 +325,10 @@ describe('audit-log reads', () => {
       const byAction = pageOf(
         await readTenantLog(tenant.slug, ownerToken, { action: 'tenant.settings_updated' })
       )
-      const byActor = pageOf(
-        await readTenantLog(tenant.slug, ownerToken, { actorUserId: owner.id })
-      )
+      const byActor = pageOf(await readTenantLog(tenant.slug, ownerToken, { actor: owner.id }))
 
-      expect(byAction.entries.map((entry) => entry.id)).toEqual([settings])
-      expect(byActor.entries.map((entry) => entry.id)).toEqual([byOwner])
+      expect(byAction.items.map((entry) => entry.id)).toEqual([settings])
+      expect(byActor.items.map((entry) => entry.id)).toEqual([byOwner])
     })
 
     it.each([['member'], ['platform'], ['system']] as const)(
@@ -353,28 +348,108 @@ describe('audit-log reads', () => {
 
         const page = pageOf(await readTenantLog(tenant.slug, ownerToken, { access }))
 
-        expect(page.entries.map((entry) => entry.id)).toEqual([ids[access]])
+        expect(page.items.map((entry) => entry.id)).toEqual([ids[access]])
       }
     )
 
-    it('defaults to 50 entries, with a cursor for the rest', async () => {
+    it('keeps only the entries that match every filter at once', async () => {
+      const { tenant, ownerToken, owner } = await createTenant()
+      const { user: other } = await createUser()
+      const match = await insertRow({
+        tenantId: tenant.id,
+        actorUserId: owner.id,
+        action: 'tenant.settings_updated',
+      })
+      await insertRow({ tenantId: tenant.id, actorUserId: owner.id })
+      await insertRow({
+        tenantId: tenant.id,
+        actorUserId: other.id,
+        action: 'tenant.settings_updated',
+      })
+      await insertRow({
+        tenantId: tenant.id,
+        actorUserId: owner.id,
+        action: 'tenant.settings_updated',
+        access: 'platform',
+      })
+
+      const page = pageOf(
+        await readTenantLog(tenant.slug, ownerToken, {
+          action: 'tenant.settings_updated,tenant.updated',
+          actor: owner.id,
+          access: 'member',
+          search: 'settings',
+        })
+      )
+
+      expect(page.items.map((entry) => entry.id)).toEqual([match])
+    })
+
+    it('sorts newest first by default and oldest first on request', async () => {
+      const { tenant, ownerToken } = await createTenant()
+      const oldest = await insertRow({
+        tenantId: tenant.id,
+        occurredAt: '2026-09-25T10:00:00.001Z',
+      })
+      const middle = await insertRow({
+        tenantId: tenant.id,
+        occurredAt: '2026-09-25T10:00:00.002Z',
+      })
+      const newest = await insertRow({
+        tenantId: tenant.id,
+        occurredAt: '2026-09-25T10:00:00.003Z',
+      })
+
+      const byDefault = pageOf(await readTenantLog(tenant.slug, ownerToken))
+      const ascending = pageOf(await readTenantLog(tenant.slug, ownerToken, { sort: 'occurred' }))
+
+      expect(byDefault.items.map((entry) => entry.id)).toEqual([newest, middle, oldest])
+      expect(ascending.items.map((entry) => entry.id)).toEqual([oldest, middle, newest])
+    })
+
+    it("cannot read another tenant's entries through a filter or a cursor", async () => {
+      const { tenant, ownerToken } = await createTenant()
+      const { tenant: other, ownerToken: otherToken, owner: otherOwner } = await createTenant()
+      const mine = await insertRow({ tenantId: tenant.id })
+      const theirs = new Set([
+        await insertRow({ tenantId: other.id, actorUserId: otherOwner.id }),
+        await insertRow({ tenantId: other.id, actorUserId: otherOwner.id }),
+      ])
+      const theirCursor = pageOf(await readTenantLog(other.slug, otherToken, { limit: '1' })).page
+        .nextCursor
+
+      const byTenant = pageOf(
+        await readTenantLog(tenant.slug, ownerToken, { tenant: other.id, target: other.id })
+      )
+      const byActor = pageOf(await readTenantLog(tenant.slug, ownerToken, { actor: otherOwner.id }))
+      const withCursor = pageOf(
+        await readTenantLog(tenant.slug, ownerToken, { cursor: theirCursor ?? '' })
+      )
+
+      expect(theirCursor).toEqual(expect.any(String))
+      expect(byTenant.items.map((entry) => entry.id)).toEqual([mine])
+      expect(byActor.items).toEqual([])
+      expect(withCursor.items.map((entry) => entry.id).filter((id) => theirs.has(id))).toEqual([])
+    })
+
+    it('defaults to 20 entries, with a cursor for the rest', async () => {
       const { tenant, ownerToken } = await createTenant()
       await sql`
         insert into audit_logs (actor_kind, access, tenant_id, action, target_type, target_id, metadata)
         select 'system', 'system', ${tenant.id}, 'tenant.updated', 'tenant', ${tenant.id}, '{"changed":["name"]}'::jsonb
-        from generate_series(1, 51)`
+        from generate_series(1, 21)`
 
       const page = pageOf(await readTenantLog(tenant.slug, ownerToken))
 
-      expect(page.entries).toHaveLength(50)
-      expect(page.nextCursor).toEqual(expect.any(String))
+      expect(page.items).toHaveLength(20)
+      expect(page.page.nextCursor).toEqual(expect.any(String))
     })
 
     it.each([
       ['limit', '0'],
       ['limit', '101'],
       ['action', 'tenant.exploded'],
-      ['actorUserId', 'not-a-uuid'],
+      ['actor', 'not-a-uuid'],
       ['access', 'everyone'],
       ['cursor', '!!!'],
     ])('answers 400 for %s=%s', async (field, value) => {
@@ -386,14 +461,6 @@ describe('audit-log reads', () => {
       expect((response.body as ApiEnvelope<unknown>).errors).toHaveProperty(field)
     })
 
-    it('answers 400 for a cursor in year 0000, which Postgres cannot cast', async () => {
-      const { tenant, ownerToken } = await createTenant()
-
-      const response = await readTenantLog(tenant.slug, ownerToken, { cursor: YEAR_ZERO_CURSOR })
-
-      expect(response.status).toBe(400)
-    })
-
     it("shows the platform tenant's own entries to its members", async () => {
       const { token } = await staff('owner')
       const platform = await platformTenant()
@@ -403,9 +470,9 @@ describe('audit-log reads', () => {
         metadata: { userId: randomUUID(), role: 'admin', via: 'script' },
       })
 
-      const { entries } = pageOf(await readTenantLog('platform', token))
+      const { items } = pageOf(await readTenantLog('platform', token))
 
-      expect(entries.map((entry) => entry.id)).toContain(granted)
+      expect(items.map((entry) => entry.id)).toContain(granted)
     })
   })
 
@@ -433,14 +500,6 @@ describe('audit-log reads', () => {
       }
     )
 
-    it('answers 400 for a cursor in year 0000, which Postgres cannot cast', async () => {
-      const { token } = await staff('admin')
-
-      const response = await readPlatformLog(token, { cursor: YEAR_ZERO_CURSOR })
-
-      expect(response.status).toBe(400)
-    })
-
     it('answers 404 to a user who is not staff', async () => {
       const { token } = await createUser()
 
@@ -463,27 +522,27 @@ describe('audit-log reads', () => {
       })
 
       const all = pageOf(await readPlatformLog(token))
-      const inFirst = pageOf(await readPlatformLog(token, { tenantId: first.id }))
+      const inFirst = pageOf(await readPlatformLog(token, { tenant: first.id }))
       const staffOnly = pageOf(await readPlatformLog(token, { access: 'platform' }))
-      const byActor = pageOf(await readPlatformLog(token, { actorUserId: owner.id }))
+      const byActor = pageOf(await readPlatformLog(token, { actor: owner.id }))
       const byAction = pageOf(
         await readPlatformLog(token, { action: 'tenant.accessed_by_platform' })
       )
 
-      expect(all.entries.map((entry) => entry.id)).toEqual(
+      expect(all.items.map((entry) => entry.id)).toEqual(
         expect.arrayContaining([memberRow, staffRow])
       )
-      const staffEntry = all.entries.find((entry) => entry.id === staffRow)
+      const staffEntry = all.items.find((entry) => entry.id === staffRow)
       expect(staffEntry?.tenant).toEqual({ id: second.id, name: second.name, slug: second.slug })
-      expect(inFirst.entries.map((entry) => entry.id)).toEqual([memberRow])
-      expect(staffOnly.entries.map((entry) => entry.id)).toEqual([staffRow])
-      expect(byActor.entries.map((entry) => entry.id)).toEqual([memberRow])
-      expect(byAction.entries.map((entry) => entry.id)).toEqual([staffRow])
+      expect(inFirst.items.map((entry) => entry.id)).toEqual([memberRow])
+      expect(staffOnly.items.map((entry) => entry.id)).toEqual([staffRow])
+      expect(byActor.items.map((entry) => entry.id)).toEqual([memberRow])
+      expect(byAction.items.map((entry) => entry.id)).toEqual([staffRow])
     })
 
     it.each([
       ['access', 'everyone'],
-      ['tenantId', 'not-a-uuid'],
+      ['tenant', 'not-a-uuid'],
       ['limit', '101'],
     ])('answers 400 for %s=%s', async (field, value) => {
       const { token } = await staff('admin')

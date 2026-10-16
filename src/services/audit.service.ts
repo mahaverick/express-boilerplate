@@ -13,11 +13,8 @@ import {
 } from '@/constants/audit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuditLog } from '@/database/models/audit-log.model'
-import {
-  AuditLogRepository,
-  type AuditLogListOptions,
-  type AuditLogListRow,
-} from '@/repositories/audit-log.repository'
+import type { InvalidCursorError } from '@/errors/list-errors'
+import { AuditLogRepository, type AuditLogListRow } from '@/repositories/audit-log.repository'
 import { enqueueAuditAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
@@ -26,8 +23,11 @@ import { getRedis, redisKey } from '@/services/redis.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { Actor } from '@/types/actor'
 import type { TimelineKind } from '@/types/timeline'
-import { encodeCursor } from '@/utilities/cursor.utilities'
-import type { PlatformAuditLogQuery, TenantAuditLogQuery } from '@/validators/audit.validators'
+import type { ListPage } from '@/utilities/list-page.utilities'
+import type {
+  PlatformAuditLogListQuery,
+  TenantAuditLogListQuery,
+} from '@/validators/audit.validators'
 
 const auditLogRepository = new AuditLogRepository()
 
@@ -285,72 +285,40 @@ async function releaseDedupeKey(key: string): Promise<void> {
 }
 
 /**
- * A page of audit rows and the opaque cursor for the next one.
- */
-export interface AuditLogPage {
-  rows: AuditLogListRow[]
-  nextCursor: string | null
-}
-
-/**
- * One keyset page under the given filters.
- * @param filters - Which entries to include.
- * @param query - The page size and the decoded cursor.
- * @param query.limit - The page size.
- * @param query.cursor - The decoded cursor, if any.
- * @returns The page, and `nextCursor` (null on the last page).
- */
-async function listPage(
-  filters: Omit<AuditLogListOptions, 'limit' | 'cursor'>,
-  query: { limit: number; cursor?: { occurredAt: string; id: string } | undefined }
-): Promise<AuditLogPage> {
-  const cursor =
-    query.cursor === undefined
-      ? undefined
-      : { occurredAt: new Date(query.cursor.occurredAt), id: query.cursor.id }
-  const page = await auditLogRepository.list({ ...filters, limit: query.limit, cursor })
-  const nextCursor =
-    page.nextCursor === undefined
-      ? // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null on the last page
-        null
-      : encodeCursor({
-          occurredAt: page.nextCursor.occurredAt.toISOString(),
-          id: page.nextCursor.id,
-        })
-  return { rows: page.rows, nextCursor }
-}
-
-/**
- * One tenant's audit log, newest first. The route has already checked the
- * caller's effective role.
+ * One page of one tenant's audit log. The route has already checked the caller's effective role.
  * @param tenantId - The tenant.
- * @param query - The validated query.
+ * @param query - The parsed list query.
  * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
 export async function listForTenant(
   tenantId: string,
-  query: TenantAuditLogQuery
-): Promise<AuditLogPage> {
-  return listPage(
-    { tenantId, action: query.action, actorUserId: query.actorUserId, access: query.access },
-    query
-  )
+  query: TenantAuditLogListQuery
+): Promise<ListPage<AuditLogListRow>> {
+  const { filters } = query
+  return auditLogRepository.list(query.params, {
+    tenantId,
+    actions: filters.action,
+    actorUserId: filters.actor,
+    access: filters.access,
+  })
 }
 
 /**
- * Every tenant's audit log, newest first, for platform owners and admins.
- * @param query - The validated query.
+ * One page of every tenant's audit log, for platform owners and admins.
+ * @param query - The parsed list query.
  * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-export async function listPlatformWide(query: PlatformAuditLogQuery): Promise<AuditLogPage> {
-  return listPage(
-    {
-      tenantId: query.tenantId,
-      targetId: query.targetId,
-      action: query.action,
-      actorUserId: query.actorUserId,
-      access: query.access,
-    },
-    query
-  )
+export async function listPlatformWide(
+  query: PlatformAuditLogListQuery
+): Promise<ListPage<AuditLogListRow>> {
+  const { filters } = query
+  return auditLogRepository.list(query.params, {
+    tenantId: filters.tenant,
+    targetId: filters.target,
+    actions: filters.action,
+    actorUserId: filters.actor,
+    access: filters.access,
+  })
 }

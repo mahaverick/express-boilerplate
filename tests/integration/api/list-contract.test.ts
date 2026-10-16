@@ -7,10 +7,16 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { describeListContract } from '../../helpers/list-contract'
-import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-users'
+import {
+  createTrackedStaff,
+  createTrackedUser,
+  deleteTrackedUsers,
+  tokenFor,
+} from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
 const app = createApp()
@@ -463,3 +469,93 @@ describeListContract({
   search: { text: `${tag}-o0001`, count: 1 },
   filters: [{ query: { state: 'awaiting_owner' }, count: 0 }],
 })
+
+/**
+ * Five audit rows in one tenant: actions and access alternate, and rows 2k
+ * and 2k+1 share an instant, so the seed has distinct times and ties.
+ * @param tenantId - The tenant the rows are filed under.
+ * @param count - How many rows.
+ * @returns The rows to insert.
+ */
+function auditRows(tenantId: string, count: number) {
+  const now = Date.now()
+  return Array.from({ length: count }, (_unused, index) => ({
+    tenant_id: tenantId,
+    actor_kind: 'system',
+    access: index % 2 === 1 ? 'platform' : 'member',
+    action: index % 2 === 1 ? 'tenant.updated' : 'tenant.created',
+    occurred_at: new Date(now - Math.floor(index / 2) * 60_000).toISOString(),
+  }))
+}
+
+/**
+ * The tenant each audit block files its rows under, with its owner.
+ */
+const audited = { tenantId: '', slug: '', ownerToken: '' }
+
+/**
+ * Create the audited tenant, owned by a fresh user, and the staff admin.
+ */
+async function createAuditedTenant(): Promise<void> {
+  await createStaff()
+  const owner = await createTrackedUser()
+  const tenant = await new TenantRepository().create({
+    name: `${tag} audited`,
+    slug: `${tag}-al-${randomUUID().slice(0, 6)}`,
+    ownerId: owner.id,
+  })
+  Object.assign(audited, { tenantId: tenant.id, slug: tenant.slug, ownerToken: tokenFor(owner) })
+}
+
+/**
+ * Remove the audit rows (truncate: the table refuses DELETE), the tenant and the users.
+ */
+async function removeAuditedTenant(): Promise<void> {
+  await truncateAuditLogs()
+  await sql`delete from tenants where id = ${audited.tenantId}`
+  await deleteTrackedUsers()
+}
+
+/**
+ * The time an audit item occurred, as a number.
+ * @param item - A list item.
+ * @returns Epoch milliseconds.
+ */
+function occurredOf(item: unknown): number {
+  return Date.parse((item as { occurredAt: string }).occurredAt)
+}
+
+for (const route of ['platform', 'tenant'] as const) {
+  describeListContract({
+    name:
+      route === 'platform'
+        ? 'GET /api/v1/platform/audit-log'
+        : 'GET /api/v1/tenants/:slug/audit-log',
+    app: () => app,
+    path: () =>
+      route === 'platform'
+        ? '/api/v1/platform/audit-log'
+        : `/api/v1/tenants/${audited.slug}/audit-log`,
+    headers: () => ({
+      Authorization: `Bearer ${route === 'platform' ? staff.token : audited.ownerToken}`,
+    }),
+    isolate: (): Record<string, string> =>
+      route === 'platform' ? { tenant: audited.tenantId } : {},
+    sorts: ['-occurred', 'occurred'],
+    order: { '-occurred': occurredOf, occurred: occurredOf },
+    setup: createAuditedTenant,
+    teardown: removeAuditedTenant,
+    seed: async (count) => {
+      const rows = auditRows(audited.tenantId, count)
+      await sql`insert into audit_logs ${sql(rows, 'tenant_id', 'actor_kind', 'access', 'action', 'occurred_at')}`
+    },
+    clear: truncateAuditLogs,
+    search: { text: 'tenant.created', count: 3 },
+    filters: [
+      { query: { action: 'tenant.updated' }, count: 2 },
+      { query: { action: 'tenant.updated,tenant.created' }, count: 5 },
+      { query: { access: 'platform' }, count: 2 },
+      { query: { access: 'member,platform' }, count: 5 },
+    ],
+  })
+}
