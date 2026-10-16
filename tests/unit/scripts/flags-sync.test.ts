@@ -11,7 +11,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { flagEntry } from '@/constants/flags.constants'
 import { evenVariantSplit, FLAG_SYNC_TAG, runFlagsSync } from '@/scripts/flags-sync'
-import { resetTenantGroupTypeIndexCache } from '@/services/analytics/timeline-group-index.service'
+import { resetTenantGroupTypeIndexCache } from '@/services/analytics/posthog-group-index.service'
 import {
   startFakePosthog,
   type FakePosthog,

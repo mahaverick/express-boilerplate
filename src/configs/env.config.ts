@@ -359,7 +359,7 @@ const EnvSchema = z.object({
     .max(100)
     .optional()
     .describe(
-      'Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (platform-timeline, via TIMELINE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.'
+      'Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (flag-evaluate, via FLAG_EVALUATE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.'
     ),
 
   /**
@@ -594,16 +594,16 @@ const EnvSchema = z.object({
       'Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.'
     ),
   /**
-   * Optional: unless both it and POSTHOG_PROJECT_ID are set, the staff
-   * timelines answer "not configured" and queued person deletions wait
-   * (analytics.config.ts `isTimelineEnabled`).
+   * Optional: unless both it and POSTHOG_PROJECT_ID are set, queued person
+   * deletions wait and `pnpm flags:sync` cannot run (analytics.config.ts
+   * `isPosthogApiEnabled`).
    */
   POSTHOG_PERSONAL_API_KEY: z
     .string()
     .startsWith('phx_', 'Use a PostHog personal API key, which starts with phx_')
     .optional()
     .describe(
-      'PostHog personal API key (phx_…) that the staff timelines read events with, user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes query:read, person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, the timelines answer "not configured" and queued person deletions wait.'
+      'PostHog personal API key (phx_…) that user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, queued person deletions wait.'
     ),
   POSTHOG_PROJECT_ID: z.coerce
     .number()
@@ -622,7 +622,7 @@ const EnvSchema = z.object({
     .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
     .optional()
     .describe(
-      'PostHog app origin that the timeline queries and person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.'
+      'PostHog app origin that person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.'
     ),
   /**
    * Optional and secret: without it every flag answers its registry fallback
@@ -635,23 +635,14 @@ const EnvSchema = z.object({
     .describe(
       'PostHog feature flags secure API key (phs_…, in Project settings under Feature flags) that the workers fetch feature flag definitions with every 30 seconds. It is a secret and never reaches a browser. Set it together with POSTHOG_PROJECT_KEY; without it every flag answers the fallback its code registry entry declares.'
     ),
-  TIMELINE_QUERY_BUDGET_PER_HOUR: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(100_000)
-    .default(1200)
-    .describe(
-      'Most PostHog queries the staff timelines make in any rolling hour, counted in Redis across every replica; a cached page spends none. PostHog allows 2400 query calls an hour for the whole organization, its own UI included. At least 1, at most 100000. Defaults to 1200.'
-    ),
-  TIMELINE_REQUESTS_PER_MINUTE: z.coerce
+  FLAG_EVALUATE_REQUESTS_PER_MINUTE: z.coerce
     .number()
     .int()
     .min(1)
     .max(1000)
     .default(20)
     .describe(
-      'Timeline requests one staff user may make a minute, cached or not, before the API answers 429. At least 1, at most 1000. Defaults to 20.'
+      'Flag evaluations (GET /platform/flags/evaluate) one staff user may make a minute before the API answers 429. At least 1, at most 1000. Defaults to 20.'
     ),
   /**
    * `z.stringbool()`, as for WORKER_ENABLED. It takes effect only with

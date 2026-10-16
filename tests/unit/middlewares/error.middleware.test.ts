@@ -6,7 +6,7 @@ import { type Request, type Response } from 'express'
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { HttpError } from '@/errors/http-error'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
 import {
   queuedErrorReportCount,
@@ -102,16 +102,16 @@ describe('errorHandler', () => {
     expect(body()).not.toHaveProperty('errors')
   })
 
-  it('answers a TimelineUnavailableError 502 with its code and a masked message, without logging it again', () => {
+  it('answers a PosthogUnavailableError 502 with its code and a masked message, without logging it again', () => {
     const { response, body, status } = mockResponse()
-    errorHandler(new TimelineUnavailableError(), {} as never, response, vi.fn())
+    errorHandler(new PosthogUnavailableError(), {} as never, response, vi.fn())
 
     expect(status).toHaveBeenCalledWith(502)
     expect(body()).toMatchObject({
       success: false,
       message: 'Internal server error',
       statusCode: 502,
-      code: 'TIMELINE_UNAVAILABLE',
+      code: 'POSTHOG_UNAVAILABLE',
     })
     expect(loggerError).not.toHaveBeenCalled()
   })

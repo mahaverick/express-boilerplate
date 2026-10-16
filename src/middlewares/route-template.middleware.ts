@@ -62,7 +62,7 @@ export function recordRouteTemplate(
 }
 
 /**
- * The parameter names a route path declares, such as `id` in `/:id/timeline`.
+ * The parameter names a route path declares, such as `id` in `/:id/onboarding`.
  * @param path - The route path.
  * @returns The names.
  */
@@ -100,7 +100,7 @@ function templatedBase(matched: MatchedBase, routeNames: Set<string>): string {
 
 /**
  * The template of the route a request matched: the router's mount path plus
- * the route path, such as `/api/v1/platform/tenants/:id/timeline`.
+ * the route path, such as `/api/v1/platform/tenants/:id/onboarding`.
  * @param request - The request, as `errorHandler` receives it.
  * @returns The template, or `UNMATCHED_ROUTE` when no route matched.
  */

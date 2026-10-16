@@ -8,7 +8,7 @@
  * database and runs every registered flag through the live evaluator.
  * Evaluate is the one place traits leave the server, so it is audited as
  * `user.flags_evaluated`, at most once per staff member, user, tenant and app
- * every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before anything is
+ * every `VIEW_AUDIT_THROTTLE_SECONDS`, before anything is
  * evaluated.
  */
 import { z } from 'zod'
@@ -187,7 +187,7 @@ const NO_TENANT = 'none'
 
 /**
  * Audit an evaluate view, at most once per staff member, user, tenant (or
- * none) and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`
+ * none) and app every `VIEW_AUDIT_THROTTLE_SECONDS`
  * (platform-view-audit.service.ts): the entry records the tenant and the
  * app, so each combination of them is audited on its own. The ids are
  * lowercased so the key never depends on the case a UUID arrived in; an id

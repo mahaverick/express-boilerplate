@@ -35,7 +35,7 @@ function probeApp(): express.Express {
   const outer = Router()
   outer.use('/tenants/:id/steps', merged)
   outer.use('/things/:thingId', unmerged)
-  outer.get('/users/:id/timeline', fail)
+  outer.get('/users/:id/onboarding', fail)
   app.use('/api/v1', outer)
   app.use((_request, _response, next) => {
     next(new Error('no route'))
@@ -50,9 +50,9 @@ const TENANT_ID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
 
 describe('routeTemplateOf', () => {
   it('joins the mount path and the route path, though Express restored baseUrl', async () => {
-    const response = await request(probeApp()).get(`/api/v1/users/${TENANT_ID}/timeline`)
+    const response = await request(probeApp()).get(`/api/v1/users/${TENANT_ID}/onboarding`)
 
-    expect(response.body).toEqual({ template: '/api/v1/users/:id/timeline', baseUrl: '' })
+    expect(response.body).toEqual({ template: '/api/v1/users/:id/onboarding', baseUrl: '' })
   })
 
   it('puts a merged mount parameter back as its name', async () => {

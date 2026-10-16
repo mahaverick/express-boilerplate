@@ -325,8 +325,8 @@ Analytics is off until `POSTHOG_PROJECT_KEY` is set: no outbox row is written,
 no drain runs, and `/api/v1/collect/*` answers 503. With only
 `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` set, the analytics Worker
 still starts, to delete purged users from PostHog. Server events and the
-browser share one PostHog project per environment. The pipeline, the proxy and
-the staff timelines are in [ARCHITECTURE.md](ARCHITECTURE.md#analytics); what
+browser share one PostHog project per environment. The pipeline and the proxy
+are in [ARCHITECTURE.md](ARCHITECTURE.md#analytics); what
 is and is not sent is in
 [SECURITY.md](SECURITY.md#analytics-and-error-tracking-privacy).
 
@@ -365,46 +365,30 @@ sent it. The rules live in `analytics-event-builder.service.ts` and
    `POSTHOG_PROJECT_KEY` is set, `TRUST_PROXY` is false and `APP_ENV` is not
    `local`.
 
-### Staff timelines
+### The PostHog personal API key
 
-`GET /api/v1/platform/users/:id/timeline` and
-`GET /api/v1/platform/tenants/:id/timeline` (platform admin and up) show Apex
-what a user or a tenant did, browser and server events together, read from
-PostHog with a personal API key. They answer `{ configured: false }` until both
-`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and boot warns
-when only one is. They are independent of `POSTHOG_PROJECT_KEY`.
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` let express call
+PostHog's private API: purged users are deleted from PostHog, and
+`pnpm flags:sync` creates missing flags. Boot
+warns when only one of them is set. They are independent of
+`POSTHOG_PROJECT_KEY`. Staff read events, replays and error issues in
+PostHog itself.
 
-**Turning them on, once per environment:**
+**Turning it on, once per environment:**
 
-1. In PostHog, create a personal API key with only the scopes `query:read`,
+1. In PostHog, create a personal API key with only the scopes
    `person:write` and `group:read`, plus `feature_flag:read` and
-   `feature_flag:write` for `pnpm flags:sync`, owned by a service account
-   rather than a person.
+   `feature_flag:write` for the flags, owned by a service account rather
+   than a person.
 2. Set `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` (the numeric id of
    the project `POSTHOG_PROJECT_KEY` reports to). The app host follows the
    ingest host's region (`https://us.posthog.com` or `https://eu.posthog.com`);
    set `POSTHOG_APP_HOST` for a self-hosted PostHog. Set them on the worker
    pods too: the PostHog deletion of purged users runs on the analytics
    Worker.
-3. Give a PostHog seat to every staff member who will watch replays: Apex
-   links to PostHog's replay, person and group pages and embeds nothing.
-4. Optional: run `pnpm analytics:backfill-groups` once, so existing tenants'
+3. Optional: run `pnpm analytics:backfill-groups` once, so existing tenants'
    group properties converge. It needs `POSTHOG_PROJECT_KEY` too and fails
    without it.
-
-**A request.** Query `range` is `24h`, `7d` (default), `30d` or `90d`; `view`
-is `all` (default) or `key` (no `$` events); `before` is the `nextCursor` of
-the previous page. A page holds at most 100 rows. Every request, a cursor page
-included, writes `user.timeline_viewed` or `tenant.timeline_viewed`, at most
-once per staff member, target and view every 10 minutes, before the cache is
-read; the audit fails closed, so if its write fails the read answers 500.
-
-A PostHog error, a timeout, a spent query budget or, for a tenant timeline, a
-project without a `tenant` group type answers 502 `TIMELINE_UNAVAILABLE`; a
-401, 403 or 404 from PostHog also logs `Timeline key or project misconfigured`
-at `error`. The limits are `TIMELINE_QUERY_BUDGET_PER_HOUR` and
-`TIMELINE_REQUESTS_PER_MINUTE`. Rotating `SESSION_SECRET` makes older events
-show as unverified in timelines: they still appear, without server badges.
 
 ### Error tracking
 
@@ -417,8 +401,7 @@ upload: `node --enable-source-maps` rewrites stacks to the `.ts` lines.
 
 **Finding an error from its `errorId`.** Every 5xx body that `errorHandler`
 writes, except a maintenance refusal, carries an `errorId`, and so does its
-`Unhandled server error` log line (except a timeline 502, whose id names
-nothing), so search the logs for it first. Error Tracking's UI does not search
+`Unhandled server error` log line, so search the logs for it first. Error Tracking's UI does not search
 by event uuid; run this in SQL insights (HogQL) instead, which also gives the
 issue to open:
 
@@ -432,11 +415,6 @@ An id that finds nothing names a log line only: the error was not reported (a
 deliberate 5xx, or error tracking off or throttled) or PostHog has not ingested
 it yet (allow about 15 s).
 
-**Staff views.** `GET /api/v1/platform/users/:id/errors` and
-`GET /api/v1/platform/tenants/:id/errors` (platform admin and up) list a user's
-or a tenant's PostHog error issues from the last 30 days. They need what the
-staff timelines need, answer `{ configured: false }` without it, and are
-audited as `user.errors_viewed` and `tenant.errors_viewed`.
 `GET /api/v1/platform/system/status` answers the release and the reporter's
 sent and dropped counts.
 

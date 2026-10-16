@@ -1,7 +1,7 @@
 /**
  * @file The experiment exposure event: the outbox row
  * `buildFlagExposureEvent` builds, with source `flag`, and its signature,
- * which the real `toPosthogBatchEvent` adds and the timeline verifier reads
+ * which the real `toPosthogBatchEvent` adds and a verifier reads
  * back as a server event. No database is involved.
  */
 import { describe, expect, expectTypeOf, it } from 'vitest'

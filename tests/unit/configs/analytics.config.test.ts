@@ -1,6 +1,6 @@
 /**
- * @file isAnalyticsEnabled, isErrorTrackingEnabled, isTimelineEnabled, posthogAssetsHost,
- * posthogAppHost, timelineLinks, isFlagsEnabled and posthogFlagUrl, which are pure
+ * @file isAnalyticsEnabled, isErrorTrackingEnabled, isPosthogApiEnabled, posthogAssetsHost,
+ * posthogAppHost, isFlagsEnabled and posthogFlagUrl, which are pure
  * functions of the environment slice they are given.
  */
 import { describe, expect, it } from 'vitest'
@@ -8,11 +8,10 @@ import {
   isAnalyticsEnabled,
   isErrorTrackingEnabled,
   isFlagsEnabled,
-  isTimelineEnabled,
+  isPosthogApiEnabled,
   posthogAppHost,
   posthogAssetsHost,
   posthogFlagUrl,
-  timelineLinks,
 } from '@/configs/analytics.config'
 
 describe('isAnalyticsEnabled', () => {
@@ -63,27 +62,27 @@ describe('posthogAssetsHost', () => {
   })
 })
 
-describe('isTimelineEnabled', () => {
+describe('isPosthogApiEnabled', () => {
   it('is on only when both the personal key and the project id are set', () => {
     expect(
-      isTimelineEnabled({
+      isPosthogApiEnabled({
         POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real',
         POSTHOG_PROJECT_ID: 1,
       })
     ).toBe(true)
     expect(
-      isTimelineEnabled({
+      isPosthogApiEnabled({
         POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real',
         POSTHOG_PROJECT_ID: undefined,
       })
     ).toBe(false)
-    expect(isTimelineEnabled({ POSTHOG_PERSONAL_API_KEY: undefined, POSTHOG_PROJECT_ID: 1 })).toBe(
-      false
-    )
+    expect(
+      isPosthogApiEnabled({ POSTHOG_PERSONAL_API_KEY: undefined, POSTHOG_PROJECT_ID: 1 })
+    ).toBe(false)
   })
 
   it('is off under the test environment, which sets neither', () => {
-    expect(isTimelineEnabled()).toBe(false)
+    expect(isPosthogApiEnabled()).toBe(false)
   })
 })
 
@@ -119,47 +118,6 @@ describe('posthogAppHost', () => {
         POSTHOG_APP_HOST: 'http://127.0.0.1:9100',
       })
     ).toBe('http://127.0.0.1:9100')
-  })
-})
-
-// eslint-disable-next-line unicorn/no-null -- JSON null, as the page carries it for the other kind's link
-const NO_LINK = null
-
-describe('timelineLinks', () => {
-  const env = {
-    POSTHOG_HOST: 'https://eu.i.posthog.com',
-    POSTHOG_APP_HOST: undefined,
-    POSTHOG_PROJECT_ID: 4321,
-  }
-
-  it("links a user timeline to the person page and the project's replay template", () => {
-    expect(timelineLinks({ kind: 'user', id: 'user-1' }, env)).toEqual({
-      person: 'https://eu.posthog.com/project/4321/person/user-1',
-      group: NO_LINK,
-      replay: 'https://eu.posthog.com/project/4321/replay/{sessionId}',
-    })
-  })
-
-  it('links a tenant timeline to the group page under the resolved group type index', () => {
-    expect(timelineLinks({ kind: 'tenant', id: 'tenant-1', groupTypeIndex: 2 }, env)).toEqual({
-      person: NO_LINK,
-      group: 'https://eu.posthog.com/project/4321/groups/2/tenant-1',
-      replay: 'https://eu.posthog.com/project/4321/replay/{sessionId}',
-    })
-  })
-
-  it('URL-encodes the id and follows POSTHOG_APP_HOST', () => {
-    const links = timelineLinks(
-      { kind: 'user', id: 'a/b?c' },
-      { ...env, POSTHOG_APP_HOST: 'https://posthog.example.test/' }
-    )
-    expect(links.person).toBe('https://posthog.example.test/project/4321/person/a%2Fb%3Fc')
-  })
-
-  it('throws without a project id', () => {
-    expect(() =>
-      timelineLinks({ kind: 'user', id: 'user-1' }, { ...env, POSTHOG_PROJECT_ID: undefined })
-    ).toThrow('POSTHOG_PROJECT_ID is not set')
   })
 })
 

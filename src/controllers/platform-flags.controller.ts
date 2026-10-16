@@ -2,7 +2,7 @@
  * @file Handlers for `GET /api/v1/platform/flags`, `/flags/unregistered`
  * and `/flags/meta` (behind `requirePlatformRole('viewer')` and the shared
  * `platform-search` limiter) and `GET /api/v1/platform/flags/evaluate` (behind
- * `requirePlatformRole('admin')` and the shared `platform-timeline`
+ * `requirePlatformRole('admin')` and its own `flag-evaluate`
  * limiter), in platform.routes.ts.
  */
 import { BaseController } from '@/controllers/base.controller'

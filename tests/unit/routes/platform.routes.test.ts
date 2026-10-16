@@ -133,27 +133,11 @@ describe('createPlatformRouter', () => {
     )
   })
 
-  it('gates the tenant timeline at admin, then the timeline limiter', () => {
-    const handlers = handlersFor(createPlatformRouter(), 'get', '/tenants/:id/timeline')
-
-    expect(handlers).toHaveLength(3)
+  it('gates the flag evaluator at admin, then its own limiter', () => {
+    const handlers = handlersFor(createPlatformRouter(), 'get', '/flags/evaluate')
     expect(Object.hasOwn(handlers[0] ?? {}, RATE_LIMITER_MARK)).toBe(false)
     expect((handlers[1] as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe(
-      'platform-timeline'
+      'flag-evaluate'
     )
-  })
-
-  it('shares one timeline limiter between the user and the tenant timelines', () => {
-    const router = createPlatformRouter()
-    const users = (router.stack as unknown as RouteLayer[]).find(
-      (layer) =>
-        Array.isArray(layer.handle.stack) && layer.match('/users') && layer.path === '/users'
-    )
-    if (!users?.handle.stack) throw new Error('no /users sub-router')
-
-    const userLimiter = handlersIn(users.handle.stack, 'get', '/:id/timeline')[1]
-    const tenantLimiter = handlersFor(router, 'get', '/tenants/:id/timeline')[1]
-
-    expect(userLimiter).toBe(tenantLimiter)
   })
 })

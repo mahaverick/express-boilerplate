@@ -49,10 +49,10 @@ function runChecks(source: Record<string, string>): {
 }
 
 /**
- * The two variables that must be set together to turn the timeline on: the PostHog personal
- * API key and the project id.
+ * The two variables that must be set together to turn PostHog's private API on: the PostHog
+ * personal API key and the project id.
  */
-function bothTimelineVariables(): Record<string, string> {
+function bothPosthogApiVariables(): Record<string, string> {
   return { POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real', POSTHOG_PROJECT_ID: '12345' }
 }
 
@@ -361,7 +361,7 @@ describe('assertEnvConsistent', () => {
     })
   })
 
-  describe('half of the timeline credentials', () => {
+  describe('half of the PostHog private API credentials', () => {
     it.each([
       {
         name: 'the key without the project id',
@@ -381,7 +381,7 @@ describe('assertEnvConsistent', () => {
     })
 
     it.each([
-      { name: 'both are set', source: { ...deployed, ...bothTimelineVariables() } },
+      { name: 'both are set', source: { ...deployed, ...bothPosthogApiVariables() } },
       { name: 'neither is set', source: deployed },
     ])('stays quiet when $name', ({ source }) => {
       expect(runChecks(source).warnings).toEqual([])

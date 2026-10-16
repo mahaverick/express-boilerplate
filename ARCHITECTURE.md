@@ -168,7 +168,7 @@ and every Redis call a request waits on runs under a deadline
 
 - **`withRedisDeadline`** wraps reads and counters: the session denylist read,
   the rate-limit store, the staff-visit, view-audit and flag-exposure dedupes,
-  the timeline budget and cache, the invitation recipient budget, the mail
+  the invitation recipient budget, the mail
   cooldowns, the maintenance-mode notice ids and the OAuth session store. A
   call with no answer in `REDIS_REQUEST_DEADLINE_MS` (300 ms) fails, and for
   the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call fails at once
@@ -341,15 +341,12 @@ and every write re-checks it under lock.
 | `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                           |
 | `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                               |
 | `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                  |
-| `platform-timeline.service.ts`   | The PostHog timelines of a user or a tenant ([Analytics](#analytics)).                                                                                                                                                                             |
-| `platform-errors.service.ts`     | The staff Errors views ([Error tracking](#error-tracking)).                                                                                                                                                                                        |
 | `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                            |
 | `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                            |
 | `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                        |
 
 Each cross-tenant repository is imported by its own `platform-*` service only;
-`platform-user.repository.ts` also by `platform-purge.service.ts` and
-`platform-timeline.service.ts`. What staff may do, and the gates on it, are in
+`platform-user.repository.ts` also by `platform-purge.service.ts`. What staff may do, and the gates on it, are in
 [SECURITY.md](SECURITY.md#platform-staff).
 
 ### Extending Apex
@@ -385,7 +382,7 @@ Directories with no filename rule:
   `isUniqueViolation`, `redactedForLog`).
 - `src/types/`: the `Express.Request` augmentation (`express.d.ts`) and the
   shared and domain types several layers use (`actor.ts`, `flags.ts`,
-  `timeline.ts`).
+  `onboarding.ts`).
 - `src/scripts/`: tools a `package.json` script runs through `tsx`, never
   imported by the app. They live under `src/` so `tsc` and type-aware lint see
   them.
@@ -503,7 +500,7 @@ handler by arity. It decides:
   Postgres refused a character in client text.
 - **A 5xx** is masked (`Internal server error`), gets an `errorId`, and is
   logged redacted (`redactedForLog`, `src/errors/postgres-errors.ts`), except a
-  `TimelineUnavailableError`, whose thrower already logged why. It is reported
+  `PosthogUnavailableError`, whose thrower already logged why. It is reported
   to error tracking only when the capture rule admits it
   ([Error tracking](#error-tracking)).
 
@@ -604,7 +601,7 @@ once. What a job payload may hold, and for how long, is in
 rejection exits the process.
 
 `startWorkers()` starts the email, notification and maintenance Workers, and
-the analytics Worker when analytics or the staff timelines are configured.
+the analytics Worker when analytics or PostHog's private API is configured.
 `WORKER_ENABLED` (default `true`) runs them in the API process. To split them,
 set it to `false` on API-only pods and `true` on a worker deployment that
 shares the Redis queues; the schedules below then run only on the worker
@@ -714,7 +711,7 @@ every replica with an open stream: one subscriber ── local emitter ── ea
 
 All three run on PostHog and are off until configured
 (`src/configs/analytics.config.ts`): analytics needs `POSTHOG_PROJECT_KEY`; the
-staff timelines, the Errors views and person deletion need
+person deletion and `pnpm flags:sync` need
 `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`; error tracking needs the
 project key and `ERROR_TRACKING_ENABLED`; flags need `POSTHOG_FEATURE_FLAGS_KEY`
 and the project key. What each sends, and what it never does, is in
@@ -723,9 +720,8 @@ steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
 
 ### Analytics
 
-No request handler calls PostHog's private API (`/api/projects/…`), except the
-staff timeline reads on a cache miss and the Errors reads, which cache nothing,
-both within the hourly query budget. Server events reach PostHog only through
+No request handler calls PostHog's private API (`/api/projects/…`): the
+person deletions and `pnpm flags:sync` are its only callers. Server events reach PostHog only through
 the outbox drain and the error reporter, both through `sendBatch`
 (`posthog-batch.service.ts`); browser events reach it only through the
 `/api/v1/collect` proxy.
@@ -800,13 +796,6 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   streaming bodies untouched. It sits ahead of the body parsers and has no
   `on.error` handler, which would make http-proxy-middleware skip its own error
   response. Without `POSTHOG_PROJECT_KEY` it answers 503.
-- **Staff timelines** (`platform-timeline.service.ts`) send PostHog only the
-  two fixed HogQL templates in `timeline-query.service.ts`, with every id, the
-  range and the cursor as placeholders, and keep only the `TIMELINE_PROP_KEYS`
-  properties. Each read is audited at most once per staff member, target and
-  view every 10 minutes (`auditThrottledView`), before the 30 s cache and the
-  hourly budget (`TIMELINE_QUERY_BUDGET_PER_HOUR`, counted in Redis across
-  replicas) are consulted.
 
 ### Error tracking
 
@@ -822,7 +811,7 @@ capture point per kind of failure and never from a logger transport:
 **The capture rule** (`shouldCaptureHttpError`). An error that is not an
 `HttpError` and resolves to 500 is reported. An `HttpError` of 500 or more is a
 deliberate answer, reported only when it wraps a `cause`. A
-`TimelineUnavailableError` never is: PostHog being unreachable is its meaning,
+`PosthogUnavailableError` never is: PostHog being unreachable is its meaning,
 and its thrower already logged why. A 4xx, and a client that went away, never
 are. Each analytics tick has one attempt, so every failed tick is a final
 failure and is reported; the throttle bounds a run of them.
@@ -857,20 +846,12 @@ graceful shutdown for `ERROR_SHUTDOWN_FLUSH_MS` (3 s).
 
 **`errorId` and the route.** Every 5xx `errorHandler` writes, except a
 maintenance refusal, carries an `errorId` in its body and on its log line; a
-reported error's id is its `$exception` uuid. A `TimelineUnavailableError` 502
+reported error's id is its `$exception` uuid. A `PosthogUnavailableError` 502
 also carries one, but it names nothing: that error is neither logged nor
 reported there. The route template on an event comes from `recordRouteTemplate`
 (`route-template.middleware.ts`): Express restores `request.baseUrl` before an
 error reaches `errorHandler`, so the mount path is recorded when the router
 assigns `request.route`, and a mount parameter's value is put back as its name.
-
-**Staff views.** `GET /platform/users/:id/errors` and
-`GET /platform/tenants/:id/errors` (`platform-errors.service.ts`) list the
-error issues a user or a tenant hit in the last 30 days from the fixed HogQL in
-`errors-query.service.ts`, sharing the timelines' limiter, budget and throttled
-audit. Every column describing an issue's most recent event is read with
-`argMax(column, (timestamp, uuid))`, so all of them come from one event and its
-signature can be verified (`errors-mapper.service.ts`).
 
 **System status.** `GET /platform/system/status` (platform admin, not
 audited) answers `{ release, errorTracking, flags, maintenance }`: the image's
@@ -1095,7 +1076,7 @@ what `pnpm env:table` prints.
 | `INVITATION_RESEND_COOLDOWN`           | no       | `10m`                      | How long after an invitation is mailed before it can be resent, as an ms()-parseable duration string. A resend sooner answers 429 invitation_resend_cooldown. Defaults to 10m.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `INVITATION_RECIPIENT_DAILY_LIMIT`     | no       | `10`                       | Most tenant invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender, of which one tenant may send at most 3; past either the sender gets 429 RATE_LIMITED. Staff owner-invitations of new tenants are not counted. Defaults to 10.                                                                                                                                                                                                                                                                                                                     |
 | `TRUST_PROXY`                          | no       | `false`                    | How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.                                                                              |
-| `RATE_LIMIT_SCALE`                     | no       | —                          | Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (platform-timeline, via TIMELINE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.                                                            |
+| `RATE_LIMIT_SCALE`                     | no       | —                          | Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (flag-evaluate, via FLAG_EVALUATE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.                                                           |
 | `COOKIE_SECURE`                        | no       | —                          | Whether the refresh-token and OAuth session cookies carry the Secure attribute ("true" or "false"). Defaults from APP_ENV: false on local, true elsewhere. With Secure on behind a TLS-terminating proxy, TRUST_PROXY must be set, or the OAuth session cookie is never sent.                                                                                                                                                                                                                                                                                                                             |
 | `COOKIE_DOMAIN`                        | no       | —                          | Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. With COOKIE_SECURE on, setting or unsetting it on a live deployment signs users in again once; the cookie names and scopes are in SECURITY.md, "The refresh cookie".                                                                                                                                                             |
 | `CORS_ALLOWED_ORIGINS`                 | no       | —                          | Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. POST /auth/refresh and /auth/logout also refuse a present Origin that is none of these, so list every other frontend origin (SECURITY.md, "CSRF"). Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.                                                                                                                    |
@@ -1121,12 +1102,11 @@ what `pnpm env:table` prints.
 | `ANALYTICS_OUTBOX_RETENTION_DAYS`      | no       | `7`                        | Days an analytics event may wait in the outbox, while PostHog is unreachable or refuses it, before it is dropped unsent with a warning. At least 1, at most 365. Defaults to 7.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `ANALYTICS_DRAIN_INTERVAL_MS`          | no       | `5000`                     | Milliseconds between analytics outbox drains, each of which sends one batch to PostHog. At least 1000, at most 600000. Defaults to 5000.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `ANALYTICS_DRAIN_BATCH_SIZE`           | no       | `500`                      | Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `POSTHOG_PERSONAL_API_KEY`             | no       | —                          | PostHog personal API key (phx_…) that the staff timelines read events with, user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes query:read, person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, the timelines answer "not configured" and queued person deletions wait.                                                                                                                                       |
+| `POSTHOG_PERSONAL_API_KEY`             | no       | —                          | PostHog personal API key (phx_…) that user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, queued person deletions wait.                                                                                                                                                                                                                                   |
 | `POSTHOG_PROJECT_ID`                   | no       | —                          | Numeric id of the PostHog project that POSTHOG_PERSONAL_API_KEY reads from and deletes in: the project POSTHOG_PROJECT_KEY reports to. Set it together with POSTHOG_PERSONAL_API_KEY.                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `POSTHOG_APP_HOST`                     | no       | —                          | PostHog app origin that the timeline queries and person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.                                                                                                                                                                                                                                                                                                   |
+| `POSTHOG_APP_HOST`                     | no       | —                          | PostHog app origin that person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.                                                                                                                                                                                                                                                                                                                            |
 | `POSTHOG_FEATURE_FLAGS_KEY`            | no       | —                          | PostHog feature flags secure API key (phs_…, in Project settings under Feature flags) that the workers fetch feature flag definitions with every 30 seconds. It is a secret and never reaches a browser. Set it together with POSTHOG_PROJECT_KEY; without it every flag answers the fallback its code registry entry declares.                                                                                                                                                                                                                                                                           |
-| `TIMELINE_QUERY_BUDGET_PER_HOUR`       | no       | `1200`                     | Most PostHog queries the staff timelines make in any rolling hour, counted in Redis across every replica; a cached page spends none. PostHog allows 2400 query calls an hour for the whole organization, its own UI included. At least 1, at most 100000. Defaults to 1200.                                                                                                                                                                                                                                                                                                                               |
-| `TIMELINE_REQUESTS_PER_MINUTE`         | no       | `20`                       | Timeline requests one staff user may make a minute, cached or not, before the API answers 429. At least 1, at most 1000. Defaults to 20.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `FLAG_EVALUATE_REQUESTS_PER_MINUTE`    | no       | `20`                       | Flag evaluations (GET /platform/flags/evaluate) one staff user may make a minute before the API answers 429. At least 1, at most 1000. Defaults to 20.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `ERROR_TRACKING_ENABLED`               | no       | `true`                     | Whether unexpected server errors are sent to PostHog Error Tracking as $exception events. Takes effect only when POSTHOG_PROJECT_KEY is set. Defaults to true; false stops sending them, and an error still gets its errorId.                                                                                                                                                                                                                                                                                                                                                                             |
 | `APP_VERSION`                          | no       | `dev`                      | The release this process runs, normally the deployed git commit sha, sent as release on every $exception event and answered by GET /health and GET /api/v1/platform/system/status. The Docker image sets it from its GIT_SHA build arg, which deploy.yml passes as the commit sha; operators do not set it. 1 to 64 letters, digits, ".", "_" and "-". Defaults to dev.                                                                                                                                                                                                                                   |
 | `REDIS_KEY_PREFIX`                     | no       | `express-boilerplate`      | Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`), the error-tracking counters (`<prefix>:errors`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.                                                    |

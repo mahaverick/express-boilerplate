@@ -22,7 +22,6 @@ import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.
 import { getRedis, redisKey } from '@/services/redis.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { Actor } from '@/types/actor'
-import type { TimelineKind } from '@/types/timeline'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
   PlatformAuditLogListQuery,
@@ -153,76 +152,6 @@ export async function recordPlatformAccess(
     if (hasClaimedKey) await releaseDedupeKey(key)
     throw error
   }
-}
-
-/**
- * Record that a staff member read a user's or a tenant's timeline:
- * `user.timeline_viewed` or `tenant.timeline_viewed`, written on the pool in
- * the platform tenant, outside any transaction, since a timeline read
- * changes nothing to commit with. It always writes; the caller
- * (platform-timeline.service.ts) decides how often to call it.
- * @param actor - The staff member.
- * @param platformTenantId - The platform tenant, where the entry is written.
- * @param kind - Whose timeline.
- * @param targetId - The user or tenant id.
- * @param metadata - The range and view they read it with.
- * @returns The written row.
- * @throws {Error} When the metadata does not match the schema or the insert fails.
- */
-export async function recordTimelineView(
-  actor: Actor,
-  platformTenantId: string,
-  kind: TimelineKind,
-  targetId: string,
-  metadata: AuditMetadata<'user.timeline_viewed'>
-): Promise<AuditLog> {
-  const common = {
-    actor,
-    access: 'platform',
-    tenantId: platformTenantId,
-    targetId,
-    metadata,
-  } as const
-  return writeEntry(
-    kind === 'user'
-      ? { ...common, action: 'user.timeline_viewed' }
-      : { ...common, action: 'tenant.timeline_viewed' },
-    db
-  )
-}
-
-/**
- * Record that a staff member read a user's or a tenant's error issues:
- * `user.errors_viewed` or `tenant.errors_viewed`, with empty metadata,
- * written on the pool in the platform tenant, outside any transaction. It
- * always writes; the caller (platform-errors.service.ts) decides how often
- * to call it.
- * @param actor - The staff member.
- * @param platformTenantId - The platform tenant, where the entry is written.
- * @param kind - Whose errors.
- * @param targetId - The user or tenant id.
- * @returns The written row.
- * @throws {Error} When the insert fails.
- */
-export async function recordErrorsView(
-  actor: Actor,
-  platformTenantId: string,
-  kind: TimelineKind,
-  targetId: string
-): Promise<AuditLog> {
-  const common = {
-    actor,
-    access: 'platform',
-    tenantId: platformTenantId,
-    targetId,
-    metadata: {},
-  } as const
-  return writeEntry(
-    kind === 'user'
-      ? { ...common, action: 'user.errors_viewed' }
-      : { ...common, action: 'tenant.errors_viewed' },
-    db
-  )
 }
 
 /**

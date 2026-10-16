@@ -5,12 +5,6 @@ import { z } from 'zod'
 import { FLAG_STATES } from '@/constants/flags.constants'
 import { STATS_RANGES } from '@/constants/platform.constants'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
-import {
-  TIMELINE_DEFAULT_RANGE,
-  TIMELINE_DEFAULT_VIEW,
-  TIMELINE_RANGES,
-  TIMELINE_VIEWS,
-} from '@/constants/timeline.constants'
 import { HttpError } from '@/errors/http-error'
 import { emailSchema } from '@/validators/auth.validators'
 import { booleanFilter, listFilter, listParamsSchema } from '@/validators/list.validators'
@@ -40,24 +34,6 @@ export type PlatformTenantListQuery = z.output<typeof platformTenantListSchema>
  */
 export const platformStatsQuerySchema = z.object({
   range: z.enum(STATS_RANGES).default('7d'),
-})
-
-/**
- * Room for any timeline cursor the server issues (about 110 characters).
- */
-const MAX_TIMELINE_CURSOR_LENGTH = 512
-
-/**
- * `GET /platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline`
- * query: the window (7 days), the view (everything) and the opaque `before`
- * cursor of a later page. The cursor is decoded by the timeline service,
- * which answers 400 for one that is not shaped like those it issues. Unknown
- * keys are ignored.
- */
-export const platformTimelineQuerySchema = z.object({
-  range: z.enum(TIMELINE_RANGES).default(TIMELINE_DEFAULT_RANGE),
-  view: z.enum(TIMELINE_VIEWS).default(TIMELINE_DEFAULT_VIEW),
-  before: z.string().min(1).max(MAX_TIMELINE_CURSOR_LENGTH).optional(),
 })
 
 /**

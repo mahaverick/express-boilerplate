@@ -137,20 +137,20 @@ function warnOnUntrustedProxyForAnalytics(env: Env, warn: (message: string) => v
 }
 
 /**
- * Warn when only half of the timeline credentials is set. The timelines and
- * PostHog person deletion need both, so with one alone they stay off and
- * nothing else says why.
+ * Warn when only half of the PostHog private API credentials is set. Person
+ * deletion and `pnpm flags:sync` need both, so with one alone they stay off
+ * and nothing else says why.
  * @param env - The validated environment.
  * @param warn - Receives the warning, naming the missing variable.
  */
-function warnOnHalfTimelineConfig(env: Env, warn: (message: string) => void): void {
+function warnOnHalfPosthogApiConfig(env: Env, warn: (message: string) => void): void {
   const hasKey = env.POSTHOG_PERSONAL_API_KEY !== undefined
   if (hasKey === (env.POSTHOG_PROJECT_ID !== undefined)) return
   const [presentName, missingName] = hasKey
     ? ['POSTHOG_PERSONAL_API_KEY', 'POSTHOG_PROJECT_ID']
     : ['POSTHOG_PROJECT_ID', 'POSTHOG_PERSONAL_API_KEY']
   warn(
-    `${presentName} is set but ${missingName} is not, so the staff timelines answer "not configured" and PostHog person deletions wait. Set ${missingName} too, or unset ${presentName}.`
+    `${presentName} is set but ${missingName} is not, so queued PostHog person deletions wait and pnpm flags:sync cannot run. Set ${missingName} too, or unset ${presentName}.`
   )
 }
 
@@ -262,7 +262,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
 
   problems.push(...flagsKeyProblems(env), ...rateLimitScaleProblems(env))
   warnOnUntrustedProxyForAnalytics(env, warn)
-  warnOnHalfTimelineConfig(env, warn)
+  warnOnHalfPosthogApiConfig(env, warn)
 
   if (problems.length === 0) return
   const list = problems.map((problem) => `  - ${problem}`).join('\n')

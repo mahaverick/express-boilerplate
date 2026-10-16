@@ -1,9 +1,9 @@
 /**
  * @file The signature that tells a server event from a forged one. PostHog's
  * project key is public, so anyone can capture an event with any
- * `distinct_id`, `source`, `access` or target; the timelines trust those
- * fields only on a row whose `server_sig` verifies. The signature is
- * HMAC-SHA256 over the fields the timeline trusts, never the timestamp, with
+ * `distinct_id`, `source`, `access` or target, so a reader of PostHog's events
+ * can trust those fields only when the signature verifies; express reads none
+ * back. The signature is HMAC-SHA256 over the trusted fields, never the timestamp, with
  * a key derived from `SESSION_SECRET`, so rotating that secret makes older
  * events read as unverified.
  */
@@ -84,8 +84,7 @@ function signedText(value: unknown): string | null {
 
 /**
  * The signed fields of an event, read from its properties by the one rule
- * both the signer (`toPosthogBatchEvent`) and the verifiers (the timeline and
- * errors mappers) use, so they cannot disagree about an absent or oddly typed
+ * both the signer (`toPosthogBatchEvent`) and any verifier use, so they cannot disagree about an absent or oddly typed
  * field. It reads `source`, `access`, `target_type`, `target_id` and
  * `$groups.tenant`; a `$groups` that is not an object reads as no tenant.
  * @param identity - The event's uuid, event name and distinct id.

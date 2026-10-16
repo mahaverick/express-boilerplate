@@ -3,7 +3,7 @@
  * signal handling and workers. Excluded from coverage as signal wiring;
  * tests/unit/index.test.ts spawns it to prove boot refuses a bad environment.
  */
-import { isAnalyticsEnabled, isFlagsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
@@ -109,7 +109,7 @@ async function boot(): Promise<void> {
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
   logger.info(
-    isAnalyticsEnabled() || isTimelineEnabled()
+    isAnalyticsEnabled() || isPosthogApiEnabled()
       ? 'Workers started (email, notification, maintenance, analytics)'
       : 'Workers started (email, notification, maintenance)'
   )

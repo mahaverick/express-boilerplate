@@ -13,13 +13,13 @@
 import { fileURLToPath } from 'node:url'
 import { getEnv } from '@/configs/env.config'
 import { FLAGS, type FlagEntry } from '@/constants/flags.constants'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import {
   posthogApi,
   posthogProjectPath,
   type PosthogApiResult,
 } from '@/services/analytics/posthog-api.service'
-import { tenantGroupTypeIndex } from '@/services/analytics/timeline-group-index.service'
+import { tenantGroupTypeIndex } from '@/services/analytics/posthog-group-index.service'
 
 const USAGE = 'Usage: pnpm flags:sync [-- --dry-run]'
 
@@ -189,7 +189,7 @@ async function tenantIndexIfNeeded(): Promise<number | undefined> {
   try {
     return await tenantGroupTypeIndex()
   } catch (error) {
-    if (error instanceof TimelineUnavailableError) {
+    if (error instanceof PosthogUnavailableError) {
       throw new SyncFailure('Could not read PostHog group types')
     }
     throw error

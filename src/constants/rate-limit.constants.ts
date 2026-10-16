@@ -81,7 +81,7 @@ export type RateLimitName =
   | 'emailWebhook'
   | 'emailWebhookRejected'
   | 'analyticsProxy'
-  | 'platformTimeline'
+  | 'flagEvaluate'
   | 'flagExposure'
   | 'maintenanceStatus'
   | 'maintenanceModeChange'
@@ -525,14 +525,13 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * Keyed on the caller's id: only staff admins reach it, past requireAuth
-   * and requirePlatformRole. Every request counts, cached or not; the
-   * project-wide hourly query budget (timeline-budget.service.ts) bounds the
-   * PostHog queries behind it. The platform router overrides `limit` with
-   * `TIMELINE_REQUESTS_PER_MINUTE`, whose default is 20.
+   * One staff user's flag evaluations; the limit comes from
+   * `FLAG_EVALUATE_REQUESTS_PER_MINUTE`, whose default is 20. Keyed on the
+   * caller's id: only staff admins reach it, past requireAuth and
+   * requirePlatformRole.
    */
-  platformTimeline: {
-    name: 'platform-timeline',
+  flagEvaluate: {
+    name: 'flag-evaluate',
     windowMs: 60_000,
     limit: 20,
     keyBy: 'user',

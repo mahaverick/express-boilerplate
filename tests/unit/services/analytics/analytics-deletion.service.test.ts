@@ -9,7 +9,7 @@
  * tests/integration/services/analytics/analytics-deletion.service.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import { isTimelineEnabled } from '@/configs/analytics.config'
+import { isPosthogApiEnabled } from '@/configs/analytics.config'
 import type { AnalyticsDeletionRow } from '@/database/models/analytics-deletion.model'
 import { AnalyticsDeletionRepository } from '@/repositories/analytics-deletion.repository'
 import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
@@ -20,7 +20,7 @@ import {
 import { posthogApi, type PosthogApiResult } from '@/services/analytics/posthog-api.service'
 import { logger } from '@/services/logger.service'
 
-vi.mock('@/configs/analytics.config', () => ({ isTimelineEnabled: vi.fn(() => true) }))
+vi.mock('@/configs/analytics.config', () => ({ isPosthogApiEnabled: vi.fn(() => true) }))
 vi.mock('@/services/analytics/posthog-api.service', () => ({
   posthogApi: vi.fn(),
   posthogProjectPath: (suffix: string) => `/api/projects/7/${suffix}`,
@@ -79,7 +79,7 @@ function spy<K extends keyof typeof repository>(name: K): NonNullable<(typeof re
 }
 
 beforeEach(() => {
-  vi.mocked(isTimelineEnabled).mockReturnValue(true)
+  vi.mocked(isPosthogApiEnabled).mockReturnValue(true)
   const prototype = AnalyticsDeletionRepository.prototype
   repository.claimDue = vi.spyOn(prototype, 'claimDue').mockResolvedValue([claimed('user-a')])
   repository.deleteByIds = vi.spyOn(prototype, 'deleteByIds').mockResolvedValue(1)
@@ -256,8 +256,8 @@ describe('processAnalyticsDeletions', () => {
     expect(posthogApi).not.toHaveBeenCalled()
   })
 
-  it('touches neither the table nor PostHog while the timeline is not configured', async () => {
-    vi.mocked(isTimelineEnabled).mockReturnValue(false)
+  it('touches neither the table nor PostHog while the PostHog private API is not configured', async () => {
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(false)
 
     await expect(processAnalyticsDeletions(NOW)).resolves.toEqual({ deleted: 0, failed: 0 })
 
@@ -268,8 +268,8 @@ describe('processAnalyticsDeletions', () => {
 })
 
 describe('warnIfDeletionsPending', () => {
-  it('warns with the count when rows wait and the timeline is not configured', async () => {
-    vi.mocked(isTimelineEnabled).mockReturnValue(false)
+  it('warns with the count when rows wait and the PostHog private API is not configured', async () => {
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(false)
     spy('countPending').mockResolvedValue(3)
     const warn = vi.spyOn(logger, 'warn')
 
@@ -281,13 +281,13 @@ describe('warnIfDeletionsPending', () => {
     )
   })
 
-  it('stays quiet with no pending rows, and does not count while the timeline is configured', async () => {
-    vi.mocked(isTimelineEnabled).mockReturnValue(false)
+  it('stays quiet with no pending rows, and does not count while the PostHog private API is configured', async () => {
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(false)
     spy('countPending').mockResolvedValue(0)
     const warn = vi.spyOn(logger, 'warn')
 
     await warnIfDeletionsPending()
-    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(true)
     await warnIfDeletionsPending()
 
     expect(warn).not.toHaveBeenCalled()
@@ -295,7 +295,7 @@ describe('warnIfDeletionsPending', () => {
   })
 
   it('logs a failed count at warn and never rejects', async () => {
-    vi.mocked(isTimelineEnabled).mockReturnValue(false)
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(false)
     const failure = new Error('database unreachable')
     spy('countPending').mockRejectedValue(failure)
     const warn = vi.spyOn(logger, 'warn')

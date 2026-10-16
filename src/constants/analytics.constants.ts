@@ -80,10 +80,15 @@ export const SYSTEM_DISTINCT_ID = 'system'
 
 /**
  * The event property that carries a server event's signature
- * (analytics-signature.service.ts). The drainer adds it at send time; the
- * timelines trust a row's server fields only when it verifies.
+ * (analytics-signature.service.ts). The drainer adds it at send time; a reader
+ * of PostHog's events trusts a row's server fields only when it verifies.
  */
 export const ANALYTICS_SIGNATURE_PROPERTY = 'server_sig'
+
+/**
+ * How long one call to PostHog's private API may take.
+ */
+export const POSTHOG_API_TIMEOUT_MS = 15_000
 
 /**
  * How long after a user purge their PostHog deletion is first sent. PostHog
@@ -101,7 +106,7 @@ export const ANALYTICS_DELETION_BATCH_SIZE = 10
 /**
  * How long a deletion tick's claim holds its rows: it covers one batch
  * request plus one request per claimed row, each at the
- * `TIMELINE_POSTHOG_TIMEOUT_MS` (15 s) timeout (11 x 15 s = 165 s at the
+ * `POSTHOG_API_TIMEOUT_MS` (15 s) timeout (11 x 15 s = 165 s at the
  * batch size), so a tick that crashes mid-request releases them and a live
  * one keeps them.
  */

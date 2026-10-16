@@ -27,7 +27,7 @@ import {
 } from '@/constants/error-tracking.constants'
 import { HttpError } from '@/errors/http-error'
 import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import {
   sendBatch,
   type PosthogBatchEvent,
@@ -544,7 +544,7 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
  * Whether `errorHandler` reports an error it answers with a 5xx. A
  * non-`HttpError` (an unexpected throw) always is. An `HttpError` is a
  * deliberate response, reported only when it wraps a `cause`, the fault
- * behind it. A `TimelineUnavailableError` never is: PostHog could not be
+ * behind it. A `PosthogUnavailableError` never is: PostHog could not be
  * asked or did not answer usably, and its thrower already logged why. Below 500,
  * nothing is.
  * @param error - The error `errorHandler` received.
@@ -552,7 +552,7 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
  * @returns True when the error is reported.
  */
 export function shouldCaptureHttpError(error: unknown, status: number): boolean {
-  if (status < 500 || error instanceof TimelineUnavailableError) return false
+  if (status < 500 || error instanceof PosthogUnavailableError) return false
   if (error instanceof HttpError) return error.cause !== undefined && error.cause !== null
   return true
 }

@@ -581,7 +581,7 @@ lock.
 `audit_logs` records every tenant, settings, member and invitation change in the
 same transaction as the change, platform joins and grants, every staff action on
 a user, a tenant, an email or a suppression, each staff step-up, staff visits,
-and throttled staff reads of a timeline, an errors view or a flag evaluation.
+and throttled staff reads of a flag evaluation.
 Each action's metadata has a strict schema (`src/constants/audit.constants.ts`);
 invitation entries keep the address's domain, never the address or the token. A
 `BEFORE UPDATE OR DELETE` trigger refuses every update and delete except the
@@ -727,9 +727,8 @@ The refresh cookie does not depend on it.
 ## Analytics and error tracking privacy
 
 With `POSTHOG_PROJECT_KEY` unset, no event reaches PostHog and the collect
-proxy answers 503 (`src/configs/analytics.config.ts`). The staff timeline and
-Errors reads and the deletion of purged users use the personal API key
-instead, and run whenever `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`
+proxy answers 503 (`src/configs/analytics.config.ts`). The deletion of purged
+users and `pnpm flags:sync` use the personal API key instead, and run whenever `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`
 are set.
 
 ### The analytics proxy
@@ -764,10 +763,9 @@ unread (`src/routes/analytics-proxy.routes.ts`).
 - **Server events are signed; browser events are client-reported.** The project
   key is public, so anyone can send PostHog any event under any `distinct_id`.
   Every server event carries `server_sig`, an HMAC keyed from `SESSION_SECRET`
-  (`src/services/analytics/analytics-signature.service.ts`), and the staff
-  timelines trust a row's source, access and target only when it verifies.
-  **Accepted risk:** PostHog's own UI shows forged events, and a flood of them
-  can push real rows onto later timeline pages. A request's `traceparent` is
+  (`src/services/analytics/analytics-signature.service.ts`), and a reader of
+  PostHog's events trusts a row's source, access and target only when it
+  verifies. **Accepted risk:** PostHog's own UI shows forged events. A request's `traceparent` is
   the client's choice; a trace id correlates and authorizes nothing.
 
 ### Error tracking: what reaches PostHog
@@ -786,7 +784,7 @@ not through the outbox, since errors often arrive while the database is down
   then sent, scrubbed), never its own keys or values
   (`src/services/errors/error-event.service.ts`).
 - **What is not reported.** Any 4xx, a client that went away, an `HttpError`
-  5xx with no `cause`, and a timeline that PostHog could not answer.
+  5xx with no `cause`, and a call to PostHog's private API that PostHog could not answer.
 - **Everything sent is scrubbed first.** `scrubText`
   (`src/services/errors/error-scrubber.service.ts`) removes addresses, IPs,
   `+`-prefixed phone numbers, JWTs and vendor keys, URL logins, query strings
@@ -807,12 +805,6 @@ not through the outbox, since errors often arrive while the database is down
   quoted pair value glued to more text or split by a line break. Regex
   scrubbing is best-effort: keep secrets and personal data out of error
   messages.
-- **`$exception` events are signed too.** The staff Errors views verify the most
-  recent event of each issue and scrub its type and message again, because a
-  forged browser event can carry anything
-  (`src/services/analytics/errors-mapper.service.ts`). **Accepted risk:** a
-  forged event newer than an issue's real ones can mask its latest type and
-  message in the staff view, which then marks the row unverified.
 - **`/health` and `/health/ready` are public.** `/health` names the release
   (`APP_VERSION`); a private fork that treats its commit sha as sensitive drops
   it in `src/app.ts`. `/health/ready` names which of `database`, `redis` and
@@ -846,8 +838,8 @@ fails a write route with no limiter.
 - **A scale for end-to-end runs, local only.** `RATE_LIMIT_SCALE` (1 to 100,
   unset meaning 1) multiplies the limit of every limiter `createRateLimiter`
   builds from its `RATE_LIMITS` spec; windows and keys stay as they are. Not
-  scaled: an explicit override (`platform-timeline`, through
-  `TIMELINE_REQUESTS_PER_MINUTE`) and the counters outside `RATE_LIMITS` (mail
+  scaled: an explicit override (`flag-evaluate`, through
+  `FLAG_EVALUATE_REQUESTS_PER_MINUTE`) and the counters outside `RATE_LIMITS` (mail
   cooldowns, the invitation recipient ceiling, the SSE stream cap). It exists because an end-to-end run sends every request from one IP
   and spends the per-IP budgets of several suites at once. Boot refuses any
   value but 1 unless `APP_ENV` is `local` (`assertEnvConsistent`,
