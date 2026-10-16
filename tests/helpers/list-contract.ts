@@ -80,11 +80,16 @@ export interface ListContract {
    */
   defaultSort?: (filters: Record<string, string>) => string
   /**
+   * Sorts whose key values are unique across the seed (a flag's `key`): they skip the tie requirement and still need at least 2 distinct values.
+   */
+  uniqueKeys?: readonly string[]
+  /**
    * Creates what every case needs (a caller, a tenant), once.
    */
   setup: () => Promise<void>
   /**
    * Inserts `count` rows that `isolate` selects, in one statement.
+   * Time sorts need distinct `created_at` offsets with at least one repeat; text sorts must seed values that differ in alphanumerics, because the database collation and the suite's code-unit compare disagree on punctuation.
    */
   seed: (count: number) => Promise<void>
   /**
@@ -214,6 +219,17 @@ function tampered(cursor: string): string {
 }
 
 /**
+ * The sort a request without `sort` gets, given the filters it carries on
+ * top of the contract's isolation.
+ * @param contract - The list.
+ * @param query - The request's filter params.
+ * @returns The default sort.
+ */
+function defaultFor(contract: ListContract, query: Record<string, string>): string {
+  return contract.defaultSort?.({ ...contract.isolate(), ...query }) ?? contract.sorts[0]
+}
+
+/**
  * Compare two sort keys.
  * @param left - One key.
  * @param right - The other.
@@ -267,7 +283,9 @@ function expectVariedSeed(contract: ListContract, sort: string, items: readonly 
     distinct,
     `sort=${sort}: the seed gives the key fewer than 2 distinct values`
   ).toBeGreaterThan(1)
-  expect(distinct, `sort=${sort}: the seed gives the key no tie`).toBeLessThan(keys.length)
+  if (contract.uniqueKeys?.includes(sort) !== true) {
+    expect(distinct, `sort=${sort}: the seed gives the key no tie`).toBeLessThan(keys.length)
+  }
 }
 
 /**
@@ -338,7 +356,7 @@ export function describeListContract(contract: ListContract): void {
       })
 
       it('reads the default sort when none is given', async () => {
-        const defaultSort = contract.defaultSort?.({}) ?? contract.sorts[0]
+        const defaultSort = defaultFor(contract, {})
         const unsorted = await pageOf(contract, { limit: '100' })
         expectOrdered(contract, defaultSort, unsorted.items)
         expect(unsorted.items.map((item) => idOf(contract, item))).toEqual(wholes.get(defaultSort))
@@ -354,9 +372,7 @@ export function describeListContract(contract: ListContract): void {
         for (const filter of filters) {
           const found = await pageOf(contract, { ...filter.query, limit: '100' })
           expect(found.items, JSON.stringify(filter.query)).toHaveLength(filter.count)
-          if (contract.defaultSort !== undefined) {
-            expectOrdered(contract, contract.defaultSort(filter.query), found.items)
-          }
+          expectOrdered(contract, defaultFor(contract, filter.query), found.items)
         }
       })
 
@@ -421,7 +437,7 @@ export function describeListContract(contract: ListContract): void {
         })
       })
 
-      const otherSort = contract.sorts[1]
+      const otherSort = contract.sorts.find((sort) => sort !== defaultFor(contract, {}))
       if (otherSort === undefined) {
         // eslint-disable-next-line sonarjs/assertions-in-tests -- a skip that names why this list has nothing to replay
         it.skip('refuses a cursor replayed under another sort (the list has one sort)', () => {})
