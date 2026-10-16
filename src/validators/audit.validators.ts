@@ -2,14 +2,14 @@
  * @file Query shapes for the tenant and platform audit-log reads, on the shared list params.
  */
 import { z } from 'zod'
-import { AUDIT_ACCESS_KINDS, AUDIT_ACTION_NAMES } from '@/constants/audit.constants'
+import { AUDIT_ACCESS_KINDS, STORED_AUDIT_ACTION_NAMES } from '@/constants/audit.constants'
 import { listFilter, listParamsSchema } from '@/validators/list.validators'
 
 /**
  * The filters both audit-log reads take: actions and access paths as comma lists, and one actor.
  */
 const auditFilters = {
-  action: listFilter('action', AUDIT_ACTION_NAMES).optional(),
+  action: listFilter('action', STORED_AUDIT_ACTION_NAMES).optional(),
   actor: z.uuid('actor must be a valid UUID.').optional(),
   access: listFilter('access', AUDIT_ACCESS_KINDS).optional(),
 }

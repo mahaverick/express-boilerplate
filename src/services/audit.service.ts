@@ -12,7 +12,7 @@ import {
   type AuditMetadata,
 } from '@/constants/audit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
-import type { AuditLog } from '@/database/models/audit-log.model'
+import type { AuditLog, WrittenAuditLog } from '@/database/models/audit-log.model'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { AuditLogRepository, type AuditLogListRow } from '@/repositories/audit-log.repository'
 import { enqueueAuditAnalytics } from '@/services/analytics/analytics-outbox.service'
@@ -88,7 +88,9 @@ async function writeEntry(entry: AuditEntry, executor: DbExecutor): Promise<Audi
     },
     executor
   )
-  await enqueueAuditAnalytics(inserted, executor)
+  // Inserted with `entry.action`, a written action, so the stored union narrows back to it.
+  const written = inserted as WrittenAuditLog
+  await enqueueAuditAnalytics(written, executor)
   return inserted
 }
 

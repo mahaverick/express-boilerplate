@@ -245,6 +245,31 @@ export type AuditAction = keyof typeof AUDIT_ACTIONS
 export const AUDIT_ACTION_NAMES = Object.keys(AUDIT_ACTIONS) as [AuditAction, ...AuditAction[]]
 
 /**
+ * Actions no build writes any more, whose rows stay in `audit_logs` (retention
+ * keeps the log forever by default). They are listed and filterable, never
+ * written.
+ */
+export const RETIRED_AUDIT_ACTIONS = [
+  'user.timeline_viewed',
+  'tenant.timeline_viewed',
+  'user.errors_viewed',
+  'tenant.errors_viewed',
+] as const
+
+/**
+ * Every action a stored row may hold: the written actions and the retired ones.
+ */
+export type StoredAuditAction = AuditAction | (typeof RETIRED_AUDIT_ACTIONS)[number]
+
+/**
+ * The stored actions, as a non-empty tuple for `z.enum`: what a list filter accepts.
+ */
+export const STORED_AUDIT_ACTION_NAMES: [StoredAuditAction, ...StoredAuditAction[]] = [
+  ...AUDIT_ACTION_NAMES,
+  ...RETIRED_AUDIT_ACTIONS,
+]
+
+/**
  * The metadata shape one action requires.
  */
 export type AuditMetadata<TAction extends AuditAction> = z.infer<

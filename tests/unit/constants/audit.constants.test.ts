@@ -12,8 +12,11 @@ import {
   AUDIT_ACTOR_KINDS,
   AUDIT_TARGET_TYPES,
   PLATFORM_ACCESS_DEDUPE_SECONDS,
+  RETIRED_AUDIT_ACTIONS,
+  STORED_AUDIT_ACTION_NAMES,
   type AuditAction,
 } from '@/constants/audit.constants'
+import type { AuditEntry } from '@/services/audit.service'
 
 // A valid metadata object per action, written out so a shape change fails here.
 const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
@@ -84,6 +87,19 @@ const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
 const ACTIONS_WITH_METADATA_KEYS = ACTIONS.filter(
   (action) => Object.keys(VALID_METADATA[action]).length > 0
 )
+
+/**
+ * Never called: it exists so the compiler checks the entry type.
+ */
+const retiredEntry = (): AuditEntry => ({
+  // @ts-expect-error -- a retired action is not an AuditEntry action
+  action: 'user.errors_viewed',
+  actor: 'system',
+  access: 'platform',
+  tenantId: 'tenant',
+  targetId: 'target',
+  metadata: {},
+})
 
 describe('AUDIT_ACTIONS', () => {
   it('lists exactly the actions of the API contract', () => {
@@ -337,5 +353,29 @@ describe('audit value sets', () => {
     const schema = z.enum(AUDIT_ACTION_NAMES)
     for (const action of ACTIONS) expect(schema.safeParse(action).success).toBe(true)
     expect(schema.safeParse('not.an.action').success).toBe(false)
+  })
+
+  describe('retired actions', () => {
+    it('are stored and filterable but not written', () => {
+      expect(RETIRED_AUDIT_ACTIONS).toEqual([
+        'user.timeline_viewed',
+        'tenant.timeline_viewed',
+        'user.errors_viewed',
+        'tenant.errors_viewed',
+      ])
+      for (const action of RETIRED_AUDIT_ACTIONS) {
+        expect(Object.hasOwn(AUDIT_ACTIONS, action)).toBe(false)
+        expect(AUDIT_ACTION_NAMES).not.toContain(action)
+        expect(STORED_AUDIT_ACTION_NAMES).toContain(action)
+        expect(action).toMatch(/^[a-z]+(\.[a-z_]+)+$/)
+      }
+      expect(STORED_AUDIT_ACTION_NAMES).toHaveLength(
+        AUDIT_ACTION_NAMES.length + RETIRED_AUDIT_ACTIONS.length
+      )
+    })
+
+    it('cannot be recorded: an entry for one does not type-check', () => {
+      expect(typeof retiredEntry).toBe('function')
+    })
   })
 })

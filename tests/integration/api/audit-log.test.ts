@@ -553,6 +553,28 @@ describe('audit-log reads', () => {
       expect(byAction.items.map((entry) => entry.id)).toEqual([staffRow])
     })
 
+    it('filters by a retired action name, which stored rows still hold', async () => {
+      const { token } = await staff('admin')
+      const { tenant } = await createTenant()
+      const retired = await insertRow({
+        tenantId: tenant.id,
+        access: 'platform',
+        action: 'user.timeline_viewed',
+        metadata: { range: '7d', view: 'all' },
+      })
+      await insertRow({ tenantId: tenant.id })
+
+      const response = await readPlatformLog(token, {
+        action: 'user.timeline_viewed',
+        tenant: tenant.id,
+      })
+
+      expect(response.status).toBe(200)
+      const page = pageOf(response)
+      expect(page.items.map((entry) => entry.id)).toEqual([retired])
+      expect(page.items[0]?.action).toBe('user.timeline_viewed')
+    })
+
     it.each([
       ['access', 'everyone'],
       ['tenant', 'not-a-uuid'],

@@ -651,6 +651,24 @@ describe('GET /platform/flags/evaluate', () => {
   })
 })
 
+describe('the flag-evaluate limiter', () => {
+  it('answers 429 RATE_LIMITED past 20 evaluations a minute for one staff member', async () => {
+    const { userId } = await memberWithTenant()
+    const { token } = await createTrackedStaff('admin')
+
+    const statuses: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const response = await staffGet(token, `/flags/evaluate?userId=${userId}&app=react`)
+      statuses.push(response.status)
+    }
+    const refused = await staffGet(token, `/flags/evaluate?userId=${userId}&app=react`)
+
+    expect(statuses.every((status) => status === 200)).toBe(true)
+    expect(refused.status).toBe(429)
+    expect((refused.body as { code?: string }).code).toBe('RATE_LIMITED')
+  })
+})
+
 describe('GET /platform/flags/evaluate refusals', () => {
   it('names errors.tenantId on the apex+tenant 400, and audits nothing', async () => {
     const { userId, tenantId } = await memberWithTenant()

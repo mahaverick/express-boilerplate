@@ -8,7 +8,7 @@
  */
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
-import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
+import type { AuditAccess, StoredAuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
@@ -61,7 +61,7 @@ export interface AuditLogFilters {
   tenantId?: string | undefined
   actorUserId?: string | undefined
   targetId?: string | undefined
-  actions?: AuditAction[] | undefined
+  actions?: StoredAuditAction[] | undefined
   access?: AuditAccess[] | undefined
   /**
   Which read this is. A `tenant` read is of one tenant's own log: search then matches only the entry's own tenant as a target and never a user target's email, since the entry can name a target outside the tenant (a staff action filed under it). A `platform` read searches every target. Required, so a new caller must choose.

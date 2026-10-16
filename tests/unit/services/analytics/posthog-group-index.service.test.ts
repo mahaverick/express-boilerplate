@@ -112,14 +112,51 @@ describe('tenantGroupTypeIndex', () => {
     expect(await tenantGroupTypeIndex()).toBe(0)
   })
 
-  it('throws on a 401, logged at error as a misconfiguration', async () => {
-    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
-    posthog().groupTypesStatus = 401
+  it.each([
+    [400, 'error', 'PostHog rejected a private API call'],
+    [401, 'error', 'PostHog key or project misconfigured'],
+    [403, 'error', 'PostHog key or project misconfigured'],
+    [404, 'error', 'PostHog key or project misconfigured'],
+    [429, 'warn', 'PostHog refused a private API call'],
+    [500, 'warn', 'PostHog refused a private API call'],
+    [502, 'warn', 'PostHog refused a private API call'],
+  ] as const)('logs a %i at %s with "%s"', async (status, level, message) => {
+    const logged = vi.spyOn(logger, level).mockImplementation(() => {})
+    const other = vi
+      .spyOn(logger, level === 'error' ? 'warn' : 'error')
+      .mockImplementation(() => {})
+    posthog().groupTypesStatus = status
 
     await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
-    expect(error).toHaveBeenCalledWith('PostHog key or project misconfigured', {
+
+    expect(logged).toHaveBeenCalledWith(message, { operation: 'group types', status })
+    expect(other).not.toHaveBeenCalled()
+  })
+
+  it('logs a network failure at warn as an unanswered call', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    target.host = 'http://127.0.0.1:1'
+
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
+
+    expect(warn).toHaveBeenCalledWith('PostHog did not answer a private API call', {
       operation: 'group types',
-      status: 401,
+      outcome: 'network',
+    })
+    target.host = posthog().url
+  })
+
+  it('logs a timeout at warn as an unanswered call', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
+      new DOMException('The operation timed out.', 'TimeoutError')
+    )
+
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
+
+    expect(warn).toHaveBeenCalledWith('PostHog did not answer a private API call', {
+      operation: 'group types',
+      outcome: 'timeout',
     })
   })
 

@@ -1,9 +1,8 @@
 /**
  * @file The signer and the verifier read an event the same way. Each event is
  * signed by the real `toPosthogBatchEvent`, then its fields are read back by
- * `signedFieldsOf` from the properties PostHog would hold (an absent property
- * as `''`, as PostHog reads it) and checked by `isAnalyticsSignatureValid`.
- * No database is involved.
+ * `signedFieldsOf` from the properties it sent and checked by
+ * `isAnalyticsSignatureValid`. No database is involved.
  */
 import { describe, expect, it } from 'vitest'
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
@@ -72,6 +71,15 @@ describe('a signed event read back by the verifier', () => {
     ['a row with a numeric target_id', numeric],
   ])('verifies %s', (_name, sent) => {
     expect(isVerified(sent)).toBe(true)
+  })
+
+  it('signs a numeric target_id as absent', () => {
+    const fields = signedFieldsOf(
+      { uuid: numeric.uuid, event: numeric.event, distinctId: numeric.distinct_id },
+      numeric.properties
+    )
+    expect(fields.targetId).toBeNull()
+    expect(fields.targetType).toBe('user')
   })
 
   it('reads a changed target_id as unverified', () => {
