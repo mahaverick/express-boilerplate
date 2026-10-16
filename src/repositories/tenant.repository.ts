@@ -72,7 +72,7 @@ function myTenantList(userId: string, search: string | undefined, filters: RoleF
     base: (executor, seek) =>
       executor
         .select({
-          id: userMembershipModel.id,
+          id: userMembershipModel.tenantId,
           tenant: tenantModel,
           role: userMembershipModel.role,
           joinedAt: userMembershipModel.createdAt,
@@ -93,7 +93,8 @@ function myTenantList(userId: string, search: string | undefined, filters: RoleF
           )
         )
         .$dynamic(),
-    id: userMembershipModel.id,
+    // Unique for one user (user_id, tenant_id), and the tenant id the item shows.
+    id: userMembershipModel.tenantId,
     sorts: {
       name: [textSort(sql`lower(${tenantModel.name})`, 'asc', 'sortName')],
       '-joined': [timestampSort(userMembershipModel.createdAt, 'desc', 'sortJoined')],

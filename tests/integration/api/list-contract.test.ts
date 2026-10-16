@@ -584,13 +584,14 @@ for (const route of ['platform', 'tenant'] as const) {
 
 /**
  * The tenant each tenant-scoped block reads, its owner, and that owner's token,
- * with a second tenant and owner for the cursor replay across paths.
+ * with a second tenant the same owner owns, so a cursor replayed there can
+ * only be refused for the tenant it is bound to.
  */
-const owned = { tenantId: '', slug: '', ownerToken: '', ownerId: '', otherSlug: '', otherToken: '' }
+const owned = { tenantId: '', slug: '', ownerToken: '', ownerId: '', otherSlug: '' }
 
 /**
  * Create a tenant owned by a fresh user (the owner's membership is the one
- * row seed() does not insert), and a second tenant with its own owner.
+ * row seed() does not insert), and a second tenant with the same owner.
  */
 async function createOwnedTenant(): Promise<void> {
   const owner = await createTrackedUser()
@@ -599,11 +600,10 @@ async function createOwnedTenant(): Promise<void> {
     slug: `${tag}-ow-${randomUUID().slice(0, 6)}`,
     ownerId: owner.id,
   })
-  const otherOwner = await createTrackedUser()
   const other = await new TenantRepository().create({
     name: `${tag} other owned`,
     slug: `${tag}-oo-${randomUUID().slice(0, 6)}`,
-    ownerId: otherOwner.id,
+    ownerId: owner.id,
   })
   Object.assign(owned, {
     tenantId: tenant.id,
@@ -611,7 +611,6 @@ async function createOwnedTenant(): Promise<void> {
     ownerToken: tokenFor(owner),
     ownerId: owner.id,
     otherSlug: other.slug,
-    otherToken: tokenFor(otherOwner),
   })
 }
 
@@ -658,7 +657,7 @@ describeListContract({
   // The rows depend on the path tenant, which is not a query param.
   otherScope: {
     path: () => `/api/v1/tenants/${owned.otherSlug}/members`,
-    headers: () => ({ Authorization: `Bearer ${owned.otherToken}` }),
+    headers: () => ({ Authorization: `Bearer ${owned.ownerToken}` }),
   },
   sorts: ['name', 'email', 'role', '-joined'],
   order: {
@@ -694,14 +693,12 @@ describeListContract({
       'first_name'
     )} returning id`
     const memberships = users.map((user, index) => ({
-      // The membership id is the user id, so the id that breaks ties is the one the items show.
-      id: user.id,
       user_id: user.id,
       tenant_id: owned.tenantId,
       role: SEEDED_ROLES[index % SEEDED_ROLES.length],
       created_at: joinedAtOf(now, index),
     }))
-    await sql`insert into user_memberships ${sql(memberships, 'id', 'user_id', 'tenant_id', 'role', 'created_at')}`
+    await sql`insert into user_memberships ${sql(memberships, 'user_id', 'tenant_id', 'role', 'created_at')}`
   },
   clear: async () => {
     await sql`delete from users where email like ${like.members}`
@@ -724,7 +721,7 @@ describeListContract({
   isolate: () => ({}),
   otherScope: {
     path: () => `/api/v1/tenants/${owned.otherSlug}/invitations`,
-    headers: () => ({ Authorization: `Bearer ${owned.otherToken}` }),
+    headers: () => ({ Authorization: `Bearer ${owned.ownerToken}` }),
   },
   sorts: ['-created', 'email'],
   order: {
@@ -803,14 +800,12 @@ describeListContract({
       'slug'
     )} returning id`
     const memberships = tenants.map((tenant, index) => ({
-      // The membership id is the tenant id, so the id that breaks ties is the one the items show.
-      id: tenant.id,
       user_id: member.id,
       tenant_id: tenant.id,
       role: index === 0 ? 'owner' : SEEDED_ROLES[index % SEEDED_ROLES.length],
       created_at: joinedAtOf(now, index),
     }))
-    await sql`insert into user_memberships ${sql(memberships, 'id', 'user_id', 'tenant_id', 'role', 'created_at')}`
+    await sql`insert into user_memberships ${sql(memberships, 'user_id', 'tenant_id', 'role', 'created_at')}`
   },
   clear: async () => {
     await sql`delete from tenants where slug like ${like.myTenants}`

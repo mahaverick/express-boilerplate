@@ -142,8 +142,9 @@ class TenantController extends BaseController {
    * included, never learn that a co-member was deactivated. A client treats
    * a missing `active` as active.
    *
-   * `role=owner` lists the owners the last-owner rule counts, the 409 on
-   * demoting, removing or leaving as an owner: it refuses unless another
+   * The list is paged (send `limit=100`, or follow `nextCursor`), and
+   * `role=owner` lists the owners the last-owner rule counts: the 409 on
+   * demoting, removing or leaving as an owner refuses unless another
    * listed owner remains. On a customer tenant any listed owner counts,
    * deactivated or not (`countOwners`); on the platform tenant only one
    * whose `user.active` is true (`countActiveOwners`).

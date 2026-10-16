@@ -274,25 +274,58 @@ describe('UserMembershipRepository', () => {
       expect(items.map((row) => row.user.firstName)).toEqual([`${tag}c`, `${tag}a`])
     })
 
-    it('sorts owner first by role, then by display name within a role', async () => {
+    it('sorts owner first by role, and breaks a tie between equal roles by membership id', async () => {
       const owner = await createUser({ firstName: 'Zed' })
       const tenant = await createTenant(owner.id)
       const viewer = await createUser({ firstName: 'Amy' })
-      const admin = await createUser({ firstName: 'Max' })
+      const lateAdmin = await createUser({ firstName: 'Zoe' })
+      const earlyAdmin = await createUser({ firstName: 'Bob' })
       await userMembershipRepository.create({
         userId: viewer.id,
         tenantId: tenant.id,
         role: 'viewer',
       })
-      await userMembershipRepository.create({
-        userId: admin.id,
+      const first = await userMembershipRepository.create({
+        userId: lateAdmin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
+      const second = await userMembershipRepository.create({
+        userId: earlyAdmin.id,
         tenantId: tenant.id,
         role: 'admin',
       })
 
       const { items } = await listPageFor(tenant.id, { sort: 'role' })
 
-      expect(items.map((row) => row.membership.role)).toEqual(['owner', 'admin', 'viewer'])
+      // Both admins rank alike, so the earlier membership id comes first although its name sorts later.
+      expect(first.id < second.id).toBe(true)
+      expect(items.map((row) => row.user.id)).toEqual([
+        owner.id,
+        lateAdmin.id,
+        earlyAdmin.id,
+        viewer.id,
+      ])
+    })
+
+    it('finds a member by full name as well as by email or either name', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+      const ada = await createUser({ firstName: 'Ada', lastName: 'Lovelace' })
+      const alan = await createUser({ firstName: 'Alan', lastName: 'Turing' })
+      for (const member of [ada, alan]) {
+        await userMembershipRepository.create({ userId: member.id, tenantId: tenant.id })
+      }
+
+      for (const search of ['ada lovelace', 'Ada Love', 'lovelace', 'ada', ada.email]) {
+        const { items } = await listPageFor(tenant.id, { search })
+        expect(
+          items.map((row) => row.user.id),
+          search
+        ).toEqual([ada.id])
+      }
+      const { items } = await listPageFor(tenant.id, { search: 'ada turing' })
+      expect(items).toEqual([])
     })
 
     it('leaves out a member whose account is soft-deleted', async () => {

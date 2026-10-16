@@ -30,7 +30,7 @@ import {
 } from '@/utilities/list-page.utilities'
 
 /**
- * One `user_memberships` row for `listByTenant`, joined with the subset of
+ * One `user_memberships` row of a tenant's member list (`listByTenant`, `listPageByTenant`), joined with the subset of
  * its user's columns safe to return over the wire.
  */
 export interface MembershipWithUser {
@@ -63,7 +63,8 @@ const memberSortName = sql<string>`lower(coalesce(nullif(trim(concat_ws(' ', ${u
 /**
  * One tenant's live members, searched by email and both names. Sorting by
  * name or email reads the user row, so those sorts are bounded by the
- * tenant's member count rather than ordered by an index. Its cursors are
+ * tenant's member count rather than ordered by an index. `search` matches the
+ * display name (so a full name finds its member), the email and each name. Its cursors are
  * bound to the tenant.
  * @param tenantId - The tenant.
  * @param search - The parsed search, or undefined.
@@ -99,6 +100,7 @@ function memberList(tenantId: string, search: string | undefined, filters: RoleF
               ? undefined
               : inArray(userMembershipModel.role, filters.roles),
             searchCondition(search, [
+              memberSortName,
               sql`lower(${userModel.email})`,
               sql`lower(${userModel.firstName})`,
               sql`lower(${userModel.lastName})`,
@@ -275,8 +277,8 @@ export class UserMembershipRepository {
 
   /**
    * Every tenant one user is a member of, with the full membership row and the
-   * tenant. `TenantRepository.listForUser` answers the same question with only
-   * the role. A soft-deleted tenant is excluded.
+   * tenant. `TenantRepository.listForUser` pages the same question with the role
+   * and join time only. A soft-deleted tenant is excluded.
    * @param userId - The user whose memberships to list.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per (still visible) tenant this user belongs to, in no particular guaranteed order.
