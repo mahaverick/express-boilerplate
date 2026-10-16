@@ -482,6 +482,10 @@ export interface InMemoryListDefinition<Row, Item> {
   idValue: z.ZodType<CursorKey>
   sorts: Readonly<Record<string, readonly InMemorySortDef<Row>[]>>
   toItem: (row: Row) => Item
+  /**
+   * Values the list's cursors are bound to, folded into the scope as the SQL lists do; none when absent.
+   */
+  bound?: Readonly<Record<string, string>>
 }
 
 /**
@@ -571,9 +575,13 @@ export function listPageInMemory<Row, Item>(
   definition: InMemoryListDefinition<Row, Item>,
   params: ListParams
 ): ListPage<Item> {
+  const scoped =
+    definition.bound === undefined
+      ? params
+      : { ...params, scope: bindScope(params.scope, definition.bound) }
   const page =
-    readMemoryPage(rows, definition, params) ??
-    readMemoryPage(rows, definition, edgeRequest(params))
+    readMemoryPage(rows, definition, scoped) ??
+    readMemoryPage(rows, definition, edgeRequest(scoped))
   if (page === undefined) throw new Error('an edge page read has no cursor to find empty')
   return params.total ? { ...page, total: cappedTotal(rows.length) } : page
 }

@@ -10,14 +10,28 @@
 import type { FlagApp, FlagScope, FlagState } from '@/types/flags'
 
 /**
+ * Every `FlagState` as a key; the record type makes a state added to the union
+ * without an entry here a compile error.
+ */
+const FLAG_STATE_SET = {
+  active: true,
+  inactive: true,
+  missing: true,
+  unsupported: true,
+} as const satisfies Record<FlagState, true>
+
+/**
  * Every state a registered flag can be in, as the flags list filters on them.
  */
-export const FLAG_STATES = [
-  'active',
-  'inactive',
-  'missing',
-  'unsupported',
-] as const satisfies readonly FlagState[]
+export const FLAG_STATES = Object.keys(FLAG_STATE_SET) as [FlagState, ...FlagState[]]
+
+/**
+ * The longest key PostHog allows a feature flag, and so the longest the
+ * definitions snapshot accepts. A cursor carrying one (at most six bytes of
+ * JSON escape per character, then base64) stays within the 4096-character
+ * cursor cap.
+ */
+export const POSTHOG_FLAG_KEY_MAX = 400
 
 /**
  * A flag key: snake_case, starting with a letter.

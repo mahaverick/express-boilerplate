@@ -939,9 +939,10 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
 - **Inspector.** `GET /platform/flags` pages the registry with each flag's
   live state, `GET /platform/flags/unregistered` pages the flags PostHog has
   that the registry lacks, and `GET /platform/flags/meta` carries the traits
-  reference and the snapshot's age; `GET /platform/flags/evaluate` answers one user's traits and values, the one
-  place traits leave the server, so each read is audited as
-  `user.flags_evaluated` before anything is evaluated. Neither calls PostHog.
+  reference and the snapshot's age; `GET /platform/flags/evaluate` answers
+  one user's traits and values, the one place traits leave the server, so each
+  read is audited as `user.flags_evaluated` before anything is evaluated. None
+  of them calls PostHog.
 - **Kill-switch latency.** An edit in PostHog reaches every process on the next
   30 s fetch and its `reload` message, or the 60 s backstop. The fetch shares
   the one-at-a-time `analytics` Worker with the drain and the deletion tick, so

@@ -176,6 +176,45 @@ describe('a list with bound values', () => {
   })
 })
 
+/**
+ * The in-memory test list bound to `list`.
+ * @param list - The bound value.
+ * @returns The definition.
+ */
+function boundTo(list: string): InMemoryListDefinition<Row, string> {
+  return { ...memory, bound: { list } }
+}
+
+describe('an in-memory list with bound values', () => {
+  const params = memorySchema.parse({ limit: '2' }).params
+
+  it('accepts a cursor issued under the same bound value', () => {
+    const first = listPageInMemory(rows, boundTo('a'), params)
+    const next = { ...params, cursor: String(first.page.nextCursor) }
+    expect(listPageInMemory(rows, boundTo('a'), next).items).toEqual(['k2', 'k3'])
+  })
+
+  it('refuses a cursor issued under another bound value, or under none', () => {
+    const fromA = String(listPageInMemory(rows, boundTo('a'), params).page.nextCursor)
+    const unbound = String(listPageInMemory(rows, memory, params).page.nextCursor)
+    expect(() => listPageInMemory(rows, boundTo('b'), { ...params, cursor: fromA })).toThrow(
+      InvalidCursorError
+    )
+    expect(() => listPageInMemory(rows, boundTo('a'), { ...params, cursor: unbound })).toThrow(
+      InvalidCursorError
+    )
+  })
+
+  it('leaves a list without bound values on the plain scope', () => {
+    const cursor = signCursor('key', params.scope, ['k1'])
+    expect(listPageInMemory(rows, memory, { ...params, cursor }).items).toEqual(['k2', 'k3'])
+    const boundCursor = signCursor('key', bindScope(params.scope, { list: 'a' }), ['k1'])
+    expect(() => listPageInMemory(rows, memory, { ...params, cursor: boundCursor })).toThrow(
+      InvalidCursorError
+    )
+  })
+})
+
 describe('searchCondition', () => {
   it('matches each expression as a literal substring, wildcards escaped', () => {
     const condition = searchCondition('50%_\\', [sql.raw('lower(name)'), sql.raw('slug')])

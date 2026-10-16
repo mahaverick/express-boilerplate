@@ -3,7 +3,8 @@
  * the real app and snapshot store. The registry list joins the registry with the snapshot (each
  * state, the condition summary, PostHog links, the kind and state filters under a search), the
  * unregistered list pages the flags PostHog has that the registry lacks, and meta carries the
- * traits and the snapshot block (its age and staleness); none calls PostHog. Evaluate answers one user's traits and every flag's value and reason, a holdout's
+ * traits and the snapshot block (its age and staleness); none calls PostHog. Evaluate answers one
+ * user's traits and every flag's value and reason, a holdout's
  * recorded variant included, after its gates: 404 for an unknown user, 400 for a tenant the user
  * isn't in or a tenant with `app=apex`. It is audited once per staff member, user, tenant and app
  * per throttle window. Flags are switched on with a mock; the project id and app host come from a
@@ -33,6 +34,7 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
 })
 
 const { createApp } = await import('@/app')
+const { FLAG_SNAPSHOT_STALE_MS, POSTHOG_FLAG_KEY_MAX } = await import('@/constants/flags.constants')
 const { TenantRepository } = await import('@/repositories/tenant.repository')
 const { sql } = await import('@/services/database.service')
 const { startFlagSnapshot, stopFlagSnapshot } =
@@ -69,9 +71,9 @@ type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 const NONE = null
 
 /**
- * Longer than the snapshot's staleness window, shorter than an access token's life.
+ * Past the snapshot's staleness window, well inside an access token's life.
  */
-const ELEVEN_MINUTES_MS = 11 * 60 * 1000
+const PAST_STALE_MS = FLAG_SNAPSHOT_STALE_MS + 60_000
 
 const app = createApp()
 const tenantRepository = new TenantRepository()
@@ -304,6 +306,53 @@ describe('GET /platform/flags/unregistered', () => {
     expect(page).toMatchObject({ hasNext: false, hasPrev: false })
   })
 
+  it('pages a key of the longest length PostHog allows across a page boundary', async () => {
+    const longKey = 'a'.repeat(POSTHOG_FLAG_KEY_MAX)
+    await loadFlagDefinitions([flagDefinition(longKey), flagDefinition('b_probe_flag')])
+    const { token } = await createTrackedStaff('viewer')
+
+    const first = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered?limit=1'))
+    const second = await staffGet(
+      token,
+      `/flags/unregistered?limit=1&cursor=${String(first.page.nextCursor)}`
+    )
+    const back = await staffGet(
+      token,
+      `/flags/unregistered?limit=1&direction=prev&cursor=${String(dataOf<UnregisteredList>(second).page.prevCursor)}`
+    )
+
+    expect(first.items.map((item) => item.key)).toEqual([longKey])
+    expect(dataOf<UnregisteredList>(second).items.map((item) => item.key)).toEqual(['b_probe_flag'])
+    expect(dataOf<UnregisteredList>(back).items.map((item) => item.key)).toEqual([longKey])
+  })
+
+  it('refuses a cursor from the registry list, and the registry list one from this list', async () => {
+    await loadFlagDefinitions([flagDefinition('a_probe_flag'), flagDefinition('b_probe_flag')])
+    const { token } = await createTrackedStaff('viewer')
+    const registry = dataOf<FlagsList>(await staffGet(token, '/flags?limit=1'))
+    const unregistered = dataOf<UnregisteredList>(
+      await staffGet(token, '/flags/unregistered?limit=1')
+    )
+
+    const onUnregistered = await staffGet(
+      token,
+      `/flags/unregistered?limit=1&cursor=${String(registry.page.nextCursor)}`
+    )
+    const onRegistry = await staffGet(
+      token,
+      `/flags?limit=1&cursor=${String(unregistered.page.nextCursor)}`
+    )
+
+    for (const response of [onUnregistered, onRegistry]) {
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({
+        message: 'Validation failed',
+        code: 'CURSOR_INVALID',
+        errors: { cursor: ['cursor is invalid.'] },
+      })
+    }
+  })
+
   it('runs the platform-search limiter', async () => {
     const { token } = await createTrackedStaff('viewer')
 
@@ -336,7 +385,7 @@ describe('GET /platform/flags/meta', () => {
   it('reports a snapshot not re-confirmed for ten minutes as stale, its fetchedAt unchanged', async () => {
     const { token } = await createTrackedStaff('viewer')
     const fresh = dataOf<FlagsMeta>(await staffGet(token, '/flags/meta'))
-    vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + ELEVEN_MINUTES_MS) })
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + PAST_STALE_MS) })
 
     const stale = dataOf<FlagsMeta>(await staffGet(token, '/flags/meta'))
 

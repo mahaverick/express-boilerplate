@@ -3,16 +3,21 @@
  * `/platform/flags/unregistered`, `/platform/flags/meta` and
  * `/platform/flags/evaluate`. All read this replica's in-memory definitions
  * snapshot and never call PostHog. The lists join the registry with the
- * snapshot, and meta carries the traits reference and the snapshot's age; evaluate builds one user's (and optionally one
- * tenant's) traits from the database and runs every registered flag through
- * the live evaluator. Evaluate is the one place traits leave the server, so
+ * snapshot, and meta carries the traits reference and the snapshot's age.
+ * Evaluate builds one user's (and optionally one tenant's) traits from the
+ * database and runs every registered flag through the live evaluator. Evaluate is the one place traits leave the server, so
  * it is audited as `user.flags_evaluated`, at most once per staff member,
  * user, tenant and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before
  * anything is evaluated.
  */
 import { z } from 'zod'
 import { posthogFlagUrl } from '@/configs/analytics.config'
-import { FLAG_TRAITS, FLAGS, type FlagEntry } from '@/constants/flags.constants'
+import {
+  FLAG_TRAITS,
+  FLAGS,
+  POSTHOG_FLAG_KEY_MAX,
+  type FlagEntry,
+} from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -93,16 +98,13 @@ function flagRow(entry: FlagEntry, definition: ParsedDefinition | undefined): Fl
 }
 
 /**
- * The longest flag key a cursor may carry.
- */
-const MAX_FLAG_KEY_LENGTH = 200
-
-/**
- * The in-memory flag lists sort on the key alone, which is unique.
+ * The in-memory flag lists sort on the key alone, which is unique, in code-unit
+ * order: the order the cursor seek compares in, so pages never skip or repeat a
+ * key. A key as long as PostHog allows (what the snapshot accepts) fits a cursor.
  */
 const BY_KEY = {
   id: (row: { key: string }) => row.key,
-  idValue: z.string().min(1).max(MAX_FLAG_KEY_LENGTH),
+  idValue: z.string().min(1).max(POSTHOG_FLAG_KEY_MAX),
   sorts: { key: [] },
 } as const
 
@@ -134,7 +136,11 @@ export function listFlags(query: PlatformFlagListQuery): ListPage<FlagRow> {
       (kind === undefined || kind.includes(row.kind)) &&
       (state === undefined || state.includes(row.state))
   )
-  const definition: InMemoryListDefinition<FlagRow, FlagRow> = { ...BY_KEY, toItem: (row) => row }
+  const definition: InMemoryListDefinition<FlagRow, FlagRow> = {
+    ...BY_KEY,
+    bound: { list: 'registry' },
+    toItem: (row) => row,
+  }
   return listPageInMemory(rows, definition, query.params)
 }
 
@@ -155,6 +161,7 @@ export function listUnregisteredFlags(
     .map((flag) => ({ key: flag.key, active: flag.active, posthogUrl: posthogFlagUrl(flag.id) }))
   const definition: InMemoryListDefinition<UnregisteredRow, UnregisteredRow> = {
     ...BY_KEY,
+    bound: { list: 'unregistered' },
     toItem: (row) => row,
   }
   return listPageInMemory(rows, definition, query.params)

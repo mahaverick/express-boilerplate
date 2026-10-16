@@ -2,11 +2,39 @@
  * @file The role gate must run before the limiter: a limiter first would
  * put RateLimit-* headers on the non-staff 404 and reveal the route.
  */
-import type { RequestHandler, Router } from 'express'
-import { describe, expect, it } from 'vitest'
+import type { NextFunction, Request, RequestHandler, Response, Router } from 'express'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { createPlatformRouter } from '@/routes/platform.routes'
+import { getPlatformMembership } from '@/services/platform.service'
+
+vi.mock('@/services/platform.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/platform.service')>()),
+  getPlatformMembership: vi.fn(),
+}))
+
+const lookup = vi.mocked(getPlatformMembership)
+
+/**
+ * Runs a route's first handler for a caller whose platform role is `role`.
+ * @param gate - The handler.
+ * @param role - The caller's platform role, or null for a non-staff user.
+ * @returns The arguments of each `next` call.
+ */
+async function runGate(
+  gate: RequestHandler | undefined,
+  role: 'viewer' | null
+): Promise<unknown[][]> {
+  lookup.mockResolvedValueOnce(role)
+  const next = vi.fn()
+  await gate?.(
+    { user: { id: 'user-1' } } as unknown as Request,
+    { locals: {} } as unknown as Response,
+    next as NextFunction
+  )
+  return next.mock.calls
+}
 
 /**
  * A router layer as these tests read it: a route's path, methods and handler
@@ -44,6 +72,10 @@ function handlersIn(layers: RouteLayer[], method: string, path: string): Request
 }
 
 describe('createPlatformRouter', () => {
+  afterEach(() => {
+    lookup.mockReset()
+  })
+
   it('checks the platform role before the search limiter', () => {
     const [roleGate, limiter, handler] = handlersFor(createPlatformRouter(), 'get', '/tenants')
 
@@ -78,12 +110,15 @@ describe('createPlatformRouter', () => {
 
   it.each(['/flags', '/flags/unregistered', '/flags/meta'])(
     'gates GET %s at the platform role, then the shared search limiter',
-    (path) => {
+    async (path) => {
       const router = createPlatformRouter()
       const handlers = handlersFor(router, 'get', path)
 
       expect(handlers).toHaveLength(3)
-      expect(handlers[0]).not.toHaveProperty('resetKey')
+      expect(await runGate(handlers[0], 'viewer')).toEqual([[]])
+      // eslint-disable-next-line unicorn/no-null -- getPlatformMembership answers null for non-staff
+      const [refusal] = await runGate(handlers[0], null)
+      expect(refusal?.[0]).toMatchObject({ message: 'Not found', statusCode: 404 })
       expect(handlers[1]).toBe(handlersFor(router, 'get', '/tenants')[1])
     }
   )
