@@ -429,13 +429,14 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   `tenant_invitations` until the batch commits, so invitation reads and writes
   wait for the batch.
 
-- **`0026` blocks every read and write on `tenants`, and writes to
-  `users`, `email_messages`, `email_suppressions`, `user_memberships` and
+- **`0026` blocks every read and write on `tenants`, `email_messages` and
+  `user_memberships`, and every write to `users`, `email_suppressions` and
   `tenant_invitations`, until the batch commits.** Its first statements drop
-  two redundant indexes and the two tenant trigram indexes. Each `DROP INDEX`
-  takes an `ACCESS EXCLUSIVE` lock on its table, held to the end of the batch
-  while every other index builds, so every tenant-scoped request waits; each
-  `CREATE INDEX` takes a `SHARE` lock, which blocks writes to its table the
+  one redundant index each on `email_messages` and `user_memberships` and the
+  two tenant trigram indexes. Each `DROP INDEX` takes an `ACCESS EXCLUSIVE`
+  lock on its table, held to the end of the batch while every other index
+  builds, so every tenant-scoped request waits; each `CREATE INDEX` takes a
+  `SHARE` lock, which blocks writes to its table the
   same way. The trigram indexes are rebuilt without their `deleted_at`
   predicate, and the two dropped indexes are prefixes of new ones
   (`email_messages_created_at_idx` of `email_messages_created_sort_idx`,

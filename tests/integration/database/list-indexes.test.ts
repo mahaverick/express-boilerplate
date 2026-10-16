@@ -1,7 +1,8 @@
 /**
  * @file Every whitelisted sort is served by an index: the helper's own page
  * query, EXPLAINed with sequential scans off, names the expected index in
- * its main plan tree, and the node directly under its `Limit` is not a Sort.
+ * its main plan tree, and no line of that tree is a Sort or Incremental
+ * Sort (so none hides under the Limit or below a join).
  * SubPlan and InitPlan blocks (a member count, a platform-role lookup) are
  * left out, since a Sort inside one does not order the page. Where a sibling index on the same leading columns could
  * serve the order with an Incremental Sort on the id (a partial unique
@@ -39,7 +40,7 @@ const ID = '0199c4a2-0000-7000-8000-000000000001'
  * Plan settings for an ordered case: sequential scans, bitmap scans and
  * explicit sorts are off, so on a table of any size the plan can only name
  * the index that hands the rows over in page order; a sort the index cannot
- * avoid still shows under the Limit and fails the case.
+ * avoid still shows as a Sort in the main plan tree and fails the case.
  */
 const ORDERED_OFF = [
   'enable_seqscan',
@@ -433,6 +434,17 @@ describe('list sort indexes', () => {
         lines.filter((line) => /(^|->\s+)(Incremental )?Sort\b/.test(line.trimStart()))
       ).toEqual([])
       expect(lines.join('\n')).toContain(index)
+    }
+  )
+
+  // The seek is a row comparison the index can bound, so it reads as an Index Cond on the expected index, never only a Filter.
+  it.each(seeking)(
+    '%s puts the seek in the index condition',
+    async (_name, query, index, hidden) => {
+      const lines = mainTree(await planFor(query(), { hidden: hidden ?? [], off: ORDERED_OFF }))
+      const scan = lines.findIndex((line) => line.includes(`using ${index} `))
+      expect(scan).toBeGreaterThanOrEqual(0)
+      expect(lines[scan + 1]).toMatch(/Index Cond: .*ROW\(.*\bid\b/)
     }
   )
 
