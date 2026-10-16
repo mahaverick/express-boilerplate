@@ -20,7 +20,7 @@ import {
   isUntranslatableCharacterError,
   redactedForLog,
 } from '@/errors/postgres-errors'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import { routeTemplateOf } from '@/middlewares/route-template.middleware'
 import {
   reportErrorWithSpan,
@@ -216,8 +216,8 @@ export function errorHandler(
 
   const isCaptured = shouldCaptureHttpError(error, statusCode) && !isClientAbort(error, request)
   const errorId = isCaptured ? captureHttpError(error, request, response, statusCode) : uuidv7()
-  // Masked, so logged here (redacted: a failed write carries its values); a timeline 502's thrower logged it.
-  if (!(error instanceof TimelineUnavailableError)) {
+  // Masked, so logged here (redacted: a failed write carries its values); a PostHog 502's thrower logged it.
+  if (!(error instanceof PosthogUnavailableError)) {
     logger.error('Unhandled server error', { error: redactedForLog(error), errorId })
   }
   errorResponse(

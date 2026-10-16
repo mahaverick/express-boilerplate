@@ -63,7 +63,7 @@ export const emailEventModel = pgTable(
      */
     detail: varchar('detail', { length: EMAIL_DETAIL_MAX_LENGTH }),
     /**
-     * The provider's timestamp. Millisecond precision, as every timeline column.
+     * The provider's timestamp. Millisecond precision, as the other email timestamps.
      */
     occurredAt: timestamp('occurred_at', { withTimezone: true, precision: 3 }).notNull(),
     receivedAt: timestamp('received_at', { withTimezone: true, precision: 3 })

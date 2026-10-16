@@ -1,12 +1,12 @@
 /**
  * @file Starts the email, notification and maintenance Workers, and the
- * analytics Worker when analytics or the PostHog timelines are enabled, and
+ * analytics Worker when analytics or PostHog's private API is enabled, and
  * keeps them on a live connection, replacing them whenever their connection
  * gives up before its first 'ready' (see `startWorkers`).
  */
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
-import { isAnalyticsEnabled, isFlagsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
 import { ensureFlagDefinitionsSchedule } from '@/jobs/flag-definitions.job'
@@ -58,12 +58,12 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 
 /**
  * Start the email, notification and maintenance Workers, and the analytics
- * Worker when `isAnalyticsEnabled()` or `isTimelineEnabled()` (feature flags
+ * Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()` (feature flags
  * need the project key, so `isFlagsEnabled()` implies the first), replacing
  * them whenever their connection gives up before its first ready. Each
  * generation registers the retention schedule, the analytics drain schedule
  * when `isAnalyticsEnabled()`, the PostHog deletion schedule when
- * `isTimelineEnabled()`, and the flag definitions schedule when
+ * `isPosthogApiEnabled()`, and the flag definitions schedule when
  * `isFlagsEnabled()`.
  *
  * A Worker on such a connection never recovers: BullMQ's init has rejected for
@@ -107,7 +107,7 @@ export function startWorkers(): SupervisedWorkers {
     try {
       generation.connection = getQueueConnection()
       const starters = [startEmailWorker, startNotificationWorker, startMaintenanceWorker]
-      if (isAnalyticsEnabled() || isTimelineEnabled()) {
+      if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
         starters.push(startAnalyticsWorker)
       }
       // One at a time, so a throw leaves the ones already started in `workers`.
@@ -123,7 +123,7 @@ export function startWorkers(): SupervisedWorkers {
           logger.warn('Registering the analytics drain schedule failed', { error })
         })
       }
-      if (isTimelineEnabled()) {
+      if (isPosthogApiEnabled()) {
         void ensureAnalyticsDeletionSchedule().catch((error: unknown) => {
           logger.warn('Registering the PostHog deletion schedule failed', { error })
         })

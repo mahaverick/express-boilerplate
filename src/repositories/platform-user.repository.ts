@@ -2,39 +2,30 @@
  * @file Staff-only, cross-tenant reads of users. Only
  * `services/platform-*.service.ts` may import this file (an eslint rule).
  * Reads exclude soft-deleted users unless a caller asks for them (the
- * `deleted` search status, `findRecord`'s `includeDeleted`). The membership
+ * `deleted` list status, `findRecord`'s `includeDeleted`). The membership
  * count and `listMemberships` leave out the platform tenant, whose membership
  * is reported as `platformRole`.
  */
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  inArray,
-  isNotNull,
-  isNull,
-  sql,
-  type SQL,
-} from 'drizzle-orm'
-import type { PageDirection } from '@/constants/platform.constants'
+import { and, count, eq, gt, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm'
+import { z } from 'zod'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
-import { userModel } from '@/database/models/user.model'
+import { lastSignInSort, userFullNameSearch, userModel } from '@/database/models/user.model'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
-import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
-
-/**
- * A row's sort key: its lowercased email and id.
- */
-export interface PlatformUserCursor {
-  sortEmail: string
-  id: string
-}
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
+import { sortAtField } from '@/validators/cursor.validators'
 
 /**
  * One user as the staff search and detail return it. Never carries the
@@ -64,28 +55,13 @@ export interface PlatformUserRecord {
 }
 
 /**
- * A page of users and the cursors either side of it.
+ * The staff user list's filters, defaults applied: `active`/`inactive`
+ * select live users by `users.active`, `deleted` soft-deleted ones.
  */
-export interface PlatformUserRecordPage {
-  users: PlatformUserRecord[]
-  nextCursor?: PlatformUserCursor
-  prevCursor?: PlatformUserCursor
-}
-
-/**
- * The search's inputs. `q` is matched as a literal, case-insensitive substring.
- */
-export interface PlatformUserSearchOptions {
-  limit: number
-  direction: PageDirection
-  q?: string | undefined
-  /**
-   * `active`/`inactive` filter live users by `users.active`; `deleted` lists only soft-deleted ones.
-   */
-  status?: 'active' | 'inactive' | 'deleted' | undefined
+export interface PlatformUserFilters {
+  status: ('active' | 'inactive' | 'deleted')[]
   verified?: boolean | undefined
   staff?: boolean | undefined
-  cursor?: PlatformUserCursor | undefined
 }
 
 /**
@@ -172,96 +148,104 @@ function recordSelection(executor: DbExecutor) {
   }
 }
 
-/**
- * A row's sort key.
- * @param row - A selected row.
- * @param row.sortEmail - Its lowercased email.
- * @param row.id - Its id.
- * @returns The cursor pointing at it.
- */
-function keyOf(row: { sortEmail: string; id: string }): PlatformUserCursor {
-  return { sortEmail: row.sortEmail, id: row.id }
-}
+const userSortEmail = sql<string>`lower(${userModel.email})`
 
 /**
- * The search's filters, before the cursor: soft-delete scope and `active`
- * (both from `status`), `q`, `verified` and `staff`.
- * @param options - The search's inputs.
- * @param platformRoleQuery - The correlated platform-role subquery, for the staff filter.
- * @returns The conditions to AND together.
- */
-function filterConditions(
-  options: PlatformUserSearchOptions,
-  platformRoleQuery: SQL | ReturnType<typeof recordSelection>['platformRoleQuery']
-): SQL[] {
-  const conditions: SQL[] = [
-    options.status === 'deleted' ? isNotNull(userModel.deletedAt) : isNull(userModel.deletedAt),
-  ]
-  if (options.q !== undefined) {
-    const pattern = `%${escapeLikePattern(options.q)}%`
-    conditions.push(
-      sql`(lower(${userModel.email}) like lower(${pattern}) escape '\\' or lower(coalesce(${userModel.firstName}, '')) like lower(${pattern}) escape '\\' or lower(coalesce(${userModel.lastName}, '')) like lower(${pattern}) escape '\\')`
-    )
-  }
-  if (options.status === 'active' || options.status === 'inactive') {
-    conditions.push(eq(userModel.active, options.status === 'active'))
-  }
-  if (options.verified !== undefined) {
-    conditions.push(
-      options.verified ? isNotNull(userModel.emailVerifiedAt) : isNull(userModel.emailVerifiedAt)
-    )
-  }
-  if (options.staff !== undefined) {
-    conditions.push(
-      options.staff ? sql`exists (${platformRoleQuery})` : sql`not exists (${platformRoleQuery})`
-    )
-  }
-  return conditions
-}
-
-/**
- * The keyset condition: rows after the cursor, or before it for `prev`.
- * @param cursor - The cursor.
- * @param isPrevious - Whether the page reads backwards.
+ * The status filter: any of the asked statuses.
+ * @param statuses - The asked statuses, at least one.
  * @returns The condition.
  */
-function cursorCondition(cursor: PlatformUserCursor, isPrevious: boolean): SQL {
-  return isPrevious
-    ? sql`(lower(${userModel.email}), ${userModel.id}) < (${cursor.sortEmail}, ${cursor.id})`
-    : sql`(lower(${userModel.email}), ${userModel.id}) > (${cursor.sortEmail}, ${cursor.id})`
+function statusCondition(statuses: PlatformUserFilters['status']): SQL | undefined {
+  return or(
+    ...statuses.map((status) =>
+      status === 'deleted'
+        ? isNotNull(userModel.deletedAt)
+        : and(isNull(userModel.deletedAt), eq(userModel.active, status === 'active'))
+    )
+  )
 }
 
 /**
- * The cursors either side of a page, rows already in ascending order.
- * For `next`: `nextCursor` is set only when more rows follow; `prevCursor` is
- * absent without a request cursor (the first page), else it is the first
- * row's key, or the request cursor when the page is empty. For `prev`:
- * `prevCursor` is set only when more rows precede; `nextCursor` is the last
- * row's key, or the request cursor when the page is empty.
- * @param rows - The page's rows, ascending.
- * @param hasMore - Whether a row beyond the page exists in the read direction.
- * @param options - The search's inputs.
- * @returns The cursors to set.
+ * The verified filter: users with (or without) a verified email.
+ * @param verified - The asked value, or undefined for no filter.
+ * @returns The condition, or undefined.
  */
-function pageCursors(
-  rows: readonly { sortEmail: string; id: string }[],
-  hasMore: boolean,
-  options: PlatformUserSearchOptions
-): Pick<PlatformUserRecordPage, 'nextCursor' | 'prevCursor'> {
-  const first = rows[0]
-  const last = rows.at(-1)
-  if (options.direction === 'prev') {
-    const next = last ? keyOf(last) : options.cursor
-    return {
-      ...(hasMore && first && { prevCursor: keyOf(first) }),
-      ...(next && { nextCursor: next }),
-    }
-  }
-  const previous = first ? keyOf(first) : options.cursor
-  return {
-    ...(hasMore && last && { nextCursor: keyOf(last) }),
-    ...(options.cursor !== undefined && previous && { prevCursor: previous }),
-  }
+function verifiedCondition(verified: boolean | undefined): SQL | undefined {
+  if (verified === undefined) return undefined
+  return verified ? isNotNull(userModel.emailVerifiedAt) : isNull(userModel.emailVerifiedAt)
+}
+
+/**
+ * The staff filter: users with (or without) a platform role.
+ * @param staff - The asked value, or undefined for no filter.
+ * @param platformRoleQuery - The correlated platform-role subquery.
+ * @returns The condition, or undefined.
+ */
+function staffCondition(
+  staff: boolean | undefined,
+  platformRoleQuery: SQL | ReturnType<typeof recordSelection>['platformRoleQuery']
+): SQL | undefined {
+  if (staff === undefined) return undefined
+  return staff ? sql`exists (${platformRoleQuery})` : sql`not exists (${platformRoleQuery})`
+}
+
+/**
+ * The staff user list, searched by email, first and last name, and full name.
+ * @param search - The parsed search, or undefined.
+ * @param filters - Status, verified and staff.
+ * @returns The list definition.
+ */
+export function platformUserList(search: string | undefined, filters: PlatformUserFilters) {
+  return defineList({
+    name: 'platform-users',
+    base: (executor, seek) => {
+      const searchExpressions = [
+        sql`lower(${userModel.email})`,
+        sql`lower(${userModel.firstName})`,
+        sql`lower(${userModel.lastName})`,
+        userFullNameSearch(userModel.firstName, userModel.lastName),
+      ]
+      const { columns, platformRoleQuery } = recordSelection(executor)
+      return executor
+        .select({
+          ...columns,
+          sortCreated: timestampKey(userModel.createdAt),
+          sortLastSignIn: sql<string>`coalesce(${timestampKey(userModel.lastLoggedInAt)}, '-infinity')`,
+        })
+        .from(userModel)
+        .where(
+          and(
+            statusCondition(filters.status),
+            searchCondition(search, searchExpressions),
+            verifiedCondition(filters.verified),
+            staffCondition(filters.staff, platformRoleQuery),
+            seek
+          )
+        )
+        .$dynamic()
+    },
+    id: userModel.id,
+    sorts: {
+      email: [textSort(userSortEmail, 'asc', 'sortEmail')],
+      created: [timestampSort(userModel.createdAt, 'asc', 'sortCreated')],
+      '-created': [timestampSort(userModel.createdAt, 'desc', 'sortCreated')],
+      '-lastSignIn': [
+        {
+          expression: lastSignInSort(userModel.lastLoggedInAt),
+          direction: 'desc',
+          key: 'sortLastSignIn',
+          value: z.union([sortAtField, z.literal('-infinity')]),
+          bind: (value) => sql`${value}::timestamptz`,
+        },
+      ],
+    },
+    toItem: ({
+      sortEmail: _email,
+      sortCreated: _created,
+      sortLastSignIn: _lastSignIn,
+      ...user
+    }): PlatformUserRecord => user,
+  })
 }
 
 /**
@@ -269,41 +253,19 @@ function pageCursors(
  */
 export class PlatformUserRepository {
   /**
-   * A page of users, ordered by `(lower(email), id)`. `next` reads the rows
-   * after the cursor; `prev` reads the rows before it, newest-first, and
-   * reverses them, so every page comes back in ascending order. See
-   * `pageCursors` for when each returned cursor is set.
-   * @param options - Filters, page size, direction and cursor.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page and its cursors.
+   * One page of the staff user list.
+   * @param params - The parsed shared list params.
+   * @param filters - Status, verified and staff.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
-  async search(
-    options: PlatformUserSearchOptions,
+  async list(
+    params: ListParams,
+    filters: PlatformUserFilters,
     executor: DbExecutor = db
-  ): Promise<PlatformUserRecordPage> {
-    const { columns, platformRoleQuery } = recordSelection(executor)
-    const isPrevious = options.direction === 'prev'
-    const conditions = filterConditions(options, platformRoleQuery)
-    if (options.cursor !== undefined) conditions.push(cursorCondition(options.cursor, isPrevious))
-
-    const rows = await executor
-      .select(columns)
-      .from(userModel)
-      .where(and(...conditions))
-      .orderBy(
-        ...(isPrevious
-          ? [desc(columns.sortEmail), desc(userModel.id)]
-          : [asc(columns.sortEmail), asc(userModel.id)])
-      )
-      .limit(options.limit + 1)
-
-    const hasMore = rows.length > options.limit
-    if (hasMore) rows.pop()
-    if (isPrevious) rows.reverse()
-    return {
-      users: rows.map(({ sortEmail: _sortEmail, ...user }) => user),
-      ...pageCursors(rows, hasMore, options),
-    }
+  ): Promise<ListPage<PlatformUserRecord>> {
+    return listPage(executor, platformUserList(params.search, filters), params)
   }
 
   /**

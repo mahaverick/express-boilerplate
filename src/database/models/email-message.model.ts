@@ -130,7 +130,11 @@ export const emailMessageModel = pgTable(
     index('email_messages_user_id_idx').on(table.userId),
     index('email_messages_tenant_id_idx').on(table.tenantId),
     index('email_messages_resent_from_id_idx').on(table.resentFromId),
-    index('email_messages_created_at_idx').on(table.createdAt),
+    index('email_messages_created_sort_idx').on(table.createdAt, table.id),
+    index('email_messages_recipient_trgm_idx').using(
+      'gin',
+      sql`lower(${table.recipient}) gin_trgm_ops`
+    ),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
     check(
       'email_messages_status_check',

@@ -168,7 +168,7 @@ and every Redis call a request waits on runs under a deadline
 
 - **`withRedisDeadline`** wraps reads and counters: the session denylist read,
   the rate-limit store, the staff-visit, view-audit and flag-exposure dedupes,
-  the timeline budget and cache, the invitation recipient budget, the mail
+  the invitation recipient budget, the mail
   cooldowns, the maintenance-mode notice ids and the OAuth session store. A
   call with no answer in `REDIS_REQUEST_DEADLINE_MS` (300 ms) fails, and for
   the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call fails at once
@@ -341,15 +341,12 @@ and every write re-checks it under lock.
 | `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                           |
 | `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                               |
 | `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                  |
-| `platform-timeline.service.ts`   | The PostHog timelines of a user or a tenant ([Analytics](#analytics)).                                                                                                                                                                             |
-| `platform-errors.service.ts`     | The staff Errors views ([Error tracking](#error-tracking)).                                                                                                                                                                                        |
 | `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                            |
 | `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                            |
 | `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                        |
 
 Each cross-tenant repository is imported by its own `platform-*` service only;
-`platform-user.repository.ts` also by `platform-purge.service.ts` and
-`platform-timeline.service.ts`. What staff may do, and the gates on it, are in
+`platform-user.repository.ts` also by `platform-purge.service.ts`. What staff may do, and the gates on it, are in
 [SECURITY.md](SECURITY.md#platform-staff).
 
 ### Extending Apex
@@ -385,7 +382,7 @@ Directories with no filename rule:
   `isUniqueViolation`, `redactedForLog`).
 - `src/types/`: the `Express.Request` augmentation (`express.d.ts`) and the
   shared and domain types several layers use (`actor.ts`, `flags.ts`,
-  `timeline.ts`).
+  `onboarding.ts`).
 - `src/scripts/`: tools a `package.json` script runs through `tsx`, never
   imported by the app. They live under `src/` so `tsc` and type-aware lint see
   them.
@@ -503,9 +500,136 @@ handler by arity. It decides:
   Postgres refused a character in client text.
 - **A 5xx** is masked (`Internal server error`), gets an `errorId`, and is
   logged redacted (`redactedForLog`, `src/errors/postgres-errors.ts`), except a
-  `TimelineUnavailableError`, whose thrower already logged why. It is reported
+  `PosthogUnavailableError`, whose thrower already logged why. It is reported
   to error tracking only when the capture rule admits it
   ([Error tracking](#error-tracking)).
+
+### List endpoints
+
+Every endpoint that returns a table's rows answers one shape, built by one
+helper, `listPage` (`src/utilities/list-page.utilities.ts`), from one
+request schema, `listParamsSchema` (`src/validators/list.validators.ts`).
+
+**The request.** `search` (1–100 characters, trimmed, no NUL; a literal,
+case-insensitive substring of the list's search columns), `sort` (one
+whitelisted key, `-` first for descending), `cursor` (opaque, from a previous
+page), `direction` (`next`, the default, or `prev`, which needs a cursor),
+`limit` (1–100, default 20) and `total=1`, plus the list's own filters. An
+enum filter takes a comma list (`status=active,inactive`); a filter's default
+is applied by the server, so a URL can omit it.
+
+**The response.** The envelope's `data` is
+`{ items, page: { nextCursor, prevCursor, hasNext, hasPrev, limit }, total? }`.
+`total` appears only for `total=1`: `{ count, capped }`, counted exactly up to
+1,000 rows and reported as `{ count: 1000, capped: true }` past them (a client
+shows "1,000+"; the query is `select count(*) from (<the list> limit 1001)`).
+
+| Endpoint                           | `search`                                           | Filters                                                      | Sorts (default first)                         |
+| ---------------------------------- | -------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------- |
+| `GET /platform/tenants`            | name, slug                                         | `state` (list; active, suspended)                            | `name`, `created`, `-created`                 |
+| `GET /platform/users`              | email, first and last name, full name              | `status` (list; active, inactive), `verified`, `staff`       | `email`, `created`, `-created`, `-lastSignIn` |
+| `GET /platform/emails`             | recipient                                          | `status`, `template` (lists), `user`, `tenant`, `from`, `to` | `-created`, `created`                         |
+| `GET /platform/email-suppressions` | address                                            | `state` (list; active)                                       | `-created`, `created`, `address`              |
+| `GET /platform/onboarding/tenants` | tenant name                                        | `state` (one; stuck)                                         | `progress` for stuck, else `-started`; `name` |
+| `GET /platform/audit-log`          | action, actor email, target email or name          | `tenant`, `actor`, `target`, `action`, `access` (lists)      | `-occurred`, `occurred`                       |
+| `GET /tenants/:slug/audit-log`     | action, actor email, the entry's own tenant's name | `action`, `access` (lists), `actor`                          | `-occurred`, `occurred`                       |
+| `GET /tenants/:slug/members`       | email, full name                                   | `role` (list)                                                | `name`, `email`, `role`, `-joined`            |
+| `GET /tenants/:slug/invitations`   | email                                              | `role` (list)                                                | `-created`, `email`                           |
+| `GET /tenants`                     | name                                               | `role` (list)                                                | `name`, `-joined`                             |
+| `GET /notifications`               | title, body                                        | `unread`                                                     | `-created`                                    |
+| `GET /platform/flags`              | key, description                                   | `kind`, `state` (lists)                                      | `key` (in memory)                             |
+| `GET /platform/flags/unregistered` | key                                                | none                                                         | `key` (in memory)                             |
+
+`GET /platform/flags/meta` is not a list: it carries the traits reference and
+the snapshot's age. The mark-read routes and the bell's `limit=5` read are
+unchanged.
+
+**The seek.** A sort is a list of columns; the helper appends the row id, in
+the first column's direction, as the tiebreaker. A page reads `limit + 1` rows
+after the cursor's keys: one row comparison `(a, id) > ($1, $2)` when every
+column runs one way, the OR-expansion `(a > $1) or (a = $1 and b < $2) or …`
+when they mix. `prev` reverses every comparison and the order, then flips the
+page back. Every sort column is NOT NULL, or coalesced the same way in the
+query and its index (`-lastSignIn` reads `coalesce(last_logged_in_at,
+'-infinity')` through `lastSignInSort`, so never-signed-in users come last).
+A cursor whose row is gone is not a gap: when the rows after a cursor are gone
+(deleted, or `prev` from the first row), the read answers the list's edge page
+on that side, so a page never skips a row and a client can always step back.
+My-tenants ties break on `tenant_id`, so memberships created in the same
+instant page in a stable order.
+
+**The sort-and-index rule.** Each whitelisted sort has an index of exactly
+its shape, filter prefix first: `(tenant_id, created_at, id)` for a tenant's
+invitations newest first. `tests/integration/database/list-indexes.test.ts`
+EXPLAINs the helper's own query for every sort and fails when the node under
+its `Limit` is a Sort. Three are bounded instead and say so there: member
+`name` and `email` and my-tenants `name` order a joined row, so they sort one
+tenant's members or one user's memberships, found through an index led by
+that tenant or user; onboarding orders the progress query's computed
+timestamps, so it sorts the tracked tenants, read through an index. The tenants,
+users, emails and suppressions searches run on GIN trigram indexes (`pg_trgm`)
+of the same lowered expressions. The members, invitations, my-tenants and
+notifications searches are bounded by their tenant or user instead. The
+platform audit-log search has no index: it scans by `occurred_at` across the
+log, and so does its `total=1` count, which is accepted. Migrations
+`0026_list_indexes.sql` and `0027_users_full_name_trgm.sql` build the indexes;
+their locking and the manual live-database path are in
+[DATABASE.md](DATABASE.md).
+
+**Cursors.** A cursor is base64url JSON `{ v, sort, keys, scope }`, a dot,
+and an HMAC-SHA256 under `CURSOR_SECRET` (`src/utilities/list-cursor.utilities.ts`).
+`scope` hashes the effective search, filters (defaults applied, comma lists
+sorted) and sort, so a cursor resumes only the view it came from. A list whose
+rows depend on more than the query string sets `bound` on its definition
+(`ListDefinition.bound`, `InMemoryListDefinition.bound`). Every list also has a
+required `name`, unique among lists, and `bindScope` folds the name and the
+bound values into the scope: a tenant's members, invitations and audit log
+bind the tenant, my tenants and notifications bind the user. A cursor from
+another tenant, user or list, even one with the same sort and filters, is
+therefore refused as `CURSOR_INVALID`, never read as a seek. Anything else is
+the one `400` `InvalidCursorError` (`code: 'CURSOR_INVALID'`,
+`errors.cursor: ['cursor is invalid.']`): empty, over 4,096 characters, a bad
+signature, another version, sort or scope, or keys of the wrong count or type.
+A client drops the cursor and reloads the first page.
+[SECURITY.md](SECURITY.md#input-and-output) has the threat.
+
+**Audit lists.** The read kind is required: `scope: 'tenant' | 'platform'`
+selects the joins and the search columns. A tenant read confines search to the
+tenant: it matches no user-target email, and the only target it joins is the
+entry's own tenant. Actions in `RETIRED_AUDIT_ACTIONS`
+(`src/constants/audit.constants.ts`) are no longer written but their stored
+rows stay, so they are listed and accepted by the `action` filter
+(`STORED_AUDIT_ACTION_NAMES`); `AUDIT_ACTIONS` is what a build may write.
+
+**Flags.** `listPageInMemory` gives the same contract over an array already
+searched and filtered: the flags registry and the flags PostHog has that it
+lacks. Both lists are split from `GET /platform/flags/meta`. A flag key longer
+than `LISTED_FLAG_KEY_MAX` (400) cannot round-trip through a cursor, so
+`listableUnregisteredFlags` leaves it out of the lists and logs one warning
+per snapshot; the system-status count uses the same function, so it agrees
+with the list. The key still evaluates.
+
+**Notifications.** `GET /notifications` is the shared list. The SSE
+`Last-Event-ID` replay is not a page: it reads the newest `SSE_REPLAY_LIMIT`
+notifications through `listRecent` (see [Realtime (SSE)](#realtime-sse)).
+
+**Adding a list.**
+
+1. In the repository, export a `defineList({ name, base, id, sorts, toItem })`
+   (a unique `name`, plus `bound` when the rows depend on a path tenant or the caller):
+   `base(executor, seek)` selects the item's columns plus one text or number
+   column per sort column (`timestampKey(…)` for a timestamp), ANDs every
+   filter, `searchCondition(search, [lowered expressions])` and `seek` into
+   one `where`, and ends in `.$dynamic()`; `toItem` drops the sort columns. A
+   method calls `listPage(executor, definition, params)`.
+2. In the validator, `listParamsSchema({ sorts, defaultSort, filters })`, with
+   `listFilter(name, values)` for an enum filter and its default in the field.
+3. The service maps items if it must; the controller sends the page as `data`.
+4. Add each sort's index to the model, generate the migration, and add one
+   `EXPLAIN` row per sort to `list-indexes.test.ts`.
+5. Add a `describeListContract` block to
+   `tests/integration/api/list-contract.test.ts`
+   (`tests/helpers/list-contract.ts` lists what it proves).
 
 ### Request correlation
 
@@ -604,7 +728,7 @@ once. What a job payload may hold, and for how long, is in
 rejection exits the process.
 
 `startWorkers()` starts the email, notification and maintenance Workers, and
-the analytics Worker when analytics or the staff timelines are configured.
+the analytics Worker when analytics or PostHog's private API is configured.
 `WORKER_ENABLED` (default `true`) runs them in the API process. To split them,
 set it to `false` on API-only pods and `true` on a worker deployment that
 shares the Redis queues; the schedules below then run only on the worker
@@ -714,7 +838,7 @@ every replica with an open stream: one subscriber ── local emitter ── ea
 
 All three run on PostHog and are off until configured
 (`src/configs/analytics.config.ts`): analytics needs `POSTHOG_PROJECT_KEY`; the
-staff timelines, the Errors views and person deletion need
+person deletion and `pnpm flags:sync` need
 `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`; error tracking needs the
 project key and `ERROR_TRACKING_ENABLED`; flags need `POSTHOG_FEATURE_FLAGS_KEY`
 and the project key. What each sends, and what it never does, is in
@@ -723,9 +847,8 @@ steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
 
 ### Analytics
 
-No request handler calls PostHog's private API (`/api/projects/…`), except the
-staff timeline reads on a cache miss and the Errors reads, which cache nothing,
-both within the hourly query budget. Server events reach PostHog only through
+No request handler calls PostHog's private API (`/api/projects/…`): the
+person deletions and `pnpm flags:sync` are its only callers. Server events reach PostHog only through
 the outbox drain and the error reporter, both through `sendBatch`
 (`posthog-batch.service.ts`); browser events reach it only through the
 `/api/v1/collect` proxy.
@@ -800,13 +923,6 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   streaming bodies untouched. It sits ahead of the body parsers and has no
   `on.error` handler, which would make http-proxy-middleware skip its own error
   response. Without `POSTHOG_PROJECT_KEY` it answers 503.
-- **Staff timelines** (`platform-timeline.service.ts`) send PostHog only the
-  two fixed HogQL templates in `timeline-query.service.ts`, with every id, the
-  range and the cursor as placeholders, and keep only the `TIMELINE_PROP_KEYS`
-  properties. Each read is audited at most once per staff member, target and
-  view every 10 minutes (`auditThrottledView`), before the 30 s cache and the
-  hourly budget (`TIMELINE_QUERY_BUDGET_PER_HOUR`, counted in Redis across
-  replicas) are consulted.
 
 ### Error tracking
 
@@ -822,7 +938,7 @@ capture point per kind of failure and never from a logger transport:
 **The capture rule** (`shouldCaptureHttpError`). An error that is not an
 `HttpError` and resolves to 500 is reported. An `HttpError` of 500 or more is a
 deliberate answer, reported only when it wraps a `cause`. A
-`TimelineUnavailableError` never is: PostHog being unreachable is its meaning,
+`PosthogUnavailableError` never is: PostHog being unreachable is its meaning,
 and its thrower already logged why. A 4xx, and a client that went away, never
 are. Each analytics tick has one attempt, so every failed tick is a final
 failure and is reported; the throttle bounds a run of them.
@@ -857,20 +973,12 @@ graceful shutdown for `ERROR_SHUTDOWN_FLUSH_MS` (3 s).
 
 **`errorId` and the route.** Every 5xx `errorHandler` writes, except a
 maintenance refusal, carries an `errorId` in its body and on its log line; a
-reported error's id is its `$exception` uuid. A `TimelineUnavailableError` 502
+reported error's id is its `$exception` uuid. A `PosthogUnavailableError` 502
 also carries one, but it names nothing: that error is neither logged nor
 reported there. The route template on an event comes from `recordRouteTemplate`
 (`route-template.middleware.ts`): Express restores `request.baseUrl` before an
 error reaches `errorHandler`, so the mount path is recorded when the router
 assigns `request.route`, and a mount parameter's value is put back as its name.
-
-**Staff views.** `GET /platform/users/:id/errors` and
-`GET /platform/tenants/:id/errors` (`platform-errors.service.ts`) list the
-error issues a user or a tenant hit in the last 30 days from the fixed HogQL in
-`errors-query.service.ts`, sharing the timelines' limiter, budget and throttled
-audit. Every column describing an issue's most recent event is read with
-`argMax(column, (timestamp, uuid))`, so all of them come from one event and its
-signature can be verified (`errors-mapper.service.ts`).
 
 **System status.** `GET /platform/system/status` (platform admin, not
 audited) answers `{ release, errorTracking, flags, maintenance }`: the image's
@@ -901,7 +1009,7 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   ├─ flagsFor / isEnabled / variantOf   service reads; variantOf records exposure
   ├─ GET …/flags                        the app's client flags
   ├─ POST …/flags/exposures             re-evaluate, dedupe, $feature_flag_called → outbox
-  └─ /platform/flags, /platform/flags/evaluate, system status
+  └─ /platform/flags (+ /unregistered, /meta, /evaluate), system status
 ```
 
 - **Registry.** Each entry has a key, a description, `boolean` or
@@ -936,10 +1044,13 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   `POST …/exposures` takes `{ keys }`, re-evaluates each key on the server and
   records `$feature_flag_called` once per session, tenant, key and response,
   only for a matched condition or a holdout.
-- **Inspector.** `GET /platform/flags` lists every flag's live state;
-  `GET /platform/flags/evaluate` answers one user's traits and values, the one
-  place traits leave the server, so each read is audited as
-  `user.flags_evaluated` before anything is evaluated. Neither calls PostHog.
+- **Inspector.** `GET /platform/flags` pages the registry with each flag's
+  live state, `GET /platform/flags/unregistered` pages the flags PostHog has
+  that the registry lacks, and `GET /platform/flags/meta` carries the traits
+  reference and the snapshot's age; `GET /platform/flags/evaluate` answers
+  one user's traits and values, the one place traits leave the server, so each
+  read is audited as `user.flags_evaluated` before anything is evaluated. None
+  of them calls PostHog.
 - **Kill-switch latency.** An edit in PostHog reaches every process on the next
   30 s fetch and its `reload` message, or the 60 s backstop. The fetch shares
   the one-at-a-time `analytics` Worker with the drain and the deletion tick, so
@@ -1077,6 +1188,7 @@ what `pnpm env:table` prints.
 | `DB_STATEMENT_TIMEOUT_MS`              | no       | `30000`                    | Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). Defaults to 30000 (30s). 0 sends no limit, leaving the server's own setting. A statement_timeout in DATABASE_URL's query string overrides it. PgBouncer, in every pool mode, refuses a startup parameter not listed in its ignore_startup_parameters, so behind it set 0 or list statement_timeout there.                                                                                                                                                                                                     |
 | `JWT_ACCESS_SECRET`                    | **yes**  | —                          | Signs and verifies access tokens (session.service.ts). Any 32+ character string works; use `openssl rand -hex 32`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `SESSION_SECRET`                       | **yes**  | —                          | Signs the express-session cookie used during the Google OAuth round-trip (passport.config.ts). Any 32+ character string works; use `openssl rand -hex 32`.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `CURSOR_SECRET`                        | no       | —                          | Signs the opaque cursors every list endpoint returns, so a client cannot forge or edit one (list-cursor.utilities.ts). Any 32+ character string works; use `openssl rand -hex 32`. Required whenever APP_ENV is not local, and the same on every replica, since any replica may verify a cursor another signed. Unset on local means each process generates its own, so a restart sends clients back to the first page. Changing it does the same everywhere.                                                                                                                                             |
 | `GOOGLE_CLIENT_ID`                     | no       | —                          | Google OAuth 2.0 client ID. When absent, Google login is disabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `GOOGLE_CLIENT_SECRET`                 | no       | —                          | Google OAuth 2.0 client secret. Required when GOOGLE_CLIENT_ID is set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `ACCESS_TOKEN_TTL`                     | no       | `15m`                      | Access token lifetime, as an ms()-parseable duration string (e.g. "15m"). Defaults to 15m.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -1091,7 +1203,7 @@ what `pnpm env:table` prints.
 | `INVITATION_RESEND_COOLDOWN`           | no       | `10m`                      | How long after an invitation is mailed before it can be resent, as an ms()-parseable duration string. A resend sooner answers 429 invitation_resend_cooldown. Defaults to 10m.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `INVITATION_RECIPIENT_DAILY_LIMIT`     | no       | `10`                       | Most tenant invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender, of which one tenant may send at most 3; past either the sender gets 429 RATE_LIMITED. Staff owner-invitations of new tenants are not counted. Defaults to 10.                                                                                                                                                                                                                                                                                                                     |
 | `TRUST_PROXY`                          | no       | `false`                    | How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.                                                                              |
-| `RATE_LIMIT_SCALE`                     | no       | —                          | Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (platform-timeline, via TIMELINE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.                                                            |
+| `RATE_LIMIT_SCALE`                     | no       | —                          | Multiplies the limit of every limiter createRateLimiter builds from its RATE_LIMITS spec, for an end-to-end run that sends every request from one IP; windows and keys stay as they are. An explicit override (flag-evaluate, via FLAG_EVALUATE_REQUESTS_PER_MINUTE) and the counters outside RATE_LIMITS (mail cooldowns, invitation recipient ceiling, SSE stream cap) are not scaled. Local only: boot refuses any value but 1 unless APP_ENV is local, so it can never raise a deployed limit. A whole number from 1 to 100. Unset means 1.                                                           |
 | `COOKIE_SECURE`                        | no       | —                          | Whether the refresh-token and OAuth session cookies carry the Secure attribute ("true" or "false"). Defaults from APP_ENV: false on local, true elsewhere. With Secure on behind a TLS-terminating proxy, TRUST_PROXY must be set, or the OAuth session cookie is never sent.                                                                                                                                                                                                                                                                                                                             |
 | `COOKIE_DOMAIN`                        | no       | —                          | Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. With COOKIE_SECURE on, setting or unsetting it on a live deployment signs users in again once; the cookie names and scopes are in SECURITY.md, "The refresh cookie".                                                                                                                                                             |
 | `CORS_ALLOWED_ORIGINS`                 | no       | —                          | Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. POST /auth/refresh and /auth/logout also refuse a present Origin that is none of these, so list every other frontend origin (SECURITY.md, "CSRF"). Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.                                                                                                                    |
@@ -1117,12 +1229,11 @@ what `pnpm env:table` prints.
 | `ANALYTICS_OUTBOX_RETENTION_DAYS`      | no       | `7`                        | Days an analytics event may wait in the outbox, while PostHog is unreachable or refuses it, before it is dropped unsent with a warning. At least 1, at most 365. Defaults to 7.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `ANALYTICS_DRAIN_INTERVAL_MS`          | no       | `5000`                     | Milliseconds between analytics outbox drains, each of which sends one batch to PostHog. At least 1000, at most 600000. Defaults to 5000.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `ANALYTICS_DRAIN_BATCH_SIZE`           | no       | `500`                      | Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `POSTHOG_PERSONAL_API_KEY`             | no       | —                          | PostHog personal API key (phx_…) that the staff timelines read events with, user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes query:read, person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, the timelines answer "not configured" and queued person deletions wait.                                                                                                                                       |
+| `POSTHOG_PERSONAL_API_KEY`             | no       | —                          | PostHog personal API key (phx_…) that user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, queued person deletions wait.                                                                                                                                                                                                                                   |
 | `POSTHOG_PROJECT_ID`                   | no       | —                          | Numeric id of the PostHog project that POSTHOG_PERSONAL_API_KEY reads from and deletes in: the project POSTHOG_PROJECT_KEY reports to. Set it together with POSTHOG_PERSONAL_API_KEY.                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `POSTHOG_APP_HOST`                     | no       | —                          | PostHog app origin that the timeline queries and person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.                                                                                                                                                                                                                                                                                                   |
+| `POSTHOG_APP_HOST`                     | no       | —                          | PostHog app origin that person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.                                                                                                                                                                                                                                                                                                                            |
 | `POSTHOG_FEATURE_FLAGS_KEY`            | no       | —                          | PostHog feature flags secure API key (phs_…, in Project settings under Feature flags) that the workers fetch feature flag definitions with every 30 seconds. It is a secret and never reaches a browser. Set it together with POSTHOG_PROJECT_KEY; without it every flag answers the fallback its code registry entry declares.                                                                                                                                                                                                                                                                           |
-| `TIMELINE_QUERY_BUDGET_PER_HOUR`       | no       | `1200`                     | Most PostHog queries the staff timelines make in any rolling hour, counted in Redis across every replica; a cached page spends none. PostHog allows 2400 query calls an hour for the whole organization, its own UI included. At least 1, at most 100000. Defaults to 1200.                                                                                                                                                                                                                                                                                                                               |
-| `TIMELINE_REQUESTS_PER_MINUTE`         | no       | `20`                       | Timeline requests one staff user may make a minute, cached or not, before the API answers 429. At least 1, at most 1000. Defaults to 20.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `FLAG_EVALUATE_REQUESTS_PER_MINUTE`    | no       | `20`                       | Flag evaluations (GET /platform/flags/evaluate) one staff user may make a minute before the API answers 429. At least 1, at most 1000. Defaults to 20.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `ERROR_TRACKING_ENABLED`               | no       | `true`                     | Whether unexpected server errors are sent to PostHog Error Tracking as $exception events. Takes effect only when POSTHOG_PROJECT_KEY is set. Defaults to true; false stops sending them, and an error still gets its errorId.                                                                                                                                                                                                                                                                                                                                                                             |
 | `APP_VERSION`                          | no       | `dev`                      | The release this process runs, normally the deployed git commit sha, sent as release on every $exception event and answered by GET /health and GET /api/v1/platform/system/status. The Docker image sets it from its GIT_SHA build arg, which deploy.yml passes as the commit sha; operators do not set it. 1 to 64 letters, digits, ".", "_" and "-". Defaults to dev.                                                                                                                                                                                                                                   |
 | `REDIS_KEY_PREFIX`                     | no       | `express-boilerplate`      | Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`), the error-tracking counters (`<prefix>:errors`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.                                                    |

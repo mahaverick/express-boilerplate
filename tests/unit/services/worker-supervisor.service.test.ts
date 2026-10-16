@@ -6,7 +6,7 @@
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isAnalyticsEnabled, isFlagsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
 import { ensureFlagDefinitionsSchedule } from '@/jobs/flag-definitions.job'
@@ -39,7 +39,7 @@ vi.mock('@/jobs/analytics-deletion.job', () => ({ ensureAnalyticsDeletionSchedul
 vi.mock('@/jobs/flag-definitions.job', () => ({ ensureFlagDefinitionsSchedule: vi.fn() }))
 vi.mock('@/configs/analytics.config', () => ({
   isAnalyticsEnabled: vi.fn(() => false),
-  isTimelineEnabled: vi.fn(() => false),
+  isPosthogApiEnabled: vi.fn(() => false),
   isFlagsEnabled: vi.fn(() => false),
 }))
 
@@ -68,7 +68,7 @@ function fakeWorker(): { worker: FakeWorker; release: () => void } {
 
 /**
  * Wires the mocks: each generation gets its own connection and a fake Worker
- * per starter (three, four with analytics or the timeline enabled), and
+ * per starter (three, four with analytics or PostHog's private API enabled), and
  * registering any schedule resolves. Returns the fakes in start order, the
  * connections, `lose` (which reports a connection lost to the listeners) and
  * the `unsubscribe` spy.
@@ -123,7 +123,7 @@ describe('startWorkers', () => {
     resetLifecycleForTests()
     vi.clearAllMocks()
     vi.mocked(isAnalyticsEnabled).mockReturnValue(false)
-    vi.mocked(isTimelineEnabled).mockReturnValue(false)
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(false)
     vi.mocked(isFlagsEnabled).mockReturnValue(false)
   })
 
@@ -311,8 +311,8 @@ describe('startWorkers', () => {
     expect(ensureAnalyticsDeletionSchedule).not.toHaveBeenCalled()
   })
 
-  it('starts the analytics Worker with only the deletion schedule when only the timeline is enabled', () => {
-    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+  it('starts the analytics Worker with only the deletion schedule when only the PostHog private API is enabled', () => {
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(true)
     const mocks = wireMocks()
     startWorkers()
 
@@ -328,7 +328,7 @@ describe('startWorkers', () => {
 
   it('starts one analytics Worker and registers both schedules when both are enabled', () => {
     vi.mocked(isAnalyticsEnabled).mockReturnValue(true)
-    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(true)
     const mocks = wireMocks()
     startWorkers()
 
@@ -339,7 +339,7 @@ describe('startWorkers', () => {
   })
 
   it('logs a failed deletion schedule registration at warn, and keeps the Workers running', async () => {
-    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(true)
     const mocks = wireMocks()
     const failure = new Error('Redis unreachable')
     vi.mocked(ensureAnalyticsDeletionSchedule).mockRejectedValueOnce(failure)

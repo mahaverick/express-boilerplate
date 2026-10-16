@@ -1,52 +1,48 @@
 /**
- * @file Query shapes for the tenant and platform audit-log reads. The cursor
- * is decoded here; a malformed one is a 400.
+ * @file Query shapes for the tenant and platform audit-log reads, on the shared list params.
  */
 import { z } from 'zod'
-import { AUDIT_ACCESS_KINDS, AUDIT_ACTION_NAMES } from '@/constants/audit.constants'
-import { cursorField, isoInstantField } from '@/validators/cursor.validators'
-
-const DEFAULT_AUDIT_PAGE_SIZE = 50
-const MAX_AUDIT_PAGE_SIZE = 100
+import { AUDIT_ACCESS_KINDS, STORED_AUDIT_ACTION_NAMES } from '@/constants/audit.constants'
+import { listFilter, listParamsSchema } from '@/validators/list.validators'
 
 /**
- * The audit cursor's decoded shape: the last entry's time and id.
+ * The filters both audit-log reads take: actions and access paths as comma lists, and one actor.
  */
-const auditCursorSchema = z.object({ occurredAt: isoInstantField, id: z.uuid() }).strict()
-
-const pageFields = {
-  cursor: cursorField(auditCursorSchema).optional(),
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(MAX_AUDIT_PAGE_SIZE, `limit must be at most ${MAX_AUDIT_PAGE_SIZE}.`)
-    .default(DEFAULT_AUDIT_PAGE_SIZE),
-  action: z.enum(AUDIT_ACTION_NAMES).optional(),
-  actorUserId: z.uuid('actorUserId must be a valid UUID.').optional(),
-  access: z.enum(AUDIT_ACCESS_KINDS).optional(),
+const auditFilters = {
+  action: listFilter('action', STORED_AUDIT_ACTION_NAMES).optional(),
+  actor: z.uuid('actor must be a valid UUID.').optional(),
+  access: listFilter('access', AUDIT_ACCESS_KINDS).optional(),
 }
 
 /**
- * `GET /api/v1/tenants/:slug/audit-log` query string.
+ * `GET /api/v1/tenants/:slug/audit-log` query: the shared list params,
+ * `search` matching the action, the actor's email and the target's label.
  */
-export const tenantAuditLogQuerySchema = z.object(pageFields)
-
-/**
- * The validated tenant audit-log query, with the cursor already decoded.
- */
-export type TenantAuditLogQuery = z.infer<typeof tenantAuditLogQuerySchema>
-
-/**
- * `GET /api/v1/platform/audit-log` query string.
- */
-export const platformAuditLogQuerySchema = z.object({
-  ...pageFields,
-  tenantId: z.uuid('tenantId must be a valid UUID.').optional(),
-  targetId: z.uuid('targetId must be a valid UUID.').optional(),
+export const tenantAuditLogListSchema = listParamsSchema({
+  sorts: ['-occurred', 'occurred'],
+  defaultSort: '-occurred',
+  filters: auditFilters,
 })
 
 /**
- * The validated platform audit-log query, with the cursor already decoded.
+ * A parsed tenant audit-log query.
  */
-export type PlatformAuditLogQuery = z.infer<typeof platformAuditLogQuerySchema>
+export type TenantAuditLogListQuery = z.output<typeof tenantAuditLogListSchema>
+
+/**
+ * `GET /api/v1/platform/audit-log` query: the tenant filters plus one tenant and one target.
+ */
+export const platformAuditLogListSchema = listParamsSchema({
+  sorts: ['-occurred', 'occurred'],
+  defaultSort: '-occurred',
+  filters: {
+    ...auditFilters,
+    tenant: z.uuid('tenant must be a valid UUID.').optional(),
+    target: z.uuid('target must be a valid UUID.').optional(),
+  },
+})
+
+/**
+ * A parsed platform audit-log query.
+ */
+export type PlatformAuditLogListQuery = z.output<typeof platformAuditLogListSchema>

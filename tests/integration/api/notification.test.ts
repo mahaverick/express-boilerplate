@@ -40,6 +40,7 @@ const notificationRepository = new NotificationRepository()
 interface ApiEnvelope<TData> {
   success: boolean
   data?: TData
+  code?: string
   errors?: Record<string, string[]>
 }
 
@@ -47,8 +48,8 @@ interface ApiEnvelope<TData> {
  * The shape `GET /api/v1/notifications` returns as `data`.
  */
 interface NotificationListBody {
-  notifications: Notification[]
-  nextCursor?: string
+  items: Notification[]
+  page: { nextCursor: string | null; hasNext: boolean }
 }
 
 /**
@@ -74,6 +75,15 @@ function b64(value: unknown): string {
   return Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString(
     'base64url'
   )
+}
+
+/**
+ * The titles of a list response's items, in the order served.
+ * @param response - A `GET /api/v1/notifications` response.
+ * @returns The titles.
+ */
+function titlesOf(response: Response): string[] {
+  return (envelopeOf<NotificationListBody>(response).data?.items ?? []).map((n) => n.title)
 }
 
 /**
@@ -155,7 +165,10 @@ describe('/api/v1/notifications', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      expect(envelopeOf<NotificationListBody>(response).data).toEqual({ notifications: [] })
+      const data = envelopeOf<NotificationListBody>(response).data
+      expect(data?.items).toEqual([])
+      expect(data?.page.hasNext).toBe(false)
+      expect(data?.page.nextCursor).toBeNull()
     })
 
     it('paginates with a cursor, returning every notification exactly once across pages', async () => {
@@ -171,19 +184,19 @@ describe('/api/v1/notifications', () => {
         .set('Authorization', `Bearer ${token}`)
       expect(firstPage.status).toBe(200)
       const firstBody = envelopeOf<NotificationListBody>(firstPage).data
-      expect(firstBody?.notifications).toHaveLength(2)
-      expect(firstBody?.nextCursor).toEqual(expect.any(String))
+      expect(firstBody?.items).toHaveLength(2)
+      expect(firstBody?.page.nextCursor).toEqual(expect.any(String))
 
       const secondPage = await request(app)
-        .get(`/api/v1/notifications?limit=2&cursor=${firstBody?.nextCursor}`)
+        .get(`/api/v1/notifications?limit=2&cursor=${firstBody?.page.nextCursor}`)
         .set('Authorization', `Bearer ${token}`)
       expect(secondPage.status).toBe(200)
       const secondBody = envelopeOf<NotificationListBody>(secondPage).data
-      expect(secondBody?.notifications).toHaveLength(1)
-      expect(secondBody?.nextCursor).toBeUndefined()
+      expect(secondBody?.items).toHaveLength(1)
+      expect(secondBody?.page.nextCursor).toBeNull()
 
       const seenIds = new Set(
-        [...(firstBody?.notifications ?? []), ...(secondBody?.notifications ?? [])].map((n) => n.id)
+        [...(firstBody?.items ?? []), ...(secondBody?.items ?? [])].map((n) => n.id)
       )
       expect(seenIds).toEqual(new Set(seeded.map((n) => n.id)))
     })
@@ -198,6 +211,7 @@ describe('/api/v1/notifications', () => {
 
       expect(response.status).toBe(400)
       expect(envelopeOf(response).errors).toEqual({ cursor: ['cursor is invalid.'] })
+      expect(envelopeOf(response).code).toBe('CURSOR_INVALID')
     })
 
     describe('a bad notifications cursor is a 400', () => {
@@ -220,7 +234,39 @@ describe('/api/v1/notifications', () => {
           .set('Authorization', `Bearer ${token}`)
         expect(response.status).toBe(400)
         expect(Object.keys(envelopeOf(response).errors ?? {})).toEqual(['cursor'])
+        expect(envelopeOf(response).code).toBe('CURSOR_INVALID')
       })
+    })
+
+    it('caps the page size at 100', async () => {
+      const { token } = await createAuthenticatedUser()
+      const ok = await request(app)
+        .get('/api/v1/notifications?limit=100')
+        .set('Authorization', `Bearer ${token}`)
+      const tooMany = await request(app)
+        .get('/api/v1/notifications?limit=101')
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(ok.status).toBe(200)
+      expect(tooMany.status).toBe(400)
+    })
+
+    it('narrows to unread notifications, and searches within them', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const read = await seedNotification(user.id, 'Billing read')
+      await seedNotification(user.id, 'Billing unread')
+      await seedNotification(user.id, 'Other unread')
+      await sql`update notifications set read_at = now() where id = ${read.id}`
+
+      const unread = await request(app)
+        .get('/api/v1/notifications?unread=true')
+        .set('Authorization', `Bearer ${token}`)
+      const searched = await request(app)
+        .get('/api/v1/notifications?unread=true&search=billing')
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(titlesOf(unread)).toEqual(['Other unread', 'Billing unread'])
+      expect(titlesOf(searched)).toEqual(['Billing unread'])
     })
 
     it('never returns another user’s notifications', async () => {
@@ -233,7 +279,7 @@ describe('/api/v1/notifications', () => {
         .set('Authorization', `Bearer ${otherToken}`)
 
       expect(response.status).toBe(200)
-      expect(envelopeOf<NotificationListBody>(response).data).toEqual({ notifications: [] })
+      expect(envelopeOf<NotificationListBody>(response).data?.items).toEqual([])
     })
 
     it('does not expose the internal dedupeKey', async () => {
@@ -245,7 +291,7 @@ describe('/api/v1/notifications', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      const [listed] = envelopeOf<NotificationListBody>(response).data?.notifications ?? []
+      const [listed] = envelopeOf<NotificationListBody>(response).data?.items ?? []
       expect(listed).toBeDefined()
       expect(listed).not.toHaveProperty('dedupeKey')
     })

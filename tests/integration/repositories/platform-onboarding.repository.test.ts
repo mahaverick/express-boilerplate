@@ -13,6 +13,7 @@ import {
   type OnboardingProgressOptions,
 } from '@/repositories/platform-onboarding.repository'
 import { sql } from '@/services/database.service'
+import { onboardingTenantListSchema } from '@/validators/platform-onboarding.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addCompletion,
@@ -49,37 +50,30 @@ async function stateOf(tenantId: string): Promise<string | undefined> {
 }
 
 /**
- * The argument of `listByState`, which `list` lets a test override in part.
+ * The states `list` reads.
  */
-type ListOptions = Parameters<PlatformOnboardingRepository['listByState']>[0]
+type ListedState = 'stuck' | 'in_progress' | 'awaiting_owner'
 
 /**
- * A page of one state's list under `OPTIONS`, in that state's display order: stuck longest first,
- * the others newest first. `overrides` change the page size, direction or cursor.
+ * A page of one state's list under `OPTIONS`, in that state's default order: stuck longest first,
+ * the others newest first. `query` adds the page size, direction or cursor.
  */
 function list(
-  state: 'stuck' | 'in_progress' | 'awaiting_owner',
-  overrides: Partial<ListOptions> = {}
+  state: ListedState,
+  query: Record<string, string> = {}
 ): ReturnType<PlatformOnboardingRepository['listByState']> {
-  return repository.listByState({
+  return repository.listByState(onboardingTenantListSchema.parse({ state, ...query }).params, {
     ...OPTIONS,
     state,
-    isAscending: state === 'stuck',
-    limit: 20,
-    direction: 'next',
-    ...overrides,
   })
 }
 
 /**
  * The ids of a page of `list`, in display order.
  */
-async function idsIn(
-  state: 'stuck' | 'in_progress' | 'awaiting_owner',
-  overrides: Partial<ListOptions> = {}
-): Promise<string[]> {
-  const page = await list(state, overrides)
-  return page.rows.map((row) => row.id)
+async function idsIn(state: ListedState, query: Record<string, string> = {}): Promise<string[]> {
+  const page = await list(state, query)
+  return page.items.map((row) => row.id)
 }
 
 /**
@@ -245,40 +239,64 @@ describe('PlatformOnboardingRepository.listByState', () => {
     const { tenant: second } = await createOnboardingTenant({ startedAt: day(2) })
 
     const all = await list('stuck')
-    const pageOne = await list('stuck', { limit: 2 })
-    const pageTwo = await list('stuck', { limit: 2, cursor: pageOne.nextCursor })
-    const back = await list('stuck', { limit: 2, direction: 'prev', cursor: pageTwo.prevCursor })
+    const pageOne = await list('stuck', { limit: '2' })
+    const pageTwo = await list('stuck', { limit: '2', cursor: pageOne.page.nextCursor ?? '' })
+    const back = await list('stuck', {
+      limit: '2',
+      direction: 'prev',
+      cursor: pageTwo.page.prevCursor ?? '',
+    })
 
-    expect(all.rows.map((row) => row.id)).toEqual([first.id, second.id, third.id])
-    expect(pageOne.rows.map((row) => row.id)).toEqual([first.id, second.id])
-    expect(pageOne.prevCursor).toBeUndefined()
-    expect(pageTwo.rows.map((row) => row.id)).toEqual([third.id])
-    expect(pageTwo.nextCursor).toBeUndefined()
-    expect(back.rows.map((row) => row.id)).toEqual([first.id, second.id])
-    expect(back.prevCursor).toBeUndefined()
+    expect(all.items.map((row) => row.id)).toEqual([first.id, second.id, third.id])
+    expect(pageOne.items.map((row) => row.id)).toEqual([first.id, second.id])
+    expect(pageOne.page.hasPrev).toBe(false)
+    expect(pageTwo.items.map((row) => row.id)).toEqual([third.id])
+    expect(pageTwo.page.hasNext).toBe(false)
+    expect(back.items.map((row) => row.id)).toEqual([first.id, second.id])
+    expect(back.page.hasPrev).toBe(false)
   })
 
-  it('hands the cursor back from an empty page, so the client can step back', async () => {
-    const { tenant } = await createOnboardingTenant({ startedAt: day(1) })
-    const page = await list('stuck')
-    expect(page.rows.map((row) => row.id)).toEqual([tenant.id])
+  it('falls back to the last page when the rows after a cursor have gone', async () => {
+    const { tenant: first } = await createOnboardingTenant({ startedAt: day(1) })
+    const { tenant: second } = await createOnboardingTenant({ startedAt: day(2) })
+    const { tenant: last } = await createOnboardingTenant({ startedAt: day(3) })
+    const pageOne = await list('stuck', { limit: '2' })
+    await sql`update tenants set onboarding_tracked = false where id = ${last.id}`
 
-    const beyond = await list('stuck', {
-      cursor: { sortAt: '2001-01-02T00:00:00.000000Z', id: 'ffffffff-ffff-7fff-bfff-ffffffffffff' },
-    })
+    const beyond = await list('stuck', { limit: '2', cursor: pageOne.page.nextCursor ?? '' })
 
-    expect(beyond.rows).toEqual([])
-    expect(beyond.prevCursor).toEqual({
-      sortAt: '2001-01-02T00:00:00.000000Z',
-      id: 'ffffffff-ffff-7fff-bfff-ffffffffffff',
-    })
+    expect(beyond.items.map((row) => row.id)).toEqual([first.id, second.id])
+    expect(beyond.page).toMatchObject({ hasNext: false, hasPrev: false })
+  })
+
+  it('searches by name within the state, and keeps the state filter', async () => {
+    const { tenant: match } = await createOnboardingTenant({ startedAt: day(1) })
+    await createOnboardingTenant({ startedAt: day(2) })
+    const { tenant: fresh } = await createOnboardingTenant({ startedAt: day(30) })
+
+    const found = await idsIn('stuck', { search: match.name })
+    const wrongState = await idsIn('in_progress', { search: match.name })
+    const freshStuck = await idsIn('stuck', { search: fresh.name })
+
+    expect(found).toEqual([match.id])
+    expect(wrongState).toEqual([])
+    expect(freshStuck).toEqual([])
+  })
+
+  it('sorts by name and by start, ascending or descending, on request', async () => {
+    const { tenant: beta } = await createOnboardingTenant({ startedAt: day(1), name: 'zz-beta' })
+    const { tenant: alpha } = await createOnboardingTenant({ startedAt: day(2), name: 'zz-alpha' })
+
+    expect(await idsIn('stuck', { search: 'zz-', sort: 'name' })).toEqual([alpha.id, beta.id])
+    expect(await idsIn('stuck', { search: 'zz-', sort: '-started' })).toEqual([alpha.id, beta.id])
+    expect(await idsIn('stuck', { search: 'zz-', sort: 'progress' })).toEqual([beta.id, alpha.id])
   })
 
   it('lists in-progress tenants newest started first', async () => {
     const { tenant: older } = await createOnboardingTenant({ startedAt: day(10) })
     const { tenant: newer } = await createOnboardingTenant({ startedAt: day(11) })
 
-    const ids = await idsIn('in_progress', { limit: 50 })
+    const ids = await idsIn('in_progress', { limit: '50' })
 
     expect(ids.indexOf(newer.id)).toBeGreaterThanOrEqual(0)
     expect(ids.indexOf(newer.id)).toBeLessThan(ids.indexOf(older.id))
@@ -294,7 +312,7 @@ describe('PlatformOnboardingRepository.listByState', () => {
       createdAt: day(2),
     })
 
-    const ids = await idsIn('awaiting_owner', { limit: 50 })
+    const ids = await idsIn('awaiting_owner', { limit: '50' })
 
     expect(ids.indexOf(newer.id)).toBeGreaterThanOrEqual(0)
     expect(ids.indexOf(newer.id)).toBeLessThan(ids.indexOf(older.id))

@@ -7,7 +7,31 @@
  * Also the closed set of traits a flag may target, and the snapshot
  * pipeline's limits.
  */
-import type { FlagApp, FlagScope } from '@/types/flags'
+import type { FlagApp, FlagScope, FlagState } from '@/types/flags'
+
+/**
+ * Every `FlagState` as a key; the record type makes a state added to the union
+ * without an entry here a compile error.
+ */
+const FLAG_STATE_SET = {
+  active: true,
+  inactive: true,
+  missing: true,
+  unsupported: true,
+} as const satisfies Record<FlagState, true>
+
+/**
+ * Every state a registered flag can be in, as the flags list filters on them.
+ */
+export const FLAG_STATES = Object.keys(FLAG_STATE_SET) as [FlagState, ...FlagState[]]
+
+/**
+ * The longest flag key the paged flag lists carry: the longest a list cursor
+ * can hold under the 4096-character cursor cap (at most six bytes of JSON
+ * escape per character, then base64). A longer key still loads into the
+ * snapshot and is evaluated, but the lists leave it out. Not a PostHog limit.
+ */
+export const LISTED_FLAG_KEY_MAX = 400
 
 /**
  * A flag key: snake_case, starting with a letter.

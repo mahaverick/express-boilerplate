@@ -197,9 +197,9 @@ describe('platform response fields', () => {
       await makeStaff(user.id, 'viewer')
       const platform = await platformTenant()
 
-      const rows = dataOf<Array<{ tenant: { id: string }; role: string; isPlatform: boolean }>>(
-        await request(app).get('/api/v1/tenants').set('Authorization', `Bearer ${token}`)
-      )
+      const { items: rows } = dataOf<{
+        items: Array<{ tenant: { id: string }; role: string; isPlatform: boolean }>
+      }>(await request(app).get('/api/v1/tenants').set('Authorization', `Bearer ${token}`))
 
       const byId = new Map(rows.map((row) => [row.tenant.id, row]))
       expect(byId.get(tenant.id)).toMatchObject({ role: 'editor', isPlatform: false })

@@ -7,8 +7,7 @@ import { z } from 'zod'
 import { ONBOARDING_RANGES, onboardingStepByKey } from '@/constants/onboarding.constants'
 import { ONBOARDING_TENANT_STATE_FILTERS } from '@/constants/platform.constants'
 import { HttpError } from '@/errors/http-error'
-import { cursorField, sortAtField } from '@/validators/cursor.validators'
-import { directionField, pageLimitField } from '@/validators/platform.validators'
+import { listParamsSchema } from '@/validators/list.validators'
 
 /**
  * The 404 an unknown or malformed step key answers.
@@ -23,15 +22,6 @@ export const STEP_NOT_FOUND_MESSAGE = 'Onboarding step not found'
 export const STEP_NOT_FOUND_CODE = 'onboarding_step_not_found'
 
 /**
- * The onboarding list cursor's decoded shape: the last row's sort
- * timestamp (microsecond text) and id.
- */
-const onboardingCursorSchema = z.strictObject({
-  sortAt: sortAtField,
-  id: z.uuid(),
-})
-
-/**
  * `GET /platform/onboarding/funnel` query: the window, 30 days unless asked otherwise.
  */
 export const onboardingFunnelQuerySchema = z.object({
@@ -39,30 +29,21 @@ export const onboardingFunnelQuerySchema = z.object({
 })
 
 /**
- * `GET /platform/onboarding/tenants` query string: one state (stuck unless
- * asked otherwise) and keyset paging. `direction=prev` needs a cursor.
+ * `GET /platform/onboarding/tenants` query: one state (stuck unless asked
+ * otherwise) and the shared list params, `search` matching the tenant name.
+ * The default sort is the state's own order: longest stuck first for
+ * `stuck`, most recently started first otherwise.
  */
-export const onboardingTenantSearchSchema = z
-  .object({
-    state: z.enum(ONBOARDING_TENANT_STATE_FILTERS).default('stuck'),
-    cursor: cursorField(onboardingCursorSchema).optional(),
-    direction: directionField,
-    limit: pageLimitField,
-  })
-  .superRefine((query, context) => {
-    if (query.direction === 'prev' && query.cursor === undefined) {
-      context.addIssue({
-        code: 'custom',
-        path: ['cursor'],
-        message: 'cursor is required when direction is prev.',
-      })
-    }
-  })
+export const onboardingTenantListSchema = listParamsSchema({
+  sorts: ['progress', '-started', 'name'],
+  defaultSort: (filters) => (filters.state === 'stuck' ? 'progress' : '-started'),
+  filters: { state: z.enum(ONBOARDING_TENANT_STATE_FILTERS).default('stuck') },
+})
 
 /**
- * The validated list query, with the cursor already decoded.
+ * A parsed onboarding tenant list query.
  */
-export type OnboardingTenantSearchQuery = z.infer<typeof onboardingTenantSearchSchema>
+export type OnboardingTenantListQuery = z.output<typeof onboardingTenantListSchema>
 
 /**
  * A route's `:key` as a registry step key, or a 404: an unknown key answers

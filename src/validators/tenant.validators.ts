@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { MEMBERSHIP_ROLES, RESERVED_SLUGS } from '@/constants/tenant.constants'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import { emailSchema } from '@/validators/auth.validators'
+import { listFilter, listParamsSchema } from '@/validators/list.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 
 const MAX_TENANT_NAME_LENGTH = 255
@@ -329,3 +330,51 @@ export const updateTenantSettingsSchema = z.object({
  * body.
  */
 export type UpdateTenantSettingsInput = z.infer<typeof updateTenantSettingsSchema>
+
+/**
+ * The role filter every tenant list takes: a comma list of membership roles.
+ */
+const roleFilter = { role: listFilter('role', MEMBERSHIP_ROLES).optional() }
+
+/**
+ * `GET /tenants/:slug/members` query: the shared list params, `search`
+ * matching the email and both names; `role` sorts owner first.
+ */
+export const memberListSchema = listParamsSchema({
+  sorts: ['name', 'email', 'role', '-joined'],
+  defaultSort: 'name',
+  filters: roleFilter,
+})
+
+/**
+ * A parsed member list query.
+ */
+export type MemberListQuery = z.output<typeof memberListSchema>
+
+/**
+ * `GET /tenants/:slug/invitations` query: the shared list params, `search` matching the email.
+ */
+export const invitationListSchema = listParamsSchema({
+  sorts: ['-created', 'email'],
+  defaultSort: '-created',
+  filters: roleFilter,
+})
+
+/**
+ * A parsed invitation list query.
+ */
+export type InvitationListQuery = z.output<typeof invitationListSchema>
+
+/**
+ * `GET /tenants` query: the shared list params, `search` matching the tenant name.
+ */
+export const myTenantListSchema = listParamsSchema({
+  sorts: ['name', '-joined'],
+  defaultSort: 'name',
+  filters: roleFilter,
+})
+
+/**
+ * A parsed my-tenants list query.
+ */
+export type MyTenantListQuery = z.output<typeof myTenantListSchema>

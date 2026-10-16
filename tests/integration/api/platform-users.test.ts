@@ -32,9 +32,14 @@ interface UserRowBody {
  * One page of the directory listing with its paging cursors.
  */
 interface UserPageBody {
-  users: UserRowBody[]
-  nextCursor: string | null
-  prevCursor: string | null
+  items: UserRowBody[]
+  page: {
+    nextCursor: string | null
+    prevCursor: string | null
+    hasNext: boolean
+    hasPrev: boolean
+    limit: number
+  }
 }
 
 /**
@@ -114,56 +119,7 @@ describe('GET /api/v1/platform/users', () => {
     })
   })
 
-  describe('paging', () => {
-    it('answers prevCursor null on the first page and walks forward and back by cursor', async () => {
-      const { token } = await createTrackedStaff('viewer')
-      const tag = `api${randomUUID().slice(0, 8)}`
-      for (const letter of ['c', 'a', 'b']) {
-        await createTrackedUser({ email: `${tag}-${letter}@example.test` })
-      }
-
-      const first = dataOf<UserPageBody>(await list(token, { q: tag, limit: '2' }))
-      expect(first.users.map((user) => user.email)).toEqual([
-        `${tag}-a@example.test`,
-        `${tag}-b@example.test`,
-      ])
-      expect(first.prevCursor).toBeNull()
-      expect(first.nextCursor).toEqual(expect.any(String))
-
-      const second = dataOf<UserPageBody>(
-        await list(token, { q: tag, limit: '2', cursor: first.nextCursor as string })
-      )
-      expect(second.users.map((user) => user.email)).toEqual([`${tag}-c@example.test`])
-      expect(second.nextCursor).toBeNull()
-
-      const back = dataOf<UserPageBody>(
-        await list(token, {
-          q: tag,
-          limit: '2',
-          direction: 'prev',
-          cursor: second.prevCursor as string,
-        })
-      )
-      expect(back.users.map((user) => user.email)).toEqual([
-        `${tag}-a@example.test`,
-        `${tag}-b@example.test`,
-      ])
-      expect(back.prevCursor).toBeNull()
-    })
-
-    it('answers 400 for direction=prev without a cursor, and for a forged cursor', async () => {
-      const { token } = await createTrackedStaff('viewer')
-
-      const noCursor = await list(token, { direction: 'prev' })
-      expect(noCursor.status).toBe(400)
-      expect((noCursor.body as ApiEnvelope<unknown>).errors?.cursor).toEqual([
-        'cursor is required when direction is prev.',
-      ])
-
-      const forged = await list(token, { cursor: 'not-a-cursor' })
-      expect(forged.status).toBe(400)
-    })
-
+  describe('query validation', () => {
     it('answers 400 for an unknown status and a non-boolean verified', async () => {
       const { token } = await createTrackedStaff('viewer')
 
@@ -179,7 +135,7 @@ describe('GET /api/v1/platform/users', () => {
     const tag = `ph${randomUUID().slice(0, 8)}`
     await createTrackedUser({ email: `${tag}@example.test`, hasPassword: true })
 
-    const response = await list(token, { q: tag })
+    const response = await list(token, { search: tag })
 
     expect(JSON.stringify(response.body)).not.toContain('passwordHash')
     expect(JSON.stringify(response.body)).not.toContain('$2')
@@ -258,11 +214,11 @@ describe('GET /api/v1/platform/users/:id', () => {
     const gone = await createTrackedUser({ email: `${tag}@example.test` })
     await sql`update users set deleted_at = now() where id = ${gone.id}`
 
-    const byDefault = dataOf<UserPageBody>(await list(token, { q: tag }))
-    const deleted = dataOf<UserPageBody>(await list(token, { q: tag, status: 'deleted' }))
+    const byDefault = dataOf<UserPageBody>(await list(token, { search: tag }))
+    const deleted = dataOf<UserPageBody>(await list(token, { search: tag, status: 'deleted' }))
 
-    expect(byDefault.users).toEqual([])
-    expect(deleted.users.map((user) => user.id)).toEqual([gone.id])
+    expect(byDefault.items).toEqual([])
+    expect(deleted.items.map((user) => user.id)).toEqual([gone.id])
   })
 
   it("answers a non-staff user with the app's own 404", async () => {

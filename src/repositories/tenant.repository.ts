@@ -18,12 +18,14 @@ import {
 } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import {
   BaseRepository,
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
+import type { RoleFilters } from '@/repositories/user-membership.repository'
 import {
   db,
   withTransaction,
@@ -31,6 +33,16 @@ import {
   type DbTransaction,
 } from '@/services/database.service'
 import type { TenantGroupSnapshot } from '@/types/analytics'
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * The columns `TenantRepository.create` accepts for the tenant row itself,
@@ -45,6 +57,52 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
      */
     ownerId: string
   }
+
+/**
+ * The tenants one user belongs to, searched by name. Its cursors are bound
+ * to the user.
+ * @param userId - The user.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The roles.
+ * @returns The list definition.
+ */
+export function myTenantList(userId: string, search: string | undefined, filters: RoleFilters) {
+  return defineList({
+    name: 'my-tenants',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: userMembershipModel.tenantId,
+          tenant: tenantModel,
+          role: userMembershipModel.role,
+          joinedAt: userMembershipModel.createdAt,
+          sortName: sql<string>`lower(${tenantModel.name})`,
+          sortJoined: timestampKey(userMembershipModel.createdAt),
+        })
+        .from(userMembershipModel)
+        .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
+        .where(
+          and(
+            eq(userMembershipModel.userId, userId),
+            isNull(tenantModel.deletedAt),
+            filters.roles === undefined
+              ? undefined
+              : inArray(userMembershipModel.role, filters.roles),
+            searchCondition(search, [sql`lower(${tenantModel.name})`]),
+            seek
+          )
+        )
+        .$dynamic(),
+    // Unique for one user (user_id, tenant_id), and the tenant id the item shows.
+    id: userMembershipModel.tenantId,
+    sorts: {
+      name: [textSort(sql`lower(${tenantModel.name})`, 'asc', 'sortName')],
+      '-joined': [timestampSort(userMembershipModel.createdAt, 'desc', 'sortJoined')],
+    },
+    bound: { userId },
+    toItem: ({ id: _id, sortName: _name, sortJoined: _joined, ...row }) => row,
+  })
+}
 
 /**
  * Query access to the `tenants` table: lookup by slug and/or id, atomic
@@ -218,22 +276,24 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
-   * Every tenant one user belongs to, with the role they hold in each, for
-   * `GET /tenants`. A soft-deleted tenant is excluded even though the user's
-   * membership row still exists: nothing prunes it when the tenant is deleted.
-   * @param userId - The user whose tenant memberships to list.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns One entry per tenant this user is (still visibly) a member of, in no particular guaranteed order.
+   * One page of the tenants a user belongs to (soft-deleted ones excluded),
+   * with their role and when they joined, searched by tenant name. Sorting
+   * by name reads the tenant row, so it is bounded by the user's membership
+   * count rather than ordered by an index.
+   * @param userId - The user.
+   * @param params - The parsed shared list params.
+   * @param filters - The roles.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
   async listForUser(
     userId: string,
+    params: ListParams,
+    filters: RoleFilters,
     executor: DbExecutor = db
-  ): Promise<Array<{ tenant: Tenant; role: MembershipRole }>> {
-    return executor
-      .select({ tenant: tenantModel, role: userMembershipModel.role })
-      .from(userMembershipModel)
-      .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
-      .where(and(eq(userMembershipModel.userId, userId), isNull(tenantModel.deletedAt)))
+  ): Promise<ListPage<{ tenant: Tenant; role: MembershipRole; joinedAt: Date }>> {
+    return listPage(executor, myTenantList(userId, params.search, filters), params)
   }
 
   /**

@@ -6,21 +6,24 @@
  * transaction the retention purge (retention.service.ts) or a tenant purge
  * opened for it.
  */
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
-import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
+import { and, eq, inArray, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
+import type { AuditAccess, StoredAuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
-
-/**
- * The last row of a page: where the next page resumes, newest first.
- */
-export interface AuditLogCursor {
-  occurredAt: Date
-  id: string
-}
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * The actor's public identity, never `passwordHash`.
@@ -42,26 +45,8 @@ export interface AuditLogListRow {
 }
 
 /**
- * Paging and the optional filters. A tenant read always sets `tenantId`.
+ * The actor columns an entry lists with, never `passwordHash`.
  */
-export interface AuditLogListOptions {
-  limit: number
-  cursor?: AuditLogCursor | undefined
-  tenantId?: string | undefined
-  targetId?: string | undefined
-  actorUserId?: string | undefined
-  action?: AuditAction | undefined
-  access?: AuditAccess | undefined
-}
-
-/**
- * A page of rows and, when more remain, the cursor for the next one.
- */
-export interface AuditLogRepositoryPage {
-  rows: AuditLogListRow[]
-  nextCursor?: AuditLogCursor
-}
-
 const actorColumns = {
   id: userModel.id,
   email: userModel.email,
@@ -70,46 +55,104 @@ const actorColumns = {
 }
 
 /**
- * The filter and keyset conditions for one listing.
- * @param options - The listing's filters and cursor.
- * @returns The conditions to AND together.
+ * The audit list's filters. A tenant read always sets `tenantId`.
  */
-function conditionsFor(options: AuditLogListOptions): SQL[] {
-  const conditions: SQL[] = []
-  if (options.tenantId !== undefined) {
-    conditions.push(eq(auditLogModel.tenantId, options.tenantId))
-  }
-  if (options.targetId !== undefined) {
-    conditions.push(eq(auditLogModel.targetId, options.targetId))
-  }
-  if (options.actorUserId !== undefined) {
-    conditions.push(eq(auditLogModel.actorUserId, options.actorUserId))
-  }
-  if (options.action !== undefined) conditions.push(eq(auditLogModel.action, options.action))
-  if (options.access !== undefined) conditions.push(eq(auditLogModel.access, options.access))
-  if (options.cursor !== undefined) {
-    // An ISO string cast back, not a bare Date: postgres.js cannot bind a Date inside a raw `sql` fragment.
-    conditions.push(
-      sql`(${auditLogModel.occurredAt}, ${auditLogModel.id}) < (${options.cursor.occurredAt.toISOString()}::timestamptz, ${options.cursor.id})`
-    )
-  }
-  return conditions
+export interface AuditLogFilters {
+  tenantId?: string | undefined
+  actorUserId?: string | undefined
+  targetId?: string | undefined
+  actions?: StoredAuditAction[] | undefined
+  access?: AuditAccess[] | undefined
+  /**
+  Which read this is. A `tenant` read is of one tenant's own log: search then matches only the entry's own tenant as a target and never a user target's email, since the entry can name a target outside the tenant (a staff action filed under it). A `platform` read searches every target. Required, so a new caller must choose.
+   */
+  scope: 'tenant' | 'platform'
 }
 
 /**
- * Trim the look-ahead row and build the next cursor from the last row kept.
- * @param rows - Up to `limit + 1` rows, newest first.
- * @param limit - The page size.
- * @returns The page.
+ * The user a `user` target names, joined for search.
  */
-function toPage(rows: AuditLogListRow[], limit: number): AuditLogRepositoryPage {
-  const hasMore = rows.length > limit
-  if (hasMore) rows.pop()
-  const last = rows.at(-1)
-  if (hasMore && last !== undefined) {
-    return { rows, nextCursor: { occurredAt: last.entry.occurredAt, id: last.entry.id } }
-  }
-  return { rows }
+const targetUser = alias(userModel, 'target_user')
+
+/**
+ * The tenant a `tenant` target names, joined for search.
+ */
+const targetTenant = alias(tenantModel, 'target_tenant')
+
+/**
+ * The audit list, newest first by default. The actor and the target are
+ * left joins, so an entry whose actor or target has no row still lists;
+ * `search` matches the action, the actor's email, a user target's email and
+ * a tenant target's name; a tenant read (`scope: 'tenant'`) matches the
+ * entry's own tenant as a target only and skips user targets. Its cursors
+ * are bound to the tenant.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The filters.
+ * @returns The list definition.
+ */
+export function auditLogList(search: string | undefined, filters: AuditLogFilters) {
+  return defineList({
+    name: filters.scope === 'tenant' ? 'tenant-audit-log' : 'platform-audit-log',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: auditLogModel.id,
+          entry: auditLogModel,
+          actor: actorColumns,
+          tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
+          sortOccurred: timestampKey(auditLogModel.occurredAt),
+        })
+        .from(auditLogModel)
+        .innerJoin(tenantModel, eq(auditLogModel.tenantId, tenantModel.id))
+        .leftJoin(userModel, eq(auditLogModel.actorUserId, userModel.id))
+        .leftJoin(
+          targetUser,
+          and(eq(auditLogModel.targetType, 'user'), eq(targetUser.id, auditLogModel.targetId))
+        )
+        .leftJoin(
+          targetTenant,
+          and(
+            eq(auditLogModel.targetType, 'tenant'),
+            eq(targetTenant.id, auditLogModel.targetId),
+            filters.scope === 'tenant' ? eq(targetTenant.id, auditLogModel.tenantId) : undefined
+          )
+        )
+        .where(
+          and(
+            filters.tenantId === undefined
+              ? undefined
+              : eq(auditLogModel.tenantId, filters.tenantId),
+            filters.targetId === undefined
+              ? undefined
+              : eq(auditLogModel.targetId, filters.targetId),
+            filters.actorUserId === undefined
+              ? undefined
+              : eq(auditLogModel.actorUserId, filters.actorUserId),
+            filters.actions === undefined
+              ? undefined
+              : inArray(auditLogModel.action, filters.actions),
+            filters.access === undefined
+              ? undefined
+              : inArray(auditLogModel.access, filters.access),
+            searchCondition(search, [
+              // Lowercase already: its CHECK allows only `[a-z._]`.
+              sql`${auditLogModel.action}`,
+              sql`lower(${userModel.email})`,
+              ...(filters.scope === 'tenant' ? [] : [sql`lower(${targetUser.email})`]),
+              sql`lower(${targetTenant.name})`,
+            ]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: auditLogModel.id,
+    sorts: {
+      '-occurred': [timestampSort(auditLogModel.occurredAt, 'desc', 'sortOccurred')],
+      occurred: [timestampSort(auditLogModel.occurredAt, 'asc', 'sortOccurred')],
+    },
+    ...(filters.tenantId !== undefined && { bound: { tenantId: filters.tenantId } }),
+    toItem: ({ id: _id, sortOccurred: _occurred, ...row }): AuditLogListRow => row,
+  })
 }
 
 /**
@@ -130,29 +173,19 @@ export class AuditLogRepository {
   }
 
   /**
-   * A page of entries, newest first, keyset on `(occurredAt, id)`. The actor
-   * is a left join, so an entry whose actor has no user row still lists.
-   * @param options - Page size, cursor, and the optional tenant, actor, action and access filters.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page, with `nextCursor` only when more rows remain.
+   * One page of entries, newest first unless asked otherwise.
+   * @param params - The parsed shared list params.
+   * @param filters - The tenant, actor, target, actions and access paths.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
   async list(
-    options: AuditLogListOptions,
+    params: ListParams,
+    filters: AuditLogFilters,
     executor: DbExecutor = db
-  ): Promise<AuditLogRepositoryPage> {
-    const rows = await executor
-      .select({
-        entry: auditLogModel,
-        actor: actorColumns,
-        tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
-      })
-      .from(auditLogModel)
-      .innerJoin(tenantModel, eq(auditLogModel.tenantId, tenantModel.id))
-      .leftJoin(userModel, eq(auditLogModel.actorUserId, userModel.id))
-      .where(and(...conditionsFor(options)))
-      .orderBy(desc(auditLogModel.occurredAt), desc(auditLogModel.id))
-      .limit(options.limit + 1)
-    return toPage(rows, options.limit)
+  ): Promise<ListPage<AuditLogListRow>> {
+    return listPage(executor, auditLogList(params.search, filters), params)
   }
 
   /**

@@ -83,7 +83,7 @@ describe('retention indexes', () => {
       `select id from user_tokens where ${TOKEN_PREDICATE} limit 5000`,
     ],
     [
-      'email_messages_created_at_idx',
+      'email_messages_created_sort_idx',
       `select id from email_messages where created_at < ${CUTOFF} limit 5000`,
     ],
     // The email group's retention finds a message's events and attempts by message_id, as do the cascades.

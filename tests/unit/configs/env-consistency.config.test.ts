@@ -27,6 +27,7 @@ const deployed: Record<string, string> = {
   MAIL_FROM: 'hello@example.net',
   MAIL_FROM_TRANSACTIONAL: 'auth@mail.example.net',
   TRUST_PROXY: '1',
+  CURSOR_SECRET: 'd'.repeat(32),
 }
 
 /**
@@ -48,14 +49,33 @@ function runChecks(source: Record<string, string>): {
 }
 
 /**
- * The two variables that must be set together to turn the timeline on: the PostHog personal
- * API key and the project id.
+ * The two variables that must be set together to turn PostHog's private API on: the PostHog
+ * personal API key and the project id.
  */
-function bothTimelineVariables(): Record<string, string> {
+function bothPosthogApiVariables(): Record<string, string> {
   return { POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real', POSTHOG_PROJECT_ID: '12345' }
 }
 
 describe('assertEnvConsistent', () => {
+  describe('CURSOR_SECRET', () => {
+    const withoutSecret = { ...deployed }
+    delete withoutSecret.CURSOR_SECRET
+
+    it.each(['dev', 'qa', 'prod'])('is required on APP_ENV=%s', (appEnv) => {
+      expect(runChecks({ ...withoutSecret, APP_ENV: appEnv }).error).toContain(
+        `CURSOR_SECRET is not set, but APP_ENV is ${appEnv}.`
+      )
+    })
+
+    it.each(['dev', 'qa', 'prod'])('passes on APP_ENV=%s once set', (appEnv) => {
+      expect(runChecks({ ...deployed, APP_ENV: appEnv }).error).toBeUndefined()
+    })
+
+    it('is optional on local', () => {
+      expect(runChecks(local).error).toBeUndefined()
+    })
+  })
+
   describe('Google sign-in from Apex on another host', () => {
     const google = {
       GOOGLE_CLIENT_ID: 'id',
@@ -341,7 +361,7 @@ describe('assertEnvConsistent', () => {
     })
   })
 
-  describe('half of the timeline credentials', () => {
+  describe('half of the PostHog private API credentials', () => {
     it.each([
       {
         name: 'the key without the project id',
@@ -361,7 +381,7 @@ describe('assertEnvConsistent', () => {
     })
 
     it.each([
-      { name: 'both are set', source: { ...deployed, ...bothTimelineVariables() } },
+      { name: 'both are set', source: { ...deployed, ...bothPosthogApiVariables() } },
       { name: 'neither is set', source: deployed },
     ])('stays quiet when $name', ({ source }) => {
       expect(runChecks(source).warnings).toEqual([])

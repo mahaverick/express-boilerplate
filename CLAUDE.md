@@ -150,10 +150,25 @@ points at the code or doc that holds the detail. How things work is in
 - **Bind a timestamp in raw `sql` as `${date.toISOString()}::timestamptz`.**
   A `Date` inside a `sql` template reaches postgres-js unserialised and the
   query fails; `lt(column, date)` is fine.
-- **A keyset cursor's timestamp uses `sortAtField` or `isoInstantField`**
-  inside a `cursorField` (`src/validators/cursor.validators.ts`), never a bare
-  regex or `z.iso.datetime()`: they let month 13 or year 0000 through, and the
-  `::timestamptz` cast then fails as a 500.
+- **Every table's list goes through `listPage`, and every whitelisted sort has
+  an index of its exact shape** (`src/utilities/list-page.utilities.ts`): a
+  sort the index does not cover becomes a Sort over the whole filtered table.
+  Add its `EXPLAIN` row to `tests/integration/database/list-indexes.test.ts`
+  and its `describeListContract` block, as
+  [ARCHITECTURE.md](ARCHITECTURE.md#list-endpoints) describes.
+- **A list sort's timestamp key is validated by `sortAtField`**
+  (`src/validators/cursor.validators.ts`), which `timestampSort` binds; never
+  a bare regex or `z.iso.datetime()`: they let month 13 or year 0000 through,
+  and the `::timestamptz` cast then fails as a 500. Select it as `timestampKey`:
+  the cursor carries the microsecond UTC text, and a `Date` drops the
+  microseconds, so a page boundary repeats or skips rows.
+- **Never hand back an unsigned cursor or accept one.** Cursors come only from
+  `signCursor` and are read only through `verifyCursor`, bound to the
+  request's `listScope`; a list whose rows depend on a path tenant or the
+  caller sets `bound`, and every list has its own `name`, so `bindScope` ties the
+  cursor to them. A list that
+  skipped either would let a client edit its seek values or replay a cursor
+  across tenants.
 - **Free-text fields use `safeText`:** single-line by default,
   `{ multiline: true }` for prose.
 - **Every Redis key and channel goes through `redisKey()`**
@@ -224,25 +239,16 @@ points at the code or doc that holds the detail. How things work is in
 ## Analytics, flags and error tracking
 
 - **The `/api/v1/collect` proxy is the only request path to PostHog's ingest,
-  and the staff timeline and Errors reads are the only request paths to its
+  and the person deletions and `pnpm flags:sync` are the only callers of its
   private API.** Server events leave only through the drain and the error
   reporter, via `sendBatch`; a request writes an outbox row and nothing else.
   See [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
-- **Send PostHog only the HogQL templates in `timeline-query.service.ts` and
-  `errors-query.service.ts`,** with every id, range and cursor in `values`. A
-  timeline row carries only `TIMELINE_PROP_KEYS`; a new builder key fails
-  `tests/unit/constants/timeline.constants.test.ts` until it is allowlisted
-  or excluded. Keep a cursor's timestamp the string PostHog returned: a `Date`
-  drops its microseconds.
-- **Trust a row's server fields only when its `server_sig` verifies**
+- **Sign every server event's trusted fields**
   (`analytics-signature.service.ts`): the project key is public, so any
-  browser can send `source: 'audit'`. Read a staff view's latest event with
-  `argMax(column, (timestamp, uuid))` on every column; per-column
-  `argMax(column, timestamp)` can mix two events with one timestamp, and the
-  signature never verifies.
+  browser can send `source: 'audit'`, and a reader of PostHog's events trusts
+  those fields only when `server_sig` verifies.
 - **Add a staff read view's audit through `auditThrottledView`**
-  (`platform-view-audit.service.ts`) and its event name to
-  `TIMELINE_EXCLUDED_EVENTS`, so no timeline lists its own audit.
+  (`platform-view-audit.service.ts`).
 - **Outbox writes go through `enqueueAnalytics`, or `enqueueAuditAnalytics`
   for an audit entry,** never the repository: their savepoint and `try`/`catch`
   keep a failed insert from failing the user's action. `enqueueAnalyticsOrThrow`

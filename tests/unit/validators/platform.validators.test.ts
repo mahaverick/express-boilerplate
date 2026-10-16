@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import {
-  directionField,
   MAX_REASON_LENGTH,
-  pageLimitField,
   parseIdParameter,
-  platformTenantSearchSchema,
+  platformTenantListSchema,
+  platformUserListSchema,
   reasonBodySchema,
   reasonSchema,
-  searchQueryField,
 } from '@/validators/platform.validators'
 
 describe('reasonSchema', () => {
@@ -53,17 +51,6 @@ describe('reasonBodySchema', () => {
   })
 })
 
-describe('directionField', () => {
-  it('defaults to next', () => {
-    expect(directionField.parse(undefined)).toBe('next')
-  })
-
-  it('accepts prev and refuses anything else', () => {
-    expect(directionField.parse('prev')).toBe('prev')
-    expect(directionField.safeParse('back').success).toBe(false)
-  })
-})
-
 describe('parseIdParameter', () => {
   it('returns a uuid unchanged', () => {
     const id = '0192f0c1-7a3e-7c3b-8a55-2f1f0d6c9e11'
@@ -95,27 +82,29 @@ describe('parseIdParameter', () => {
   })
 })
 
-describe('searchQueryField and pageLimitField', () => {
-  it('trims q and refuses whitespace alone, over 100 characters, or a NUL', () => {
-    expect(searchQueryField.parse('  acme ')).toBe('acme')
-    expect(searchQueryField.safeParse(' '.repeat(3)).success).toBe(false)
-    expect(searchQueryField.safeParse('x'.repeat(101)).success).toBe(false)
-    expect(searchQueryField.safeParse('a\0b').success).toBe(false)
-  })
-
-  it('coerces limit, defaults it to 20 and caps it at 50', () => {
-    expect(pageLimitField.parse(undefined)).toBe(20)
-    expect(pageLimitField.parse('7')).toBe(7)
-    expect(pageLimitField.safeParse('51').success).toBe(false)
-    expect(pageLimitField.safeParse('0').success).toBe(false)
-  })
-
-  it('parses the tenant search query with the default direction and limit', () => {
-    expect(platformTenantSearchSchema.parse({ q: ' acme ' })).toEqual({
-      q: 'acme',
-      direction: 'next',
-      limit: 20,
+describe('platformTenantListSchema', () => {
+  it('defaults state to active and suspended and the sort to name', () => {
+    expect(platformTenantListSchema.parse({})).toMatchObject({
+      params: { sort: 'name' },
+      filters: { state: ['active', 'suspended'] },
     })
-    expect(platformTenantSearchSchema.safeParse({ q: '  ' }).success).toBe(false)
+  })
+
+  it('refuses a state that is not a lifecycle state', () => {
+    expect(platformTenantListSchema.safeParse({ state: 'all' }).success).toBe(false)
+  })
+})
+
+describe('platformUserListSchema', () => {
+  it('defaults status to live accounts and the sort to email', () => {
+    expect(platformUserListSchema.parse({})).toMatchObject({
+      params: { sort: 'email' },
+      filters: { status: ['active', 'inactive'] },
+    })
+  })
+
+  it('takes -lastSignIn and refuses lastSignIn ascending', () => {
+    expect(platformUserListSchema.parse({ sort: '-lastSignIn' }).params.sort).toBe('-lastSignIn')
+    expect(platformUserListSchema.safeParse({ sort: 'lastSignIn' }).success).toBe(false)
   })
 })

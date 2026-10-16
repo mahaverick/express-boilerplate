@@ -89,16 +89,6 @@ export interface OnboardingTenantRow {
 }
 
 /**
- * A page of the onboarding list and the opaque cursors either side of it
- * (null at each end).
- */
-export interface OnboardingTenantPage {
-  tenants: OnboardingTenantRow[]
-  nextCursor: string | null
-  prevCursor: string | null
-}
-
-/**
  * One live member's own completion of a member step.
  */
 export interface OnboardingMemberStatus {

@@ -1,23 +1,33 @@
 /**
- * @file The Apex flag inspector behind `GET /platform/flags` and
- * `GET /platform/flags/evaluate`. Both read this replica's in-memory
- * definitions snapshot and never call PostHog. The list joins the registry
- * with the snapshot; evaluate builds one user's (and optionally one
- * tenant's) traits from the database and runs every registered flag through
- * the live evaluator. Evaluate is the one place traits leave the server, so
- * it is audited as `user.flags_evaluated`, at most once per staff member,
- * user, tenant and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before
- * anything is evaluated.
+ * @file The Apex flag inspector behind `GET /platform/flags`,
+ * `/platform/flags/unregistered`, `/platform/flags/meta` and
+ * `/platform/flags/evaluate`. All read this replica's in-memory definitions
+ * snapshot and never call PostHog. The lists join the registry with the
+ * snapshot, and meta carries the traits reference and the snapshot's age.
+ * Evaluate builds one user's (and optionally one tenant's) traits from the
+ * database and runs every registered flag through the live evaluator.
+ * Evaluate is the one place traits leave the server, so it is audited as
+ * `user.flags_evaluated`, at most once per staff member, user, tenant and app
+ * every `VIEW_AUDIT_THROTTLE_SECONDS`, before anything is
+ * evaluated.
  */
+import { z } from 'zod'
 import { posthogFlagUrl } from '@/configs/analytics.config'
-import { FLAG_TRAITS, FLAGS, type FlagEntry } from '@/constants/flags.constants'
+import {
+  FLAG_TRAITS,
+  FLAGS,
+  LISTED_FLAG_KEY_MAX,
+  type FlagEntry,
+} from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { recordFlagsEvaluateView } from '@/services/audit.service'
 import { flagContextForUser } from '@/services/flags/flag-context.service'
 import { getFlagsStatus } from '@/services/flags/flag-counters.service'
 import { definitionOf, flagStateOf } from '@/services/flags/flag-evaluator.service'
+import { listableUnregisteredFlags } from '@/services/flags/flag-listing.service'
 import { getFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { evaluateAll } from '@/services/flags/flags.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
@@ -27,11 +37,20 @@ import type { Actor } from '@/types/actor'
 import type {
   FlagRow,
   FlagsEvaluateResponse,
-  FlagsListResponse,
+  FlagsMetaResponse,
   UnregisteredRow,
 } from '@/types/flags'
+import {
+  listPageInMemory,
+  type InMemoryListDefinition,
+  type ListPage,
+} from '@/utilities/list-page.utilities'
 import type { ParsedDefinition } from '@/validators/flag-definition.validators'
-import type { PlatformFlagsEvaluateQuery } from '@/validators/platform.validators'
+import type {
+  PlatformFlagListQuery,
+  PlatformFlagsEvaluateQuery,
+  PlatformUnregisteredFlagListQuery,
+} from '@/validators/platform.validators'
 
 const userRepository = new UserRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -81,29 +100,80 @@ function flagRow(entry: FlagEntry, definition: ParsedDefinition | undefined): Fl
 }
 
 /**
- * The inspector's list: every registered flag with its live state, the
- * flags PostHog has that the registry lacks, the traits reference and the
- * snapshot's age.
- * @returns The list; never calls PostHog.
+ * The in-memory flag lists sort on the key alone, which is unique, in code-unit
+ * order: the order the cursor seek compares in, so pages never skip or repeat a
+ * key. A key of at most LISTED_FLAG_KEY_MAX characters fits a cursor.
  */
-export async function listFlags(): Promise<FlagsListResponse> {
+const BY_KEY = {
+  id: (row: { key: string }) => row.key,
+  idValue: z.string().min(1).max(LISTED_FLAG_KEY_MAX),
+  sorts: { key: [] },
+} as const
+
+/**
+ * Whether any of `texts` contains the lowered search, or there is no search.
+ * @param search - The lowered search, or undefined.
+ * @param texts - The row's searchable texts.
+ * @returns True when the row matches.
+ */
+function isMatch(search: string | undefined, ...texts: string[]): boolean {
+  return search === undefined || texts.some((text) => text.toLowerCase().includes(search))
+}
+
+/**
+ * One page of the registry, each flag with its live state; never calls PostHog.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export function listFlags(query: PlatformFlagListQuery): ListPage<FlagRow> {
   const snapshot = getFlagSnapshot()
-  const definitions = snapshot?.flags ?? {}
-  const registered = new Set<string>(FLAGS.map((entry) => entry.key))
-  const unregistered: UnregisteredRow[] = Object.values(definitions)
-    .filter((definition) => !registered.has(definition.key))
-    .toSorted((a, b) => a.key.localeCompare(b.key))
-    .map((definition) => ({
-      key: definition.key,
-      active: definition.active,
-      posthogUrl: posthogFlagUrl(definition.id),
-    }))
+  const search = query.params.search?.toLowerCase()
+  const { kind, state } = query.filters
+  const rows = FLAGS.map((entry) =>
+    flagRow(entry, snapshot === null ? undefined : definitionOf(snapshot, entry.key))
+  ).filter(
+    (row) =>
+      isMatch(search, row.key, row.description) &&
+      (kind === undefined || kind.includes(row.kind)) &&
+      (state === undefined || state.includes(row.state))
+  )
+  const definition: InMemoryListDefinition<FlagRow, FlagRow> = {
+    ...BY_KEY,
+    name: 'platform-flags',
+    toItem: (row) => row,
+  }
+  return listPageInMemory(rows, definition, query.params)
+}
+
+/**
+ * One page of the flags PostHog has that the registry lacks; never calls PostHog.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export function listUnregisteredFlags(
+  query: PlatformUnregisteredFlagListQuery
+): ListPage<UnregisteredRow> {
+  const search = query.params.search?.toLowerCase()
+  const rows = listableUnregisteredFlags(getFlagSnapshot())
+    .filter((flag) => isMatch(search, flag.key))
+    .map((flag) => ({ key: flag.key, active: flag.active, posthogUrl: posthogFlagUrl(flag.id) }))
+  const definition: InMemoryListDefinition<UnregisteredRow, UnregisteredRow> = {
+    ...BY_KEY,
+    name: 'platform-flags-unregistered',
+    toItem: (row) => row,
+  }
+  return listPageInMemory(rows, definition, query.params)
+}
+
+/**
+ * The traits reference and the snapshot's age, for the inspector's header.
+ * @returns The meta block.
+ */
+export async function getFlagsMeta(): Promise<FlagsMetaResponse> {
   const status = await getFlagsStatus()
   return {
-    items: FLAGS.map((entry) =>
-      flagRow(entry, snapshot === null ? undefined : definitionOf(snapshot, entry.key))
-    ),
-    unregistered,
     traits: FLAG_TRAITS.map((trait) => ({ ...trait })),
     snapshot: { enabled: status.enabled, fetchedAt: status.snapshotAt, stale: status.stale },
   }
@@ -117,7 +187,7 @@ const NO_TENANT = 'none'
 
 /**
  * Audit an evaluate view, at most once per staff member, user, tenant (or
- * none) and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`
+ * none) and app every `VIEW_AUDIT_THROTTLE_SECONDS`
  * (platform-view-audit.service.ts): the entry records the tenant and the
  * app, so each combination of them is audited on its own. The ids are
  * lowercased so the key never depends on the case a UUID arrived in; an id

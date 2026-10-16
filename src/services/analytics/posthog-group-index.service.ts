@@ -4,15 +4,52 @@
  * index 0, but nothing enforces it. A missing type is not kept, so the next
  * request asks again once an operator adds it.
  */
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
-import { posthogApi, posthogProjectPath } from '@/services/analytics/posthog-api.service'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import {
-  logTimelineFailure,
-  MAX_GROUP_TYPE_INDEX,
-} from '@/services/analytics/timeline-query.service'
+  posthogApi,
+  posthogProjectPath,
+  type PosthogApiResult,
+} from '@/services/analytics/posthog-api.service'
 import { logger } from '@/services/logger.service'
 
 const TENANT_GROUP_TYPE = 'tenant'
+
+/**
+ * PostHog's highest group type index: a project has at most five group types.
+ */
+const MAX_GROUP_TYPE_INDEX = 4
+
+/**
+ * Statuses that say the key or the project is wrong, not the request.
+ */
+const MISCONFIGURED_STATUSES: ReadonlySet<number> = new Set([401, 403, 404])
+
+/**
+ * Log why a call to PostHog's private API failed, never with the key: `error`
+ * for an answer that says the key, the project or the request is wrong (any
+ * 4xx but 429), `warn` for a 429, a 5xx, a timeout or a network failure.
+ * @param result - The failed call.
+ * @param operation - What was asked, e.g. `'group types'`.
+ */
+function logPosthogFailure(
+  result: Exclude<PosthogApiResult, { kind: 'ok' }>,
+  operation: string
+): void {
+  if (result.kind !== 'http_error') {
+    logger.warn('PostHog did not answer a private API call', { operation, outcome: result.kind })
+    return
+  }
+  const { status } = result
+  if (MISCONFIGURED_STATUSES.has(status)) {
+    logger.error('PostHog key or project misconfigured', { operation, status })
+    return
+  }
+  if (status === 429 || status >= 500) {
+    logger.warn('PostHog refused a private API call', { operation, status })
+    return
+  }
+  logger.error('PostHog rejected a private API call', { operation, status })
+}
 
 /**
  * The cached index, once found.
@@ -47,23 +84,23 @@ function tenantIndexIn(json: unknown): number | undefined | null {
  * The `tenant` group type's index, from the cache or from PostHog.
  * @returns The index, or undefined when the project has no `tenant` group
  *   type (logged at `error`; nothing is cached).
- * @throws {TimelineUnavailableError} When PostHog fails, times out or
+ * @throws {PosthogUnavailableError} When PostHog fails, times out or
  *   answers in an unexpected shape (logged by cause).
  */
 export async function tenantGroupTypeIndex(): Promise<number | undefined> {
   if (cache.index !== undefined) return cache.index
   const result = await posthogApi('GET', posthogProjectPath('groups_types/'))
   if (result.kind !== 'ok') {
-    logTimelineFailure(result, 'group types')
-    throw new TimelineUnavailableError()
+    logPosthogFailure(result, 'group types')
+    throw new PosthogUnavailableError()
   }
   const index = tenantIndexIn(result.json)
   if (index === null) {
     logger.error('PostHog answered the group types call in an unexpected shape')
-    throw new TimelineUnavailableError()
+    throw new PosthogUnavailableError()
   }
   if (index === undefined) {
-    logger.error('PostHog has no "tenant" group type, so tenant timelines are unavailable', {
+    logger.error('PostHog has no "tenant" group type, so tenant group lookups are unavailable', {
       groupType: TENANT_GROUP_TYPE,
     })
     return undefined

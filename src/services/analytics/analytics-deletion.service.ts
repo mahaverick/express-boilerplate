@@ -7,7 +7,7 @@
  * outage of any length only delays it. Inert while the personal API key or
  * the project id is not configured: the rows wait.
  */
-import { isTimelineEnabled } from '@/configs/analytics.config'
+import { isPosthogApiEnabled } from '@/configs/analytics.config'
 import {
   ANALYTICS_DELETION_BATCH_SIZE,
   ANALYTICS_DELETION_LEASE_SECONDS,
@@ -150,12 +150,12 @@ function logFailure(
  * event committed after the purge cannot be sent once PostHog has deleted
  * the person. The lease covers one batch request plus one request per claimed
  * id: `ANALYTICS_DELETION_LEASE_SECONDS` is 180 s and
- * `TIMELINE_POSTHOG_TIMEOUT_MS` bounds each call at 15 s.
+ * `POSTHOG_API_TIMEOUT_MS` bounds each call at 15 s.
  * @param now - The clock the claim and backoff are measured against. Defaults to now.
  * @returns How many rows were deleted and how many failed.
  */
 export async function processAnalyticsDeletions(now: Date = new Date()): Promise<DeletionResult> {
-  if (!isTimelineEnabled()) return { deleted: 0, failed: 0 }
+  if (!isPosthogApiEnabled()) return { deleted: 0, failed: 0 }
   const rows = await analyticsDeletionRepository.claimDue(
     ANALYTICS_DELETION_BATCH_SIZE,
     ANALYTICS_DELETION_LEASE_SECONDS,
@@ -234,7 +234,7 @@ async function deleteOneByOne(
  * @returns Resolves once the check is done.
  */
 export async function warnIfDeletionsPending(): Promise<void> {
-  if (isTimelineEnabled()) return
+  if (isPosthogApiEnabled()) return
   try {
     const pending = await analyticsDeletionRepository.countPending()
     if (pending === 0) return

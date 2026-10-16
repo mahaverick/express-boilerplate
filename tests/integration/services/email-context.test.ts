@@ -20,6 +20,7 @@ import { sendPasswordSetup } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { invite, listPending, resend } from '@/services/tenant-invitation.service'
 import { sendVerificationMail } from '@/services/verification.service'
+import { invitationListSchema } from '@/validators/tenant.validators'
 import { processNotificationJob } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -28,6 +29,16 @@ import {
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
 import { waitForJob } from '../../helpers/queue-jobs'
+
+/**
+ * Every pending invitation of a tenant, read as one page.
+ * @param tenantId - The tenant.
+ * @returns The page's items.
+ */
+async function pendingOf(tenantId: string) {
+  const page = await listPending(tenantId, invitationListSchema.parse({ limit: '100' }))
+  return page.items
+}
 
 const tenantRepository = new TenantRepository()
 const createdTenantIds: string[] = []
@@ -106,7 +117,7 @@ describe('invitation mail', () => {
 
     await invite({ userId: owner.id }, tenant.id, email, 'editor')
 
-    const [pending] = await listPending(tenant.id)
+    const [pending] = await pendingOf(tenant.id)
     const row = await rowOf(await emailJobTo(email, 'tenant_invitation'))
     expect(row).toMatchObject({
       tenant_id: tenant.id,
@@ -125,7 +136,7 @@ describe('invitation mail', () => {
     recipients.push(email)
     await invite({ userId: owner.id }, tenant.id, email, 'editor')
     const first = await emailJobTo(email, 'tenant_invitation')
-    const [pending] = await listPending(tenant.id)
+    const [pending] = await pendingOf(tenant.id)
 
     await resend({ userId: owner.id }, tenant.id, pending?.id ?? '', {
       resentFromId: first.data.messageId ?? '',

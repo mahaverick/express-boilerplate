@@ -3,44 +3,86 @@
  * table has no `deletedAt`/`updatedAt`, `deleteOne` is a hard delete, and its one
  * unique index (`dedupe_key`) is handled by `createOnce`'s ON CONFLICT, not a 409.
  */
-import { and, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import {
   notificationModel,
   type NewNotification,
   type Notification,
 } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
-import { encodeCursor } from '@/utilities/cursor.utilities'
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
- * The two fields a keyset pagination cursor for `NotificationRepository.list`
- * carries: the last row's `createdAt` and `id`, the pair (after `userId`)
- * `notifications_user_created_idx` is built on.
+ * A notification as a list returns it: every column but the internal `dedupeKey`.
  */
-export interface NotificationCursor {
-  /**
-   * The `createdAt` of the last row on the previous page.
-   */
-  createdAt: Date
-  /**
-   * The `id` of the last row on the previous page, the tiebreaker for two
-   * rows sharing the same `createdAt`.
-   */
-  id: string
+export type NotificationListItem = Omit<Notification, 'dedupeKey'>
+
+/**
+ * The condition for the `unread` filter.
+ * @param unread - True for unread only, false for read only, undefined for both.
+ * @returns The SQL condition, or undefined for both.
+ */
+function readCondition(unread: boolean | undefined) {
+  if (unread === undefined) return
+  return unread ? isNull(notificationModel.readAt) : isNotNull(notificationModel.readAt)
 }
 
 /**
- * Encode a page's last row into the opaque, URL-safe cursor string
- * `NotificationRepository.list` returns as `nextCursor`, through the shared
- * `encodeCursor` that `cursorField` decodes against. `createdAt` is
- * serialized with `toISOString()`, since the cursor goes to the client and
- * comes back as a query parameter.
- * @param cursor - The last row's `createdAt` and `id`.
- * @returns A base64url-encoded, opaque cursor string.
+ * One user's notifications, newest first, searched by title and body. Its cursors are bound to the user.
+ * @param userId - The owner.
+ * @param search - The parsed search, or undefined.
+ * @param filters - `unread` true for unread only, false for read only.
+ * @param filters.unread - The read filter, or undefined for both.
+ * @returns The list definition.
  */
-export function encodeNotificationCursor(cursor: NotificationCursor): string {
-  return encodeCursor({ createdAt: cursor.createdAt.toISOString(), id: cursor.id })
+export function notificationList(
+  userId: string,
+  search: string | undefined,
+  filters: { unread: boolean | undefined }
+) {
+  return defineList({
+    name: 'notifications',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: notificationModel.id,
+          userId: notificationModel.userId,
+          type: notificationModel.type,
+          title: notificationModel.title,
+          body: notificationModel.body,
+          metadata: notificationModel.metadata,
+          readAt: notificationModel.readAt,
+          createdAt: notificationModel.createdAt,
+          sortCreated: timestampKey(notificationModel.createdAt),
+        })
+        .from(notificationModel)
+        .where(
+          and(
+            eq(notificationModel.userId, userId),
+            readCondition(filters.unread),
+            searchCondition(search, [
+              sql`lower(${notificationModel.title})`,
+              sql`lower(${notificationModel.body})`,
+            ]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: notificationModel.id,
+    sorts: { '-created': [timestampSort(notificationModel.createdAt, 'desc', 'sortCreated')] },
+    bound: { userId },
+    toItem: ({ sortCreated: _created, ...notification }): NotificationListItem => notification,
+  })
 }
 
 /**
@@ -84,48 +126,43 @@ export class NotificationRepository {
   }
 
   /**
-   * A page of one user's notifications, newest first, via keyset (not
-   * offset) pagination on `(createdAt, id)`. The cursor's `createdAt` is bound
-   * as an ISO string cast to `timestamptz`: drizzle hands a raw `Date` in a
-   * `sql` template to postgres-js unserialised, and the query fails.
+   * One page of a user's notifications, newest first, searched by title and body.
    * @param userId - The notification owner. Every returned row belongs to this user.
-   * @param options - `limit` (page size) and an optional `cursor`, the last row of the previous page, to resume after.
-   * @param options.limit - How many notifications to return on this page.
-   * @param options.cursor - The last row of the previous page, or undefined to fetch the first page.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Up to `limit` notifications, and `nextCursor` (present only when more rows remain) to fetch the next page.
+   * @param params - The parsed shared list params.
+   * @param filters - `unread` true for unread only, false for read only.
+   * @param filters.unread - The read filter, or undefined for both.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
   async list(
     userId: string,
-    options: { limit: number; cursor?: NotificationCursor },
+    params: ListParams,
+    filters: { unread: boolean | undefined },
     executor: DbExecutor = db
-  ): Promise<{ notifications: Notification[]; nextCursor?: string }> {
-    const conditions = [eq(notificationModel.userId, userId)]
+  ): Promise<ListPage<NotificationListItem>> {
+    return listPage(executor, notificationList(userId, params.search, filters), params)
+  }
 
-    if (options.cursor) {
-      conditions.push(
-        sql`(${notificationModel.createdAt}, ${notificationModel.id}) < (${options.cursor.createdAt.toISOString()}::timestamptz, ${options.cursor.id})`
-      )
-    }
-
-    const notifications = await executor
+  /**
+   * A user's newest notifications, newest first: the SSE replay's one
+   * bounded read, with no cursor, search or filter.
+   * @param userId - The owner.
+   * @param limit - The most rows to read.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns Up to `limit` notifications, newest first, the id breaking a tie.
+   */
+  async listRecent(
+    userId: string,
+    limit: number,
+    executor: DbExecutor = db
+  ): Promise<Notification[]> {
+    return executor
       .select()
       .from(notificationModel)
-      .where(and(...conditions))
+      .where(eq(notificationModel.userId, userId))
       .orderBy(desc(notificationModel.createdAt), desc(notificationModel.id))
-      .limit(options.limit + 1)
-
-    const hasMore = notifications.length > options.limit
-    if (hasMore) notifications.pop()
-
-    const lastRow = notifications.at(-1)
-    if (hasMore && lastRow !== undefined) {
-      return {
-        notifications,
-        nextCursor: encodeNotificationCursor({ createdAt: lastRow.createdAt, id: lastRow.id }),
-      }
-    }
-    return { notifications }
+      .limit(limit)
   }
 
   /**

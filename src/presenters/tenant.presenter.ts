@@ -23,6 +23,10 @@ export interface TenantListRow {
   tenant: PublicTenant
   role: MembershipRole
   isPlatform: boolean
+  /**
+   * When the user joined the tenant.
+   */
+  joinedAt: Date
 }
 
 /**
@@ -60,11 +64,16 @@ export function toPublicTenant(tenant: Tenant): PublicTenant {
  * @param entry.role - The caller's role in it.
  * @returns The row, with `isPlatform` lifted to the top level.
  */
-export function toTenantListRow(entry: { tenant: Tenant; role: MembershipRole }): TenantListRow {
+export function toTenantListRow(entry: {
+  tenant: Tenant
+  role: MembershipRole
+  joinedAt: Date
+}): TenantListRow {
   return {
     tenant: toPublicTenant(entry.tenant),
     role: entry.role,
     isPlatform: entry.tenant.isPlatform,
+    joinedAt: entry.joinedAt,
   }
 }
 

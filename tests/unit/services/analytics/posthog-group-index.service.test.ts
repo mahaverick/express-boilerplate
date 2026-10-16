@@ -2,14 +2,14 @@
  * @file tenantGroupTypeIndex against the fake PostHog on 127.0.0.1 (no
  * database, no Redis): the index is read once and kept, whatever its value;
  * a missing `tenant` type is logged at error and not kept; a failed or
- * malformed answer throws TimelineUnavailableError.
+ * malformed answer throws PosthogUnavailableError.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import {
   resetTenantGroupTypeIndexCache,
   tenantGroupTypeIndex,
-} from '@/services/analytics/timeline-group-index.service'
+} from '@/services/analytics/posthog-group-index.service'
 import { logger } from '@/services/logger.service'
 import { startFakePosthog, type FakePosthog } from '../../../helpers/fake-posthog'
 
@@ -57,6 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  target.host = posthog().url
   posthog().groupTypes = [{ group_type: 'tenant', group_type_index: 0 }]
   posthog().groupTypesStatus = 200
   posthog().requests.length = 0
@@ -89,7 +90,7 @@ describe('tenantGroupTypeIndex', () => {
 
     expect(await tenantGroupTypeIndex()).toBeUndefined()
     expect(error).toHaveBeenCalledWith(
-      'PostHog has no "tenant" group type, so tenant timelines are unavailable',
+      'PostHog has no "tenant" group type, so tenant group lookups are unavailable',
       { groupType: 'tenant' }
     )
 
@@ -98,12 +99,12 @@ describe('tenantGroupTypeIndex', () => {
     expect(groupTypeCalls()).toBe(2)
   })
 
-  it('throws TimelineUnavailableError, logged at warn, when PostHog fails, and keeps nothing', async () => {
+  it('throws PosthogUnavailableError, logged at warn, when PostHog fails, and keeps nothing', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     posthog().groupTypesStatus = 503
 
-    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(TimelineUnavailableError)
-    expect(warn).toHaveBeenCalledWith('PostHog refused a timeline call', {
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
+    expect(warn).toHaveBeenCalledWith('PostHog refused a private API call', {
       operation: 'group types',
       status: 503,
     })
@@ -112,15 +113,55 @@ describe('tenantGroupTypeIndex', () => {
     expect(await tenantGroupTypeIndex()).toBe(0)
   })
 
-  it('throws on a 401, logged at error as a misconfiguration', async () => {
-    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
-    posthog().groupTypesStatus = 401
+  it.each([
+    [400, 'error', 'PostHog rejected a private API call'],
+    [401, 'error', 'PostHog key or project misconfigured'],
+    [403, 'error', 'PostHog key or project misconfigured'],
+    [404, 'error', 'PostHog key or project misconfigured'],
+    [429, 'warn', 'PostHog refused a private API call'],
+    [500, 'warn', 'PostHog refused a private API call'],
+    [502, 'warn', 'PostHog refused a private API call'],
+  ] as const)('logs a %i at %s with "%s"', async (status, level, message) => {
+    const logged = vi.spyOn(logger, level).mockImplementation(() => {})
+    const other = vi
+      .spyOn(logger, level === 'error' ? 'warn' : 'error')
+      .mockImplementation(() => {})
+    posthog().groupTypesStatus = status
 
-    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(TimelineUnavailableError)
-    expect(error).toHaveBeenCalledWith('Timeline key or project misconfigured', {
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
+
+    expect(logged).toHaveBeenCalledWith(message, { operation: 'group types', status })
+    expect(other).not.toHaveBeenCalled()
+  })
+
+  it('logs a network failure at warn as an unanswered call', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    target.host = 'http://127.0.0.1:1'
+
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
+
+    expect(warn).toHaveBeenCalledWith('PostHog did not answer a private API call', {
       operation: 'group types',
-      status: 401,
+      outcome: 'network',
     })
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('logs a timeout at warn as an unanswered call', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
+      new DOMException('The operation timed out.', 'TimeoutError')
+    )
+
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
+
+    expect(warn).toHaveBeenCalledWith('PostHog did not answer a private API call', {
+      operation: 'group types',
+      outcome: 'timeout',
+    })
+    expect(error).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -131,7 +172,7 @@ describe('tenantGroupTypeIndex', () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     posthog().groupTypes = answer as unknown as FakePosthog['groupTypes']
 
-    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(TimelineUnavailableError)
+    await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
     expect(error).toHaveBeenCalledWith(
       'PostHog answered the group types call in an unexpected shape'
     )

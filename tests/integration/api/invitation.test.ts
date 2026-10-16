@@ -30,6 +30,7 @@ import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queu
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
+import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -49,6 +50,17 @@ import {
 } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 import { settle } from '../../helpers/timing'
+
+/**
+ * Every pending invitation of a tenant, read as one page.
+ * @param tenantId - The tenant.
+ * @returns The page's items.
+ */
+async function pendingOf(tenantId: string) {
+  const { params, filters } = invitationListSchema.parse({ limit: '100' })
+  const page = await invitationRepository.listPending(tenantId, params, { roles: filters.role })
+  return page.items
+}
 
 const app = createApp()
 const invitationRepository = new TenantInvitationRepository()
@@ -334,7 +346,7 @@ describe('invitations API', () => {
 
         const queued = await waitForInvitationEmail(email)
         expect(queued.userId).toBe(invitee?.id ?? '')
-        const [pending] = await invitationRepository.listPending(tenant.id)
+        const [pending] = await pendingOf(tenant.id)
         /**
          * Matches the notification job for this test's pending invitation.
          */
@@ -408,7 +420,7 @@ describe('invitations API', () => {
         const response = await inviteVia(tenant.slug, adminToken, { email: uniqueEmail(), role })
 
         expect(response.status).toBe(403)
-        expect(await invitationRepository.listPending(tenant.id)).toEqual([])
+        expect(await pendingOf(tenant.id)).toEqual([])
       }
     )
 
@@ -479,7 +491,8 @@ describe('invitations API', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
 
       expect(response.status).toBe(200)
-      const items = envelopeOf<Array<Record<string, unknown>>>(response).data ?? []
+      const items =
+        envelopeOf<{ items: Array<Record<string, unknown>> }>(response).data?.items ?? []
       expect(items).toHaveLength(1)
       expect(Object.keys(items[0] ?? {}).toSorted((a, b) => a.localeCompare(b))).toEqual([
         'createdAt',
@@ -514,7 +527,7 @@ describe('invitations API', () => {
         .set('Authorization', `Bearer ${adminToken}`)
 
       expect(response.status).toBe(200)
-      const items = envelopeOf<Array<{ id: string }>>(response).data ?? []
+      const items = envelopeOf<{ items: Array<{ id: string }> }>(response).data?.items ?? []
       expect(items.map((item) => item.id)).toEqual([invitationId])
     })
 
@@ -541,7 +554,7 @@ describe('invitations API', () => {
       const { user: invitee, token: inviteeToken } = await createUser()
       await inviteVia(tenant.slug, ownerToken, { email: invitee.email, role: 'viewer' })
       const first = await waitForInvitationEmail(invitee.email)
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       await backdateInvitationSend(pending?.id ?? '')
 
       // No .send(): the React client resends with no body at all.
@@ -566,7 +579,7 @@ describe('invitations API', () => {
         email: uniqueEmail(),
         role: 'viewer',
       })
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       await backdateInvitationSend(pending?.id ?? '')
 
       const resent = await request(app)
@@ -648,7 +661,7 @@ describe('invitations API', () => {
 
       const invited = await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
       expect(invited.status).toBe(202)
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       for (let index = 0; index < 5; index += 1) {
         await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
       }
@@ -662,7 +675,7 @@ describe('invitations API', () => {
       const invitee = uniqueEmail()
       await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
       const { token: rawToken } = await waitForInvitationEmail(invitee)
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
 
       const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
 
@@ -678,7 +691,7 @@ describe('invitations API', () => {
     it('resends once the cooldown has passed', async () => {
       const { ownerToken, tenant } = await setup()
       await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       await backdateInvitationSend(pending?.id ?? '')
 
       const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
@@ -691,7 +704,7 @@ describe('invitations API', () => {
       const invitee = uniqueEmail()
       await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
       const { token: rawToken } = await waitForInvitationEmail(invitee)
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       const invitationId = pending?.id ?? ''
       await backdateInvitationSend(invitationId)
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
@@ -738,7 +751,7 @@ describe('invitations API', () => {
 
       expect(refused.status).toBe(429)
       expect(refused.body).toMatchObject({ code: 'RATE_LIMITED' })
-      expect(await invitationRepository.listPending(tenant.id)).toEqual([])
+      expect(await pendingOf(tenant.id)).toEqual([])
     })
 
     it('refuses a fourth invitation of one address from one tenant without spending its daily budget', async () => {
@@ -768,7 +781,7 @@ describe('invitations API', () => {
       const invitee = uniqueEmail()
       await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
       const { token: rawToken } = await waitForInvitationEmail(invitee)
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       await backdateInvitationSend(pending?.id ?? '')
       const redis = await getRedis()
       await redis.set(
@@ -796,7 +809,7 @@ describe('invitations API', () => {
         expect(invited.status).toBe(202)
       }
 
-      expect(await invitationRepository.listPending(tenant.id)).toHaveLength(12)
+      expect(await pendingOf(tenant.id)).toHaveLength(12)
     })
   })
 

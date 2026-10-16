@@ -183,6 +183,20 @@
       "when": 1791395175250,
       "tag": "0025_invitation_last_sent_at",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792157486857,
+      "tag": "0026_list_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792162870714,
+      "tag": "0027_users_full_name_trgm",
+      "breakpoints": true
     }
   ]
 }

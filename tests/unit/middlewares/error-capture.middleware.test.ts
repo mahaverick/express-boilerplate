@@ -12,7 +12,7 @@ import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import type { Request, Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { HttpError } from '@/errors/http-error'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { UNMATCHED_ROUTE } from '@/middlewares/route-template.middleware'
 import * as reporter from '@/services/errors/error-reporter.service'
@@ -142,10 +142,10 @@ describe('errorHandler and error tracking', () => {
     })
   })
 
-  it('does not report or log a TimelineUnavailableError, even with a cause, but gives it an errorId', () => {
+  it('does not report or log a PosthogUnavailableError, even with a cause, but gives it an errorId', () => {
     const { response, body } = mockResponse()
     const { request } = mockRequest()
-    const error = new TimelineUnavailableError()
+    const error = new PosthogUnavailableError()
     Object.assign(error, { cause: new Error('PostHog refused') })
 
     errorHandler(error, request, response, vi.fn())

@@ -107,7 +107,7 @@ describe('notification.worker', () => {
       'completed'
     )
 
-    const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+    const notifications = await notificationRepository.listRecent(userId, 10)
     expect(notifications).toHaveLength(1)
     expect(notifications[0]?.title).toBe('Verify your email')
     // The load-bearing assertion: what was actually persisted to Postgres, not merely what the worker was asked to strip in-process.
@@ -150,7 +150,7 @@ describe('notification.worker', () => {
       'completed'
     )
 
-    const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+    const notifications = await notificationRepository.listRecent(userId, 10)
     expect(notifications).toEqual([])
 
     const emailJobs = await emailQueueJobs()
@@ -196,7 +196,7 @@ describe('notification.worker', () => {
       'completed',
     ])
 
-    const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+    const notifications = await notificationRepository.listRecent(userId, 10)
     expect(notifications.map((notification) => notification.type)).toEqual(['verify_email'])
 
     const emailJobs = await emailQueueJobs()
@@ -218,7 +218,7 @@ describe('notification.worker', () => {
       'completed'
     )
 
-    const { notifications } = await notificationRepository.list(userId, { limit: 10 })
+    const notifications = await notificationRepository.listRecent(userId, 10)
     expect(notifications).toHaveLength(1)
 
     const emailJobs = await emailQueueJobs()

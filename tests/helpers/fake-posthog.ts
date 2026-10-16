@@ -3,8 +3,7 @@
  * request (method, path with query, headers and the exact body bytes), parses
  * each `/batch/` body into `batches`, and answers with a status the test
  * chooses. It also serves the private-API endpoints the server calls with
- * the personal key, under `/api/projects/<id>/`: `query/` (answered by
- * `respondToQuery`), `groups_types/` (from `groupTypes`, with `groupTypesStatus`),
+ * the personal key, under `/api/projects/<id>/`: `groups_types/` (from `groupTypes`, with `groupTypesStatus`),
  * `persons/bulk_delete/` (with `bulkDeleteStatus`) and `feature_flags/`
  * (GET pages `featureFlags`; POST creates one after the fake's copy of
  * PostHog's validation, unless `onFeatureFlagCreate`'s responder answers first);
@@ -39,21 +38,6 @@ interface FakePosthogRequest {
  * falls back to the status `respondWith` set.
  */
 type BatchResponder = (events: PosthogBatchEvent[]) => number | undefined
-
-/**
- * The `query` object of one `POST /api/projects/<id>/query/` body.
- */
-interface FakePosthogQuery {
-  query: string
-  values: Record<string, unknown>
-}
-
-/**
- * Decides the answer to one HogQL query; `json` defaults to an empty result.
- */
-type QueryResponder = (
-  body: FakePosthogQuery
-) => Promise<{ status: number; json?: unknown }> | { status: number; json?: unknown }
 
 /**
  * One `persons/bulk_delete/` body as the fake received it.
@@ -140,15 +124,6 @@ export interface FakePosthog {
    * Extra headers on every later answer; pass an empty object to stop.
    */
   respondWithHeaders: (headers: Record<string, string>) => void
-  /**
-   * Each HogQL query body, in arrival order.
-   */
-  queries: FakePosthogQuery[]
-  /**
-   * Answer later queries with `responder`; the default answers 200 with
-   * `{ columns: [], results: [] }`.
-   */
-  respondToQuery: (responder: QueryResponder) => void
   /**
    * The `groups_types/` answer; assign a new array to change it. Starts as
    * `[{ group_type: 'tenant', group_type_index: 0 }]`.
@@ -242,7 +217,7 @@ export interface FakePosthog {
 /**
  * The endpoints served under `/api/projects/<id>/`.
  */
-type PrivateEndpoint = 'query' | 'groups_types' | 'bulk_delete' | 'feature_flags' | 'unknown'
+type PrivateEndpoint = 'groups_types' | 'bulk_delete' | 'feature_flags' | 'unknown'
 
 /**
  * The private-API endpoint a path names: `undefined` when it is not under
@@ -253,8 +228,9 @@ type PrivateEndpoint = 'query' | 'groups_types' | 'bulk_delete' | 'feature_flags
  */
 function privateEndpointOf(path: string): PrivateEndpoint | undefined {
   if (!path.startsWith('/api/projects/')) return undefined
-  const match =
-    /^\/api\/projects\/\d+\/(query|groups_types|persons\/bulk_delete|feature_flags)\/$/.exec(path)
+  const match = /^\/api\/projects\/\d+\/(groups_types|persons\/bulk_delete|feature_flags)\/$/.exec(
+    path
+  )
   if (!match) return 'unknown'
   if (match[1] === 'persons/bulk_delete') return 'bulk_delete'
   return match[1] as PrivateEndpoint
@@ -270,23 +246,6 @@ function jsonOf(body: Buffer): unknown {
     return JSON.parse(body.toString('utf8')) as unknown
   } catch {
     return undefined
-  }
-}
-
-/**
- * The `query` object of a query body, or an empty query when it has none.
- * @param body - The request body.
- * @returns The HogQL text and its values.
- */
-function queryOf(body: Buffer): FakePosthogQuery {
-  const parsed = jsonOf(body) as { query?: { query?: unknown; values?: unknown } } | undefined
-  const query = parsed?.query
-  return {
-    query: typeof query?.query === 'string' ? query.query : '',
-    values:
-      typeof query?.values === 'object' && query.values !== null
-        ? (query.values as Record<string, unknown>)
-        : {},
   }
 }
 
@@ -428,12 +387,8 @@ export async function startFakePosthog(): Promise<FakePosthog> {
   const sockets = new Set<Socket>()
   const held = new Map<ServerResponse, NodeJS.Timeout>()
 
-  const queries: FakePosthogQuery[] = []
   const bulkDeletes: FakePosthogBulkDelete[] = []
   const authHeaders: string[] = []
-  const answers: { query: QueryResponder } = {
-    query: () => ({ status: 200, json: { columns: [], results: [] } }),
-  }
 
   const fake: FakePosthog = {
     url: '',
@@ -450,10 +405,6 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     },
     respondWithHeaders: (headers) => {
       state.headers = headers
-    },
-    queries,
-    respondToQuery: (responder) => {
-      answers.query = responder
     },
     groupTypes: [{ group_type: 'tenant', group_type_index: 0 }],
     groupTypesStatus: 200,
@@ -589,19 +540,13 @@ export async function startFakePosthog(): Promise<FakePosthog> {
    * @param body - The request body.
    * @returns What to answer.
    */
-  async function privateAnswer(
+  function privateAnswer(
     endpoint: PrivateEndpoint,
     method: string,
     path: string,
     body: Buffer
-  ): Promise<{ status: number; json: unknown }> {
+  ): { status: number; json: unknown } {
     switch (endpoint) {
-      case 'query': {
-        const query = queryOf(body)
-        queries.push(query)
-        const answer = await answers.query(query)
-        return { status: answer.status, json: answer.json ?? { columns: [], results: [] } }
-      }
       case 'groups_types': {
         const status = fake.groupTypesStatus
         return { status, json: status === 200 ? fake.groupTypes : { detail: 'error' } }
@@ -668,7 +613,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     const endpoint = privateEndpointOf(bare)
     if (endpoint !== undefined) {
       authHeaders.push(request.headers.authorization ?? '')
-      const privateResult = await privateAnswer(endpoint, method, path, body)
+      const privateResult = privateAnswer(endpoint, method, path, body)
       return { status: privateResult.status, headers: {}, text: JSON.stringify(privateResult.json) }
     }
     let status = state.status

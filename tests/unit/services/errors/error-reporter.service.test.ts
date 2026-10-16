@@ -11,7 +11,7 @@ import { inspect } from 'node:util'
 import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpError } from '@/errors/http-error'
-import { TimelineUnavailableError } from '@/errors/timeline-errors'
+import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import type { PosthogBatchEvent, SendResult } from '@/services/analytics/posthog-batch.service'
 import {
   countErrorOutcome,
@@ -746,8 +746,8 @@ describe('shouldCaptureHttpError', () => {
     expect(shouldCaptureHttpError(error, 503)).toBe(true)
   })
 
-  it('never captures TimelineUnavailableError, even with a cause', () => {
-    const error = new TimelineUnavailableError()
+  it('never captures PosthogUnavailableError, even with a cause', () => {
+    const error = new PosthogUnavailableError()
     Object.assign(error, { cause: new Error('PostHog 500') })
     expect(shouldCaptureHttpError(error, 502)).toBe(false)
   })

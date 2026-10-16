@@ -52,12 +52,10 @@ afterEach(() => {
   const current = posthog()
   current.respondWith(200)
   current.respondWithHeaders({})
-  current.respondToQuery(() => ({ status: 200 }))
   current.hang(0)
   current.groupTypesStatus = 200
   current.bulkDeleteStatus = 202
   current.requests.length = 0
-  current.queries.length = 0
   current.bulkDeletes.length = 0
   current.authHeaders.length = 0
   current.featureFlags = []
@@ -134,18 +132,16 @@ describe('posthogApi', () => {
   })
 
   it('sends a POST body as JSON', async () => {
-    posthog().respondToQuery(() => ({ status: 200, json: { columns: ['uuid'], results: [['a']] } }))
-
-    const result = await posthogApi('POST', posthogProjectPath('query/'), {
-      query: { kind: 'HogQLQuery', query: 'select 1', values: { id: 'x' } },
+    const result = await posthogApi('POST', posthogProjectPath('persons/bulk_delete/'), {
+      distinct_ids: ['user-1'],
+      delete_events: true,
+      delete_recordings: false,
     })
 
-    expect(result).toEqual({
-      kind: 'ok',
-      status: 200,
-      json: { columns: ['uuid'], results: [['a']] },
-    })
-    expect(posthog().queries).toEqual([{ query: 'select 1', values: { id: 'x' } }])
+    expect(result).toMatchObject({ kind: 'ok', status: 202 })
+    expect(posthog().bulkDeletes).toEqual([
+      { distinct_ids: ['user-1'], delete_events: true, delete_recordings: false },
+    ])
     expect(posthog().requests[0]?.headers['content-type']).toBe('application/json')
   })
 
@@ -162,9 +158,9 @@ describe('posthogApi', () => {
   it.each([401, 403, 404, 429, 500, 503])(
     'returns http_error for %i, with no key anywhere in the result',
     async (status) => {
-      posthog().respondToQuery(() => ({ status }))
+      posthog().groupTypesStatus = status
 
-      const result = await posthogApi('POST', posthogProjectPath('query/'), { query: {} })
+      const result = await posthogApi('GET', posthogProjectPath('groups_types/'))
 
       expect(result).toEqual({ kind: 'http_error', status })
       expect(inspect(result, { depth: Infinity })).not.toContain(KEY)
@@ -194,7 +190,7 @@ describe('posthogApi', () => {
     posthog().respondWith(301)
     posthog().respondWithHeaders({ location: `${posthog().url}/elsewhere/` })
 
-    const result = await posthogApi('POST', '/redirected/', { query: {} })
+    const result = await posthogApi('POST', '/redirected/', { distinct_ids: [] })
 
     expect(result).toEqual({ kind: 'network' })
     expect(posthog().requests.map((request) => request.path)).toEqual(['/redirected/'])
@@ -258,7 +254,7 @@ describe('posthogApi', () => {
   })
 
   it('refuses a path without its trailing slash, before any request', async () => {
-    await expect(posthogApi('POST', '/api/projects/4321/query', {})).rejects.toThrow(
+    await expect(posthogApi('POST', '/api/projects/4321/persons/bulk_delete', {})).rejects.toThrow(
       'must end with "/"'
     )
     expect(posthog().requests).toEqual([])
@@ -268,7 +264,7 @@ describe('posthogApi', () => {
 describe('the fake PostHog private API', () => {
   it('answers 404 for a project path it does not serve, a missing trailing slash included', async () => {
     const answers = await Promise.all(
-      ['/api/projects/4321/query', '/api/projects/4321/events/'].map(async (path) => {
+      ['/api/projects/4321/groups_types', '/api/projects/4321/events/'].map(async (path) => {
         const response = await fetch(`${posthog().url}${path}`, { method: 'POST' })
         await response.body?.cancel()
         return response.status
@@ -276,7 +272,6 @@ describe('the fake PostHog private API', () => {
     )
 
     expect(answers).toEqual([404, 404])
-    expect(posthog().queries).toEqual([])
   })
 
   it('records a bulk delete and answers with persons_found equal to the ids sent', async () => {

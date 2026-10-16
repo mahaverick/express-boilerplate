@@ -1,45 +1,41 @@
 /**
  * @file The staff email and suppression queries: filters, the UTC date
- * range, the microsecond cursor, and `direction=prev` needing a cursor.
+ * range, and the suppression state default. Paging params are covered by
+ * the shared list schema's tests.
  */
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import {
   emailHealthQuerySchema,
-  platformEmailSearchSchema,
-  platformSuppressionSearchSchema,
+  platformEmailListSchema,
+  platformSuppressionListSchema,
 } from '@/validators/platform-email.validators'
 
-/**
- * A cursor in the microsecond form the repository issues, for a random row id.
- */
-const validCursor = (): string =>
-  encodeCursor({ sortAt: '2026-09-30T08:15:02.123456Z', id: randomUUID() })
-
-describe('platformEmailSearchSchema', () => {
-  it('defaults to the first page, newest first, 20 rows', () => {
-    expect(platformEmailSearchSchema.parse({})).toEqual({ direction: 'next', limit: 20 })
+describe('platformEmailListSchema', () => {
+  it('has no filters and sorts newest first by default', () => {
+    const parsed = platformEmailListSchema.parse({})
+    expect(parsed.params).toMatchObject({ limit: 20, direction: 'next' })
+    expect(parsed.filters).toEqual({})
   })
 
-  it('accepts every filter together', () => {
-    const tenantId = randomUUID()
-    const userId = randomUUID()
-    const parsed = platformEmailSearchSchema.parse({
-      q: '  ada@  ',
-      status: 'bounced',
+  it('accepts every filter together, comma lists included', () => {
+    const tenant = randomUUID()
+    const user = randomUUID()
+    const parsed = platformEmailListSchema.parse({
+      search: '  ada@  ',
+      status: 'bounced,sent',
       template: 'tenant_invitation',
-      tenantId,
-      userId,
+      tenant,
+      user,
       from: '2026-09-01',
       to: '2026-09-30',
     })
-    expect(parsed).toMatchObject({
-      q: 'ada@',
-      status: 'bounced',
-      template: 'tenant_invitation',
-      tenantId,
-      userId,
+    expect(parsed.params.search).toBe('ada@')
+    expect(parsed.filters).toEqual({
+      status: ['bounced', 'sent'],
+      template: ['tenant_invitation'],
+      tenant,
+      user,
       from: '2026-09-01',
       to: '2026-09-30',
     })
@@ -47,36 +43,34 @@ describe('platformEmailSearchSchema', () => {
 
   it('accepts a one-day range (to is inclusive)', () => {
     expect(
-      platformEmailSearchSchema.safeParse({ from: '2026-09-30', to: '2026-09-30' }).success
+      platformEmailListSchema.safeParse({ from: '2026-09-30', to: '2026-09-30' }).success
     ).toBe(true)
+  })
+
+  it('refuses to before from', () => {
+    const result = platformEmailListSchema.safeParse({ from: '2026-02-01', to: '2026-01-31' })
+    expect(result.success).toBe(false)
+  })
+
+  it('renames tenantId and userId to tenant and user', () => {
+    const id = '0199c4a2-0000-7000-8000-000000000001'
+    expect(platformEmailListSchema.parse({ tenant: id, user: id }).filters).toMatchObject({
+      tenant: id,
+      user: id,
+    })
   })
 
   it.each([
     [{ status: 'opened' }],
+    [{ status: 'sent,opened' }],
     [{ template: 'welcome' }],
-    [{ tenantId: 'not-a-uuid' }],
-    [{ userId: '42' }],
+    [{ tenant: 'not-a-uuid' }],
+    [{ user: '42' }],
     [{ from: '2026-9-1' }],
     [{ to: '2026-09-31T00:00:00Z' }],
-    [{ from: '2026-09-30', to: '2026-09-29' }],
-    [{ q: ' '.repeat(3) }],
-    [{ limit: '51' }],
-    [{ cursor: 'not-a-cursor' }],
-    [{ cursor: encodeCursor({ sortAt: '2026-09-30T08:15:02.123Z', id: randomUUID() }) }],
+    [{ sort: 'recipient' }],
   ])('refuses %j', (query) => {
-    expect(platformEmailSearchSchema.safeParse(query).success).toBe(false)
-  })
-
-  it('decodes a cursor and pages back with it', () => {
-    const parsed = platformEmailSearchSchema.parse({ cursor: validCursor(), direction: 'prev' })
-    expect(parsed.cursor?.sortAt).toBe('2026-09-30T08:15:02.123456Z')
-    expect(parsed.direction).toBe('prev')
-  })
-
-  it('refuses direction=prev without a cursor, naming the cursor field', () => {
-    const result = platformEmailSearchSchema.safeParse({ direction: 'prev' })
-    expect(result.success).toBe(false)
-    expect(result.error?.issues[0]?.path).toEqual(['cursor'])
+    expect(platformEmailListSchema.safeParse(query).success).toBe(false)
   })
 })
 
@@ -91,21 +85,21 @@ describe('emailHealthQuerySchema', () => {
   })
 })
 
-describe('platformSuppressionSearchSchema', () => {
-  it('defaults to active suppressions', () => {
-    expect(platformSuppressionSearchSchema.parse({})).toEqual({
-      state: 'active',
-      direction: 'next',
-      limit: 20,
-    })
+describe('platformSuppressionListSchema', () => {
+  it('lists active suppressions unless asked', () => {
+    expect(platformSuppressionListSchema.parse({}).filters.state).toEqual(['active'])
   })
 
-  it.each(['active', 'lifted', 'all'])('accepts state=%s', (state) => {
-    expect(platformSuppressionSearchSchema.parse({ state }).state).toBe(state)
+  it('accepts a comma list of states', () => {
+    expect(platformSuppressionListSchema.parse({ state: 'lifted,active' }).filters.state).toEqual([
+      'active',
+      'lifted',
+    ])
   })
 
-  it('refuses an unknown state and prev without a cursor', () => {
-    expect(platformSuppressionSearchSchema.safeParse({ state: 'expired' }).success).toBe(false)
-    expect(platformSuppressionSearchSchema.safeParse({ direction: 'prev' }).success).toBe(false)
+  it('refuses an unknown state, state=all, and prev without a cursor', () => {
+    expect(platformSuppressionListSchema.safeParse({ state: 'expired' }).success).toBe(false)
+    expect(platformSuppressionListSchema.safeParse({ state: 'all' }).success).toBe(false)
+    expect(platformSuppressionListSchema.safeParse({ direction: 'prev' }).success).toBe(false)
   })
 })

@@ -12,14 +12,24 @@
  */
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import type { OnboardingSource, OnboardingState } from '@/constants/onboarding.constants'
-import type { PageDirection } from '@/constants/platform.constants'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import { auditLogModel } from '@/database/models/audit-log.model'
 import { onboardingCompletionModel } from '@/database/models/onboarding-completion.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * The registry, as the keys the progress query needs.
@@ -60,37 +70,6 @@ export interface OnboardingProgressRow {
   doneKeys: string[]
   lastProgressAt: Date | null
   completedAt: Date | null
-}
-
-/**
- * A list row's sort key: its sort timestamp as UTC text with microseconds,
- * and its id.
- */
-export interface OnboardingPageCursor {
-  sortAt: string
-  id: string
-}
-
-/**
- * A page of progress rows in display order, and the cursors either side of
- * it, each only when rows lie that way.
- */
-export interface OnboardingProgressPage {
-  rows: OnboardingProgressRow[]
-  nextCursor?: OnboardingPageCursor
-  prevCursor?: OnboardingPageCursor
-}
-
-/**
- * The list's inputs. `isAscending` is the display order: oldest progress
- * first for the stuck list, newest first otherwise.
- */
-export interface OnboardingListOptions extends OnboardingProgressOptions {
-  state: OnboardingState
-  isAscending: boolean
-  limit: number
-  direction: PageDirection
-  cursor?: OnboardingPageCursor | undefined
 }
 
 /**
@@ -188,7 +167,6 @@ interface RawProgressRow extends Record<string, unknown> {
   done_keys: string[]
   last_progress_at: string | null
   completed_at: string | null
-  sort_at: string
 }
 
 /**
@@ -198,15 +176,6 @@ interface RawProgressRow extends Record<string, unknown> {
  */
 function isoText(expression: SQL): SQL {
   return sql`to_char(${expression} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
-}
-
-/**
- * A timestamp expression as UTC text with microseconds, the cursor's sort key.
- * @param expression - A `timestamptz` expression.
- * @returns The text expression.
- */
-function sortText(expression: SQL): SQL {
-  return sql`to_char(${expression} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
 }
 
 /**
@@ -334,11 +303,10 @@ function progressQuery(scope: SQL, options: OnboardingProgressOptions): SQL {
 }
 
 /**
- * The columns a progress row is read with, `sortAt` the given expression.
- * @param sortAt - The row's sort timestamp.
+ * The columns a progress row is read with.
  * @returns The select list.
  */
-function progressColumns(sortAt: SQL): SQL {
+function progressColumns(): SQL {
   return sql`
     p.id, p.name, p.slug, p.lifecycle_state, p.onboarding_tracked,
     ${isoText(sql.raw('p.onboarding_started_at'))} as started_at,
@@ -346,8 +314,7 @@ function progressColumns(sortAt: SQL): SQL {
     p.onboarding_dismissed_by as dismissed_by,
     p.state, p.required_done, p.done_keys,
     ${isoText(sql.raw('p.last_progress_at'))} as last_progress_at,
-    ${isoText(sql.raw('p.completed_at'))} as completed_at,
-    ${sortText(sortAt)} as sort_at
+    ${isoText(sql.raw('p.completed_at'))} as completed_at
   `
 }
 
@@ -359,40 +326,69 @@ const ACTIVE_TRACKED = sql.raw(
 )
 
 /**
- * The cursors either side of a page already in display order. A page read
- * from a cursor that comes back empty hands that cursor back on the side
- * it came from, so the client can always step back.
- * @param rows - The page's raw rows, in display order.
- * @param hasMore - Whether a row beyond the page exists in the read direction.
- * @param direction - Which way the page was read.
- * @param cursor - The cursor it was read from, if any.
- * @returns The cursors to set.
+ * The list's inputs beside the shared params: the state, the registry keys and the stuck cut-off.
  */
-function pageCursors(
-  rows: readonly RawProgressRow[],
-  hasMore: boolean,
-  direction: PageDirection,
-  cursor: OnboardingPageCursor | undefined
-): Pick<OnboardingProgressPage, 'nextCursor' | 'prevCursor'> {
-  /**
-   * The cursor that resumes a keyset page at this row: the `(sortAt, id)` pair
-   * the keyset condition compares against.
-   */
-  const keyOf = (row: RawProgressRow): OnboardingPageCursor => ({ sortAt: row.sort_at, id: row.id })
-  const first = rows.at(0)
-  const last = rows.at(-1)
-  if (direction === 'prev') {
-    const next = last ? keyOf(last) : cursor
-    return {
-      ...(hasMore && first && { prevCursor: keyOf(first) }),
-      ...(next && { nextCursor: next }),
-    }
-  }
-  const previous = first ? keyOf(first) : cursor
-  return {
-    ...(hasMore && last && { nextCursor: keyOf(last) }),
-    ...(cursor !== undefined && previous && { prevCursor: previous }),
-  }
+export interface OnboardingListFilters extends OnboardingProgressOptions {
+  state: OnboardingState
+}
+
+/**
+ * When a row last moved, falling back to its creation (an awaiting-owner tenant has no progress yet).
+ */
+const progressSort = sql`coalesce(p.last_progress_at, p.created_at)`
+
+/**
+ * When onboarding started, falling back to creation while the tenant awaits an owner.
+ */
+const startedSort = sql`coalesce(p.onboarding_started_at, p.created_at)`
+
+/**
+ * The staff onboarding list: the active, tracked tenants in one state,
+ * searched by tenant name. The rows come from the progress query as a
+ * subquery `p`, so the sort expressions are computed per row and the read
+ * is bounded by the number of tracked tenants, not by an index.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The state, the registry keys and the stuck cut-off.
+ * @returns The list definition.
+ */
+export function onboardingTenantList(search: string | undefined, filters: OnboardingListFilters) {
+  const progress = sql`(${progressQuery(ACTIVE_TRACKED, filters)} select * from progress) p`
+  return defineList({
+    name: 'platform-onboarding-tenants',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: sql<string>`p.id`,
+          name: sql<string>`p.name`,
+          slug: sql<string>`p.slug`,
+          lifecycle_state: sql<TenantLifecycleState>`p.lifecycle_state`,
+          onboarding_tracked: sql<boolean>`p.onboarding_tracked`,
+          started_at: sql<string | null>`${isoText(sql.raw('p.onboarding_started_at'))}`,
+          dismissed_at: sql<string | null>`${isoText(sql.raw('p.onboarding_dismissed_at'))}`,
+          dismissed_by: sql<string | null>`p.onboarding_dismissed_by`,
+          state: sql<OnboardingState>`p.state`,
+          required_done: sql<number>`p.required_done`,
+          done_keys: sql<string[]>`p.done_keys`,
+          last_progress_at: sql<string | null>`${isoText(sql.raw('p.last_progress_at'))}`,
+          completed_at: sql<string | null>`${isoText(sql.raw('p.completed_at'))}`,
+          sortProgress: timestampKey(progressSort),
+          sortStarted: timestampKey(startedSort),
+          sortName: sql<string>`lower(p.name)`,
+        })
+        .from(progress)
+        .where(
+          and(sql`p.state = ${filters.state}`, searchCondition(search, [sql`lower(p.name)`]), seek)
+        )
+        .$dynamic(),
+    id: sql`p.id`,
+    sorts: {
+      progress: [timestampSort(progressSort, 'asc', 'sortProgress')],
+      '-started': [timestampSort(startedSort, 'desc', 'sortStarted')],
+      name: [textSort(sql`lower(p.name)`, 'asc', 'sortName')],
+    },
+    toItem: ({ sortProgress: _progress, sortStarted: _started, sortName: _name, ...row }) =>
+      toProgressRow(row),
+  })
 }
 
 /**
@@ -468,49 +464,19 @@ export class PlatformOnboardingRepository {
   }
 
   /**
-   * A keyset page of the active, tracked tenants in one state, sorted on
-   * `(sort timestamp, id)` in the order `isAscending` gives. The sort
-   * timestamp is the last progress for `stuck`, otherwise when onboarding
-   * started, or when the tenant was created while it awaits an owner.
-   * `direction: 'prev'` reads the rows before `cursor` and returns them in
-   * display order.
-   * @param options - State, order, page size, direction, cursor, registry keys and stuck cut-off.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page, with `nextCursor`/`prevCursor` only when rows remain that way.
+   * One page of the active, tracked tenants in one state.
+   * @param params - The parsed shared list params.
+   * @param filters - The state, the registry keys and the stuck cut-off.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
   async listByState(
-    options: OnboardingListOptions,
+    params: ListParams,
+    filters: OnboardingListFilters,
     executor: DbExecutor = db
-  ): Promise<OnboardingProgressPage> {
-    const isPrevious = options.direction === 'prev'
-    const isReadAscending = options.isAscending !== isPrevious
-    const sortExpression =
-      options.state === 'stuck'
-        ? sql.raw('p.last_progress_at')
-        : sql.raw('coalesce(p.onboarding_started_at, p.created_at)')
-    const comparison = isReadAscending ? sql.raw('>') : sql.raw('<')
-    const order = isReadAscending ? sql.raw('asc') : sql.raw('desc')
-    const afterCursor =
-      options.cursor === undefined
-        ? sql``
-        : sql`and (${sortExpression}, p.id) ${comparison} (${options.cursor.sortAt}::timestamptz, ${options.cursor.id})`
-    const rows = [
-      ...(await executor.execute<RawProgressRow>(
-        sql`${progressQuery(ACTIVE_TRACKED, options)}
-          select ${progressColumns(sortExpression)}
-          from progress p
-          where p.state = ${options.state} ${afterCursor}
-          order by ${sortExpression} ${order}, p.id ${order}
-          limit ${options.limit + 1}`
-      )),
-    ]
-    const hasMore = rows.length > options.limit
-    if (hasMore) rows.pop()
-    if (isPrevious) rows.reverse()
-    return {
-      rows: rows.map((row) => toProgressRow(row)),
-      ...pageCursors(rows, hasMore, options.direction, options.cursor),
-    }
+  ): Promise<ListPage<OnboardingProgressRow>> {
+    return listPage(executor, onboardingTenantList(params.search, filters), params)
   }
 
   /**
@@ -528,7 +494,7 @@ export class PlatformOnboardingRepository {
     const scope = sql`t.id = ${tenantId}`
     const [row] = await executor.execute<RawProgressRow>(
       sql`${progressQuery(scope, options)}
-        select ${progressColumns(sql.raw('p.created_at'))} from progress p`
+        select ${progressColumns()} from progress p`
     )
     return row === undefined ? undefined : toProgressRow(row)
   }

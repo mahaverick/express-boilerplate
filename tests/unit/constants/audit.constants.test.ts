@@ -3,7 +3,7 @@
  * audit_logs_action_check's pattern and column width, and each metadata
  * schema to its exact keys.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import { z } from 'zod'
 import {
   AUDIT_ACCESS_KINDS,
@@ -12,8 +12,11 @@ import {
   AUDIT_ACTOR_KINDS,
   AUDIT_TARGET_TYPES,
   PLATFORM_ACCESS_DEDUPE_SECONDS,
+  RETIRED_AUDIT_ACTIONS,
+  STORED_AUDIT_ACTION_NAMES,
   type AuditAction,
 } from '@/constants/audit.constants'
+import type { AuditEntry } from '@/services/audit.service'
 
 // A valid metadata object per action, written out so a shape change fails here.
 const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
@@ -67,10 +70,6 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     emailDomains: ['example.test', 'acme.example'],
     messageIds: ['message-1', 'message-2'],
   },
-  'user.timeline_viewed': { range: '7d', view: 'all' },
-  'tenant.timeline_viewed': { range: '90d', view: 'key' },
-  'user.errors_viewed': {},
-  'tenant.errors_viewed': {},
   // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no tenant"
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
@@ -112,24 +111,20 @@ describe('AUDIT_ACTIONS', () => {
       'tenant.accessed_by_platform',
       'tenant.archived',
       'tenant.created',
-      'tenant.errors_viewed',
       'tenant.owner_invited',
       'tenant.purged',
       'tenant.reactivated',
       'tenant.settings_updated',
       'tenant.suspended',
-      'tenant.timeline_viewed',
       'tenant.updated',
       'user.created',
       'user.deactivated',
       'user.deleted',
-      'user.errors_viewed',
       'user.flags_evaluated',
       'user.password_setup_sent',
       'user.purged',
       'user.reactivated',
       'user.signed_out',
-      'user.timeline_viewed',
       'user.updated',
       'user.verification_resent',
     ])
@@ -206,19 +201,6 @@ describe('AUDIT_ACTIONS', () => {
     // eslint-disable-next-line unicorn/no-null -- JSON null: created with the tenant, no reason asked
     expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
   })
-
-  it.each(['user.timeline_viewed', 'tenant.timeline_viewed'] as const)(
-    '%s takes only a known range and view',
-    (action) => {
-      const schema = AUDIT_ACTIONS[action].metadata
-      for (const range of ['24h', '7d', '30d', '90d']) {
-        expect(schema.safeParse({ range, view: 'all' }).success).toBe(true)
-      }
-      expect(schema.safeParse({ range: '7d', view: 'key' }).success).toBe(true)
-      expect(schema.safeParse({ range: '1y', view: 'all' }).success).toBe(false)
-      expect(schema.safeParse({ range: '7d', view: 'everything' }).success).toBe(false)
-    }
-  )
 
   it('pins the closed value sets of user.password_setup_sent and auth.reauthenticated', () => {
     expect(
@@ -358,5 +340,29 @@ describe('audit value sets', () => {
     const schema = z.enum(AUDIT_ACTION_NAMES)
     for (const action of ACTIONS) expect(schema.safeParse(action).success).toBe(true)
     expect(schema.safeParse('not.an.action').success).toBe(false)
+  })
+
+  describe('retired actions', () => {
+    it('are stored and filterable but not written', () => {
+      expect(RETIRED_AUDIT_ACTIONS).toEqual([
+        'user.timeline_viewed',
+        'tenant.timeline_viewed',
+        'user.errors_viewed',
+        'tenant.errors_viewed',
+      ])
+      for (const action of RETIRED_AUDIT_ACTIONS) {
+        expect(Object.hasOwn(AUDIT_ACTIONS, action)).toBe(false)
+        expect(AUDIT_ACTION_NAMES).not.toContain(action)
+        expect(STORED_AUDIT_ACTION_NAMES).toContain(action)
+        expect(action).toMatch(/^[a-z]+(\.[a-z_]+)+$/)
+      }
+      expect(STORED_AUDIT_ACTION_NAMES).toHaveLength(
+        AUDIT_ACTION_NAMES.length + RETIRED_AUDIT_ACTIONS.length
+      )
+    })
+
+    it('cannot be recorded: an entry for one does not type-check', () => {
+      expectTypeOf<(typeof RETIRED_AUDIT_ACTIONS)[number]>().not.toExtend<AuditEntry['action']>()
+    })
   })
 })

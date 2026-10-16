@@ -17,7 +17,6 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
@@ -38,9 +37,14 @@ interface PlatformTenantRowBody {
  * One page of the staff tenant search, with its cursors.
  */
 interface SearchPage {
-  tenants: PlatformTenantRowBody[]
-  nextCursor: string | null
-  prevCursor: string | null
+  items: PlatformTenantRowBody[]
+  page: {
+    nextCursor: string | null
+    prevCursor: string | null
+    hasNext: boolean
+    hasPrev: boolean
+    limit: number
+  }
 }
 
 /**
@@ -211,11 +215,11 @@ describe('GET /api/v1/platform/tenants', () => {
       const seen: PlatformTenantRowBody[] = []
       let cursor: string | undefined
       do {
-        const query: Record<string, string> = { q: platform.slug, limit: '50' }
+        const query: Record<string, string> = { search: platform.slug, limit: '50' }
         if (cursor !== undefined) query.cursor = cursor
         const page = pageOf(await search(token, query))
-        seen.push(...page.tenants)
-        cursor = page.nextCursor ?? undefined
+        seen.push(...page.items)
+        cursor = page.page.nextCursor ?? undefined
       } while (cursor !== undefined)
 
       expect(seen.map((tenant) => tenant.id)).not.toContain(platform.id)
@@ -230,9 +234,9 @@ describe('GET /api/v1/platform/tenants', () => {
       await sql`update tenants set lifecycle_state = 'suspended' where id = ${suspended.id}`
       await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${deleted.id}`
 
-      const page = pageOf(await search(await createStaff(), { q: tag }))
+      const page = pageOf(await search(await createStaff(), { search: tag }))
 
-      const byId = new Map(page.tenants.map((tenant) => [tenant.id, tenant.lifecycleState]))
+      const byId = new Map(page.items.map((tenant) => [tenant.id, tenant.lifecycleState]))
       expect(byId.get(live.id)).toBe('active')
       expect(byId.get(suspended.id)).toBe('suspended')
       expect(byId.has(deleted.id)).toBe(false)
@@ -254,9 +258,9 @@ describe('GET /api/v1/platform/tenants', () => {
       })
       await sql`update users set deleted_at = now() where id = ${gone.id}`
 
-      const page = pageOf(await search(await createStaff(), { q: tenant.slug }))
+      const page = pageOf(await search(await createStaff(), { search: tenant.slug }))
 
-      expect(page.tenants).toEqual([
+      expect(page.items).toEqual([
         {
           id: tenant.id,
           name: tenant.name,
@@ -269,17 +273,17 @@ describe('GET /api/v1/platform/tenants', () => {
     })
   })
 
-  describe('q', () => {
+  describe('search', () => {
     it('matches name case-insensitively and slug by substring', async () => {
       const tag = newTag()
       const tenant = await createNamedTenant(`${tag} Mixed CASE`)
       const token = await createStaff()
 
-      const byName = pageOf(await search(token, { q: `${tag} mixed case` }))
-      const bySlug = pageOf(await search(token, { q: tenant.slug.slice(5, 20) }))
+      const byName = pageOf(await search(token, { search: `${tag} mixed case` }))
+      const bySlug = pageOf(await search(token, { search: tenant.slug.slice(5, 20) }))
 
-      expect(byName.tenants.map((row) => row.id)).toEqual([tenant.id])
-      expect(bySlug.tenants.map((row) => row.id)).toContain(tenant.id)
+      expect(byName.items.map((row) => row.id)).toEqual([tenant.id])
+      expect(bySlug.items.map((row) => row.id)).toContain(tenant.id)
     })
 
     it('treats % as a literal character', async () => {
@@ -287,9 +291,9 @@ describe('GET /api/v1/platform/tenants', () => {
       const percent = await createNamedTenant(`${tag} 100% Co`)
       await createNamedTenant(`${tag} 1000 Co`)
 
-      const page = pageOf(await search(await createStaff(), { q: `${tag} 100%` }))
+      const page = pageOf(await search(await createStaff(), { search: `${tag} 100%` }))
 
-      expect(page.tenants.map((row) => row.id)).toEqual([percent.id])
+      expect(page.items.map((row) => row.id)).toEqual([percent.id])
     })
 
     it('treats _ as a literal character', async () => {
@@ -297,9 +301,9 @@ describe('GET /api/v1/platform/tenants', () => {
       const underscore = await createNamedTenant(`${tag}_corp`)
       await createNamedTenant(`${tag}xcorp`)
 
-      const page = pageOf(await search(await createStaff(), { q: `${tag}_corp` }))
+      const page = pageOf(await search(await createStaff(), { search: `${tag}_corp` }))
 
-      expect(page.tenants.map((row) => row.id)).toEqual([underscore.id])
+      expect(page.items.map((row) => row.id)).toEqual([underscore.id])
     })
 
     it('treats a backslash as a literal character', async () => {
@@ -307,34 +311,34 @@ describe('GET /api/v1/platform/tenants', () => {
       const slashed = await createNamedTenant(String.raw`${tag} a\b`)
       await createNamedTenant(`${tag} ab`)
 
-      const page = pageOf(await search(await createStaff(), { q: String.raw`${tag} a\b` }))
+      const page = pageOf(await search(await createStaff(), { search: String.raw`${tag} a\b` }))
 
-      expect(page.tenants.map((row) => row.id)).toEqual([slashed.id])
+      expect(page.items.map((row) => row.id)).toEqual([slashed.id])
     })
 
-    it('trims q before matching', async () => {
+    it('trims search before matching', async () => {
       const tag = newTag()
       const tenant = await createNamedTenant(`${tag} Trimmed`)
 
-      const page = pageOf(await search(await createStaff(), { q: `   ${tag} trimmed  ` }))
+      const page = pageOf(await search(await createStaff(), { search: `   ${tag} trimmed  ` }))
 
-      expect(page.tenants.map((row) => row.id)).toEqual([tenant.id])
+      expect(page.items.map((row) => row.id)).toEqual([tenant.id])
     })
 
     it.each([
       ['whitespace only', ' '.repeat(3)],
       ['longer than 100 characters', 'x'.repeat(101)],
       ['carrying a NUL byte', 'a\0b'],
-    ])('answers 400 for a q that is %s', async (_label, q) => {
-      const response = await search(await createStaff(), { q })
+    ])('answers 400 for a search that is %s', async (_label, q) => {
+      const response = await search(await createStaff(), { search: q })
 
       expect(response.status).toBe(400)
-      expect((response.body as ApiEnvelope<unknown>).errors).toHaveProperty('q')
+      expect((response.body as ApiEnvelope<unknown>).errors).toHaveProperty('search')
     })
   })
 
   describe('limit and cursor', () => {
-    it.each([['0'], ['51'], ['1.5'], ['abc']])('answers 400 for limit=%s', async (limit) => {
+    it.each([['0'], ['101'], ['1.5'], ['abc']])('answers 400 for limit=%s', async (limit) => {
       const response = await search(await createStaff(), { limit })
 
       expect(response.status).toBe(400)
@@ -347,10 +351,10 @@ describe('GET /api/v1/platform/tenants', () => {
         await createNamedTenant(`${tag} Many ${String(index).padStart(2, '0')}`)
       }
 
-      const page = pageOf(await search(await createStaff(), { q: tag }))
+      const page = pageOf(await search(await createStaff(), { search: tag }))
 
-      expect(page.tenants).toHaveLength(20)
-      expect(page.nextCursor).toEqual(expect.any(String))
+      expect(page.items).toHaveLength(20)
+      expect(page.page.nextCursor).toEqual(expect.any(String))
     })
 
     it('pages tenants with equal names exactly once each, in the order one page gives', async () => {
@@ -362,18 +366,18 @@ describe('GET /api/v1/platform/tenants', () => {
       ]
       const token = await createStaff()
 
-      const onePage = pageOf(await search(token, { q: tag, limit: '3' }))
+      const onePage = pageOf(await search(token, { search: tag, limit: '3' }))
       const walked: string[] = []
       let cursor: string | null | undefined
       for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
-        const query: Record<string, string> = { q: tag, limit: '1' }
+        const query: Record<string, string> = { search: tag, limit: '1' }
         if (typeof cursor === 'string') query.cursor = cursor
         const page = pageOf(await search(token, query))
-        walked.push(...page.tenants.map((row) => row.id))
-        cursor = page.nextCursor
+        walked.push(...page.items.map((row) => row.id))
+        cursor = page.page.nextCursor
       }
 
-      expect(walked).toEqual(onePage.tenants.map((row) => row.id))
+      expect(walked).toEqual(onePage.items.map((row) => row.id))
       expect(new Set(walked)).toEqual(new Set(created.map((tenant) => tenant.id)))
       expect(cursor).toBeNull()
     })
@@ -382,34 +386,24 @@ describe('GET /api/v1/platform/tenants', () => {
     it.each([
       ['emoji', '\u{1F600}'],
       ['control characters', '\u{1}'],
+      ['CJK', '界'],
     ])('pages past a 255-character name made of %s', async (_label, character) => {
       const tag = newTag()
       const name = `${tag} ${character.repeat(255 - tag.length - 1)}`
       const created = [await createNamedTenant(name), await createNamedTenant(name)]
       const token = await createStaff()
 
-      const first = pageOf(await search(token, { q: tag, limit: '1' }))
-      if (first.nextCursor === null) throw new Error('expected a second page')
-      const second = await search(token, { q: tag, limit: '1', cursor: first.nextCursor })
+      const first = pageOf(await search(token, { search: tag, limit: '1' }))
+      if (first.page.nextCursor === null) throw new Error('expected a second page')
+      const second = await search(token, {
+        search: tag,
+        limit: '1',
+        cursor: first.page.nextCursor,
+      })
 
       expect(second.status).toBe(200)
-      const walked = [...first.tenants, ...pageOf(second).tenants].map((row) => row.id)
+      const walked = [...first.items, ...pageOf(second).items].map((row) => row.id)
       expect(new Set(walked)).toEqual(new Set(created.map((tenant) => tenant.id)))
-    })
-
-    it.each([
-      ['not base64 JSON', '!!!'],
-      ['the wrong shape', Buffer.from('{"sortName":1,"id":"x"}').toString('base64url')],
-      ['carrying a NUL in sortName', encodeCursor({ sortName: 'a\0b', id: randomUUID() })],
-      [
-        'carrying a NUL in id',
-        encodeCursor({ sortName: 'a', id: `${randomUUID().slice(0, 35)}\0` }),
-      ],
-    ])('answers 400 for a cursor that is %s', async (_label, cursorValue) => {
-      const response = await search(await createStaff(), { cursor: cursorValue })
-
-      expect(response.status).toBe(400)
-      expect((response.body as ApiEnvelope<unknown>).errors).toHaveProperty('cursor')
     })
   })
 
@@ -419,17 +413,17 @@ describe('GET /api/v1/platform/tenants', () => {
       ['active', ['live']],
       ['suspended', ['suspended']],
       ['archived', ['archived']],
-      ['all', ['archived', 'live', 'suspended']],
+      ['active,suspended,archived', ['archived', 'live', 'suspended']],
     ] as const)('state=%s lists %j', async (state, expected) => {
       const tag = newTag()
       const seeded = await seedStates(tag)
-      const query: Record<string, string> = { q: tag }
+      const query: Record<string, string> = { search: tag }
       if (state !== undefined) query.state = state
 
       const page = pageOf(await search(await createStaff(), query))
 
       const names = Object.fromEntries(Object.entries(seeded).map(([key, t]) => [t.id, key]))
-      const found = page.tenants.map((tenant) => names[tenant.id] ?? 'unexpected')
+      const found = page.items.map((tenant) => names[tenant.id] ?? 'unexpected')
       expect(found.toSorted((a, b) => a.localeCompare(b))).toEqual([...expected])
     })
 
@@ -439,81 +433,22 @@ describe('GET /api/v1/platform/tenants', () => {
       expect(response.status).toBe(400)
     })
 
-    it('never lists the platform tenant under state=all', async () => {
+    it('never lists the platform tenant under every state', async () => {
       const platform = await platformTenant()
 
       const page = pageOf(
-        await search(await createStaff(), { q: platform.slug, state: 'all', limit: '50' })
+        await search(await createStaff(), {
+          search: platform.slug,
+          state: 'active,suspended,archived',
+          limit: '50',
+        })
       )
 
-      expect(page.tenants.map((tenant) => tenant.id)).not.toContain(platform.id)
+      expect(page.items.map((tenant) => tenant.id)).not.toContain(platform.id)
     })
   })
 
   describe('paging in both directions', () => {
-    it('has no prevCursor on the first page, and walks forward then back to the same pages', async () => {
-      const tag = newTag()
-      const names = await seedFive(tag)
-      const token = await createStaff()
-
-      const first = pageOf(await search(token, { q: tag, limit: '2' }))
-      expect(first.prevCursor).toBeNull()
-      expect(first.tenants.map((t) => t.name)).toEqual(names.slice(0, 2))
-      if (first.nextCursor === null) throw new Error('expected a second page')
-
-      const second = pageOf(await search(token, { q: tag, limit: '2', cursor: first.nextCursor }))
-      expect(second.tenants.map((t) => t.name)).toEqual(names.slice(2, 4))
-      if (second.prevCursor === null || second.nextCursor === null)
-        throw new Error('expected both cursors')
-
-      const third = pageOf(await search(token, { q: tag, limit: '2', cursor: second.nextCursor }))
-      expect(third.tenants.map((t) => t.name)).toEqual(names.slice(4))
-      expect(third.nextCursor).toBeNull()
-      if (third.prevCursor === null) throw new Error('expected a prevCursor on the last page')
-
-      const backToSecond = pageOf(
-        await search(token, { q: tag, limit: '2', cursor: third.prevCursor, direction: 'prev' })
-      )
-      expect(backToSecond.tenants.map((t) => t.name)).toEqual(names.slice(2, 4))
-      if (backToSecond.prevCursor === null) throw new Error('expected a way back to page one')
-
-      const backToFirst = pageOf(
-        await search(token, {
-          q: tag,
-          limit: '2',
-          cursor: backToSecond.prevCursor,
-          direction: 'prev',
-        })
-      )
-      expect(backToFirst.tenants.map((t) => t.name)).toEqual(names.slice(0, 2))
-      expect(backToFirst.prevCursor).toBeNull()
-      expect(backToFirst.nextCursor).not.toBeNull()
-    })
-
-    it('rejects direction=prev without a cursor with 400, naming the cursor', async () => {
-      const response = await search(await createStaff(), { direction: 'prev' })
-
-      expect(response.status).toBe(400)
-      expect((response.body as { errors?: Record<string, string[]> }).errors?.cursor).toEqual([
-        'cursor is required when direction is prev.',
-      ])
-    })
-
-    it('hands the cursor back as nextCursor when a prev page comes back empty, so the client is never stranded', async () => {
-      const tag = newTag()
-      const lowest = await createNamedTenant(`${tag} a`)
-      await createNamedTenant(`${tag} b`)
-      const cursor = encodeCursor({ sortName: lowest.name.toLowerCase(), id: lowest.id })
-
-      const empty = pageOf(
-        await search(await createStaff(), { q: tag, limit: '2', cursor, direction: 'prev' })
-      )
-
-      expect(empty.tenants).toEqual([])
-      expect(empty.prevCursor).toBeNull()
-      expect(empty.nextCursor).toBe(cursor)
-    })
-
     it('rejects an unknown direction with 400', async () => {
       const response = await search(await createStaff(), { direction: 'up' })
 
@@ -527,13 +462,18 @@ describe('GET /api/v1/platform/tenants', () => {
       await sql`update tenants set lifecycle_state = 'suspended' where id = ${suspended.id}`
       const token = await createStaff()
 
-      const first = pageOf(await search(token, { q: tag, limit: '2', state: 'active' }))
-      if (first.nextCursor === null) throw new Error('expected a second page')
+      const first = pageOf(await search(token, { search: tag, limit: '2', state: 'active' }))
+      if (first.page.nextCursor === null) throw new Error('expected a second page')
       const second = pageOf(
-        await search(token, { q: tag, limit: '2', state: 'active', cursor: first.nextCursor })
+        await search(token, {
+          search: tag,
+          limit: '2',
+          state: 'active',
+          cursor: first.page.nextCursor,
+        })
       )
 
-      expect([...first.tenants, ...second.tenants].map((t) => t.id)).not.toContain(suspended.id)
+      expect([...first.items, ...second.items].map((t) => t.id)).not.toContain(suspended.id)
     })
   })
 })

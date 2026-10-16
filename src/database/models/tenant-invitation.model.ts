@@ -5,7 +5,7 @@
  * `TenantInvitationRepository` does not extend `BaseRepository`.
  */
 import { sql, type InferSelectModel } from 'drizzle-orm'
-import { check, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
+import { check, index, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel } from '@/database/models/tenant.model'
@@ -65,6 +65,16 @@ export const tenantInvitationModel = pgTable(
     uniqueIndex('tenant_invitations_pending_unique')
       .on(table.tenantId, sql`lower(${table.email})`)
       .where(sql`${table.acceptedAt} is null and ${table.revokedAt} is null`),
+    index('tenant_invitations_tenant_created_sort_idx').on(
+      table.tenantId,
+      table.createdAt,
+      table.id
+    ),
+    index('tenant_invitations_tenant_email_sort_idx').on(
+      table.tenantId,
+      sql`lower(${table.email})`,
+      table.id
+    ),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
     check(
       'tenant_invitations_role_check',

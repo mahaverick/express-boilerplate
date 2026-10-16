@@ -10,11 +10,9 @@ import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
 import { flagsController } from '@/controllers/flags.controller'
-import { platformErrorsController } from '@/controllers/platform-errors.controller'
 import { platformFlagsController } from '@/controllers/platform-flags.controller'
 import { platformMaintenanceModeController } from '@/controllers/platform-maintenance-mode.controller'
 import { platformSystemController } from '@/controllers/platform-system.controller'
-import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformController } from '@/controllers/platform.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
@@ -47,11 +45,11 @@ export function createPlatformRouter(): Router {
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
   // One instance shared by the /platform writes of users, tenants, emails and onboarding.
   const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
-  // One instance shared by the user and tenant timelines, Errors views and the flag evaluator.
-  const timelineLimiter = createRateLimiter(RATE_LIMITS.platformTimeline, {
-    limit: getEnv().TIMELINE_REQUESTS_PER_MINUTE,
+  // The flag evaluator's own budget: each call evaluates every flag for one user.
+  const flagEvaluateLimiter = createRateLimiter(RATE_LIMITS.flagEvaluate, {
+    limit: getEnv().FLAG_EVALUATE_REQUESTS_PER_MINUTE,
   })
-  router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter, timelineLimiter }))
+  router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter }))
   router.use('/emails', createPlatformEmailRouter({ searchLimiter, writeLimiter }))
   router.use(
     '/email-suppressions',
@@ -120,18 +118,6 @@ export function createPlatformRouter(): Router {
     searchLimiter,
     platformController.getTenant
   )
-  router.get(
-    '/tenants/:id/timeline',
-    requirePlatformRole('admin'),
-    timelineLimiter,
-    platformTimelineController.getTenantTimeline
-  )
-  router.get(
-    '/tenants/:id/errors',
-    requirePlatformRole('admin'),
-    timelineLimiter,
-    platformErrorsController.getTenantErrors
-  )
   router.get('/stats', requirePlatformRole('viewer'), searchLimiter, platformController.getStats)
   router.get(
     '/system/status',
@@ -160,6 +146,18 @@ export function createPlatformRouter(): Router {
     platformFlagsController.listFlags
   )
   router.get(
+    '/flags/unregistered',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformFlagsController.listUnregisteredFlags
+  )
+  router.get(
+    '/flags/meta',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformFlagsController.getFlagsMeta
+  )
+  router.get(
     '/maintenance-mode',
     requirePlatformRole('viewer'),
     searchLimiter,
@@ -176,7 +174,7 @@ export function createPlatformRouter(): Router {
   router.get(
     '/flags/evaluate',
     requirePlatformRole('admin'),
-    timelineLimiter,
+    flagEvaluateLimiter,
     platformFlagsController.evaluate
   )
   return router

@@ -3,7 +3,7 @@
  * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
  * soft-deleted tenant.
  */
-import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
@@ -13,8 +13,20 @@ import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
+import type { RoleFilters } from '@/repositories/user-membership.repository'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * The partial unique index that allows one pending invitation per tenant and address.
@@ -89,6 +101,66 @@ export interface PendingInvitationSummary {
 }
 
 /**
+ * A tenant's pending, unexpired invitations, searched by email, each with
+ * its inviter's name. Its cursors are bound to the tenant.
+ * @param tenantId - The tenant.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The roles.
+ * @returns The list definition.
+ */
+export function invitationList(tenantId: string, search: string | undefined, filters: RoleFilters) {
+  return defineList({
+    name: 'invitations',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          expiresAt: invitation.expiresAt,
+          createdAt: invitation.createdAt,
+          inviterId: userModel.id,
+          inviterFirstName: userModel.firstName,
+          inviterLastName: userModel.lastName,
+          sortCreated: timestampKey(invitation.createdAt),
+          sortEmail: sql<string>`lower(${invitation.email})`,
+        })
+        .from(invitation)
+        .leftJoin(
+          userModel,
+          and(eq(invitation.invitedBy, userModel.id), isNull(userModel.deletedAt))
+        )
+        .where(
+          and(
+            eq(invitation.tenantId, tenantId),
+            redeemableCondition(),
+            filters.roles === undefined ? undefined : inArray(invitation.role, filters.roles),
+            searchCondition(search, [sql`lower(${invitation.email})`]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: invitation.id,
+    sorts: {
+      '-created': [timestampSort(invitation.createdAt, 'desc', 'sortCreated')],
+      email: [textSort(sql`lower(${invitation.email})`, 'asc', 'sortEmail')],
+    },
+    bound: { tenantId },
+    toItem: (row): PendingInvitationSummary => ({
+      id: row.id,
+      email: row.email,
+      role: row.role,
+      invitedBy:
+        row.inviterId === null
+          ? NO_INVITER
+          : { id: row.inviterId, firstName: row.inviterFirstName, lastName: row.inviterLastName },
+      expiresAt: row.expiresAt,
+      createdAt: row.createdAt,
+    }),
+  })
+}
+
+/**
  * An invitation with the (not soft-deleted) tenant it is for, and that tenant's lifecycle state.
  */
 export interface InvitationWithTenant {
@@ -160,42 +232,22 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * A tenant's pending, unexpired invitations, newest first, with each
+   * One page of a tenant's pending, unexpired invitations, each with its
    * inviter's name.
    * @param tenantId - The tenant.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns One summary per invitation.
+   * @param params - The parsed shared list params.
+   * @param filters - The roles.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
   async listPending(
     tenantId: string,
+    params: ListParams,
+    filters: RoleFilters,
     executor: DbExecutor = db
-  ): Promise<PendingInvitationSummary[]> {
-    const rows = await executor
-      .select({
-        id: invitation.id,
-        email: invitation.email,
-        role: invitation.role,
-        expiresAt: invitation.expiresAt,
-        createdAt: invitation.createdAt,
-        inviterId: userModel.id,
-        inviterFirstName: userModel.firstName,
-        inviterLastName: userModel.lastName,
-      })
-      .from(invitation)
-      .leftJoin(userModel, and(eq(invitation.invitedBy, userModel.id), isNull(userModel.deletedAt)))
-      .where(and(eq(invitation.tenantId, tenantId), redeemableCondition()))
-      .orderBy(desc(invitation.createdAt), desc(invitation.id))
-    return rows.map((row) => ({
-      id: row.id,
-      email: row.email,
-      role: row.role,
-      invitedBy:
-        row.inviterId === null
-          ? NO_INVITER
-          : { id: row.inviterId, firstName: row.inviterFirstName, lastName: row.inviterLastName },
-      expiresAt: row.expiresAt,
-      createdAt: row.createdAt,
-    }))
+  ): Promise<ListPage<PendingInvitationSummary>> {
+    return listPage(executor, invitationList(tenantId, params.search, filters), params)
   }
 
   /**

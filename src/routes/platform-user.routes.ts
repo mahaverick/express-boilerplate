@@ -7,8 +7,6 @@
  * route exists.
  */
 import { Router, type RequestHandler } from 'express'
-import { platformErrorsController } from '@/controllers/platform-errors.controller'
-import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformUserController } from '@/controllers/platform-user.controller'
 import { requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
@@ -24,18 +22,11 @@ export interface PlatformLimiters {
 }
 
 /**
- * The shared limiters plus the one the timeline and Errors routes draw on.
- */
-export interface PlatformUserLimiters extends PlatformLimiters {
-  timelineLimiter: RequestHandler
-}
-
-/**
  * Build the platform user routes.
- * @param limiters - The shared `platformSearch`, `platformWrite` and `platformTimeline` limiters.
+ * @param limiters - The shared `platformSearch` and `platformWrite` limiters.
  * @returns A router mounted at `/api/v1/platform/users`.
  */
-export function createPlatformUserRouter(limiters: PlatformUserLimiters): Router {
+export function createPlatformUserRouter(limiters: PlatformLimiters): Router {
   const router = Router()
   router.get(
     '/',
@@ -48,18 +39,6 @@ export function createPlatformUserRouter(limiters: PlatformUserLimiters): Router
     requirePlatformRole('viewer'),
     limiters.searchLimiter,
     platformUserController.getUser
-  )
-  router.get(
-    '/:id/timeline',
-    requirePlatformRole('admin'),
-    limiters.timelineLimiter,
-    platformTimelineController.getUserTimeline
-  )
-  router.get(
-    '/:id/errors',
-    requirePlatformRole('admin'),
-    limiters.timelineLimiter,
-    platformErrorsController.getUserErrors
   )
   router.post(
     '/',

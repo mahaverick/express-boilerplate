@@ -12,7 +12,7 @@ import { PgTransaction } from 'drizzle-orm/pg-core'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
 import type { AuditAction } from '@/constants/audit.constants'
 import type { NewAnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
-import type { AuditLog } from '@/database/models/audit-log.model'
+import type { WrittenAuditLog } from '@/database/models/audit-log.model'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -70,7 +70,7 @@ const PLATFORM_TENANT_MEMBER_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAc
  * @param entry - The inserted audit row.
  * @returns The user's id, or a non-string when the row names none.
  */
-function affectedUserIdOf(entry: AuditLog): unknown {
+function affectedUserIdOf(entry: WrittenAuditLog): unknown {
   return entry.action === 'invitation.accepted' || entry.action === 'member.left'
     ? entry.actorUserId
     : entry.metadata.userId
@@ -153,7 +153,10 @@ export async function enqueueAnalyticsOrThrow(rows: NewAnalyticsOutboxRow[]): Pr
  * @param executor - The savepoint, or the pool.
  * @returns The extras for `buildAuditEvents`.
  */
-async function auditExtras(entry: AuditLog, executor: DbExecutor): Promise<AuditEventExtras> {
+async function auditExtras(
+  entry: WrittenAuditLog,
+  executor: DbExecutor
+): Promise<AuditEventExtras> {
   const isTenantGroupAction = TENANT_GROUP_ACTIONS.has(entry.action)
   const isPlatformMemberAction = PLATFORM_TENANT_MEMBER_ACTIONS.has(entry.action)
   const tenant =
@@ -192,7 +195,10 @@ async function auditExtras(entry: AuditLog, executor: DbExecutor): Promise<Audit
  * @param executor - The audit write's transaction, or the pool.
  * @returns Resolves once the rows are written or the failure is logged.
  */
-export async function enqueueAuditAnalytics(entry: AuditLog, executor: DbExecutor): Promise<void> {
+export async function enqueueAuditAnalytics(
+  entry: WrittenAuditLog,
+  executor: DbExecutor
+): Promise<void> {
   if (!isAnalyticsEnabled()) return
   try {
     await inSavepoint(executor, async (savepoint) => {

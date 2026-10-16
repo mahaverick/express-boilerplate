@@ -123,7 +123,7 @@ describe('logStaffWrites and callers the role gate refuses', () => {
   })
 })
 
-describe('GET /api/v1/platform/audit-log?targetId=', () => {
+describe('GET /api/v1/platform/audit-log?target=', () => {
   it('returns only the entries about one target', async () => {
     const { token } = await createTrackedStaff('admin')
     const first = await createTrackedUser({ active: false })
@@ -137,22 +137,21 @@ describe('GET /api/v1/platform/audit-log?targetId=', () => {
 
     const response = await request(app)
       .get('/api/v1/platform/audit-log')
-      .query({ targetId: first.id })
+      .query({ target: first.id })
       .set('Authorization', `Bearer ${token}`)
 
     expect(response.status).toBe(200)
-    const entries = (response.body as { data: { entries: { target: { id: string } }[] } }).data
-      .entries
+    const entries = (response.body as { data: { items: { target: { id: string } }[] } }).data.items
     expect(entries.length).toBeGreaterThan(0)
     expect(entries.every((entry) => entry.target.id === first.id)).toBe(true)
   })
 
-  it('answers 400 for a targetId that is not a uuid', async () => {
+  it('answers 400 for a target that is not a uuid', async () => {
     const { token } = await createTrackedStaff('admin')
 
     const response = await request(app)
       .get('/api/v1/platform/audit-log')
-      .query({ targetId: 'nope' })
+      .query({ target: 'nope' })
       .set('Authorization', `Bearer ${token}`)
 
     expect(response.status).toBe(400)

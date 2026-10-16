@@ -1,8 +1,10 @@
 /**
- * @file GET /api/v1/platform/flags and GET /api/v1/platform/flags/evaluate through the real app
- * and snapshot store. The list joins the registry with the snapshot (each state, the condition
- * summary, PostHog links, the unregistered flags sorted, the traits, the snapshot block) and never
- * calls PostHog. Evaluate answers one user's traits and every flag's value and reason, a holdout's
+ * @file GET /api/v1/platform/flags, /flags/unregistered, /flags/meta and /flags/evaluate through
+ * the real app and snapshot store. The registry list joins the registry with the snapshot (each
+ * state, the condition summary, PostHog links, the kind and state filters under a search), the
+ * unregistered list pages the flags PostHog has that the registry lacks, and meta carries the
+ * traits and the snapshot block (its age and staleness); none calls PostHog. Evaluate answers one
+ * user's traits and every flag's value and reason, a holdout's
  * recorded variant included, after its gates: 404 for an unknown user, 400 for a tenant the user
  * isn't in or a tenant with `app=apex`. It is audited once per staff member, user, tenant and app
  * per throttle window. Flags are switched on with a mock; the project id and app host come from a
@@ -32,6 +34,8 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
 })
 
 const { createApp } = await import('@/app')
+const { FLAG_SNAPSHOT_STALE_MS, LISTED_FLAG_KEY_MAX } = await import('@/constants/flags.constants')
+const { logger } = await import('@/services/logger.service')
 const { TenantRepository } = await import('@/repositories/tenant.repository')
 const { sql } = await import('@/services/database.service')
 const { startFlagSnapshot, stopFlagSnapshot } =
@@ -48,7 +52,17 @@ const { request } = await import('../../helpers/request')
 /**
  * What the flags list `data` holds.
  */
-type FlagsList = import('@/types/flags').FlagsListResponse
+type FlagsList = import('@/utilities/list-page.utilities').ListPage<import('@/types/flags').FlagRow>
+/**
+ * What the unregistered flags list `data` holds.
+ */
+type UnregisteredList = import('@/utilities/list-page.utilities').ListPage<
+  import('@/types/flags').UnregisteredRow
+>
+/**
+ * What the flags meta `data` holds.
+ */
+type FlagsMeta = import('@/types/flags').FlagsMetaResponse
 /**
  * What the flags evaluate `data` holds.
  */
@@ -56,6 +70,11 @@ type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 
 // eslint-disable-next-line unicorn/no-null -- JSON null, as the list carries it
 const NONE = null
+
+/**
+ * Past the snapshot's staleness window, well inside an access token's life.
+ */
+const PAST_STALE_MS = FLAG_SNAPSHOT_STALE_MS + 60_000
 
 const app = createApp()
 const tenantRepository = new TenantRepository()
@@ -73,6 +92,13 @@ function staffGet(token: string, path: string): Promise<Response> {
  */
 function dataOf<T>(response: Response): T {
   return (response.body as { data: T }).data
+}
+
+/**
+ * The keys of a flags list response's items, in order.
+ */
+function keysOf(response: Response): string[] {
+  return dataOf<FlagsList>(response).items.map((item) => item.key)
 }
 
 /**
@@ -108,6 +134,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -190,15 +217,74 @@ describe('GET /platform/flags', () => {
     ])
   })
 
+  it('links no PostHog page for a malformed flag, which has no numeric id', async () => {
+    await loadFlagDefinitions([
+      { ...flagDefinition('example_beta_page', { groupIndex: 0 }), id: undefined },
+      { ...flagDefinition('mm_probe_flag'), id: undefined },
+    ])
+    const { token } = await createTrackedStaff('viewer')
+
+    const list = dataOf<FlagsList>(await staffGet(token, '/flags'))
+    const unregistered = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
+
+    expect(list.items[0]).toMatchObject({
+      key: 'example_beta_page',
+      state: 'unsupported',
+      unsupportedReason: 'malformed',
+      posthogUrl: NONE,
+    })
+    expect(unregistered.items).toEqual([{ key: 'mm_probe_flag', active: true, posthogUrl: NONE }])
+  })
+
+  it('filters by kind and state, combined with a search over the key and the description', async () => {
+    await loadFlagDefinitions([betaPageDefinition(true)])
+    const { token } = await createTrackedStaff('viewer')
+
+    const boolean = await staffGet(token, '/flags?kind=boolean')
+    const missing = await staffGet(token, '/flags?state=missing')
+    const active = await staffGet(token, '/flags?state=active')
+    const both = await staffGet(token, '/flags?kind=multivariate&state=missing&search=EXPERIMENT')
+    const byDescription = await staffGet(token, '/flags?search=call-to-action')
+    const mismatch = await staffGet(token, '/flags?kind=boolean&state=missing&search=beta')
+    const searchMismatch = await staffGet(token, '/flags?kind=boolean&state=active&search=cta')
+
+    expect(keysOf(boolean)).toEqual(['example_beta_page'])
+    expect(keysOf(missing)).toEqual(['example_cta_experiment'])
+    expect(keysOf(active)).toEqual(['example_beta_page'])
+    expect(keysOf(both)).toEqual(['example_cta_experiment'])
+    expect(keysOf(byDescription)).toEqual(['example_cta_experiment'])
+    expect(keysOf(mismatch)).toEqual([])
+    expect(keysOf(searchMismatch)).toEqual([])
+  })
+
+  it('refuses an unknown kind or state with 400', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const kind = await staffGet(token, '/flags?kind=numeric')
+    const state = await staffGet(token, '/flags?state=broken')
+
+    expect([kind.status, state.status]).toEqual([400, 400])
+  })
+
+  it('runs the platform-search limiter', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const response = await staffGet(token, '/flags')
+
+    expect(response.headers['ratelimit-limit']).toBe('60')
+  })
+})
+
+describe('GET /platform/flags/unregistered', () => {
   it('lists the flags PostHog has that the registry lacks, sorted by key', async () => {
     const zed = flagDefinition('zz_probe_flag', { active: false })
     const ant = flagDefinition('aa_probe_flag')
     await loadFlagDefinitions([zed, betaPageDefinition(true), ant])
     const { token } = await createTrackedStaff('viewer')
 
-    const { unregistered } = dataOf<FlagsList>(await staffGet(token, '/flags'))
+    const { items } = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
 
-    expect(unregistered).toEqual([
+    expect(items).toEqual([
       {
         key: 'aa_probe_flag',
         active: true,
@@ -212,40 +298,127 @@ describe('GET /platform/flags', () => {
     ])
   })
 
-  it('links no PostHog page for a malformed flag, which has no numeric id', async () => {
+  it('answers an empty page when the registry lacks nothing', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const { items, page } = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
+
+    expect(items).toEqual([])
+    expect(page).toMatchObject({ hasNext: false, hasPrev: false })
+  })
+
+  it('pages a key of the longest listed length across a page boundary', async () => {
+    const longKey = 'a'.repeat(LISTED_FLAG_KEY_MAX)
+    await loadFlagDefinitions([flagDefinition(longKey), flagDefinition('b_probe_flag')])
+    const { token } = await createTrackedStaff('viewer')
+
+    const first = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered?limit=1'))
+    const second = await staffGet(
+      token,
+      `/flags/unregistered?limit=1&cursor=${String(first.page.nextCursor)}`
+    )
+    const back = await staffGet(
+      token,
+      `/flags/unregistered?limit=1&direction=prev&cursor=${String(dataOf<UnregisteredList>(second).page.prevCursor)}`
+    )
+
+    expect(first.items.map((item) => item.key)).toEqual([longKey])
+    expect(dataOf<UnregisteredList>(second).items.map((item) => item.key)).toEqual(['b_probe_flag'])
+    expect(dataOf<UnregisteredList>(back).items.map((item) => item.key)).toEqual([longKey])
+  })
+
+  it('leaves a key too long for a cursor out of the list, logs it, and loads the rest', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger)
+    const tooLong = 'a'.repeat(LISTED_FLAG_KEY_MAX + 1)
     await loadFlagDefinitions([
-      { ...flagDefinition('example_beta_page', { groupIndex: 0 }), id: undefined },
-      { ...flagDefinition('mm_probe_flag'), id: undefined },
+      flagDefinition(tooLong),
+      flagDefinition('b_probe_flag'),
+      flagDefinition('c_probe_flag'),
+      betaPageDefinition(true),
     ])
     const { token } = await createTrackedStaff('viewer')
 
-    const list = dataOf<FlagsList>(await staffGet(token, '/flags'))
+    const unregistered = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
+    const again = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
+    const registry = dataOf<FlagsList>(await staffGet(token, '/flags'))
 
-    expect(list.items[0]).toMatchObject({
-      key: 'example_beta_page',
-      state: 'unsupported',
-      unsupportedReason: 'malformed',
-      posthogUrl: NONE,
+    expect(again.items).toEqual(unregistered.items)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(unregistered.items.map((item) => item.key)).toEqual(['b_probe_flag', 'c_probe_flag'])
+    expect(registry.items[0]).toMatchObject({ key: 'example_beta_page', state: 'active' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('too long'), {
+      keyLength: LISTED_FLAG_KEY_MAX + 1,
+      keyPrefix: 'a'.repeat(40),
     })
-    expect(list.unregistered).toEqual([{ key: 'mm_probe_flag', active: true, posthogUrl: NONE }])
   })
 
+  it('refuses a cursor from the registry list, and the registry list one from this list', async () => {
+    await loadFlagDefinitions([flagDefinition('a_probe_flag'), flagDefinition('b_probe_flag')])
+    const { token } = await createTrackedStaff('viewer')
+    const registry = dataOf<FlagsList>(await staffGet(token, '/flags?limit=1'))
+    const unregistered = dataOf<UnregisteredList>(
+      await staffGet(token, '/flags/unregistered?limit=1')
+    )
+
+    const onUnregistered = await staffGet(
+      token,
+      `/flags/unregistered?limit=1&cursor=${String(registry.page.nextCursor)}`
+    )
+    const onRegistry = await staffGet(
+      token,
+      `/flags?limit=1&cursor=${String(unregistered.page.nextCursor)}`
+    )
+
+    for (const response of [onUnregistered, onRegistry]) {
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({
+        message: 'Validation failed',
+        code: 'CURSOR_INVALID',
+        errors: { cursor: ['cursor is invalid.'] },
+      })
+    }
+  })
+
+  it('runs the platform-search limiter', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const response = await staffGet(token, '/flags/unregistered')
+
+    expect(response.headers['ratelimit-limit']).toBe('60')
+  })
+})
+
+describe('GET /platform/flags/meta', () => {
   it('carries the traits reference and the snapshot block', async () => {
     const { token } = await createTrackedStaff('viewer')
 
-    const list = dataOf<FlagsList>(await staffGet(token, '/flags'))
+    const meta = dataOf<FlagsMeta>(await staffGet(token, '/flags/meta'))
 
-    expect(list.traits.map((trait) => trait.name)).toEqual([
+    expect(meta.traits.map((trait) => trait.name)).toEqual([
       'platform_role',
       'tenant_role',
       'app_env',
       'account_created_days',
       'tenant_created_days',
     ])
-    expect(list.snapshot).toEqual({
+    expect(meta.snapshot).toEqual({
       enabled: true,
       fetchedAt: expect.any(String) as unknown,
       stale: false,
+    })
+  })
+
+  it('reports a snapshot not re-confirmed for ten minutes as stale, its fetchedAt unchanged', async () => {
+    const { token } = await createTrackedStaff('viewer')
+    const fresh = dataOf<FlagsMeta>(await staffGet(token, '/flags/meta'))
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + PAST_STALE_MS) })
+
+    const stale = dataOf<FlagsMeta>(await staffGet(token, '/flags/meta'))
+
+    expect(stale.snapshot).toEqual({
+      enabled: true,
+      fetchedAt: fresh.snapshot.fetchedAt,
+      stale: true,
     })
   })
 
@@ -253,15 +426,15 @@ describe('GET /platform/flags', () => {
     flags.isEnabled = false
     const { token } = await createTrackedStaff('viewer')
 
-    const list = dataOf<FlagsList>(await staffGet(token, '/flags'))
+    const meta = dataOf<FlagsMeta>(await staffGet(token, '/flags/meta'))
 
-    expect(list.snapshot.enabled).toBe(false)
+    expect(meta.snapshot.enabled).toBe(false)
   })
 
   it('runs the platform-search limiter', async () => {
     const { token } = await createTrackedStaff('viewer')
 
-    const response = await staffGet(token, '/flags')
+    const response = await staffGet(token, '/flags/meta')
 
     expect(response.headers['ratelimit-limit']).toBe('60')
   })
@@ -475,6 +648,24 @@ describe('GET /platform/flags/evaluate', () => {
     const response = await staffGet(token, `/flags/evaluate?userId=${userId}&app=react`)
 
     expect(response.status).toBe(404)
+  })
+})
+
+describe('the flag-evaluate limiter', () => {
+  it('answers 429 RATE_LIMITED past 20 evaluations a minute for one staff member', async () => {
+    const { userId } = await memberWithTenant()
+    const { token } = await createTrackedStaff('admin')
+
+    const statuses: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const response = await staffGet(token, `/flags/evaluate?userId=${userId}&app=react`)
+      statuses.push(response.status)
+    }
+    const refused = await staffGet(token, `/flags/evaluate?userId=${userId}&app=react`)
+
+    expect(statuses.every((status) => status === 200)).toBe(true)
+    expect(refused.status).toBe(429)
+    expect((refused.body as { code?: string }).code).toBe('RATE_LIMITED')
   })
 })
 

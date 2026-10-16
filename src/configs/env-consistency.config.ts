@@ -137,20 +137,20 @@ function warnOnUntrustedProxyForAnalytics(env: Env, warn: (message: string) => v
 }
 
 /**
- * Warn when only half of the timeline credentials is set. The timelines and
- * PostHog person deletion need both, so with one alone they stay off and
- * nothing else says why.
+ * Warn when only half of the PostHog private API credentials is set. Person
+ * deletion and `pnpm flags:sync` need both, so with one alone they stay off
+ * and nothing else says why.
  * @param env - The validated environment.
  * @param warn - Receives the warning, naming the missing variable.
  */
-function warnOnHalfTimelineConfig(env: Env, warn: (message: string) => void): void {
+function warnOnHalfPosthogApiConfig(env: Env, warn: (message: string) => void): void {
   const hasKey = env.POSTHOG_PERSONAL_API_KEY !== undefined
   if (hasKey === (env.POSTHOG_PROJECT_ID !== undefined)) return
   const [presentName, missingName] = hasKey
     ? ['POSTHOG_PERSONAL_API_KEY', 'POSTHOG_PROJECT_ID']
     : ['POSTHOG_PROJECT_ID', 'POSTHOG_PERSONAL_API_KEY']
   warn(
-    `${presentName} is set but ${missingName} is not, so the staff timelines answer "not configured" and PostHog person deletions wait. Set ${missingName} too, or unset ${presentName}.`
+    `${presentName} is set but ${missingName} is not, so queued PostHog person deletions wait and pnpm flags:sync cannot run. Set ${missingName} too, or unset ${presentName}.`
   )
 }
 
@@ -185,6 +185,19 @@ function rateLimitScaleProblems(env: Env): string[] {
 }
 
 /**
+ * The problem of a deployed environment with no `CURSOR_SECRET`: each replica
+ * would sign cursors with its own generated key.
+ * @param env - The validated environment.
+ * @returns One problem, or none when the secret is set.
+ */
+function cursorSecretProblems(env: Env): string[] {
+  if (env.CURSOR_SECRET !== undefined) return []
+  return [
+    `CURSOR_SECRET is not set, but APP_ENV is ${env.APP_ENV}. Set it to the same 32+ character secret on every replica (openssl rand -hex 32): a replica that generates its own refuses the list cursors the others sign.`,
+  ]
+}
+
+/**
  * Refuses unsafe or inconsistent configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -206,7 +219,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     )
   }
   if (!isLocal) {
-    problems.push(...mailpitDefaultProblems(env))
+    problems.push(...mailpitDefaultProblems(env), ...cursorSecretProblems(env))
     warnOnSharedSenderDomain(env, warn)
   }
 
@@ -249,7 +262,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
 
   problems.push(...flagsKeyProblems(env), ...rateLimitScaleProblems(env))
   warnOnUntrustedProxyForAnalytics(env, warn)
-  warnOnHalfTimelineConfig(env, warn)
+  warnOnHalfPosthogApiConfig(env, warn)
 
   if (problems.length === 0) return
   const list = problems.map((problem) => `  - ${problem}`).join('\n')

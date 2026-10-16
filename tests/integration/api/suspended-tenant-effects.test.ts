@@ -127,11 +127,11 @@ describe('a suspended tenant', () => {
     /**
      * The audit-log response body, narrowed to what the assertions read.
      */
-    type Entries = { data: { entries: { action: string; metadata: Record<string, unknown> }[] } }
-    const memberSuspend = (asMember.body as Entries).data.entries.find(
+    type Entries = { data: { items: { action: string; metadata: Record<string, unknown> }[] } }
+    const memberSuspend = (asMember.body as Entries).data.items.find(
       (entry) => entry.action === 'tenant.suspended'
     )
-    const staffSuspend = (asStaff.body as Entries).data.entries.find(
+    const staffSuspend = (asStaff.body as Entries).data.items.find(
       (entry) => entry.action === 'tenant.suspended'
     )
     expect(memberSuspend?.metadata).toEqual({})

@@ -105,12 +105,11 @@ export const tenantModel = pgTable(
       'tenants_platform_untracked',
       sql`not ${table.isPlatform} or not ${table.onboardingTracked}`
     ),
-    index('tenants_name_trgm_idx')
-      .using('gin', sql`lower(${table.name}) gin_trgm_ops`)
-      .where(isNull(table.deletedAt)),
-    index('tenants_slug_trgm_idx')
-      .using('gin', table.slug.op('gin_trgm_ops'))
-      .where(isNull(table.deletedAt)),
+    index('tenants_name_sort_idx').on(sql`lower(${table.name})`, table.id),
+    index('tenants_created_sort_idx').on(table.createdAt, table.id),
+    // Full, not partial: archived tenants are soft-deleted and still listed and searched.
+    index('tenants_name_trgm_idx').using('gin', sql`lower(${table.name}) gin_trgm_ops`),
+    index('tenants_slug_trgm_idx').using('gin', table.slug.op('gin_trgm_ops')),
   ]
 )
 

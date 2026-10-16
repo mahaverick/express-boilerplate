@@ -24,8 +24,7 @@ import {
 import { EMAIL_EVENT_TYPES } from '@/constants/email.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
-import { TIMELINE_RANGES, TIMELINE_VIEWS } from '@/constants/timeline.constants'
-import type { AuditLog } from '@/database/models/audit-log.model'
+import type { WrittenAuditLog } from '@/database/models/audit-log.model'
 import {
   auditEventName,
   buildAuditEvents,
@@ -83,8 +82,8 @@ const NONE = null
 function auditRow(
   action: AuditAction,
   metadata: Record<string, unknown>,
-  overrides: Partial<AuditLog> = {}
-): AuditLog {
+  overrides: Partial<WrittenAuditLog> = {}
+): WrittenAuditLog {
   return {
     id: '0199a1b2-0000-7000-8000-0000000000aa',
     occurredAt: OCCURRED_AT,
@@ -588,8 +587,6 @@ const CANDIDATES: readonly unknown[] = [
   ...MEMBERSHIP_ROLES,
   ...MAINTENANCE_MODES,
   ...EMAIL_TEMPLATE_KEYS,
-  ...TIMELINE_RANGES,
-  ...TIMELINE_VIEWS,
   'react',
   'apex',
   true,

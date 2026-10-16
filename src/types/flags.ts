@@ -217,11 +217,9 @@ interface TraitRow {
 }
 
 /**
- * `GET /platform/flags`.
+ * `GET /platform/flags/meta`: the traits reference and this replica's snapshot age.
  */
-export interface FlagsListResponse {
-  items: FlagRow[]
-  unregistered: UnregisteredRow[]
+export interface FlagsMetaResponse {
   traits: TraitRow[]
   snapshot: {
     /**

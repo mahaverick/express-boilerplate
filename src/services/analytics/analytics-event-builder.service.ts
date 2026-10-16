@@ -21,7 +21,7 @@ import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
 import { FLAG_EXPOSURE_EVENT } from '@/constants/flags.constants'
 import { onboardingStepByKey } from '@/constants/onboarding.constants'
 import type { NewAnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
-import type { AuditLog } from '@/database/models/audit-log.model'
+import type { AuditLog, WrittenAuditLog } from '@/database/models/audit-log.model'
 import { logger } from '@/services/logger.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type {
@@ -299,7 +299,7 @@ function buildStaffStatusSet(
  * @returns The rows, in that order.
  */
 export function buildAuditEvents(
-  entry: AuditLog,
+  entry: WrittenAuditLog,
   context: AnalyticsContext,
   extras: AuditEventExtras = {}
 ): NewAnalyticsOutboxRow[] {

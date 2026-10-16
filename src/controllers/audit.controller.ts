@@ -8,10 +8,7 @@ import { tenantPrincipal } from '@/controllers/helpers.controller'
 import { hideStaffReason, toAuditEntry, toPlatformAuditEntry } from '@/presenters/audit.presenter'
 import { listForTenant, listPlatformWide } from '@/services/audit.service'
 import { successResponse } from '@/utilities/response.utilities'
-import {
-  platformAuditLogQuerySchema,
-  tenantAuditLogQuerySchema,
-} from '@/validators/audit.validators'
+import { platformAuditLogListSchema, tenantAuditLogListSchema } from '@/validators/audit.validators'
 import { parseBody } from '@/validators/parse.validators'
 
 /**
@@ -24,15 +21,15 @@ class AuditController extends BaseController {
    */
   listTenantAuditLog = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
-    const query = parseBody(tenantAuditLogQuerySchema, request.query)
+    const query = parseBody(tenantAuditLogListSchema, request.query)
     const page = await listForTenant(principal.tenantId, query)
     const shape =
       principal.access === 'member'
-        ? (row: (typeof page.rows)[number]) => hideStaffReason(toAuditEntry(row))
+        ? (row: (typeof page.items)[number]) => hideStaffReason(toAuditEntry(row))
         : toAuditEntry
     successResponse(
       response,
-      { entries: page.rows.map((row) => shape(row)), nextCursor: page.nextCursor },
+      { ...page, items: page.items.map((row) => shape(row)) },
       'Audit log retrieved.'
     )
   })
@@ -41,11 +38,11 @@ class AuditController extends BaseController {
    * `GET /platform/audit-log`: every tenant's entries, newest first.
    */
   listPlatformAuditLog = this.handle(async (request, response) => {
-    const query = parseBody(platformAuditLogQuerySchema, request.query)
+    const query = parseBody(platformAuditLogListSchema, request.query)
     const page = await listPlatformWide(query)
     successResponse(
       response,
-      { entries: page.rows.map((row) => toPlatformAuditEntry(row)), nextCursor: page.nextCursor },
+      { ...page, items: page.items.map((row) => toPlatformAuditEntry(row)) },
       'Audit log retrieved.'
     )
   })

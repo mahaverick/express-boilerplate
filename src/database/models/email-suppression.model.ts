@@ -4,7 +4,7 @@
  * retention; lifting one keeps the row as history.
  */
 import { sql, type InferSelectModel } from 'drizzle-orm'
-import { check, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
+import { check, index, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import {
   LIFT_REASON_MAX_LENGTH,
@@ -54,6 +54,9 @@ export const emailSuppressionModel = pgTable(
     uniqueIndex('email_suppressions_active_address_unique')
       .on(table.address)
       .where(sql`${table.liftedAt} is null`),
+    index('email_suppressions_created_sort_idx').on(table.createdAt, table.id),
+    index('email_suppressions_address_sort_idx').on(table.address, table.id),
+    index('email_suppressions_address_trgm_idx').using('gin', table.address.op('gin_trgm_ops')),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
     check(
       'email_suppressions_reason_check',

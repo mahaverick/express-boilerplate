@@ -15,6 +15,7 @@ import {
   type AuditAction,
   type AuditActorKind,
   type AuditTargetType,
+  type StoredAuditAction,
 } from '@/constants/audit.constants'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
@@ -51,7 +52,7 @@ export const auditLogModel = pgTable(
     tenantId: varchar('tenant_id', { length: 36 })
       .notNull()
       .references(() => tenantModel.id, { onDelete: 'restrict' }),
-    action: varchar('action', { length: 64 }).$type<AuditAction>().notNull(),
+    action: varchar('action', { length: 64 }).$type<StoredAuditAction>().notNull(),
     targetType: varchar('target_type', { length: 32 }).$type<AuditTargetType>(),
     targetId: varchar('target_id', { length: 36 }),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
@@ -97,6 +98,13 @@ export const auditLogModel = pgTable(
 export type AuditLog = InferSelectModel<typeof auditLogModel>
 
 /**
- * An audit_logs row as written to the database.
+ * An audit row as a build writes it: its action is a written one, never a retired one.
  */
-export type NewAuditLog = InferInsertModel<typeof auditLogModel>
+export type WrittenAuditLog = Omit<AuditLog, 'action'> & { action: AuditAction }
+
+/**
+ * An audit_logs row as written to the database: only a written action, never a retired one.
+ */
+export type NewAuditLog = Omit<InferInsertModel<typeof auditLogModel>, 'action'> & {
+  action: AuditAction
+}

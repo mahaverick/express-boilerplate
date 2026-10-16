@@ -284,7 +284,7 @@ in Apex. The rules behind them are in
 - **A user or tenant field staff can see.** Add the column (model, then
   `pnpm db:migration:generate`), select it in
   `src/repositories/platform-user.repository.ts` (`recordSelection`) or
-  `src/repositories/platform-tenant.repository.ts` (`searchAll`,
+  `src/repositories/platform-tenant.repository.ts` (`platformTenantList`,
   `findDetail`), and mirror it in `apex-boilerplate/src/types/api.types.ts`. A
   user field staff may edit joins `updatePlatformUserSchema`
   (`src/validators/platform.validators.ts`); a tenant field is edited through
@@ -292,11 +292,18 @@ in Apex. The rules behind them are in
   `src/validators/tenant.validators.ts`). List it by name in the
   `user.updated` or `tenant.updated` audit metadata.
 - **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES`
-  (`src/constants/tenant.constants.ts`), decide what
-  `statesFor` (`src/constants/platform.constants.ts`) lists by default, give it
+  (`src/constants/tenant.constants.ts`), decide whether
+  `platformTenantListSchema`'s `state` default
+  (`src/validators/platform.validators.ts`) lists it, give it
   a transition in `src/services/platform-tenant.service.ts` and an audit action,
   and decide whether `resolveTenant` and invitations treat it like
   `suspended`.
+- **A list staff or users page through.** One `defineList` in the repository
+  (`bound` when the rows depend on a path tenant or the caller), one
+  `listParamsSchema` in the validator, an index per sort in the model and the
+  migration, an `EXPLAIN` row in `list-indexes.test.ts` and a
+  `describeListContract` block. The steps are under
+  [List endpoints](ARCHITECTURE.md#list-endpoints).
 - **A staff action.** A POST under `/platform/users/:id/<verb>` or
   `/platform/tenants/:id/<verb>` with `requirePlatformRole(<least role>)`,
   `requireJsonContentType`, `requireRecentAuth()` when it is destructive, then

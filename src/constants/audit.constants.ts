@@ -9,7 +9,6 @@ import {
   ONBOARDING_STEP_KEY_PATTERN,
 } from '@/constants/onboarding.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
-import { TIMELINE_RANGES, TIMELINE_VIEWS } from '@/constants/timeline.constants'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
@@ -86,14 +85,6 @@ const staffReason = reason.optional()
  * An onboarding step key, in the registry's shape.
  */
 const stepKey = z.string().max(ONBOARDING_STEP_KEY_MAX_LENGTH).regex(ONBOARDING_STEP_KEY_PATTERN)
-
-/**
- * The range and view a staff member opened a timeline with.
- */
-const timelineView = z.strictObject({
-  range: z.enum(TIMELINE_RANGES),
-  view: z.enum(TIMELINE_VIEWS),
-})
 
 /**
  * The most reminder emails one entry lists: one per active owner, bounded so
@@ -225,12 +216,6 @@ export const AUDIT_ACTIONS = {
       messageIds: z.array(id).max(MAX_REMINDER_RECIPIENTS),
     }),
   },
-  // A staff member read a user's or a tenant's timeline; platform-timeline.service.ts throttles it.
-  'user.timeline_viewed': { target: 'user', metadata: timelineView },
-  'tenant.timeline_viewed': { target: 'tenant', metadata: timelineView },
-  // A staff member read a user's or a tenant's error issues; platform-errors.service.ts throttles it.
-  'user.errors_viewed': { target: 'user', metadata: z.strictObject({}) },
-  'tenant.errors_viewed': { target: 'tenant', metadata: z.strictObject({}) },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {
     target: 'user',
@@ -258,6 +243,31 @@ export type AuditAction = keyof typeof AUDIT_ACTIONS
  * The audited actions, as a non-empty tuple for `z.enum`.
  */
 export const AUDIT_ACTION_NAMES = Object.keys(AUDIT_ACTIONS) as [AuditAction, ...AuditAction[]]
+
+/**
+ * Actions no build writes any more, whose rows stay in `audit_logs` (retention
+ * keeps the log forever by default). They are listed and filterable, never
+ * written.
+ */
+export const RETIRED_AUDIT_ACTIONS = [
+  'user.timeline_viewed',
+  'tenant.timeline_viewed',
+  'user.errors_viewed',
+  'tenant.errors_viewed',
+] as const
+
+/**
+ * Every action a stored row may hold: the written actions and the retired ones.
+ */
+export type StoredAuditAction = AuditAction | (typeof RETIRED_AUDIT_ACTIONS)[number]
+
+/**
+ * The stored actions, as a non-empty tuple for `z.enum`: what a list filter accepts.
+ */
+export const STORED_AUDIT_ACTION_NAMES: [StoredAuditAction, ...StoredAuditAction[]] = [
+  ...AUDIT_ACTION_NAMES,
+  ...RETIRED_AUDIT_ACTIONS,
+]
 
 /**
  * The metadata shape one action requires.

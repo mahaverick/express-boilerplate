@@ -5,7 +5,7 @@
  * failing routes: the 5xx body's `errorId` names the log line and the one
  * `$exception` sent, signed and with GeoIP disabled; the actor's identity and
  * tenant group, or the server's anonymous identity; what is never sent (a
- * 404, a validation 400, a client abort, a timeline 502, a 503 with no
+ * 404, a validation 400, a client abort, a PostHog 502, a 503 with no
  * cause); a postgres.js unique violation arriving without its row values;
  * and the `/collect` proxy's own failures never reaching the reporter. Error
  * tracking is enabled for this file through a mocked `getEnv()`. The payload
@@ -40,7 +40,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const { createApp } = await import('@/app')
 const { userModel } = await import('@/database/models/user.model')
 const { HttpError } = await import('@/errors/http-error')
-const { TimelineUnavailableError } = await import('@/errors/timeline-errors')
+const { PosthogUnavailableError } = await import('@/errors/posthog-errors')
 const { requireAuth } = await import('@/middlewares/auth.middleware')
 const { errorHandler } = await import('@/middlewares/error.middleware')
 const { posthogSession } = await import('@/middlewares/posthog-session.middleware')
@@ -117,8 +117,8 @@ function probeApp(): express.Express {
   router.post('/echo', (request_: Request, response: Response) => {
     response.json(request_.body)
   })
-  router.get('/timeline', () => {
-    throw Object.assign(new TimelineUnavailableError(), { cause: new Error('refused') })
+  router.get('/posthog', () => {
+    throw Object.assign(new PosthogUnavailableError(), { cause: new Error('refused') })
   })
   router.get('/shutting-down', () => {
     throw new HttpError('Server is shutting down', 503)
@@ -320,7 +320,7 @@ describe('what is never sent', () => {
   it.each([
     ['an HttpError 404', 'get', '/api/probe/missing', 404],
     ['a malformed-JSON 400', 'post', '/api/probe/echo', 400],
-    ['a TimelineUnavailableError with a cause', 'get', '/api/probe/timeline', 502],
+    ['a PosthogUnavailableError with a cause', 'get', '/api/probe/posthog', 502],
     ['an HttpError 503 without a cause', 'get', '/api/probe/shutting-down', 503],
   ] as const)('%s', async (_name, method, path, status) => {
     vi.spyOn(logger, 'error').mockImplementation(() => {})

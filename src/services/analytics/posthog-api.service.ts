@@ -1,6 +1,6 @@
 /**
  * @file The server's calls to PostHog's private API (`/api/projects/…`) with
- * the personal API key: the timeline queries, the group types lookup, person
+ * the personal API key: the group types lookup, person
  * deletion and `pnpm flags:sync`'s flag list and creates. Each call is
  * classified, never thrown, so a PostHog outage reaches the caller as a
  * value. The key travels only in the `Authorization` header and is never
@@ -9,7 +9,7 @@
  */
 import { posthogAppHost } from '@/configs/analytics.config'
 import { getEnv } from '@/configs/env.config'
-import { TIMELINE_POSTHOG_TIMEOUT_MS } from '@/constants/timeline.constants'
+import { POSTHOG_API_TIMEOUT_MS } from '@/constants/analytics.constants'
 
 /**
  * How one private-API call ended: `ok` for any 2xx (202 included), with the
@@ -83,13 +83,13 @@ async function discardBody(response: Response): Promise<void> {
  * @param body - A JSON body for a POST.
  * @param options - Call options.
  * @param options.timeoutMs - How long the whole call, body included, may take;
- *   defaults to `TIMELINE_POSTHOG_TIMEOUT_MS`.
+ *   defaults to `POSTHOG_API_TIMEOUT_MS`.
  * @param options.query - Query parameters appended to `path`, URL-encoded.
  * @param options.shouldReadErrorBody - Whether an `http_error` carries its
  *   parsed body (a validation error's `code`, say); off, the body is discarded.
  * @returns How the call ended.
  * @throws {Error} When `POSTHOG_PERSONAL_API_KEY` is not set (only code that
- *   checked `isTimelineEnabled()` may call), or `path` does not end with `/`.
+ *   checked `isPosthogApiEnabled()` may call), or `path` does not end with `/`.
  */
 export async function posthogApi(
   method: 'GET' | 'POST',
@@ -118,7 +118,7 @@ export async function posthogApi(
       headers,
       ...(body !== undefined && { body: JSON.stringify(body) }),
       redirect: 'error',
-      signal: AbortSignal.timeout(options.timeoutMs ?? TIMELINE_POSTHOG_TIMEOUT_MS),
+      signal: AbortSignal.timeout(options.timeoutMs ?? POSTHOG_API_TIMEOUT_MS),
     })
     if (response.status < 200 || response.status >= 300) {
       if (options.shouldReadErrorBody === true) {

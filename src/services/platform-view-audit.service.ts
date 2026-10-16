@@ -1,15 +1,23 @@
 /**
- * @file The throttled audit of a staff read view (a timeline, an errors
- * list, a flags evaluation): one entry per staff member, target and view every
- * `TIMELINE_AUDIT_THROTTLE_SECONDS`, claimed with Redis `SET NX EX`. It
+ * @file The throttled audit of a staff read view (the flags evaluate view):
+ * at most once per staff member and target every `VIEW_AUDIT_THROTTLE_SECONDS`,
+ * claimed with Redis `SET NX EX`. It
  * fails toward auditing: a Redis failure writes the entry anyway, and a
  * failed write releases the key it claimed, so the next read is audited.
  */
-import { TIMELINE_AUDIT_THROTTLE_SECONDS } from '@/constants/timeline.constants'
 import { logger } from '@/services/logger.service'
 import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
-import type { TimelineKind } from '@/types/timeline'
+
+/**
+ * How long one staff member's view of one target goes unaudited after an audited one.
+ */
+const VIEW_AUDIT_THROTTLE_SECONDS = 600
+
+/**
+ * Whose view is audited: a user's or a tenant's.
+ */
+type ViewAuditKind = 'user' | 'tenant'
 
 /**
  * One throttled view audit.
@@ -21,13 +29,13 @@ export interface ThrottledViewAudit {
    */
   key: string
   /**
-   * The view's name as the log lines say it, capitalised: `Timeline`, `Errors view`.
+   * The view's name as the log lines say it, capitalised: `Flags evaluate view`.
    */
   label: string
   /**
    * Whose view: a user's or a tenant's.
    */
-  kind: TimelineKind
+  kind: ViewAuditKind
   /**
    * The user or tenant id.
    */
@@ -74,7 +82,7 @@ function logUnreleasedThrottleKey(audit: ThrottledViewAudit, error: unknown): vo
       error,
       kind: audit.kind,
       targetId: audit.targetId,
-      unauditedSeconds: TIMELINE_AUDIT_THROTTLE_SECONDS,
+      unauditedSeconds: VIEW_AUDIT_THROTTLE_SECONDS,
     }
   )
 }
@@ -95,7 +103,7 @@ export async function auditThrottledView(audit: ThrottledViewAudit): Promise<voi
       const redis = await getRedis()
       return redis.set(audit.key, '1', {
         condition: 'NX',
-        expiration: { type: 'EX', value: TIMELINE_AUDIT_THROTTLE_SECONDS },
+        expiration: { type: 'EX', value: VIEW_AUDIT_THROTTLE_SECONDS },
       })
     }, 'view audit throttle')
     if (reply === null) return

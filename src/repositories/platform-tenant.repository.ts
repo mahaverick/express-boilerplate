@@ -1,26 +1,27 @@
 /**
  * @file Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
  * import this file (an eslint rule); every query excludes the platform tenant.
- * `searchAll` lists soft-deleted tenants only when archived and asked for;
+ * `list` lists soft-deleted tenants only when archived and asked for;
  * `findDetail` returns a tenant in any lifecycle state.
  */
-import { and, count, desc, eq, gt, inArray, isNull, sql, type SQL } from 'drizzle-orm'
-import type { PageDirection } from '@/constants/platform.constants'
+import { and, count, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { tenantModel, tenantSettingsModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
-import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
-
-/**
- * The last row of a page: its lowercased name and id, the sort key.
- */
-export interface PlatformTenantCursor {
-  sortName: string
-  id: string
-}
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * One tenant as the staff search returns it.
@@ -35,24 +36,10 @@ export interface PlatformTenantRow {
 }
 
 /**
- * A page of tenants and the cursors either side of it, each only when rows lie that way.
+ * The staff tenant list's filters, defaults applied.
  */
-export interface PlatformTenantPage {
-  tenants: PlatformTenantRow[]
-  nextCursor?: PlatformTenantCursor
-  prevCursor?: PlatformTenantCursor
-}
-
-/**
- * The search's inputs. `q` is matched as a literal substring. `states`
- * defaults to active and suspended, `direction` to next.
- */
-export interface PlatformTenantSearchOptions {
-  limit: number
-  states?: readonly TenantLifecycleState[] | undefined
-  direction?: PageDirection | undefined
-  q?: string | undefined
-  cursor?: PlatformTenantCursor | undefined
+export interface PlatformTenantFilters {
+  state: TenantLifecycleState[]
 }
 
 /**
@@ -85,95 +72,78 @@ export interface PlatformTenantDetailRow {
   pendingOwnerInvitation: { id: string; email: string; expiresAt: Date } | null
 }
 
+const tenantSortName = sql<string>`lower(${tenantModel.name})`
+
 /**
- * The cursor that points at a row.
- * @param row - A row carrying its sort key.
- * @param row.sortName - The row's lowercased name.
- * @param row.id - The row's id.
- * @returns The cursor.
+ * The staff tenant list: customer tenants in the asked states, searched by
+ * name or slug. Archived tenants are soft-deleted, so `deleted_at` is
+ * ignored for them only. Member counts include live members only.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The states.
+ * @returns The list definition.
  */
-function cursorOf({ sortName, id }: PlatformTenantCursor): PlatformTenantCursor {
-  return { sortName, id }
+export function platformTenantList(search: string | undefined, filters: PlatformTenantFilters) {
+  return defineList({
+    name: 'platform-tenants',
+    base: (executor, seek) => {
+      // Built with a join so drizzle qualifies its columns; the one-table outer select renders them bare.
+      const liveMembers = executor
+        .select({ count: count() })
+        .from(userMembershipModel)
+        .innerJoin(userModel, eq(userModel.id, userMembershipModel.userId))
+        .where(and(eq(userMembershipModel.tenantId, tenantModel.id), isNull(userModel.deletedAt)))
+      return executor
+        .select({
+          id: tenantModel.id,
+          name: tenantModel.name,
+          slug: tenantModel.slug,
+          lifecycleState: tenantModel.lifecycleState,
+          memberCount: sql<number>`(${liveMembers})`.mapWith(Number),
+          createdAt: tenantModel.createdAt,
+          sortName: tenantSortName,
+          sortCreated: timestampKey(tenantModel.createdAt),
+        })
+        .from(tenantModel)
+        .where(
+          and(
+            eq(tenantModel.isPlatform, false),
+            inArray(tenantModel.lifecycleState, filters.state),
+            // Only an archived row may be soft-deleted and still listed.
+            sql`(${tenantModel.deletedAt} is null or ${tenantModel.lifecycleState} = 'archived')`,
+            searchCondition(search, [sql`lower(${tenantModel.name})`, sql`${tenantModel.slug}`]),
+            seek
+          )
+        )
+        .$dynamic()
+    },
+    id: tenantModel.id,
+    sorts: {
+      name: [textSort(tenantSortName, 'asc', 'sortName')],
+      created: [timestampSort(tenantModel.createdAt, 'asc', 'sortCreated')],
+      '-created': [timestampSort(tenantModel.createdAt, 'desc', 'sortCreated')],
+    },
+    toItem: ({ sortName: _name, sortCreated: _created, ...tenant }): PlatformTenantRow => tenant,
+  })
 }
 
 /**
- * Query access for the staff tenant search.
+ * Query access for the staff tenant list and detail.
  */
 export class PlatformTenantRepository {
   /**
-   * A page of customer tenants in `states`, ordered by `(lower(name), id)`,
-   * optionally filtered by a case-insensitive substring of the name or slug.
-   * Archived tenants are soft-deleted, so `deleted_at` is ignored for them
-   * only. `direction: 'prev'` reads the rows before `cursor`, newest-first,
-   * and returns them in ascending order. Member counts include live members only.
-   * @param options - Page size, states, direction, search text and cursor.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page, with `nextCursor`/`prevCursor` only when rows remain that way.
+   * One page of the staff tenant list.
+   * @param params - The parsed shared list params.
+   * @param filters - The states.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
-  async searchAll(
-    options: PlatformTenantSearchOptions,
+  async list(
+    params: ListParams,
+    filters: PlatformTenantFilters,
     executor: DbExecutor = db
-  ): Promise<PlatformTenantPage> {
-    const sortName = sql<string>`lower(${tenantModel.name})`
-    const states = options.states ?? (['active', 'suspended'] as const)
-    const conditions: SQL[] = [
-      eq(tenantModel.isPlatform, false),
-      inArray(tenantModel.lifecycleState, [...states]),
-      // Only an archived row may be soft-deleted and still listed.
-      sql`(${tenantModel.deletedAt} is null or ${tenantModel.lifecycleState} = 'archived')`,
-    ]
-    if (options.q !== undefined) {
-      const pattern = `%${escapeLikePattern(options.q)}%`
-      conditions.push(
-        sql`(lower(${tenantModel.name}) like lower(${pattern}) escape '\\' or ${tenantModel.slug} like lower(${pattern}) escape '\\')`
-      )
-    }
-    const isPrevious = options.direction === 'prev'
-    if (options.cursor !== undefined) {
-      const key = sql`(lower(${tenantModel.name}), ${tenantModel.id})`
-      const at = sql`(${options.cursor.sortName}, ${options.cursor.id})`
-      conditions.push(isPrevious ? sql`${key} < ${at}` : sql`${key} > ${at}`)
-    }
-    // Built with a join so drizzle qualifies its columns; the one-table outer select renders them bare.
-    const liveMembers = executor
-      .select({ count: count() })
-      .from(userMembershipModel)
-      .innerJoin(userModel, eq(userModel.id, userMembershipModel.userId))
-      .where(and(eq(userMembershipModel.tenantId, tenantModel.id), isNull(userModel.deletedAt)))
-    const memberCount = sql<number>`(${liveMembers})`.mapWith(Number)
-
-    const rows = await executor
-      .select({
-        id: tenantModel.id,
-        name: tenantModel.name,
-        slug: tenantModel.slug,
-        lifecycleState: tenantModel.lifecycleState,
-        memberCount,
-        createdAt: tenantModel.createdAt,
-        sortName,
-      })
-      .from(tenantModel)
-      .where(and(...conditions))
-      .orderBy(
-        ...(isPrevious ? [desc(sortName), desc(tenantModel.id)] : [sortName, tenantModel.id])
-      )
-      .limit(options.limit + 1)
-
-    const hasMoreThisWay = rows.length > options.limit
-    if (hasMoreThisWay) rows.pop()
-    if (isPrevious) rows.reverse()
-    const first = rows.at(0)
-    const last = rows.at(-1)
-    // A page read from a cursor has rows on the side it came from; an empty one hands that cursor back.
-    const hasBefore = isPrevious ? hasMoreThisWay : options.cursor !== undefined
-    const hasAfter = isPrevious ? options.cursor !== undefined : hasMoreThisWay
-    const nextCursor = last === undefined ? options.cursor : cursorOf(last)
-    const previousCursor = first === undefined ? options.cursor : cursorOf(first)
-    return {
-      tenants: rows.map(({ sortName: _sortName, ...tenant }) => tenant),
-      ...(hasAfter && nextCursor && { nextCursor }),
-      ...(hasBefore && previousCursor && { prevCursor: previousCursor }),
-    }
+  ): Promise<ListPage<PlatformTenantRow>> {
+    return listPage(executor, platformTenantList(params.search, filters), params)
   }
 
   /**

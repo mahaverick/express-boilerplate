@@ -52,16 +52,6 @@ export interface EmailMessageSummary {
 }
 
 /**
- * A page of messages, newest first, and the opaque cursors either side of it
- * (null at each end).
- */
-export interface EmailMessagePage {
-  messages: EmailMessageSummary[]
-  nextCursor: string | null
-  prevCursor: string | null
-}
-
-/**
  * One send attempt (an `email_logs` row).
  */
 interface EmailAttemptView {
@@ -168,13 +158,4 @@ export interface EmailSuppressionView {
   liftedAt: Date | null
   liftedBy: EmailPerson | null
   liftReason: string | null
-}
-
-/**
- * A page of suppressions, newest first, and the cursors either side of it.
- */
-export interface EmailSuppressionPage {
-  suppressions: EmailSuppressionView[]
-  nextCursor: string | null
-  prevCursor: string | null
 }

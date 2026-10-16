@@ -3,21 +3,34 @@
  * the table has no `deletedAt`, and `delete` is a hard delete.
  */
 import { and, count, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
-import type { MembershipRole } from '@/constants/tenant.constants'
+import { z } from 'zod'
+import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
 import {
+  membershipRoleRank,
   userMembershipModel,
   type NewUserMembership,
   type UserMembership,
 } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import type { RowLockMode } from '@/types/lock-mode'
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
- * One `user_memberships` row for `listByTenant`, joined with the subset of
+ * One `user_memberships` row of a tenant's member list (`listByTenant`, `listPageByTenant`), joined with the subset of
  * its user's columns safe to return over the wire.
  */
 export interface MembershipWithUser {
@@ -32,6 +45,94 @@ export interface MembershipWithUser {
    * `listMembers` (tenant.service.ts) drops `active` on a customer tenant.
    */
   user: Pick<User, 'id' | 'email' | 'firstName' | 'lastName' | 'active'>
+}
+
+/**
+ * The tenant lists' role filter.
+ */
+export interface RoleFilters {
+  roles: MembershipRole[] | undefined
+}
+
+/**
+ * The member display name the `name` sort uses: first and last name, else the email, lowercased.
+ */
+const memberSortName = sql<string>`lower(coalesce(nullif(trim(concat_ws(' ', ${userModel.firstName}, ${userModel.lastName})), ''), ${userModel.email}))`
+
+/**
+ * One tenant's live members, searched by email and both names. Sorting by
+ * name or email reads the user row, so those sorts are bounded by the
+ * tenant's member count rather than ordered by an index. `search` matches the
+ * display name (so a full name finds its member), the email and each name. Its cursors are
+ * bound to the tenant.
+ * @param tenantId - The tenant.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The roles.
+ * @returns The list definition.
+ */
+export function memberList(tenantId: string, search: string | undefined, filters: RoleFilters) {
+  return defineList({
+    name: 'members',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: userMembershipModel.id,
+          membership: userMembershipModel,
+          user: {
+            id: userModel.id,
+            email: userModel.email,
+            firstName: userModel.firstName,
+            lastName: userModel.lastName,
+            active: userModel.active,
+          },
+          sortName: memberSortName,
+          sortEmail: sql<string>`lower(${userModel.email})`,
+          sortRole: membershipRoleRank(userMembershipModel.role),
+          sortJoined: timestampKey(userMembershipModel.createdAt),
+        })
+        .from(userMembershipModel)
+        .innerJoin(userModel, eq(userMembershipModel.userId, userModel.id))
+        .where(
+          and(
+            eq(userMembershipModel.tenantId, tenantId),
+            isNull(userModel.deletedAt),
+            filters.roles === undefined
+              ? undefined
+              : inArray(userMembershipModel.role, filters.roles),
+            searchCondition(search, [
+              memberSortName,
+              sql`lower(${userModel.email})`,
+              sql`lower(${userModel.firstName})`,
+              sql`lower(${userModel.lastName})`,
+            ]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: userMembershipModel.id,
+    sorts: {
+      name: [textSort(memberSortName, 'asc', 'sortName')],
+      email: [textSort(sql`lower(${userModel.email})`, 'asc', 'sortEmail')],
+      role: [
+        {
+          expression: membershipRoleRank(userMembershipModel.role),
+          direction: 'asc',
+          key: 'sortRole',
+          value: z.number().int().min(0).max(MEMBERSHIP_ROLES.length),
+        },
+      ],
+      '-joined': [timestampSort(userMembershipModel.createdAt, 'desc', 'sortJoined')],
+    },
+    bound: { tenantId },
+    toItem: ({
+      id: _id,
+      sortName: _name,
+      sortEmail: _email,
+      sortRole: _role,
+      sortJoined: _joined,
+      ...member
+    }): MembershipWithUser => member,
+  })
 }
 
 /**
@@ -155,9 +256,29 @@ export class UserMembershipRepository {
   }
 
   /**
+   * One page of one tenant's members, each with safe user info, for
+   * `GET /tenants/:slug/members`. `listByTenant` stays for the tenant purge,
+   * which reads every member in its transaction.
+   * @param tenantId - The tenant whose members to list.
+   * @param params - The parsed shared list params.
+   * @param filters - The roles.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
+   */
+  async listPageByTenant(
+    tenantId: string,
+    params: ListParams,
+    filters: RoleFilters,
+    executor: DbExecutor = db
+  ): Promise<ListPage<MembershipWithUser>> {
+    return listPage(executor, memberList(tenantId, params.search, filters), params)
+  }
+
+  /**
    * Every tenant one user is a member of, with the full membership row and the
-   * tenant. `TenantRepository.listForUser` answers the same question with only
-   * the role. A soft-deleted tenant is excluded.
+   * tenant. `TenantRepository.listForUser` pages the same question with the role
+   * and join time only. A soft-deleted tenant is excluded.
    * @param userId - The user whose memberships to list.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per (still visible) tenant this user belongs to, in no particular guaranteed order.

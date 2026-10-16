@@ -314,14 +314,15 @@ describe('/api/v1/tenants', () => {
 
       expect(response.status).toBe(200)
       const tenants =
-        envelopeOf<Array<{ tenant: Tenant; role: MembershipRole }>>(response).data ?? []
+        envelopeOf<{ items: Array<{ tenant: Tenant; role: MembershipRole }> }>(response).data
+          ?.items ?? []
       expect(tenants).toHaveLength(2)
       const byTenantId = new Map(tenants.map((entry) => [entry.tenant.id, entry.role]))
       expect(byTenantId.get(owned.id)).toBe('owner')
       expect(byTenantId.get(joined.id)).toBe('viewer')
     })
 
-    it('returns an empty list for a user with no memberships', async () => {
+    it('returns an empty page for a user with no memberships', async () => {
       const { token } = await createAuthenticatedUser()
 
       const response = await request(app)
@@ -329,7 +330,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      expect(envelopeOf<unknown[]>(response).data).toEqual([])
+      expect(envelopeOf<{ items: unknown[] }>(response).data?.items).toEqual([])
     })
 
     it('rejects a request with no token', async () => {
@@ -530,7 +531,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      const members = envelopeOf<unknown[]>(response).data
+      const members = envelopeOf<{ items: unknown[] }>(response).data?.items
       expect(members).toHaveLength(2)
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
@@ -547,7 +548,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      const members = envelopeOf<MemberRow[]>(response).data ?? []
+      const members = envelopeOf<{ items: MemberRow[] }>(response).data?.items ?? []
       const activeRow = members.find((member) => member.user.id === ownerUser.id)
       const inactiveRow = members.find((member) => member.user.id === deactivatedUser.id)
       expect(activeRow?.user).toStrictEqual({
@@ -571,7 +572,7 @@ describe('/api/v1/tenants', () => {
         .get(`/api/v1/tenants/${tenant.slug}/members`)
         .set('Authorization', `Bearer ${staffToken}`)
       expect(staffResponse.status).toBe(200)
-      const staffRows = envelopeOf<MemberRow[]>(staffResponse).data ?? []
+      const staffRows = envelopeOf<{ items: MemberRow[] }>(staffResponse).data?.items ?? []
       expect(staffRows).toHaveLength(2)
       for (const member of staffRows) {
         const memberRow = members.find((row) => row.user.id === member.user.id)
@@ -589,10 +590,11 @@ describe('/api/v1/tenants', () => {
 
       const response = await request(app)
         .get(`/api/v1/tenants/${platform.slug}/members`)
+        .query({ limit: '100' })
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      const members = envelopeOf<MemberRow[]>(response).data ?? []
+      const members = envelopeOf<{ items: MemberRow[] }>(response).data?.items ?? []
       const activeRow = members.find((member) => member.user.id === staffUser.id)
       const inactiveRow = members.find((member) => member.user.id === deactivatedStaff.id)
       expect(activeRow?.user).toStrictEqual({
