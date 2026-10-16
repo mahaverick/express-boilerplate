@@ -61,6 +61,7 @@ const like = {
   percentTenants: `${tag}-p%`,
   users: `${tag}-u%`,
   signInUsers: `${tag}-n%`,
+  future: `${tag}-f%`,
 }
 
 /**
@@ -256,5 +257,85 @@ describe('GET /api/v1/platform/users sort=-lastSignIn', () => {
       emailOf('1'),
       emailOf('3'),
     ])
+  })
+})
+
+/**
+ * The creation time of future row `index`: 2099, newer than anything else in the worker's database.
+ * @param index - The row index.
+ * @returns The instant as ISO text.
+ */
+function futureAt(index: number): string {
+  return new Date(Date.UTC(2099, 0, 1 + index)).toISOString()
+}
+
+/**
+ * Insert one tenant per slug, oldest first, in 2099.
+ * @param slugs - The slugs, also used as names.
+ */
+async function insertFutureTenants(slugs: readonly string[]): Promise<void> {
+  const rows = slugs.map((slug, index) => ({ name: slug, slug, created_at: futureAt(index) }))
+  await sql`insert into tenants ${sql(rows, 'name', 'slug', 'created_at')}`
+}
+
+/**
+ * Insert one user per email, oldest first, in 2099.
+ * @param emails - The addresses.
+ */
+async function insertFutureUsers(emails: readonly string[]): Promise<void> {
+  const rows = emails.map((email, index) => ({ email, created_at: futureAt(index) }))
+  await sql`insert into users ${sql(rows, 'email', 'created_at')}`
+}
+
+describe.each([
+  {
+    path: '/api/v1/platform/tenants',
+    insert: insertFutureTenants,
+    key: 'slug',
+    values: [`${tag}-f0`, `${tag}-f1`, `${tag}-f2`],
+    cleanup: () => sql`delete from tenants where slug like ${like.future}`,
+  },
+  {
+    path: '/api/v1/platform/users',
+    insert: insertFutureUsers,
+    key: 'email',
+    values: [`${tag}-f0@example.test`, `${tag}-f1@example.test`, `${tag}-f2@example.test`],
+    cleanup: () => sql`delete from users where email like ${like.future}`,
+  },
+])('GET $path without search', ({ path, insert, key, values, cleanup }) => {
+  beforeAll(async () => {
+    await createStaff()
+    await insert(values)
+  })
+  afterAll(async () => {
+    await cleanup()
+    await removeStaff()
+  })
+
+  it('lists the newest rows first under sort=-created, with a total when asked', async () => {
+    const response = await request(app)
+      .get(path)
+      .query({ sort: '-created', limit: '3', total: '1' })
+      .set('Authorization', `Bearer ${staff.token}`)
+    expect(response.status).toBe(200)
+    const data = (
+      response.body as {
+        data: { items: Record<string, string>[]; total: { count: number; capped: boolean } }
+      }
+    ).data
+    expect(data.items.map((item) => item[key])).toEqual(values.toReversed())
+    expect(data.total.count).toBeGreaterThanOrEqual(3)
+  })
+
+  it('lists in the default order, the seeded rows in ascending order wherever they fall', async () => {
+    const response = await request(app)
+      .get(path)
+      .query({ limit: '100' })
+      .set('Authorization', `Bearer ${staff.token}`)
+    expect(response.status).toBe(200)
+    const data = (response.body as { data: { items: Record<string, string>[] } }).data
+    expect(data.items.length).toBeGreaterThan(0)
+    const seeded = data.items.map((item) => item[key] ?? '').filter((name) => values.includes(name))
+    expect(seeded).toEqual(values.slice(0, seeded.length))
   })
 })

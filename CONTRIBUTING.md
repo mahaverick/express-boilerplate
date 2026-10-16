@@ -293,7 +293,8 @@ in Apex. The rules behind them are in
   `user.updated` or `tenant.updated` audit metadata.
 - **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES`
   (`src/constants/tenant.constants.ts`), decide whether
-  `platformTenantListSchema`'s `state` default (`src/validators/platform.validators.ts`) lists it, give it
+  `platformTenantListSchema`'s `state` default
+  (`src/validators/platform.validators.ts`) lists it, give it
   a transition in `src/services/platform-tenant.service.ts` and an audit action,
   and decide whether `resolveTenant` and invitations treat it like
   `suspended`.

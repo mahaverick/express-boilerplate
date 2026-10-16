@@ -56,6 +56,17 @@ async function archive(tenantId: string): Promise<void> {
 }
 
 /**
+ * A cursor a page must have handed back.
+ * @param cursor - The page's `nextCursor` or `prevCursor`.
+ * @returns The cursor.
+ * @throws {Error} When the page has none.
+ */
+function required(cursor: string | null): string {
+  if (cursor === null) throw new Error('expected the page to hand back a cursor')
+  return cursor
+}
+
+/**
  * One page of the staff user list for these query params, parsed as the route parses them.
  */
 async function listUsers(query: Record<string, string>) {
@@ -119,7 +130,7 @@ describe('PlatformUserRepository.list', () => {
       search: tag,
       status: 'deleted',
       limit: '1',
-      cursor: String(page.page.nextCursor),
+      cursor: required(page.page.nextCursor),
     })
     expect(following.items.map((user) => user.id)).toEqual(expected.slice(1))
     const back = await listUsers({
@@ -127,7 +138,7 @@ describe('PlatformUserRepository.list', () => {
       status: 'deleted',
       limit: '1',
       direction: 'prev',
-      cursor: String(following.page.prevCursor),
+      cursor: required(following.page.prevCursor),
     })
     expect(back.items.map((user) => user.id)).toEqual(expected.slice(0, 1))
   })

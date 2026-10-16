@@ -61,6 +61,17 @@ async function createTenant(name: string, slug: string): Promise<string> {
 }
 
 /**
+ * A cursor a page must have handed back.
+ * @param cursor - The page's `nextCursor` or `prevCursor`.
+ * @returns The cursor.
+ * @throws {Error} When the page has none.
+ */
+function required(cursor: string | null): string {
+  if (cursor === null) throw new Error('expected the page to hand back a cursor')
+  return cursor
+}
+
+/**
  * One page of the staff tenant list for these query params, parsed as the route parses them.
  */
 async function listTenants(query: Record<string, string>) {
@@ -161,7 +172,7 @@ describe('PlatformTenantRepository.list', () => {
     const last = await listTenants({
       search: tag,
       limit: '2',
-      cursor: String(first.page.nextCursor),
+      cursor: required(first.page.nextCursor),
     })
 
     expect(first.items).toHaveLength(2)
