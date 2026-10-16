@@ -408,19 +408,21 @@ describe('NotificationRepository', () => {
     })
   })
 
-  it('listRecent reads the newest notifications first, at most limit, and only the owner’s', async () => {
-    const user = await userRepository.create({ email: uniqueEmail() })
-    const other = await userRepository.create({ email: uniqueEmail() })
-    createdUserIds.push(user.id, other.id)
-    await sql`insert into notifications (user_id, type, title, body, created_at) values
-      (${user.id}, 'password_changed', 'oldest', 'b', ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
-      (${user.id}, 'password_changed', 'middle', 'b', ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
-      (${user.id}, 'password_changed', 'newest', 'b', ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
-      (${other.id}, 'password_changed', 'not mine', 'b', ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
+  describe('listRecent', () => {
+    it('reads the newest notifications first, at most limit, and only the owner’s', async () => {
+      const user = await userRepository.create({ email: uniqueEmail() })
+      const other = await userRepository.create({ email: uniqueEmail() })
+      createdUserIds.push(user.id, other.id)
+      await sql`insert into notifications (user_id, type, title, body, created_at) values
+        (${user.id}, 'password_changed', 'oldest', 'b', ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
+        (${user.id}, 'password_changed', 'middle', 'b', ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
+        (${user.id}, 'password_changed', 'newest', 'b', ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
+        (${other.id}, 'password_changed', 'not mine', 'b', ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
 
-    const recent = await notificationRepository.listRecent(user.id, 2)
+      const recent = await notificationRepository.listRecent(user.id, 2)
 
-    expect(recent.map((notification) => notification.title)).toEqual(['newest', 'middle'])
+      expect(recent.map((notification) => notification.title)).toEqual(['newest', 'middle'])
+    })
   })
 
   describe('list over real rows', () => {

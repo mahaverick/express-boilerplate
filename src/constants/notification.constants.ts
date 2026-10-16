@@ -42,7 +42,7 @@ export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
  * (`fetchMissedNotifications`); the list endpoint's page size comes from
  * `listParamsSchema`.
  */
-export const MAX_NOTIFICATION_PAGE_SIZE = 100
+export const SSE_REPLAY_LIMIT = 100
 
 /**
  * Bytes a notification stream may have queued for a client before the

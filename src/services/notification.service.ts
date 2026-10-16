@@ -5,8 +5,8 @@
  * another user's notification.
  */
 import {
-  MAX_NOTIFICATION_PAGE_SIZE,
   NOTIFICATION_TYPES,
+  SSE_REPLAY_LIMIT,
   STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
@@ -163,7 +163,7 @@ function isNewerThan(candidate: Notification, cursor: Notification): boolean {
 
 /**
  * The notifications a reconnecting SSE client missed after `lastEventId`,
- * bounded to the newest `MAX_NOTIFICATION_PAGE_SIZE`. An id the user no
+ * bounded to the newest `SSE_REPLAY_LIMIT`. An id the user no
  * longer owns (deleted since) yields an empty list, not an error.
  * @param userId - The stream's owner.
  * @param lastEventId - The `Last-Event-ID` header value.
@@ -176,7 +176,7 @@ export async function fetchMissedNotifications(
   const cursor = await notificationRepository.findByIdAndUser(lastEventId, userId)
   if (!cursor) return []
 
-  const recent = await notificationRepository.listRecent(userId, MAX_NOTIFICATION_PAGE_SIZE)
+  const recent = await notificationRepository.listRecent(userId, SSE_REPLAY_LIMIT)
 
   return recent.filter((notification) => isNewerThan(notification, cursor)).toReversed()
 }

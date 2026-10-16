@@ -150,10 +150,10 @@ points at the code or doc that holds the detail. How things work is in
 - **Bind a timestamp in raw `sql` as `${date.toISOString()}::timestamptz`.**
   A `Date` inside a `sql` template reaches postgres-js unserialised and the
   query fails; `lt(column, date)` is fine.
-- **A keyset cursor's timestamp uses `sortAtField` or `isoInstantField`**
-  inside a `cursorField` (`src/validators/cursor.validators.ts`), never a bare
-  regex or `z.iso.datetime()`: they let month 13 or year 0000 through, and the
-  `::timestamptz` cast then fails as a 500.
+- **A list sort's timestamp key is validated by `sortAtField`**
+  (`src/validators/cursor.validators.ts`), which `timestampSort` binds; never
+  a bare regex or `z.iso.datetime()`: they let month 13 or year 0000 through,
+  and the `::timestamptz` cast then fails as a 500.
 - **Free-text fields use `safeText`:** single-line by default,
   `{ multiline: true }` for prose.
 - **Every Redis key and channel goes through `redisKey()`**
