@@ -1,5 +1,5 @@
 {
-  "id": "ca7020b5-a09c-47df-988a-f39b80fb6aeb",
+  "id": "7e3ea3a9-275b-4596-845b-9f3b41c12159",
   "prevId": "8b3a154d-3734-4e4c-a192-0c5e8311e7f4",
   "version": "7",
   "dialect": "postgresql",
@@ -922,21 +922,6 @@
           "columns": [
             {
               "expression": "resent_from_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "email_messages_created_at_idx": {
-          "name": "email_messages_created_at_idx",
-          "columns": [
-            {
-              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2281,21 +2266,6 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "user_memberships_tenant_id_idx": {
-          "name": "user_memberships_tenant_id_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}

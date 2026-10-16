@@ -1,3 +1,5 @@
+DROP INDEX "email_messages_created_at_idx";--> statement-breakpoint
+DROP INDEX "user_memberships_tenant_id_idx";--> statement-breakpoint
 DROP INDEX "tenants_name_trgm_idx";--> statement-breakpoint
 DROP INDEX "tenants_slug_trgm_idx";--> statement-breakpoint
 CREATE INDEX "email_messages_created_sort_idx" ON "email_messages" USING btree ("created_at","id");--> statement-breakpoint

@@ -75,7 +75,6 @@ export const userMembershipModel = pgTable(
   (table) => [
     // One role per user per tenant; the conflict target of `insertIfAbsent`.
     uniqueIndex('user_memberships_user_id_tenant_id_unique').on(table.userId, table.tenantId),
-    index('user_memberships_tenant_id_idx').on(table.tenantId),
     index('user_memberships_tenant_role_sort_idx').on(
       table.tenantId,
       membershipRoleRank(table.role),

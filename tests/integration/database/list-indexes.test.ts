@@ -30,6 +30,7 @@ import { invitationList } from '@/repositories/tenant-invitation.repository'
 import { myTenantList } from '@/repositories/tenant.repository'
 import { memberList } from '@/repositories/user-membership.repository'
 import { db, sql } from '@/services/database.service'
+import { bindScope, signCursor, type CursorKey } from '@/utilities/list-cursor.utilities'
 import { listPageQuery, type ListParams } from '@/utilities/list-page.utilities'
 
 const ID = '0199c4a2-0000-7000-8000-000000000001'
@@ -59,9 +60,22 @@ const USER_LED_MEMBERSHIP_INDEXES = [
  * The membership indexes led by the tenant, dropped from a user-led bounded case for the same reason.
  */
 const TENANT_LED_MEMBERSHIP_INDEXES = [
-  'user_memberships_tenant_id_idx',
   'user_memberships_tenant_role_sort_idx',
   'user_memberships_tenant_joined_sort_idx',
+] as const
+
+/**
+ * The indexes that order users and tenants for their own lists. A bounded
+ * case drops them, so a members or my-tenants plan cannot start from an
+ * ordered walk of every user or tenant and join the memberships per row.
+ */
+const JOINED_ORDER_INDEXES = [
+  'users_email_sort_idx',
+  'users_email_unique',
+  'users_created_sort_idx',
+  'users_last_logged_in_sort_idx',
+  'tenants_name_sort_idx',
+  'tenants_created_sort_idx',
 ] as const
 
 /**
@@ -148,6 +162,19 @@ function first(sort: string): ListParams {
   }
 }
 
+/**
+ * Params for the page after a boundary row: a cursor signed under the list's own scope, carrying the boundary's sort value then its id.
+ */
+function after(
+  list: { bound?: Readonly<Record<string, string>> | undefined },
+  sort: string,
+  keys: readonly CursorKey[]
+): ListParams {
+  const base = first(sort)
+  const scope = list.bound === undefined ? base.scope : bindScope(base.scope, list.bound)
+  return { ...base, cursor: signCursor(sort, scope, keys) }
+}
+
 const live = { state: ['active' as const, 'suspended' as const] }
 const liveUsers = {
   status: ['active' as const, 'inactive' as const],
@@ -218,13 +245,11 @@ const ordered: OrderedCase[] = [
     'emails -created',
     () => listPageQuery(db, platformEmailList(undefined, {}), first('-created')).toSQL(),
     'email_messages_created_sort_idx',
-    ['email_messages_created_at_idx'],
   ],
   [
     'emails created',
     () => listPageQuery(db, platformEmailList(undefined, {}), first('created')).toSQL(),
     'email_messages_created_sort_idx',
-    ['email_messages_created_at_idx'],
   ],
   [
     'suppressions -created',
@@ -293,13 +318,11 @@ const ordered: OrderedCase[] = [
     'members role',
     () => listPageQuery(db, memberList(ID, undefined, noRoles), first('role')).toSQL(),
     'user_memberships_tenant_role_sort_idx',
-    ['user_memberships_tenant_id_idx'],
   ],
   [
     'members -joined',
     () => listPageQuery(db, memberList(ID, undefined, noRoles), first('-joined')).toSQL(),
     'user_memberships_tenant_joined_sort_idx',
-    ['user_memberships_tenant_id_idx'],
   ],
   [
     'invitations -created',
@@ -327,6 +350,47 @@ const ordered: OrderedCase[] = [
         first('-created')
       ).toSQL(),
     'notifications_user_created_idx',
+  ],
+]
+
+const AT = '2026-01-01T00:00:00.000000Z'
+
+/**
+ * Cases that plan with a cursor, one per seek shape: a timestamp, a text key, the role rank and the never-signed-in timestamp.
+ */
+const seeking: OrderedCase[] = [
+  [
+    'users -created after a cursor',
+    () => {
+      const list = platformUserList(undefined, liveUsers)
+      return listPageQuery(db, list, after(list, '-created', [AT, ID])).toSQL()
+    },
+    'users_created_sort_idx',
+  ],
+  [
+    'users email after a cursor',
+    () => {
+      const list = platformUserList(undefined, liveUsers)
+      return listPageQuery(db, list, after(list, 'email', ['a@example.test', ID])).toSQL()
+    },
+    'users_email_sort_idx',
+    ['users_email_unique'],
+  ],
+  [
+    'users -lastSignIn after a cursor',
+    () => {
+      const list = platformUserList(undefined, liveUsers)
+      return listPageQuery(db, list, after(list, '-lastSignIn', [AT, ID])).toSQL()
+    },
+    'users_last_logged_in_sort_idx',
+  ],
+  [
+    'members role after a cursor',
+    () => {
+      const list = memberList(ID, undefined, noRoles)
+      return listPageQuery(db, list, after(list, 'role', [2, ID])).toSQL()
+    },
+    'user_memberships_tenant_role_sort_idx',
   ],
 ]
 
@@ -359,11 +423,15 @@ const bounded: BoundedCase[] = [
 ]
 
 describe('list sort indexes', () => {
-  it.each(ordered)(
+  it.each([...ordered, ...seeking])(
     '%s is ordered by its index, with no Sort under the Limit',
     async (_name, query, index, hidden) => {
       const lines = mainTree(await planFor(query(), { hidden: hidden ?? [], off: ORDERED_OFF }))
       expect(orderingNode(lines)).not.toMatch(/^->\s+(Incremental )?Sort\b/)
+      // Nor a Sort anywhere else in the main tree, such as below a join.
+      expect(
+        lines.filter((line) => /(^|->\s+)(Incremental )?Sort\b/.test(line.trimStart()))
+      ).toEqual([])
       expect(lines.join('\n')).toContain(index)
     }
   )
@@ -374,16 +442,22 @@ describe('list sort indexes', () => {
     async (_name, query, owner, hidden) => {
       const rivals =
         owner === 'tenant' ? USER_LED_MEMBERSHIP_INDEXES : TENANT_LED_MEMBERSHIP_INDEXES
-      const tree = mainTree(
-        await planFor(query(), { hidden: [...rivals, ...(hidden ?? [])] })
-      ).join('\n')
-      expect(tree).toMatch(
+      const lines = mainTree(
+        await planFor(query(), { hidden: [...rivals, ...JOINED_ORDER_INDEXES, ...(hidden ?? [])] })
+      )
+      // The first scan is the outer side of the join: the memberships, read through the owner's index with the owner in its Index Cond.
+      const scan = lines.findIndex((line) =>
+        /Index (Only )?Scan|Bitmap Index Scan|Seq Scan/.test(line)
+      )
+      expect(lines[scan]).toMatch(
         new RegExp(
           String.raw`(Index (Only )?Scan( Backward)? using|Bitmap Index Scan on) user_memberships_${owner}_\w+`
         )
       )
-      expect(tree).toMatch(new RegExp(String.raw`Index Cond: \(.*\b${owner}_id\)(::text)? = `))
-      expect(tree).not.toMatch(/Seq Scan on user_memberships/)
+      expect(lines[scan + 1]).toMatch(
+        new RegExp(String.raw`Index Cond: \(.*\b${owner}_id\)?(::text)? = `)
+      )
+      expect(lines.join('\n')).not.toMatch(/Seq Scan on user_memberships/)
     }
   )
 
@@ -429,5 +503,17 @@ describe('list search indexes', () => {
       { off: ['enable_seqscan', 'enable_indexscan', 'enable_indexonlyscan'] }
     )
     expect(plan).toContain(index)
+  })
+})
+
+describe('migration 0026: the tenant trigram indexes', () => {
+  it('cover archived tenants too, with no predicate', async () => {
+    const indexes = await sql<{ indexname: string; indexdef: string }[]>`
+      select indexname, indexdef from pg_indexes
+      where tablename = 'tenants' and indexname in ('tenants_name_trgm_idx', 'tenants_slug_trgm_idx')
+      order by indexname
+    `
+    expect(indexes).toHaveLength(2)
+    for (const index of indexes) expect(index.indexdef).not.toContain('WHERE')
   })
 })

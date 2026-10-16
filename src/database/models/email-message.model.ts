@@ -130,7 +130,6 @@ export const emailMessageModel = pgTable(
     index('email_messages_user_id_idx').on(table.userId),
     index('email_messages_tenant_id_idx').on(table.tenantId),
     index('email_messages_resent_from_id_idx').on(table.resentFromId),
-    index('email_messages_created_at_idx').on(table.createdAt),
     index('email_messages_created_sort_idx').on(table.createdAt, table.id),
     index('email_messages_recipient_trgm_idx').using(
       'gin',
