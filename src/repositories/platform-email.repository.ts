@@ -396,7 +396,7 @@ function messageConditions(
  * @param filters - The filters.
  * @returns The list definition.
  */
-function platformEmailList(search: string | undefined, filters: PlatformEmailFilters) {
+export function platformEmailList(search: string | undefined, filters: PlatformEmailFilters) {
   return defineList({
     base: (executor, seek) =>
       selectMessages(executor).where(and(...messageConditions(search, filters), seek)),
@@ -427,7 +427,10 @@ function suppressionStateCondition(states: PlatformSuppressionFilters['states'])
  * @param filters - The states.
  * @returns The list definition.
  */
-function platformSuppressionList(search: string | undefined, filters: PlatformSuppressionFilters) {
+export function platformSuppressionList(
+  search: string | undefined,
+  filters: PlatformSuppressionFilters
+) {
   const state = suppressionStateCondition(filters.states)
   return defineList({
     base: (executor, seek) =>

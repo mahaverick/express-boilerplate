@@ -100,7 +100,6 @@ export interface PendingInvitationSummary {
   createdAt: Date
 }
 
-// Not exported until the index tests (EXPLAIN) call it.
 /**
  * A tenant's pending, unexpired invitations, searched by email, each with
  * its inviter's name. Its cursors are bound to the tenant.
@@ -109,7 +108,7 @@ export interface PendingInvitationSummary {
  * @param filters - The roles.
  * @returns The list definition.
  */
-function invitationList(tenantId: string, search: string | undefined, filters: RoleFilters) {
+export function invitationList(tenantId: string, search: string | undefined, filters: RoleFilters) {
   return defineList({
     base: (executor, seek) =>
       executor

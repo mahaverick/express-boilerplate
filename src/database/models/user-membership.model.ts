@@ -76,6 +76,17 @@ export const userMembershipModel = pgTable(
     // One role per user per tenant; the conflict target of `insertIfAbsent`.
     uniqueIndex('user_memberships_user_id_tenant_id_unique').on(table.userId, table.tenantId),
     index('user_memberships_tenant_id_idx').on(table.tenantId),
+    index('user_memberships_tenant_role_sort_idx').on(
+      table.tenantId,
+      membershipRoleRank(table.role),
+      table.id
+    ),
+    index('user_memberships_tenant_joined_sort_idx').on(table.tenantId, table.createdAt, table.id),
+    index('user_memberships_user_joined_sort_idx').on(
+      table.userId,
+      table.createdAt,
+      table.tenantId
+    ),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
     check(
       'user_memberships_role_check',

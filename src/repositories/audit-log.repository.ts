@@ -79,7 +79,6 @@ const targetUser = alias(userModel, 'target_user')
  */
 const targetTenant = alias(tenantModel, 'target_tenant')
 
-// Not exported until the index tests (EXPLAIN) call it.
 /**
  * The audit list, newest first by default. The actor and the target are
  * left joins, so an entry whose actor or target has no row still lists;
@@ -91,7 +90,7 @@ const targetTenant = alias(tenantModel, 'target_tenant')
  * @param filters - The filters.
  * @returns The list definition.
  */
-function auditLogList(search: string | undefined, filters: AuditLogFilters) {
+export function auditLogList(search: string | undefined, filters: AuditLogFilters) {
   return defineList({
     base: (executor, seek) =>
       executor

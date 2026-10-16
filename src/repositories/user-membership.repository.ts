@@ -59,7 +59,6 @@ export interface RoleFilters {
  */
 const memberSortName = sql<string>`lower(coalesce(nullif(trim(concat_ws(' ', ${userModel.firstName}, ${userModel.lastName})), ''), ${userModel.email}))`
 
-// Not exported until the index tests (EXPLAIN) call it.
 /**
  * One tenant's live members, searched by email and both names. Sorting by
  * name or email reads the user row, so those sorts are bounded by the
@@ -71,7 +70,7 @@ const memberSortName = sql<string>`lower(coalesce(nullif(trim(concat_ws(' ', ${u
  * @param filters - The roles.
  * @returns The list definition.
  */
-function memberList(tenantId: string, search: string | undefined, filters: RoleFilters) {
+export function memberList(tenantId: string, search: string | undefined, filters: RoleFilters) {
   return defineList({
     base: (executor, seek) =>
       executor

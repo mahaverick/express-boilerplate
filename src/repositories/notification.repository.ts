@@ -37,7 +37,6 @@ function readCondition(unread: boolean | undefined) {
   return unread ? isNull(notificationModel.readAt) : isNotNull(notificationModel.readAt)
 }
 
-// Not exported until the index tests (EXPLAIN) call it.
 /**
  * One user's notifications, newest first, searched by title and body. Its cursors are bound to the user.
  * @param userId - The owner.
@@ -46,7 +45,7 @@ function readCondition(unread: boolean | undefined) {
  * @param filters.unread - The read filter, or undefined for both.
  * @returns The list definition.
  */
-function notificationList(
+export function notificationList(
   userId: string,
   search: string | undefined,
   filters: { unread: boolean | undefined }

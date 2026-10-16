@@ -58,7 +58,6 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
     ownerId: string
   }
 
-// Not exported until the index tests (EXPLAIN) call it.
 /**
  * The tenants one user belongs to, searched by name. Its cursors are bound
  * to the user.
@@ -67,7 +66,7 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
  * @param filters - The roles.
  * @returns The list definition.
  */
-function myTenantList(userId: string, search: string | undefined, filters: RoleFilters) {
+export function myTenantList(userId: string, search: string | undefined, filters: RoleFilters) {
   return defineList({
     base: (executor, seek) =>
       executor

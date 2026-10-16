@@ -12,7 +12,7 @@ import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.co
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
-import { userModel } from '@/database/models/user.model'
+import { lastSignInSort, userModel } from '@/database/models/user.model'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
 import {
@@ -151,12 +151,6 @@ function recordSelection(executor: DbExecutor) {
 const userSortEmail = sql<string>`lower(${userModel.email})`
 
 /**
- * The last sign-in, never-signed-in as `-infinity` so it sorts last
- * descending; the index on it has this exact expression.
- */
-const userLastSignIn = sql`coalesce(${userModel.lastLoggedInAt}, '-infinity'::timestamptz)`
-
-/**
  * The status filter: any of the asked statuses.
  * @param statuses - The asked statuses, at least one.
  * @returns The condition.
@@ -201,7 +195,7 @@ function staffCondition(
  * @param filters - Status, verified and staff.
  * @returns The list definition.
  */
-function platformUserList(search: string | undefined, filters: PlatformUserFilters) {
+export function platformUserList(search: string | undefined, filters: PlatformUserFilters) {
   return defineList({
     base: (executor, seek) => {
       const { columns, platformRoleQuery } = recordSelection(executor)
@@ -234,7 +228,7 @@ function platformUserList(search: string | undefined, filters: PlatformUserFilte
       '-created': [timestampSort(userModel.createdAt, 'desc', 'sortCreated')],
       '-lastSignIn': [
         {
-          expression: userLastSignIn,
+          expression: lastSignInSort(userModel.lastLoggedInAt),
           direction: 'desc',
           key: 'sortLastSignIn',
           value: z.union([sortAtField, z.literal('-infinity')]),

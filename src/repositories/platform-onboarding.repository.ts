@@ -351,7 +351,7 @@ const startedSort = sql`coalesce(p.onboarding_started_at, p.created_at)`
  * @param filters - The state, the registry keys and the stuck cut-off.
  * @returns The list definition.
  */
-function onboardingTenantList(search: string | undefined, filters: OnboardingListFilters) {
+export function onboardingTenantList(search: string | undefined, filters: OnboardingListFilters) {
   const progress = sql`(${progressQuery(ACTIVE_TRACKED, filters)} select * from progress) p`
   return defineList({
     base: (executor, seek) =>

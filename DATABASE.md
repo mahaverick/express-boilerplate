@@ -429,6 +429,40 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   `tenant_invitations` until the batch commits, so invitation reads and writes
   wait for the batch.
 
+- **`0026` blocks writes to `tenants`, `users`, `email_messages`,
+  `email_suppressions`, `user_memberships` and `tenant_invitations` while its
+  indexes build.** Each `CREATE INDEX` takes a `SHARE` lock that the batch
+  holds to the end; reads go on. It also drops and rebuilds the two tenant
+  trigram indexes without their `deleted_at` predicate, so tenant search
+  scans until they are back. On large tables, build them first, each
+  statement on its own:
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS tenants_name_sort_idx ON tenants (lower(name), id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS tenants_created_sort_idx ON tenants (created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_email_sort_idx ON users (lower(email), id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_created_sort_idx ON users (created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_last_logged_in_sort_idx ON users (coalesce(last_logged_in_at, '-infinity'::timestamptz), id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_email_trgm_idx ON users USING gin (lower(email) gin_trgm_ops);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_first_name_trgm_idx ON users USING gin (lower(first_name) gin_trgm_ops);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_last_name_trgm_idx ON users USING gin (lower(last_name) gin_trgm_ops);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_messages_created_sort_idx ON email_messages (created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_messages_recipient_trgm_idx ON email_messages USING gin (lower(recipient) gin_trgm_ops);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_suppressions_created_sort_idx ON email_suppressions (created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_suppressions_address_sort_idx ON email_suppressions (address, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_suppressions_address_trgm_idx ON email_suppressions USING gin (address gin_trgm_ops);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS user_memberships_tenant_joined_sort_idx ON user_memberships (tenant_id, created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS user_memberships_user_joined_sort_idx ON user_memberships (user_id, created_at, tenant_id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS tenant_invitations_tenant_created_sort_idx ON tenant_invitations (tenant_id, created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS tenant_invitations_tenant_email_sort_idx ON tenant_invitations (tenant_id, lower(email), id);
+  ```
+
+  `user_memberships_tenant_role_sort_idx` is the `CREATE INDEX` line for it
+  in `0026_list_indexes.sql`, run with `CONCURRENTLY IF NOT EXISTS` added.
+  Then edit the not-yet-applied migration: delete those `CREATE INDEX`
+  lines, and keep the two trigram `DROP INDEX`/`CREATE INDEX` pairs, which
+  are quick on a `tenants` table of any realistic size.
+
 ## The test database
 
 `docker/postgres/init.sql` runs once, the first time the `postgres` container

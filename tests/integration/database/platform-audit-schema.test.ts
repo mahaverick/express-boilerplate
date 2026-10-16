@@ -110,7 +110,7 @@ describe('migration 0016: the platform tenant', () => {
     expect(row?.deleted_at).toBeNull()
   })
 
-  it('installs pg_trgm and both trigram indexes, partial on live tenants', async () => {
+  it('installs pg_trgm and both trigram indexes, covering archived tenants too', async () => {
     const extensions = await sql`select 1 from pg_extension where extname = 'pg_trgm'`
     expect(extensions).toHaveLength(1)
     const indexes = await sql<{ indexname: string; indexdef: string }[]>`
@@ -125,7 +125,7 @@ describe('migration 0016: the platform tenant', () => {
     for (const index of indexes) {
       expect(index.indexdef).toContain('USING gin')
       expect(index.indexdef).toContain('gin_trgm_ops')
-      expect(index.indexdef).toContain('WHERE (deleted_at IS NULL)')
+      expect(index.indexdef).not.toContain('WHERE')
     }
   })
 })
