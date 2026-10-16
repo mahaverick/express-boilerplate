@@ -9,12 +9,12 @@
  */
 import { isFlagsEnabled } from '@/configs/analytics.config'
 import {
-  findFlagEntry,
   FLAG_SNAPSHOT_STALE_MS,
   FLAG_UNKNOWN_VARIANT_WINDOW_MINUTES,
   FLAGS,
 } from '@/constants/flags.constants'
 import { definitionOf, flagStateOf } from '@/services/flags/flag-evaluator.service'
+import { listableUnregisteredFlags } from '@/services/flags/flag-listing.service'
 import { getFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
@@ -135,7 +135,7 @@ function countsOf(
   }
   if (snapshot === null) return counts
   for (const entry of FLAGS) counts[flagStateOf(definitionOf(snapshot, entry.key))] += 1
-  counts.unregistered = Object.keys(snapshot.flags).filter((key) => !findFlagEntry(key)).length
+  counts.unregistered = listableUnregisteredFlags(snapshot).length
   return counts
 }
 

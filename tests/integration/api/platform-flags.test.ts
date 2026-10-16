@@ -339,8 +339,11 @@ describe('GET /platform/flags/unregistered', () => {
     const { token } = await createTrackedStaff('viewer')
 
     const unregistered = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
+    const again = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
     const registry = dataOf<FlagsList>(await staffGet(token, '/flags'))
 
+    expect(again.items).toEqual(unregistered.items)
+    expect(warn).toHaveBeenCalledTimes(1)
     expect(unregistered.items.map((item) => item.key)).toEqual(['b_probe_flag', 'c_probe_flag'])
     expect(registry.items[0]).toMatchObject({ key: 'example_beta_page', state: 'active' })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('too long'), {

@@ -5,10 +5,11 @@
  * snapshot and never call PostHog. The lists join the registry with the
  * snapshot, and meta carries the traits reference and the snapshot's age.
  * Evaluate builds one user's (and optionally one tenant's) traits from the
- * database and runs every registered flag through the live evaluator. Evaluate is the one place traits leave the server, so
- * it is audited as `user.flags_evaluated`, at most once per staff member,
- * user, tenant and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before
- * anything is evaluated.
+ * database and runs every registered flag through the live evaluator.
+ * Evaluate is the one place traits leave the server, so it is audited as
+ * `user.flags_evaluated`, at most once per staff member, user, tenant and app
+ * every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before anything is
+ * evaluated.
  */
 import { z } from 'zod'
 import { posthogFlagUrl } from '@/configs/analytics.config'
@@ -26,9 +27,9 @@ import { recordFlagsEvaluateView } from '@/services/audit.service'
 import { flagContextForUser } from '@/services/flags/flag-context.service'
 import { getFlagsStatus } from '@/services/flags/flag-counters.service'
 import { definitionOf, flagStateOf } from '@/services/flags/flag-evaluator.service'
+import { listableUnregisteredFlags } from '@/services/flags/flag-listing.service'
 import { getFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { evaluateAll } from '@/services/flags/flags.service'
-import { logger } from '@/services/logger.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
 import { auditThrottledView } from '@/services/platform-view-audit.service'
 import { redisKey } from '@/services/redis.service'
@@ -120,21 +121,6 @@ function isMatch(search: string | undefined, ...texts: string[]): boolean {
 }
 
 /**
- * Whether a flag key fits a list cursor; a longer one is left out of the
- * lists, with a warning, and still evaluates.
- * @param key - The flag key.
- * @returns True when the key can be listed.
- */
-function isListable(key: string): boolean {
-  if (key.length <= LISTED_FLAG_KEY_MAX) return true
-  logger.warn('Flag key too long to list; leaving it out of the flags lists', {
-    keyLength: key.length,
-    keyPrefix: key.slice(0, 40),
-  })
-  return false
-}
-
-/**
  * One page of the registry, each flag with its live state; never calls PostHog.
  * @param query - The parsed list query.
  * @returns The page.
@@ -169,11 +155,8 @@ export function listFlags(query: PlatformFlagListQuery): ListPage<FlagRow> {
 export function listUnregisteredFlags(
   query: PlatformUnregisteredFlagListQuery
 ): ListPage<UnregisteredRow> {
-  const definitions = getFlagSnapshot()?.flags ?? {}
-  const registered = new Set<string>(FLAGS.map((entry) => entry.key))
   const search = query.params.search?.toLowerCase()
-  const rows = Object.values(definitions)
-    .filter((flag) => !registered.has(flag.key) && isListable(flag.key))
+  const rows = listableUnregisteredFlags(getFlagSnapshot())
     .filter((flag) => isMatch(search, flag.key))
     .map((flag) => ({ key: flag.key, active: flag.active, posthogUrl: posthogFlagUrl(flag.id) }))
   const definition: InMemoryListDefinition<UnregisteredRow, UnregisteredRow> = {
