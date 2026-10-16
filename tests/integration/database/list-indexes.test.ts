@@ -304,6 +304,8 @@ const ordered: OrderedCase[] = [
         first('-occurred')
       ).toSQL(),
     'audit_logs_tenant_occurred_idx',
+    // Without stats the platform-wide index looks as cheap, filtering by tenant.
+    ['audit_logs_occurred_idx'],
   ],
   [
     'tenant audit occurred',
@@ -314,6 +316,8 @@ const ordered: OrderedCase[] = [
         first('occurred')
       ).toSQL(),
     'audit_logs_tenant_occurred_idx',
+    // Without stats the platform-wide index looks as cheap, filtering by tenant.
+    ['audit_logs_occurred_idx'],
   ],
   [
     'members role',
