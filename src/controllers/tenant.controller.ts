@@ -31,7 +31,10 @@ import { parseBody } from '@/validators/parse.validators'
 import { parseIdParameter } from '@/validators/platform.validators'
 import {
   invitationIdSchema,
+  invitationListSchema,
   inviteMemberSchema,
+  memberListSchema,
+  myTenantListSchema,
   newTenantSchema,
   updateMemberRoleSchema,
   updateTenantSchema,
@@ -89,13 +92,16 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants`: every tenant the caller belongs to, with their role in each.
+   * `GET /tenants`: one page of the tenants the caller belongs to, with
+   * their role in each and when they joined.
    */
   listTenants = this.handle(async (request, response) => {
-    const tenants = await listForUser(authenticatedUserId(request))
+    const userId = authenticatedUserId(request)
+    const query = parseBody(myTenantListSchema, request.query)
+    const page = await listForUser(userId, query)
     successResponse(
       response,
-      tenants.map((entry) => toTenantListRow(entry)),
+      { ...page, items: page.items.map((entry) => toTenantListRow(entry)) },
       'Tenants retrieved.'
     )
   })
@@ -126,8 +132,8 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants/:slug/members`: a tenant's members, each with their safe
-   * user info (`UserMembershipRepository.listByTenant` never selects
+   * `GET /tenants/:slug/members`: one page of a tenant's members, each with
+   * their safe user info (`UserMembershipRepository.listPageByTenant` never selects
    * `passwordHash`). Anyone `resolveTenant` admits may call this. Each row is
    * `{ membership, user: { id, email, firstName, lastName } }`, and a
    * soft-deleted user is not listed. On the platform tenant only, `user`
@@ -136,7 +142,7 @@ class TenantController extends BaseController {
    * included, never learn that a co-member was deactivated. A client treats
    * a missing `active` as active.
    *
-   * The rows are enough to reproduce the last-owner rule, the 409 on
+   * `role=owner` lists the owners the last-owner rule counts, the 409 on
    * demoting, removing or leaving as an owner: it refuses unless another
    * listed owner remains. On a customer tenant any listed owner counts,
    * deactivated or not (`countOwners`); on the platform tenant only one
@@ -144,7 +150,8 @@ class TenantController extends BaseController {
    */
   listMembers = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
-    const members = await listMembers(principal.tenantId, principal.isPlatformTenant)
+    const query = parseBody(memberListSchema, request.query)
+    const members = await listMembers(principal.tenantId, principal.isPlatformTenant, query)
     successResponse(response, members, 'Members retrieved.')
   })
 
@@ -202,13 +209,14 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants/:slug/invitations`: a tenant's pending invitations.
+   * `GET /tenants/:slug/invitations`: one page of a tenant's pending invitations.
    * Owner/admin only (`requireRole('owner', 'admin')`, tenant.routes.ts).
    * Never returns a token or its hash.
    */
   listInvitations = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
-    const invitations = await listPending(principal.tenantId)
+    const query = parseBody(invitationListSchema, request.query)
+    const invitations = await listPending(principal.tenantId, query)
     successResponse(response, invitations, 'Invitations retrieved.')
   })
 

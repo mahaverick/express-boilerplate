@@ -15,6 +15,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { memberListSchema } from '@/validators/tenant.validators'
 import { backdateUpdatedAt } from '../../helpers/backdate'
 
 const tenantRepository = new TenantRepository()
@@ -27,6 +28,17 @@ const userRepository = new UserRepository()
  */
 function uniqueEmail(): string {
   return `membership-repo-${randomUUID()}@example.test`
+}
+
+/**
+ * One page of a tenant's members for these query params, parsed as the route parses them.
+ * @param tenantId - The tenant.
+ * @param query - The query string params.
+ * @returns The page.
+ */
+async function listPageFor(tenantId: string, query: Record<string, string> = {}) {
+  const { params, filters } = memberListSchema.parse(query)
+  return userMembershipRepository.listPageByTenant(tenantId, params, { roles: filters.role })
 }
 
 describe('UserMembershipRepository', () => {
@@ -218,6 +230,81 @@ describe('UserMembershipRepository', () => {
       const tenant = await createTenant(owner.id)
       const rows = await userMembershipRepository.listByTenant(tenant.id)
       expect(rows).toHaveLength(1) // just the owner
+    })
+  })
+
+  describe('listPageByTenant', () => {
+    it('lists by display name by default, a member without a name by email', async () => {
+      const owner = await createUser({ firstName: 'Zed', lastName: 'Zulu' })
+      const tenant = await createTenant(owner.id)
+      const named = await createUser({ firstName: 'Bea', lastName: 'Bravo' })
+      const unnamed = await createUser()
+      for (const member of [named, unnamed]) {
+        await userMembershipRepository.create({ userId: member.id, tenantId: tenant.id })
+      }
+
+      const { items } = await listPageFor(tenant.id)
+
+      // The unnamed member's email starts with "membership-repo", which sorts between "Bea" and "Zed".
+      expect(items.map((row) => row.user.id)).toEqual([named.id, unnamed.id, owner.id])
+    })
+
+    it('filters by role and searches by name under a non-default sort', async () => {
+      const owner = await createUser({ firstName: 'Ada', lastName: 'Lovelace' })
+      const tenant = await createTenant(owner.id)
+      const tag = randomUUID().slice(0, 8)
+      const members = [
+        ['viewer', `${tag}a`, '2026-10-01T00:00:00.000Z'],
+        ['editor', `${tag}b`, '2026-10-02T00:00:00.000Z'],
+        ['viewer', `${tag}c`, '2026-10-03T00:00:00.000Z'],
+        ['viewer', 'Other', '2026-10-04T00:00:00.000Z'],
+      ] as const
+      for (const [role, firstName, at] of members) {
+        const user = await createUser({ firstName })
+        await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
+        await sql`update user_memberships set created_at = ${at} where user_id = ${user.id} and tenant_id = ${tenant.id}`
+      }
+
+      const { items } = await listPageFor(tenant.id, {
+        search: tag,
+        role: 'viewer',
+        sort: '-joined',
+      })
+
+      expect(items.map((row) => row.user.firstName)).toEqual([`${tag}c`, `${tag}a`])
+    })
+
+    it('sorts owner first by role, then by display name within a role', async () => {
+      const owner = await createUser({ firstName: 'Zed' })
+      const tenant = await createTenant(owner.id)
+      const viewer = await createUser({ firstName: 'Amy' })
+      const admin = await createUser({ firstName: 'Max' })
+      await userMembershipRepository.create({
+        userId: viewer.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+      await userMembershipRepository.create({
+        userId: admin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
+
+      const { items } = await listPageFor(tenant.id, { sort: 'role' })
+
+      expect(items.map((row) => row.membership.role)).toEqual(['owner', 'admin', 'viewer'])
+    })
+
+    it('leaves out a member whose account is soft-deleted', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+      const gone = await createUser()
+      await userMembershipRepository.create({ userId: gone.id, tenantId: tenant.id })
+      await userRepository.softDelete(gone.id)
+
+      const { items } = await listPageFor(tenant.id)
+
+      expect(items.map((row) => row.user.id)).toEqual([owner.id])
     })
   })
 

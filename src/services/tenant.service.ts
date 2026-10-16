@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import {
@@ -19,8 +20,11 @@ import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { lockActorRole, lockUserForOwnership } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
+import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
   CreateTenantInput,
+  MemberListQuery,
+  MyTenantListQuery,
   UpdateTenantInput,
   UpdateTenantSettingsInput,
 } from '@/validators/tenant.validators'
@@ -158,14 +162,17 @@ export async function createTenant(actor: Actor, input: CreateTenantInput): Prom
 }
 
 /**
- * Every tenant the user belongs to, with their role in each.
+ * One page of the tenants the user belongs to, with their role and join time in each.
  * @param userId - The user.
- * @returns One entry per visible tenant.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
 export async function listForUser(
-  userId: string
-): Promise<Array<{ tenant: Tenant; role: MembershipRole }>> {
-  return tenantRepository.listForUser(userId)
+  userId: string,
+  query: MyTenantListQuery
+): Promise<ListPage<{ tenant: Tenant; role: MembershipRole; joinedAt: Date }>> {
+  return tenantRepository.listForUser(userId, query.params, { roles: query.filters.role })
 }
 
 /**
@@ -238,22 +245,33 @@ export interface TenantMemberRow {
 }
 
 /**
- * A tenant's members, each with safe user fields only. `user.active` is
- * returned on the platform tenant alone: its last-owner rule counts active
- * owners only, and staff already read every account's status. A customer
- * tenant's rule ignores it, so its members never learn that a co-member's
- * account was deactivated.
+ * One page of a tenant's members, each with safe user fields only.
+ * `user.active` is returned on the platform tenant alone: its last-owner
+ * rule counts active owners only, and staff already read every account's
+ * status. A customer tenant's rule ignores it, so its members never learn
+ * that a co-member's account was deactivated.
  * @param tenantId - The tenant.
  * @param isPlatformTenant - The tenant is the platform tenant (`request.principal.isPlatformTenant`).
- * @returns One entry per live member.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
 export async function listMembers(
   tenantId: string,
-  isPlatformTenant: boolean
-): Promise<TenantMemberRow[]> {
-  const rows = await userMembershipRepository.listByTenant(tenantId)
-  if (isPlatformTenant) return rows
-  return rows.map(({ membership, user: { active: _active, ...user } }) => ({ membership, user }))
+  isPlatformTenant: boolean,
+  query: MemberListQuery
+): Promise<ListPage<TenantMemberRow>> {
+  const page = await userMembershipRepository.listPageByTenant(tenantId, query.params, {
+    roles: query.filters.role,
+  })
+  if (isPlatformTenant) return page
+  return {
+    ...page,
+    items: page.items.map(({ membership, user: { active: _active, ...user } }) => ({
+      membership,
+      user,
+    })),
+  }
 }
 
 /**

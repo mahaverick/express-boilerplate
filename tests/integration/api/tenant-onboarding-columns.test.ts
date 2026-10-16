@@ -63,7 +63,7 @@ describe('tenant responses', () => {
      */
     const body = (response: typeof created): { data: unknown } => response.body as { data: unknown }
     expectNoOnboardingColumns(body(created).data)
-    const rows = body(listed).data as Array<{ tenant: unknown }>
+    const { items: rows } = body(listed).data as { items: Array<{ tenant: unknown }> }
     expect(rows).toHaveLength(1)
     expectNoOnboardingColumns(rows[0]?.tenant)
     expectNoOnboardingColumns(body(read).data)

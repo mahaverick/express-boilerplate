@@ -2,8 +2,16 @@
  * @file The `user_memberships` table: which tenants a user belongs to, and
  * at which role.
  */
-import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
-import { check, index, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
+import { sql, type InferInsertModel, type InferSelectModel, type SQL } from 'drizzle-orm'
+import {
+  check,
+  index,
+  pgTable,
+  timestamp,
+  uniqueIndex,
+  varchar,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
@@ -13,6 +21,22 @@ import { userModel } from '@/database/models/user.model'
  * template so `sonarjs/no-nested-template-literals` holds.
  */
 const MEMBERSHIP_ROLE_SQL_LIST = MEMBERSHIP_ROLES.map((role) => `'${role}'`).join(', ')
+
+/**
+ * A membership role as its rank, owner first, in `MEMBERSHIP_ROLES` order:
+ * an immutable `CASE` the member list sorts on and its index is built from,
+ * so the two expressions are the same. The CHECK keeps every row inside the
+ * listed roles; the `else` only keeps the expression NOT NULL.
+ * @param role - The role column.
+ * @returns The rank expression.
+ */
+export function membershipRoleRank(role: AnyPgColumn | SQL): SQL<number> {
+  const branches = MEMBERSHIP_ROLES.map((name, rank) => `when '${name}' then ${String(rank)}`).join(
+    ' '
+  )
+  // sql.raw: an index expression cannot take bound parameters; the values are code constants.
+  return sql<number>`(case ${role} ${sql.raw(branches)} else ${sql.raw(String(MEMBERSHIP_ROLES.length))} end)`
+}
 
 /**
  * The `user_memberships` table: one row per (user, tenant) pair, carrying

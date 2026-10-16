@@ -4,9 +4,10 @@
  * per-file tag or a fresh tenant or user, so other files' rows in this
  * worker's database never change a count.
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -71,6 +72,8 @@ const like = {
   emails: `${tag}-e%`,
   suppressions: `${tag}-s%`,
   onboarding: `${tag}-o%`,
+  members: `${tag}-m%`,
+  myTenants: `${tag}-y%`,
 }
 
 /**
@@ -578,3 +581,244 @@ for (const route of ['platform', 'tenant'] as const) {
     ],
   })
 }
+
+/**
+ * The tenant each tenant-scoped block reads, its owner, and that owner's token,
+ * with a second tenant and owner for the cursor replay across paths.
+ */
+const owned = { tenantId: '', slug: '', ownerToken: '', ownerId: '', otherSlug: '', otherToken: '' }
+
+/**
+ * Create a tenant owned by a fresh user (the owner's membership is the one
+ * row seed() does not insert), and a second tenant with its own owner.
+ */
+async function createOwnedTenant(): Promise<void> {
+  const owner = await createTrackedUser()
+  const tenant = await new TenantRepository().create({
+    name: `${tag} owned`,
+    slug: `${tag}-ow-${randomUUID().slice(0, 6)}`,
+    ownerId: owner.id,
+  })
+  const otherOwner = await createTrackedUser()
+  const other = await new TenantRepository().create({
+    name: `${tag} other owned`,
+    slug: `${tag}-oo-${randomUUID().slice(0, 6)}`,
+    ownerId: otherOwner.id,
+  })
+  Object.assign(owned, {
+    tenantId: tenant.id,
+    slug: tenant.slug,
+    ownerToken: tokenFor(owner),
+    ownerId: owner.id,
+    otherSlug: other.slug,
+    otherToken: tokenFor(otherOwner),
+  })
+}
+
+/**
+ * Remove both owned tenants (memberships and invitations cascade) and every tracked user.
+ */
+async function removeOwnedTenant(): Promise<void> {
+  await truncateAuditLogs()
+  await sql`delete from tenants where slug in (${owned.slug}, ${owned.otherSlug})`
+  await deleteTrackedUsers()
+}
+
+/**
+ * The roles seeded members and invitations take, by index.
+ */
+const SEEDED_ROLES = ['viewer', 'editor', 'admin', 'viewer', 'manager'] as const
+
+/**
+ * The instant of seeded row `index`, as UTC text: rows 2k and 2k+1 share an
+ * instant, so the seed has distinct times and ties.
+ * @param now - The one clock reading the whole seed is built from.
+ * @param index - The row index.
+ * @returns The ISO instant.
+ */
+function joinedAtOf(now: number, index: number): string {
+  return new Date(now - Math.floor(index / 2) * 60_000).toISOString()
+}
+
+/**
+ * The instant a member's membership, an invitation or a tenant row joined or was created, as a number.
+ * @param field - The JSON path to the ISO instant.
+ * @returns A key function over list items.
+ */
+function instantAt(field: (item: unknown) => string): (item: unknown) => number {
+  return (item) => Date.parse(field(item))
+}
+
+describeListContract({
+  name: 'GET /api/v1/tenants/:slug/members',
+  app: () => app,
+  path: () => `/api/v1/tenants/${owned.slug}/members`,
+  headers: () => ({ Authorization: `Bearer ${owned.ownerToken}` }),
+  isolate: () => ({}),
+  // The rows depend on the path tenant, which is not a query param.
+  otherScope: {
+    path: () => `/api/v1/tenants/${owned.otherSlug}/members`,
+    headers: () => ({ Authorization: `Bearer ${owned.otherToken}` }),
+  },
+  sorts: ['name', 'email', 'role', '-joined'],
+  order: {
+    name: (item) => {
+      const { user } = item as {
+        user: { firstName: string | null; lastName: string | null; email: string }
+      }
+      const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
+      return (full === '' ? user.email : full).toLowerCase()
+    },
+    // Addresses are unique, so the email sort has no tie to test.
+    email: (item) => (item as { user: { email: string } }).user.email.toLowerCase(),
+    role: (item) =>
+      MEMBERSHIP_ROLES.indexOf(
+        (item as { membership: { role: (typeof MEMBERSHIP_ROLES)[number] } }).membership.role
+      ),
+    '-joined': instantAt(
+      (item) => (item as { membership: { createdAt: string } }).membership.createdAt
+    ),
+  },
+  uniqueKeys: ['email'],
+  setup: createOwnedTenant,
+  teardown: removeOwnedTenant,
+  seed: async (count) => {
+    const now = Date.now()
+    const users = await sql<{ id: string }[]>`insert into users ${sql(
+      Array.from({ length: count }, (_unused, index) => ({
+        email: `${tag}-m${pad(index)}@example.test`,
+        // Rows 0 and 1 share a display name: a tie on the name sort.
+        first_name: index < 2 ? `${tag}mira` : NONE,
+      })),
+      'email',
+      'first_name'
+    )} returning id`
+    const memberships = users.map((user, index) => ({
+      // The membership id is the user id, so the id that breaks ties is the one the items show.
+      id: user.id,
+      user_id: user.id,
+      tenant_id: owned.tenantId,
+      role: SEEDED_ROLES[index % SEEDED_ROLES.length],
+      created_at: joinedAtOf(now, index),
+    }))
+    await sql`insert into user_memberships ${sql(memberships, 'id', 'user_id', 'tenant_id', 'role', 'created_at')}`
+  },
+  clear: async () => {
+    await sql`delete from users where email like ${like.members}`
+  },
+  idOf: (item) => (item as { membership: { id: string } }).membership.id,
+  visible: 6,
+  search: { text: `${tag}-m0003`, count: 1 },
+  filters: [
+    { query: { role: 'viewer' }, count: 2 },
+    { query: { role: 'viewer,owner' }, count: 3 },
+    { query: { role: 'admin' }, count: 1 },
+  ],
+})
+
+describeListContract({
+  name: 'GET /api/v1/tenants/:slug/invitations',
+  app: () => app,
+  path: () => `/api/v1/tenants/${owned.slug}/invitations`,
+  headers: () => ({ Authorization: `Bearer ${owned.ownerToken}` }),
+  isolate: () => ({}),
+  otherScope: {
+    path: () => `/api/v1/tenants/${owned.otherSlug}/invitations`,
+    headers: () => ({ Authorization: `Bearer ${owned.otherToken}` }),
+  },
+  sorts: ['-created', 'email'],
+  order: {
+    '-created': instantAt((item) => (item as { createdAt: string }).createdAt),
+    // Addresses are unique, so the email sort has no tie to test.
+    email: (item) => (item as { email: string }).email.toLowerCase(),
+  },
+  uniqueKeys: ['email'],
+  setup: createOwnedTenant,
+  teardown: removeOwnedTenant,
+  seed: async (count) => {
+    const now = Date.now()
+    const expiresAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      tenant_id: owned.tenantId,
+      email: `${tag}-i${pad(index)}@example.test`,
+      role: SEEDED_ROLES[index % SEEDED_ROLES.length],
+      token_hash: createHash('sha256')
+        .update(`${tag}-i${pad(index)}`)
+        .digest('hex'),
+      invited_by: owned.ownerId,
+      expires_at: expiresAt,
+      created_at: joinedAtOf(now, index),
+    }))
+    await sql`insert into tenant_invitations ${sql(rows, 'tenant_id', 'email', 'role', 'token_hash', 'invited_by', 'expires_at', 'created_at')}`
+  },
+  clear: async () => {
+    await sql`delete from tenant_invitations where tenant_id = ${owned.tenantId}`
+  },
+  search: { text: `${tag}-i0002`, count: 1 },
+  filters: [
+    { query: { role: 'viewer' }, count: 2 },
+    { query: { role: 'viewer,manager' }, count: 3 },
+  ],
+})
+
+/**
+ * The user whose own tenants the my-tenants block reads, and another user for the cursor replay.
+ */
+const member = { id: '', token: '', otherToken: '' }
+
+describeListContract({
+  name: 'GET /api/v1/tenants',
+  app: () => app,
+  path: () => '/api/v1/tenants',
+  headers: () => ({ Authorization: `Bearer ${member.token}` }),
+  isolate: () => ({}),
+  // The rows depend on the calling user, who is not a query param.
+  otherScope: {
+    path: () => '/api/v1/tenants',
+    headers: () => ({ Authorization: `Bearer ${member.otherToken}` }),
+  },
+  sorts: ['name', '-joined'],
+  order: {
+    name: (item) => (item as { tenant: { name: string } }).tenant.name.toLowerCase(),
+    '-joined': instantAt((item) => (item as { joinedAt: string }).joinedAt),
+  },
+  setup: async () => {
+    const user = await createTrackedUser()
+    const other = await createTrackedUser()
+    Object.assign(member, { id: user.id, token: tokenFor(user), otherToken: tokenFor(other) })
+  },
+  teardown: async () => {
+    await truncateAuditLogs()
+    await deleteTrackedUsers()
+  },
+  seed: async (count) => {
+    const now = Date.now()
+    const tenants = await sql<{ id: string }[]>`insert into tenants ${sql(
+      Array.from({ length: count }, (_unused, index) => ({
+        // Rows 0 and 1 share a name: a tie on the name sort.
+        name: `${tag}-y${pad(index === 1 ? 0 : index)}`,
+        slug: `${tag}-y${pad(index)}`,
+      })),
+      'name',
+      'slug'
+    )} returning id`
+    const memberships = tenants.map((tenant, index) => ({
+      // The membership id is the tenant id, so the id that breaks ties is the one the items show.
+      id: tenant.id,
+      user_id: member.id,
+      tenant_id: tenant.id,
+      role: index === 0 ? 'owner' : SEEDED_ROLES[index % SEEDED_ROLES.length],
+      created_at: joinedAtOf(now, index),
+    }))
+    await sql`insert into user_memberships ${sql(memberships, 'id', 'user_id', 'tenant_id', 'role', 'created_at')}`
+  },
+  clear: async () => {
+    await sql`delete from tenants where slug like ${like.myTenants}`
+  },
+  idOf: (item) => (item as { tenant: { id: string } }).tenant.id,
+  search: { text: `${tag}-y0004`, count: 1 },
+  filters: [
+    { query: { role: 'owner' }, count: 1 },
+    { query: { role: 'owner,viewer' }, count: 2 },
+  ],
+})

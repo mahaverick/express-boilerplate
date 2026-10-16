@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { RESERVED_SLUGS } from '@/constants/tenant.constants'
 import {
+  invitationListSchema,
   isLocaleTag,
   isSlugShaped,
   isTimeZoneName,
+  memberListSchema,
+  myTenantListSchema,
   newTenantSchema,
   scanJson,
   slugSchema,
@@ -162,5 +165,21 @@ describe('isLocaleTag', () => {
 
   it.each(['en_US', 'x-private', 'i-klingon', 'e', 'en-', 'en\u{7}'])('refuses %j', (tag) => {
     expect(isLocaleTag(tag)).toBe(false)
+  })
+})
+
+describe('the tenant list schemas', () => {
+  it('sort members by name, invitations newest first and my tenants by name, unless asked', () => {
+    expect(memberListSchema.parse({}).params.sort).toBe('name')
+    expect(invitationListSchema.parse({}).params.sort).toBe('-created')
+    expect(myTenantListSchema.parse({}).params.sort).toBe('name')
+  })
+
+  it('take a comma list of roles', () => {
+    expect(memberListSchema.parse({ role: 'viewer,owner' }).filters.role).toEqual([
+      'owner',
+      'viewer',
+    ])
+    expect(memberListSchema.safeParse({ role: 'superuser' }).success).toBe(false)
   })
 })

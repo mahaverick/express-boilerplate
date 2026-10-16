@@ -13,6 +13,7 @@ import {
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { InvalidCursorError } from '@/errors/list-errors'
 import {
   TenantInvitationRepository,
   type NewPendingInvitation,
@@ -20,6 +21,18 @@ import {
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { invitationListSchema } from '@/validators/tenant.validators'
+
+/**
+ * Every pending invitation of a tenant, read as one page.
+ * @param tenantId - The tenant.
+ * @returns The page's items.
+ */
+async function pendingOf(tenantId: string) {
+  const { params, filters } = invitationListSchema.parse({ limit: '100' })
+  const page = await invitationRepository.listPending(tenantId, params, { roles: filters.role })
+  return page.items
+}
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -159,7 +172,7 @@ describe('TenantInvitationRepository', () => {
       const reloadedFirst = await reload(first.id)
       expect(reloadedFirst?.revokedAt).toBeInstanceOf(Date)
       expect(second.revokedAt).toBeNull()
-      const pending = await invitationRepository.listPending(tenant.id)
+      const pending = await pendingOf(tenant.id)
       expect(pending.map((invitation) => invitation.id)).toEqual([second.id])
     })
 
@@ -285,7 +298,7 @@ describe('TenantInvitationRepository', () => {
         expect(result.reason).toBeInstanceOf(HttpError)
         expect(result.reason).toMatchObject({ statusCode: 409, code: 'invitation_conflict' })
       }
-      const pending = await invitationRepository.listPending(tenant.id)
+      const pending = await pendingOf(tenant.id)
       expect(pending).toHaveLength(1)
     })
   })
@@ -309,7 +322,7 @@ describe('TenantInvitationRepository', () => {
       const accepted = await createPending({ tenantId: tenant.id, invitedBy: owner.id })
       await invitationRepository.claimForAccept(accepted.tokenHash, owner.id)
 
-      const pending = await invitationRepository.listPending(tenant.id)
+      const pending = await pendingOf(tenant.id)
 
       expect(pending.map((invitation) => invitation.id)).toEqual([newer.id, older.id])
       expect(pending[0]).toStrictEqual({
@@ -322,6 +335,61 @@ describe('TenantInvitationRepository', () => {
       })
     })
 
+    it('filters by role and searches by address under a non-default sort', async () => {
+      const { owner, tenant } = await setup()
+      const tag = randomUUID().slice(0, 8)
+      await createPending({
+        tenantId: tenant.id,
+        invitedBy: owner.id,
+        email: `${tag}-c@example.test`,
+      })
+      await createPending({
+        tenantId: tenant.id,
+        invitedBy: owner.id,
+        email: `${tag}-a@example.test`,
+      })
+      await createPending({
+        tenantId: tenant.id,
+        invitedBy: owner.id,
+        email: `${tag}-b@example.test`,
+        role: 'editor',
+      })
+      await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+
+      const { params, filters } = invitationListSchema.parse({
+        search: tag,
+        role: 'viewer',
+        sort: 'email',
+      })
+      const page = await invitationRepository.listPending(tenant.id, params, {
+        roles: filters.role,
+      })
+
+      expect(page.items.map((invitation) => invitation.email)).toEqual([
+        `${tag}-a@example.test`,
+        `${tag}-c@example.test`,
+      ])
+    })
+
+    it('refuses a cursor another tenant issued', async () => {
+      const { owner, tenant } = await setup()
+      const { tenant: other } = await setup()
+      await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+      await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+      const first = invitationListSchema.parse({ limit: '1' })
+      const page = await invitationRepository.listPending(tenant.id, first.params, {
+        roles: undefined,
+      })
+      const replay = invitationListSchema.parse({
+        limit: '1',
+        cursor: String(page.page.nextCursor),
+      })
+
+      await expect(
+        invitationRepository.listPending(other.id, replay.params, { roles: undefined })
+      ).rejects.toBeInstanceOf(InvalidCursorError)
+    })
+
     it('reports invitedBy as null once the inviter is deleted', async () => {
       const { tenant } = await setup()
       const inviter = await createUser()
@@ -329,7 +397,7 @@ describe('TenantInvitationRepository', () => {
 
       await sql`delete from users where id = ${inviter.id}`
 
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       expect(pending).toBeDefined()
       expect(pending?.invitedBy).toBeNull()
     })
@@ -341,7 +409,7 @@ describe('TenantInvitationRepository', () => {
 
       await userRepository.softDelete(inviter.id)
 
-      const [pending] = await invitationRepository.listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       expect(pending).toBeDefined()
       expect(pending?.invitedBy).toBeNull()
     })

@@ -43,7 +43,7 @@ describe('tenant presenters', () => {
   })
 
   it('toTenantListRow and toTenantDetail carry no onboarding column', () => {
-    const row = toTenantListRow({ tenant, role: 'owner' })
+    const row = toTenantListRow({ tenant, role: 'owner', joinedAt: tenant.createdAt })
     const detail = toTenantDetail(tenant, { role: 'owner', access: 'member' })
     for (const key of ONBOARDING_KEYS) {
       expect(row.tenant).not.toHaveProperty(key)

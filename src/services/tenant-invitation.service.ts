@@ -18,6 +18,7 @@ import {
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { canActorGrantRole } from '@/policies/tenant.policy'
@@ -47,6 +48,8 @@ import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
+import type { InvitationListQuery } from '@/validators/tenant.validators'
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -550,12 +553,17 @@ export async function sendOwnerInvitation(
 }
 
 /**
- * A tenant's pending, unexpired invitations, newest first.
+ * One page of a tenant's pending, unexpired invitations.
  * @param tenantId - The tenant.
- * @returns One summary per invitation; never a token or its hash.
+ * @param query - The parsed list query.
+ * @returns The page; never a token or its hash.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-export async function listPending(tenantId: string): Promise<PendingInvitationSummary[]> {
-  return invitationRepository.listPending(tenantId)
+export async function listPending(
+  tenantId: string,
+  query: InvitationListQuery
+): Promise<ListPage<PendingInvitationSummary>> {
+  return invitationRepository.listPending(tenantId, query.params, { roles: query.filters.role })
 }
 
 /**

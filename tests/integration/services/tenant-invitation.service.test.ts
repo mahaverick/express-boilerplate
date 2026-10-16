@@ -26,10 +26,21 @@ import {
   resend,
   revoke,
 } from '@/services/tenant-invitation.service'
+import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
+
+/**
+ * Every pending invitation of a tenant, read as one page.
+ * @param tenantId - The tenant.
+ * @returns The page's items.
+ */
+async function pendingOf(tenantId: string) {
+  const page = await listPending(tenantId, invitationListSchema.parse({ limit: '100' }))
+  return page.items
+}
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -172,7 +183,7 @@ describe('tenant-invitation.service', () => {
 
       await invite({ userId: owner.id }, tenant.id, `  ${email.toUpperCase()}  `, 'editor')
 
-      const [pending] = await listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       expect(pending).toMatchObject({ email, role: 'editor' })
       const queued = await waitForInvitationEmail(email)
       expect(queued.userId).toBe('')
@@ -205,7 +216,7 @@ describe('tenant-invitation.service', () => {
         code: 'already_member',
         message: 'That person is already a member.',
       })
-      expect(await listPending(tenant.id)).toEqual([])
+      expect(await pendingOf(tenant.id)).toEqual([])
     })
 
     it('enqueues an in-app notification, carrying no token, for a verified existing user', async () => {
@@ -216,7 +227,7 @@ describe('tenant-invitation.service', () => {
 
       const queued = await waitForInvitationEmail(invitee.email)
       expect(queued.userId).toBe(invitee.id)
-      const [pending] = await listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       const job = await waitForJob<NotificationJobData>(
         getNotificationQueue(),
         (data) => data.userId === invitee.id && data.type === 'tenant_invitation'
@@ -241,7 +252,7 @@ describe('tenant-invitation.service', () => {
         await invite({ userId: owner.id }, tenant.id, email, 'viewer')
 
         await waitForInvitationEmail(email)
-        const [pending] = await listPending(tenant.id)
+        const [pending] = await pendingOf(tenant.id)
         await expectNoJob<NotificationJobData>(
           getNotificationQueue(),
           (data) => data.type === 'tenant_invitation' && data.metadata?.invitationId === pending?.id
@@ -293,7 +304,7 @@ describe('tenant-invitation.service', () => {
       await expect(
         invite({ userId: outsider.id }, tenant.id, uniqueEmail(), 'viewer')
       ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
-      expect(await listPending(tenant.id)).toEqual([])
+      expect(await pendingOf(tenant.id)).toEqual([])
     })
   })
 
@@ -305,7 +316,7 @@ describe('tenant-invitation.service', () => {
       await invite({ userId: owner.id }, tenant.id, invitee.email, 'viewer')
 
       await waitForInvitationEmail(invitee.email)
-      const [pending] = await listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       await expectNoJob<NotificationJobData>(
         getNotificationQueue(),
         (data) => data.type === 'tenant_invitation' && data.metadata?.invitationId === pending?.id
@@ -342,7 +353,7 @@ describe('tenant-invitation.service', () => {
       const email = uniqueEmail()
       await invite({ userId: owner.id }, tenant.id, email, 'viewer')
       const first = await waitForInvitationEmail(email)
-      const [pending] = await listPending(tenant.id)
+      const [pending] = await pendingOf(tenant.id)
       await backdateInvitationSend(pending?.id ?? '')
 
       await resend({ userId: owner.id }, tenant.id, pending?.id ?? '')

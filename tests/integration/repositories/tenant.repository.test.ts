@@ -20,6 +20,7 @@ import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { myTenantListSchema } from '@/validators/tenant.validators'
 import { backdateUpdatedAt } from '../../helpers/backdate'
 
 const tenantRepository = new TenantRepository()
@@ -43,6 +44,17 @@ function uniqueEmail(): string {
  */
 function uniqueSlug(): string {
   return `tenant-${randomUUID()}`
+}
+
+/**
+ * One page of a user's tenants for these query params, parsed as the route parses them.
+ * @param userId - The user.
+ * @param query - The query string params.
+ * @returns The page.
+ */
+async function listFor(userId: string, query: Record<string, string> = {}) {
+  const { params, filters } = myTenantListSchema.parse(query)
+  return tenantRepository.listForUser(userId, params, { roles: filters.role })
 }
 
 describe('TenantRepository', () => {
@@ -242,7 +254,7 @@ describe('TenantRepository', () => {
       const joined = await createTenant(otherOwnerId)
       await userMembershipRepository.create({ userId, tenantId: joined.id, role: 'editor' })
 
-      const rows = await tenantRepository.listForUser(userId)
+      const { items: rows } = await listFor(userId)
       const byTenantId = new Map(rows.map((row) => [row.tenant.id, row.role]))
 
       expect(byTenantId.get(owned.id)).toBe('owner')
@@ -254,13 +266,54 @@ describe('TenantRepository', () => {
       const tenant = await createTenant(userId)
       await tenantRepository.softDelete(tenant.id)
 
-      const rows = await tenantRepository.listForUser(userId)
+      const { items: rows } = await listFor(userId)
       expect(rows.some((row) => row.tenant.id === tenant.id)).toBe(false)
     })
 
-    it('returns an empty array for a user with no memberships', async () => {
+    it('lists by name by default, and carries when each membership began', async () => {
       const userId = await createUser()
-      expect(await tenantRepository.listForUser(userId)).toEqual([])
+      const ownerId = await createUser()
+      const bravo = await createTenant(ownerId, { name: 'Bravo' })
+      const alpha = await createTenant(ownerId, { name: 'alpha' })
+      const charlie = await createTenant(ownerId, { name: 'Charlie' })
+      for (const tenant of [bravo, alpha, charlie]) {
+        await userMembershipRepository.create({ userId, tenantId: tenant.id, role: 'viewer' })
+      }
+
+      const { items } = await listFor(userId)
+
+      expect(items.map((row) => row.tenant.name)).toEqual(['alpha', 'Bravo', 'Charlie'])
+      expect(items[0]?.joinedAt).toBeInstanceOf(Date)
+    })
+
+    it('filters by role and searches by name under a non-default sort', async () => {
+      const userId = await createUser()
+      const ownerId = await createUser()
+      const tag = randomUUID().slice(0, 8)
+      const first = await createTenant(ownerId, { name: `${tag} first` })
+      const second = await createTenant(ownerId, { name: `${tag} second` })
+      const third = await createTenant(ownerId, { name: `${tag} third` })
+      const other = await createTenant(ownerId, { name: 'unrelated' })
+      const joins = [
+        [first, 'viewer', '2026-10-01T00:00:00.000Z'],
+        [second, 'editor', '2026-10-02T00:00:00.000Z'],
+        [third, 'viewer', '2026-10-03T00:00:00.000Z'],
+        [other, 'viewer', '2026-10-04T00:00:00.000Z'],
+      ] as const
+      for (const [tenant, role, at] of joins) {
+        await userMembershipRepository.create({ userId, tenantId: tenant.id, role })
+        await sql`update user_memberships set created_at = ${at} where user_id = ${userId} and tenant_id = ${tenant.id}`
+      }
+
+      const { items } = await listFor(userId, { search: tag, role: 'viewer', sort: '-joined' })
+
+      expect(items.map((row) => row.tenant.name)).toEqual([`${tag} third`, `${tag} first`])
+    })
+
+    it('returns an empty page for a user with no memberships', async () => {
+      const userId = await createUser()
+      const { items } = await listFor(userId)
+      expect(items).toEqual([])
     })
   })
 
