@@ -130,8 +130,11 @@ describe('AuditLogRepository.list, one tenant', () => {
       entry(tenantId, userId, { occurredAt: new Date('2026-09-25T11:00:00.000Z') })
     )
 
-    const everything = await auditLogRepository.list(paramsOf({ limit: '100' }), { tenantId })
-    const paged = await readAllPages({ tenantId }, 2)
+    const everything = await auditLogRepository.list(paramsOf({ limit: '100' }), {
+      tenantId,
+      scope: 'tenant',
+    })
+    const paged = await readAllPages({ tenantId, scope: 'tenant' }, 2)
 
     expect(everything.page.nextCursor).toBeNull()
     expect(everything.items).toHaveLength(5)
@@ -150,7 +153,10 @@ describe('AuditLogRepository.list, one tenant', () => {
     await auditLogRepository.insert(entry(tenantId, userId))
     await auditLogRepository.insert(entry(tenantId, userId))
 
-    const exact = await auditLogRepository.list(paramsOf({ limit: '2' }), { tenantId })
+    const exact = await auditLogRepository.list(paramsOf({ limit: '2' }), {
+      tenantId,
+      scope: 'tenant',
+    })
 
     expect(exact.items).toHaveLength(2)
     expect(exact.page.nextCursor).toBeNull()
@@ -168,13 +174,18 @@ describe('AuditLogRepository.list, one tenant', () => {
     )
     await auditLogRepository.insert(entry(second.tenantId, second.userId))
 
-    const all = await auditLogRepository.list(paramsOf(), { tenantId: first.tenantId })
+    const all = await auditLogRepository.list(paramsOf(), {
+      tenantId: first.tenantId,
+      scope: 'tenant',
+    })
     const byAction = await auditLogRepository.list(paramsOf(), {
       tenantId: first.tenantId,
+      scope: 'tenant',
       actions: ['tenant.settings_updated'],
     })
     const byActor = await auditLogRepository.list(paramsOf(), {
       tenantId: first.tenantId,
+      scope: 'tenant',
       actorUserId: first.userId,
     })
 
@@ -191,7 +202,7 @@ describe('AuditLogRepository.list, one tenant', () => {
       entry(tenantId, userId, { actorKind: 'system', actorUserId: undefined, access: 'system' })
     )
 
-    const { items: rows } = await auditLogRepository.list(paramsOf(), { tenantId })
+    const { items: rows } = await auditLogRepository.list(paramsOf(), { tenantId, scope: 'tenant' })
     const userRow = rows.find((row) => row.entry.actorKind === 'user')
     const systemRow = rows.find((row) => row.entry.actorKind === 'system')
 
@@ -218,10 +229,15 @@ describe('AuditLogRepository.list, with its tenant', () => {
       })
     )
 
-    const scoped = await auditLogRepository.list(paramsOf(), { tenantId })
-    const staffOnly = await auditLogRepository.list(paramsOf(), { tenantId, access: ['platform'] })
+    const scoped = await auditLogRepository.list(paramsOf(), { tenantId, scope: 'tenant' })
+    const staffOnly = await auditLogRepository.list(paramsOf(), {
+      tenantId,
+      scope: 'tenant',
+      access: ['platform'],
+    })
     const byAction = await auditLogRepository.list(paramsOf(), {
       tenantId,
+      scope: 'tenant',
       actions: ['tenant.updated'],
     })
 
@@ -242,10 +258,13 @@ describe('AuditLogRepository.list, with its tenant', () => {
       await auditLogRepository.insert(entry(tenantId, userId, { occurredAt: shared }))
     }
 
-    const first = await auditLogRepository.list(paramsOf({ limit: '2' }), { tenantId })
+    const first = await auditLogRepository.list(paramsOf({ limit: '2' }), {
+      tenantId,
+      scope: 'tenant',
+    })
     const second = await auditLogRepository.list(
       paramsOf({ limit: '2', cursor: first.page.nextCursor ?? '' }),
-      { tenantId }
+      { tenantId, scope: 'tenant' }
     )
 
     expect(first.items).toHaveLength(2)
@@ -277,9 +296,10 @@ describe('AuditLogRepository.list, search', () => {
     /**
      * The actions the search finds in this tenant, under any extra filters.
      */
-    const search = async (text: string, filters: AuditLogFilters = {}) => {
+    const search = async (text: string, filters: Partial<AuditLogFilters> = {}) => {
       const page = await auditLogRepository.list(paramsOf({ search: text }), {
         tenantId,
+        scope: 'platform',
         ...filters,
       })
       return page.items.map((row) => row.entry.action)
@@ -313,17 +333,26 @@ describe('AuditLogRepository.list, search', () => {
     /**
      * How many entries the search finds in this tenant.
      */
-    const found = async (text: string, isTenantRead: boolean) => {
+    const found = async (text: string, scope: 'tenant' | 'platform') => {
       const page = await auditLogRepository.list(paramsOf({ search: text }), {
         tenantId,
-        isTenantRead,
+        scope,
       })
       return page.items.length
     }
 
-    expect(await found('audit-outsider-', true)).toBe(0)
-    expect(await found('audit co', true)).toBe(0)
+    // Positive control: an entry targeting its own tenant is found by the tenant's name; the foreign tenant, with the same name, is not.
+    await auditLogRepository.insert(
+      entry(tenantId, userId, {
+        action: 'tenant.updated',
+        targetType: 'tenant',
+        targetId: tenantId,
+      })
+    )
+
+    expect(await found('audit-outsider-', 'tenant')).toBe(0)
+    expect(await found('audit co', 'tenant')).toBe(1)
     // The platform read still searches targets outside the tenant.
-    expect(await found('audit-outsider-', false)).toBe(1)
+    expect(await found('audit-outsider-', 'platform')).toBe(1)
   })
 })

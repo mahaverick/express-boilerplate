@@ -424,10 +424,8 @@ describe('audit-log reads', () => {
       const { tenant, ownerToken } = await createTenant()
       const { tenant: other, ownerToken: otherToken, owner: otherOwner } = await createTenant()
       const mine = await insertRow({ tenantId: tenant.id })
-      const theirs = new Set([
-        await insertRow({ tenantId: other.id, actorUserId: otherOwner.id }),
-        await insertRow({ tenantId: other.id, actorUserId: otherOwner.id }),
-      ])
+      await insertRow({ tenantId: other.id, actorUserId: otherOwner.id })
+      await insertRow({ tenantId: other.id, actorUserId: otherOwner.id })
       const theirCursor = pageOf(await readTenantLog(other.slug, otherToken, { limit: '1' })).page
         .nextCursor
 
@@ -445,7 +443,6 @@ describe('audit-log reads', () => {
       // The cursor is bound to the tenant it was issued for.
       expect(withCursor.status).toBe(400)
       expect((withCursor.body as { code?: string }).code).toBe('CURSOR_INVALID')
-      expect(theirs.size).toBe(2)
     })
 
     it('defaults to 20 entries, with a cursor for the rest', async () => {

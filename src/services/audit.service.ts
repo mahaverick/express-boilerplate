@@ -298,7 +298,7 @@ export async function listForTenant(
   const { filters } = query
   return auditLogRepository.list(query.params, {
     tenantId,
-    isTenantRead: true,
+    scope: 'tenant',
     actions: filters.action,
     actorUserId: filters.actor,
     access: filters.access,
@@ -316,6 +316,7 @@ export async function listPlatformWide(
 ): Promise<ListPage<AuditLogListRow>> {
   const { filters } = query
   return auditLogRepository.list(query.params, {
+    scope: 'platform',
     tenantId: filters.tenant,
     targetId: filters.target,
     actions: filters.action,

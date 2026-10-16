@@ -64,9 +64,9 @@ export interface AuditLogFilters {
   actions?: AuditAction[] | undefined
   access?: AuditAccess[] | undefined
   /**
-  True for a read of one tenant's own log: search then matches only the entry's own tenant as a target and never a user target's email, since the entry can name a target outside the tenant (a staff action filed under it).
+  Which read this is. A `tenant` read is of one tenant's own log: search then matches only the entry's own tenant as a target and never a user target's email, since the entry can name a target outside the tenant (a staff action filed under it). A `platform` read searches every target. Required, so a new caller must choose.
    */
-  isTenantRead?: boolean | undefined
+  scope: 'tenant' | 'platform'
 }
 
 /**
@@ -84,7 +84,7 @@ const targetTenant = alias(tenantModel, 'target_tenant')
  * The audit list, newest first by default. The actor and the target are
  * left joins, so an entry whose actor or target has no row still lists;
  * `search` matches the action, the actor's email, a user target's email and
- * a tenant target's name; a tenant read (`isTenantRead`) matches the
+ * a tenant target's name; a tenant read (`scope: 'tenant'`) matches the
  * entry's own tenant as a target only and skips user targets. Its cursors
  * are bound to the tenant.
  * @param search - The parsed search, or undefined.
@@ -114,7 +114,7 @@ function auditLogList(search: string | undefined, filters: AuditLogFilters) {
           and(
             eq(auditLogModel.targetType, 'tenant'),
             eq(targetTenant.id, auditLogModel.targetId),
-            filters.isTenantRead === true ? eq(targetTenant.id, auditLogModel.tenantId) : undefined
+            filters.scope === 'tenant' ? eq(targetTenant.id, auditLogModel.tenantId) : undefined
           )
         )
         .where(
@@ -138,7 +138,7 @@ function auditLogList(search: string | undefined, filters: AuditLogFilters) {
               // Lowercase already: its CHECK allows only `[a-z._]`.
               sql`${auditLogModel.action}`,
               sql`lower(${userModel.email})`,
-              ...(filters.isTenantRead === true ? [] : [sql`lower(${targetUser.email})`]),
+              ...(filters.scope === 'tenant' ? [] : [sql`lower(${targetUser.email})`]),
               sql`lower(${targetTenant.name})`,
             ]),
             seek
