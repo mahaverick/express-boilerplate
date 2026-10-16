@@ -291,4 +291,39 @@ describe('AuditLogRepository.list, search', () => {
     expect(await search('audit co')).toEqual(['tenant.updated'])
     expect(await search('audit co', { actions: ['user.updated'] })).toEqual([])
   })
+
+  it('does not let a tenant read search a target outside the tenant', async () => {
+    const { userId, tenantId } = await createOwnerAndTenant()
+    const outsider = await userRepository.create({
+      email: `audit-outsider-${randomUUID()}@example.test`,
+    })
+    createdUserIds.push(outsider.id)
+    const elsewhere = await createOwnerAndTenant()
+    // A staff action filed under this tenant, naming a user who is not a member and a tenant that is not this one.
+    await auditLogRepository.insert(
+      entry(tenantId, userId, { action: 'user.updated', targetType: 'user', targetId: outsider.id })
+    )
+    await auditLogRepository.insert(
+      entry(tenantId, userId, {
+        action: 'tenant.updated',
+        targetType: 'tenant',
+        targetId: elsewhere.tenantId,
+      })
+    )
+    /**
+     * How many entries the search finds in this tenant.
+     */
+    const found = async (text: string, isTenantRead: boolean) => {
+      const page = await auditLogRepository.list(paramsOf({ search: text }), {
+        tenantId,
+        isTenantRead,
+      })
+      return page.items.length
+    }
+
+    expect(await found('audit-outsider-', true)).toBe(0)
+    expect(await found('audit co', true)).toBe(0)
+    // The platform read still searches targets outside the tenant.
+    expect(await found('audit-outsider-', false)).toBe(1)
+  })
 })

@@ -44,6 +44,9 @@ export interface AuditLogListRow {
   tenant: { id: string; name: string; slug: string }
 }
 
+/**
+ * The actor columns an entry lists with, never `passwordHash`.
+ */
 const actorColumns = {
   id: userModel.id,
   email: userModel.email,
@@ -60,6 +63,10 @@ export interface AuditLogFilters {
   targetId?: string | undefined
   actions?: AuditAction[] | undefined
   access?: AuditAccess[] | undefined
+  /**
+  True for a read of one tenant's own log: search then matches only the entry's own tenant as a target and never a user target's email, since the entry can name a target outside the tenant (a staff action filed under it).
+   */
+  isTenantRead?: boolean | undefined
 }
 
 /**
@@ -77,7 +84,9 @@ const targetTenant = alias(tenantModel, 'target_tenant')
  * The audit list, newest first by default. The actor and the target are
  * left joins, so an entry whose actor or target has no row still lists;
  * `search` matches the action, the actor's email, a user target's email and
- * a tenant target's name.
+ * a tenant target's name; a tenant read (`isTenantRead`) matches the
+ * entry's own tenant as a target only and skips user targets. Its cursors
+ * are bound to the tenant.
  * @param search - The parsed search, or undefined.
  * @param filters - The filters.
  * @returns The list definition.
@@ -102,7 +111,11 @@ function auditLogList(search: string | undefined, filters: AuditLogFilters) {
         )
         .leftJoin(
           targetTenant,
-          and(eq(auditLogModel.targetType, 'tenant'), eq(targetTenant.id, auditLogModel.targetId))
+          and(
+            eq(auditLogModel.targetType, 'tenant'),
+            eq(targetTenant.id, auditLogModel.targetId),
+            filters.isTenantRead === true ? eq(targetTenant.id, auditLogModel.tenantId) : undefined
+          )
         )
         .where(
           and(
@@ -125,7 +138,7 @@ function auditLogList(search: string | undefined, filters: AuditLogFilters) {
               // Lowercase already: its CHECK allows only `[a-z._]`.
               sql`${auditLogModel.action}`,
               sql`lower(${userModel.email})`,
-              sql`lower(${targetUser.email})`,
+              ...(filters.isTenantRead === true ? [] : [sql`lower(${targetUser.email})`]),
               sql`lower(${targetTenant.name})`,
             ]),
             seek
@@ -137,6 +150,7 @@ function auditLogList(search: string | undefined, filters: AuditLogFilters) {
       '-occurred': [timestampSort(auditLogModel.occurredAt, 'desc', 'sortOccurred')],
       occurred: [timestampSort(auditLogModel.occurredAt, 'asc', 'sortOccurred')],
     },
+    ...(filters.tenantId !== undefined && { bound: { tenantId: filters.tenantId } }),
     toItem: ({ id: _id, sortOccurred: _occurred, ...row }): AuditLogListRow => row,
   })
 }

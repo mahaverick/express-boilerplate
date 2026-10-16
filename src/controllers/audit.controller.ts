@@ -34,6 +34,9 @@ class AuditController extends BaseController {
     )
   })
 
+  /**
+   * `GET /platform/audit-log`: every tenant's entries, newest first.
+   */
   listPlatformAuditLog = this.handle(async (request, response) => {
     const query = parseBody(platformAuditLogListSchema, request.query)
     const page = await listPlatformWide(query)

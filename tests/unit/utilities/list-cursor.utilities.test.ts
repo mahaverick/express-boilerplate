@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { cursorSecret } from '@/configs/env.config'
 import { CURSOR_INVALID_CODE, InvalidCursorError } from '@/errors/list-errors'
 import {
+  bindScope,
   CURSOR_VERSION,
   listScope,
   MAX_CURSOR_LENGTH,
@@ -207,3 +208,18 @@ function signedBodyRaw(text: string): string {
   const signature = createHmac('sha256', cursorSecret()).update(body).digest('base64url')
   return `${body}.${signature}`
 }
+
+describe('bindScope', () => {
+  const scope = listScope({ search: undefined, sort: 'name', filters: {} })
+
+  it('gives each bound value its own scope, whatever the key order', () => {
+    expect(bindScope(scope, { tenantId: 'a' })).not.toBe(bindScope(scope, { tenantId: 'b' }))
+    expect(bindScope(scope, { tenantId: 'a' })).not.toBe(scope)
+    expect(bindScope(scope, { a: '1', b: '2' })).toBe(bindScope(scope, { b: '2', a: '1' }))
+  })
+
+  it('gives each request scope its own bound scope', () => {
+    const other = listScope({ search: 'x', sort: 'name', filters: {} })
+    expect(bindScope(scope, { tenantId: 'a' })).not.toBe(bindScope(other, { tenantId: 'a' }))
+  })
+})

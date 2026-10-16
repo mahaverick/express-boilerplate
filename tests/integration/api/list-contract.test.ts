@@ -491,7 +491,7 @@ function auditRows(tenantId: string, count: number) {
 /**
  * The tenant each audit block files its rows under, with its owner.
  */
-const audited = { tenantId: '', slug: '', ownerToken: '' }
+const audited = { tenantId: '', slug: '', ownerToken: '', otherSlug: '', otherToken: '' }
 
 /**
  * Create the audited tenant, owned by a fresh user, and the staff admin.
@@ -504,7 +504,19 @@ async function createAuditedTenant(): Promise<void> {
     slug: `${tag}-al-${randomUUID().slice(0, 6)}`,
     ownerId: owner.id,
   })
-  Object.assign(audited, { tenantId: tenant.id, slug: tenant.slug, ownerToken: tokenFor(owner) })
+  const otherOwner = await createTrackedUser()
+  const other = await new TenantRepository().create({
+    name: `${tag} other audited`,
+    slug: `${tag}-ao-${randomUUID().slice(0, 6)}`,
+    ownerId: otherOwner.id,
+  })
+  Object.assign(audited, {
+    tenantId: tenant.id,
+    slug: tenant.slug,
+    ownerToken: tokenFor(owner),
+    otherSlug: other.slug,
+    otherToken: tokenFor(otherOwner),
+  })
 }
 
 /**
@@ -512,7 +524,7 @@ async function createAuditedTenant(): Promise<void> {
  */
 async function removeAuditedTenant(): Promise<void> {
   await truncateAuditLogs()
-  await sql`delete from tenants where id = ${audited.tenantId}`
+  await sql`delete from tenants where slug in (${audited.slug}, ${audited.otherSlug})`
   await deleteTrackedUsers()
 }
 
@@ -541,6 +553,13 @@ for (const route of ['platform', 'tenant'] as const) {
     }),
     isolate: (): Record<string, string> =>
       route === 'platform' ? { tenant: audited.tenantId } : {},
+    // The tenant route's rows depend on the path tenant, which is not a query param.
+    ...(route === 'tenant' && {
+      otherScope: {
+        path: () => `/api/v1/tenants/${audited.otherSlug}/audit-log`,
+        headers: () => ({ Authorization: `Bearer ${audited.otherToken}` }),
+      },
+    }),
     sorts: ['-occurred', 'occurred'],
     order: { '-occurred': occurredOf, occurred: occurredOf },
     setup: createAuditedTenant,

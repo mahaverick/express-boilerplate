@@ -298,6 +298,7 @@ export async function listForTenant(
   const { filters } = query
   return auditLogRepository.list(query.params, {
     tenantId,
+    isTenantRead: true,
     actions: filters.action,
     actorUserId: filters.actor,
     access: filters.access,

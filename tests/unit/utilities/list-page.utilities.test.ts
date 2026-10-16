@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { tenantModel } from '@/database/models/tenant.model'
 import { InvalidCursorError } from '@/errors/list-errors'
 import { db } from '@/services/database.service'
-import { signCursor } from '@/utilities/list-cursor.utilities'
+import { bindScope, signCursor } from '@/utilities/list-cursor.utilities'
 import {
   cappedTotal,
   defineList,
@@ -139,6 +139,40 @@ describe('listPageQuery', () => {
     const cursor = signCursor('-created', scope, ['2026-01-01T00:00:00.000000Z', ID])
     const params = tenantSchema.parse({ cursor }).params
     expect(() => listPageQuery(db, tenants, params)).toThrow(InvalidCursorError)
+  })
+})
+
+/**
+ * The tenants list bound to one tenant.
+ */
+function owned(tenantId: string) {
+  return { ...tenants, bound: { tenantId } }
+}
+
+describe('a list with bound values', () => {
+  const params = tenantSchema.parse({}).params
+
+  it('accepts a cursor signed under the same bound value', () => {
+    const cursor = signCursor('name', bindScope(params.scope, { tenantId: 'a' }), ['x', ID])
+    const withCursor = { ...params, cursor }
+    expect(() => listPageQuery(db, owned('a'), withCursor)).not.toThrow()
+  })
+
+  it('refuses a cursor signed under another bound value, or under none', () => {
+    const other = signCursor('name', bindScope(params.scope, { tenantId: 'b' }), ['x', ID])
+    const unbound = signCursor('name', params.scope, ['x', ID])
+    for (const cursor of [other, unbound]) {
+      expect(() => listPageQuery(db, owned('a'), { ...params, cursor })).toThrow(InvalidCursorError)
+    }
+  })
+
+  it('leaves a list without bound values on the plain scope', () => {
+    const cursor = signCursor('name', params.scope, ['x', ID])
+    expect(() => listPageQuery(db, tenants, { ...params, cursor })).not.toThrow()
+    const bound = signCursor('name', bindScope(params.scope, { tenantId: 'a' }), ['x', ID])
+    expect(() => listPageQuery(db, tenants, { ...params, cursor: bound })).toThrow(
+      InvalidCursorError
+    )
   })
 })
 

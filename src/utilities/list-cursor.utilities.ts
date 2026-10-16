@@ -104,6 +104,24 @@ export function listScope(input: ListScopeInput): string {
 }
 
 /**
+ * A scope hash narrowed to the values that define a list but are not query
+ * params (a path tenant, the calling user): the same request under another
+ * value hashes differently, so a cursor minted under one is refused under
+ * another.
+ * @param scope - The request's `listScope`.
+ * @param bound - The list's bound values.
+ * @returns The hash, base64url.
+ */
+export function bindScope(scope: string, bound: Readonly<Record<string, string>>): string {
+  const entries = Object.keys(bound)
+    .toSorted(compareText)
+    .map((name) => [name, bound[name]])
+  return createHash('sha256')
+    .update(JSON.stringify([scope, entries]))
+    .digest('base64url')
+}
+
+/**
  * The HMAC of a cursor's JSON part.
  * @param body - The base64url JSON part.
  * @returns The raw signature.

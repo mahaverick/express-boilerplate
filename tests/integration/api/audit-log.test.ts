@@ -63,6 +63,13 @@ interface SeedRow {
   metadata?: Record<string, unknown>
 }
 
+/**
+ * Orders ids as text.
+ */
+function byText(left: string, right: string): number {
+  return left.localeCompare(right)
+}
+
 const ISO_MILLISECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
 const app = createApp()
@@ -355,34 +362,40 @@ describe('audit-log reads', () => {
     it('keeps only the entries that match every filter at once', async () => {
       const { tenant, ownerToken, owner } = await createTenant()
       const { user: other } = await createUser()
-      const match = await insertRow({
+      const base = { tenantId: tenant.id, actorUserId: owner.id, action: 'tenant.settings_updated' }
+      const match = await insertRow(base)
+      // Each of these fails exactly one filter, so each filter must be applied.
+      const wrongAction = await insertRow({ ...base, action: 'tenant.updated' })
+      const wrongActor = await insertRow({ ...base, actorUserId: other.id })
+      const wrongAccess = await insertRow({ ...base, access: 'platform' })
+      // No actor, so no actor email for the search to find.
+      const wrongSearch = await insertRow({
         tenantId: tenant.id,
-        actorUserId: owner.id,
         action: 'tenant.settings_updated',
-      })
-      await insertRow({ tenantId: tenant.id, actorUserId: owner.id })
-      await insertRow({
-        tenantId: tenant.id,
-        actorUserId: other.id,
-        action: 'tenant.settings_updated',
-      })
-      await insertRow({
-        tenantId: tenant.id,
-        actorUserId: owner.id,
-        action: 'tenant.settings_updated',
-        access: 'platform',
+        access: 'member',
       })
 
-      const page = pageOf(
-        await readTenantLog(tenant.slug, ownerToken, {
-          action: 'tenant.settings_updated,tenant.updated',
-          actor: owner.id,
-          access: 'member',
-          search: 'settings',
-        })
+      const everyFilter = {
+        action: 'tenant.settings_updated',
+        actor: owner.id,
+        access: 'member',
+        search: 'audit-api-',
+      }
+      const page = pageOf(await readTenantLog(tenant.slug, ownerToken, everyFilter))
+      const withoutActionFilter = { actor: owner.id, access: 'member', search: 'audit-api-' }
+      const withoutAction = pageOf(
+        await readTenantLog(tenant.slug, ownerToken, withoutActionFilter)
       )
 
       expect(page.items.map((entry) => entry.id)).toEqual([match])
+      // Dropping the action filter lets back exactly the row only it excluded.
+      expect(withoutAction.items.map((entry) => entry.id).toSorted(byText)).toEqual(
+        [match, wrongAction].toSorted(byText)
+      )
+      const letBack = new Set(withoutAction.items.map((entry) => entry.id))
+      for (const dropped of [wrongActor, wrongAccess, wrongSearch]) {
+        expect(letBack.has(dropped)).toBe(false)
+      }
     })
 
     it('sorts newest first by default and oldest first on request', async () => {
@@ -422,14 +435,17 @@ describe('audit-log reads', () => {
         await readTenantLog(tenant.slug, ownerToken, { tenant: other.id, target: other.id })
       )
       const byActor = pageOf(await readTenantLog(tenant.slug, ownerToken, { actor: otherOwner.id }))
-      const withCursor = pageOf(
-        await readTenantLog(tenant.slug, ownerToken, { cursor: theirCursor ?? '' })
-      )
+      const withCursor = await readTenantLog(tenant.slug, ownerToken, {
+        cursor: theirCursor ?? '',
+      })
 
       expect(theirCursor).toEqual(expect.any(String))
       expect(byTenant.items.map((entry) => entry.id)).toEqual([mine])
       expect(byActor.items).toEqual([])
-      expect(withCursor.items.map((entry) => entry.id).filter((id) => theirs.has(id))).toEqual([])
+      // The cursor is bound to the tenant it was issued for.
+      expect(withCursor.status).toBe(400)
+      expect((withCursor.body as { code?: string }).code).toBe('CURSOR_INVALID')
+      expect(theirs.size).toBe(2)
     })
 
     it('defaults to 20 entries, with a cursor for the rest', async () => {

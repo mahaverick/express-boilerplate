@@ -11,7 +11,12 @@ import { z } from 'zod'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import type { DbExecutor } from '@/services/database.service'
 import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
-import { signCursor, verifyCursor, type CursorKey } from '@/utilities/list-cursor.utilities'
+import {
+  bindScope,
+  signCursor,
+  verifyCursor,
+  type CursorKey,
+} from '@/utilities/list-cursor.utilities'
 import { sortAtField } from '@/validators/cursor.validators'
 
 /**
@@ -109,6 +114,10 @@ export interface ListDefinition<TQuery extends PgSelect, Item> {
   Sort key (with its leading `-` when descending) to its ordered columns; the helper appends the id.
    */
   sorts: Readonly<Record<string, readonly SortDef[]>>
+  /**
+  Values that define the list without being query params (a path tenant, the calling user); folded into the scope a cursor is signed and checked against, so a cursor minted under one value is refused under another. Absent for a list with none.
+   */
+  bound?: Readonly<Record<string, string>>
   toItem: (row: ListRow<TQuery>) => Item
 }
 
@@ -265,7 +274,22 @@ export function listPageQuery<TQuery extends PgSelect, Item>(
   definition: ListDefinition<TQuery, Item>,
   params: ListParams
 ): TQuery {
-  return queryFor(executor, definition, params, prepare(definition, params))
+  const scoped = scopedParams(definition, params)
+  return queryFor(executor, definition, scoped, prepare(definition, scoped))
+}
+
+/**
+ * The request with its scope narrowed to the list's bound values; the request itself when the list has none.
+ * @param definition - The list.
+ * @param params - The parsed request.
+ * @returns The request cursors are signed and checked against.
+ */
+function scopedParams<TQuery extends PgSelect, Item>(
+  definition: ListDefinition<TQuery, Item>,
+  params: ListParams
+): ListParams {
+  if (definition.bound === undefined) return params
+  return { ...params, scope: bindScope(params.scope, definition.bound) }
 }
 
 /**
@@ -417,15 +441,16 @@ async function readPage<TQuery extends PgSelect, Item>(
  * stood beside is skipped or repeated.
  * @param executor - Where to run the queries.
  * @param definition - The list.
- * @param params - The parsed request.
+ * @param requested - The parsed request.
  * @returns The page.
  * @throws {InvalidCursorError} When the cursor does not verify.
  */
 export async function listPage<TQuery extends PgSelect, Item>(
   executor: DbExecutor,
   definition: ListDefinition<TQuery, Item>,
-  params: ListParams
+  requested: ListParams
 ): Promise<ListPage<Item>> {
+  const params = scopedParams(definition, requested)
   const read = await readPage(executor, definition, params)
   const page = read ?? (await readPage(executor, definition, edgeRequest(params)))
   if (page === undefined) throw new Error('an edge page read has no cursor to find empty')

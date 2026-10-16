@@ -121,6 +121,10 @@ export interface ListContract {
    */
   filters?: readonly { query: Record<string, string>; count: number }[]
   /**
+   * For a list whose rows depend on something other than its query (a path tenant, the calling user): another path and caller, read after `setup`. A cursor issued to the contract's own caller must be refused there with the one `CURSOR_INVALID` body.
+   */
+  otherScope?: { path: () => string; headers: () => Record<string, string> }
+  /**
    * False when the list cannot hold 1001 isolated rows (the fixed flags registry).
    */
   canCap?: boolean
@@ -436,6 +440,20 @@ export function describeListContract(contract: ListContract): void {
           search: `${contract.isolate().search ?? ''}zzz`,
         })
       })
+
+      const { otherScope } = contract
+      if (otherScope !== undefined) {
+        it('refuses a cursor replayed under another path or caller', async () => {
+          const response = await request(contract.app())
+            .get(otherScope.path())
+            .query({ ...contract.isolate(), limit: size, cursor: await issuedCursor() })
+            .set(otherScope.headers())
+          const body = response.body as Envelope
+          expect(response.status).toBe(400)
+          expect(body.code).toBe('CURSOR_INVALID')
+          expect(body.errors).toEqual({ cursor: ['cursor is invalid.'] })
+        })
+      }
 
       const otherSort = contract.sorts.find((sort) => sort !== defaultFor(contract, {}))
       if (otherSort === undefined) {
