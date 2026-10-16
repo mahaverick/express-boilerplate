@@ -102,7 +102,7 @@ export default tseslint.config(
       // env, db and repository are the canonical names (process.env, Drizzle's db, *.repository.ts files).
       'unicorn/name-replacements': [
         'error',
-        { replacements: { env: false, db: false, repository: false } },
+        { replacements: { env: false, db: false, repository: false, params: false, def: false } },
       ],
 
       // Express finds error handlers by arity, so an unused fourth parameter is load-bearing.

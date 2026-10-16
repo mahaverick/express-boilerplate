@@ -6,13 +6,7 @@
  */
 import { z } from 'zod'
 import { decodeCursor } from '@/utilities/cursor.utilities'
-
-/**
- * Room for any cursor the server issues. A 255-character value is at most
- * 1,530 bytes of JSON (a control character escapes to six); with a uuid
- * beside it that encodes to 2,119 base64url characters.
- */
-const MAX_CURSOR_LENGTH = 4096
+import { MAX_CURSOR_LENGTH } from '@/utilities/list-cursor.utilities'
 
 /**
  * A `cursor` query field that decodes against `schema`, or fails validation
