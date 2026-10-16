@@ -866,3 +866,29 @@ describeListContract({
     { query: { unread: 'false' }, count: 2 },
   ],
 })
+
+describeListContract({
+  name: 'GET /api/v1/platform/flags',
+  app: () => app,
+  path: () => '/api/v1/platform/flags',
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({}),
+  sorts: ['key'],
+  order: { key: (item) => (item as { key: string }).key },
+  uniqueKeys: ['key'],
+  setup: createStaff,
+  teardown: removeStaff,
+  // The registry is fixed, so there is nothing to seed; with no snapshot loaded both flags are missing.
+  seed: async () => {},
+  clear: async () => {},
+  idOf: (item) => (item as { key: string }).key,
+  visible: 2,
+  pageSize: 1,
+  canCap: false,
+  search: { text: 'beta', count: 1 },
+  filters: [
+    { query: { kind: 'boolean' }, count: 1 },
+    { query: { kind: 'boolean,multivariate' }, count: 2 },
+    { query: { state: 'missing,active' }, count: 2 },
+  ],
+})

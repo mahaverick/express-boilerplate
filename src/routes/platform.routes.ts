@@ -160,6 +160,18 @@ export function createPlatformRouter(): Router {
     platformFlagsController.listFlags
   )
   router.get(
+    '/flags/unregistered',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformFlagsController.listUnregisteredFlags
+  )
+  router.get(
+    '/flags/meta',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformFlagsController.getFlagsMeta
+  )
+  router.get(
     '/maintenance-mode',
     requirePlatformRole('viewer'),
     searchLimiter,

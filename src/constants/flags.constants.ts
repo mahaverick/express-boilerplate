@@ -7,7 +7,17 @@
  * Also the closed set of traits a flag may target, and the snapshot
  * pipeline's limits.
  */
-import type { FlagApp, FlagScope } from '@/types/flags'
+import type { FlagApp, FlagScope, FlagState } from '@/types/flags'
+
+/**
+ * Every state a registered flag can be in, as the flags list filters on them.
+ */
+export const FLAG_STATES = [
+  'active',
+  'inactive',
+  'missing',
+  'unsupported',
+] as const satisfies readonly FlagState[]
 
 /**
  * A flag key: snake_case, starting with a letter.

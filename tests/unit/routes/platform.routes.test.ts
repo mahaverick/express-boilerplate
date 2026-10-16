@@ -76,6 +76,18 @@ describe('createPlatformRouter', () => {
     expect(statsLimiter).toBe(tenantsLimiter)
   })
 
+  it.each(['/flags', '/flags/unregistered', '/flags/meta'])(
+    'gates GET %s at the platform role, then the shared search limiter',
+    (path) => {
+      const router = createPlatformRouter()
+      const handlers = handlersFor(router, 'get', path)
+
+      expect(handlers).toHaveLength(3)
+      expect(handlers[0]).not.toHaveProperty('resetKey')
+      expect(handlers[1]).toBe(handlersFor(router, 'get', '/tenants')[1])
+    }
+  )
+
   it('gates the tenant purge: role, JSON, step-up, then the shared write limiter', () => {
     const handlers = handlersFor(createPlatformRouter(), 'post', '/tenants/:id/purge')
 

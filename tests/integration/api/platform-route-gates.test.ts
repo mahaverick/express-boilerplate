@@ -252,6 +252,8 @@ const ROUTES: readonly GateRow[] = [
     isStaffWriteLogExempt: true,
   },
   { method: 'get', path: '/flags', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/flags/unregistered', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/flags/meta', minRole: 'viewer', requiresStepUp: false },
   { method: 'get', path: '/flags/evaluate', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/maintenance-mode', minRole: 'viewer', requiresStepUp: false },
   { method: 'put', path: '/maintenance-mode', minRole: 'owner', requiresStepUp: true },

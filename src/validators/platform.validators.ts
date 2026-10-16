@@ -2,6 +2,7 @@
  * @file The staff request bodies and queries. List queries come from `listParamsSchema`.
  */
 import { z } from 'zod'
+import { FLAG_STATES } from '@/constants/flags.constants'
 import { STATS_RANGES } from '@/constants/platform.constants'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
 import {
@@ -58,6 +59,39 @@ export const platformTimelineQuerySchema = z.object({
   view: z.enum(TIMELINE_VIEWS).default(TIMELINE_DEFAULT_VIEW),
   before: z.string().min(1).max(MAX_TIMELINE_CURSOR_LENGTH).optional(),
 })
+
+/**
+ * `GET /platform/flags` query: the shared list params over the registry,
+ * `search` matching the key and the description.
+ */
+export const platformFlagListSchema = listParamsSchema({
+  sorts: ['key'],
+  defaultSort: 'key',
+  filters: {
+    kind: listFilter('kind', ['boolean', 'multivariate']).optional(),
+    state: listFilter('state', FLAG_STATES).optional(),
+  },
+})
+
+/**
+ * A parsed flags list query.
+ */
+export type PlatformFlagListQuery = z.output<typeof platformFlagListSchema>
+
+/**
+ * `GET /platform/flags/unregistered` query: the shared list params over the
+ * flags PostHog has that the registry lacks, `search` matching the key.
+ */
+export const platformUnregisteredFlagListSchema = listParamsSchema({
+  sorts: ['key'],
+  defaultSort: 'key',
+  filters: {},
+})
+
+/**
+ * A parsed unregistered-flags list query.
+ */
+export type PlatformUnregisteredFlagListQuery = z.output<typeof platformUnregisteredFlagListSchema>
 
 /**
  * `GET /platform/flags/evaluate` query: the user, an optional tenant the

@@ -901,7 +901,7 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   ├─ flagsFor / isEnabled / variantOf   service reads; variantOf records exposure
   ├─ GET …/flags                        the app's client flags
   ├─ POST …/flags/exposures             re-evaluate, dedupe, $feature_flag_called → outbox
-  └─ /platform/flags, /platform/flags/evaluate, system status
+  └─ /platform/flags (+ /unregistered, /meta, /evaluate), system status
 ```
 
 - **Registry.** Each entry has a key, a description, `boolean` or
@@ -936,8 +936,10 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   `POST …/exposures` takes `{ keys }`, re-evaluates each key on the server and
   records `$feature_flag_called` once per session, tenant, key and response,
   only for a matched condition or a holdout.
-- **Inspector.** `GET /platform/flags` lists every flag's live state;
-  `GET /platform/flags/evaluate` answers one user's traits and values, the one
+- **Inspector.** `GET /platform/flags` pages the registry with each flag's
+  live state, `GET /platform/flags/unregistered` pages the flags PostHog has
+  that the registry lacks, and `GET /platform/flags/meta` carries the traits
+  reference and the snapshot's age; `GET /platform/flags/evaluate` answers one user's traits and values, the one
   place traits leave the server, so each read is audited as
   `user.flags_evaluated` before anything is evaluated. Neither calls PostHog.
 - **Kill-switch latency.** An edit in PostHog reaches every process on the next
