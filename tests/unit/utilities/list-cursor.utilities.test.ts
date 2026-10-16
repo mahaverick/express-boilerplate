@@ -4,7 +4,7 @@
  * wrong key count or types), each as the one `InvalidCursorError`.
  */
 import { createHmac } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { cursorSecret } from '@/configs/env.config'
 import { CURSOR_INVALID_CODE, InvalidCursorError } from '@/errors/list-errors'
@@ -15,6 +15,17 @@ import {
   signCursor,
   verifyCursor,
 } from '@/utilities/list-cursor.utilities'
+
+const secretOverride = vi.hoisted(() => ({ value: undefined as string | undefined }))
+
+vi.mock('@/configs/env.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/env.config')>()
+  return { ...actual, cursorSecret: () => secretOverride.value ?? actual.cursorSecret() }
+})
+
+afterEach(() => {
+  secretOverride.value = undefined
+})
 
 const ID = '0199c4a2-0000-7000-8000-000000000001'
 const SCOPE = listScope({ search: undefined, sort: 'name', filters: {} })
@@ -49,6 +60,20 @@ describe('signCursor and verifyCursor', () => {
     expect(verifyCursor(cursor, { sort: 'name', scope: SCOPE, keys: KEYS })).toEqual(['acme', ID])
   })
 
+  it('verifies a body signed by the test helper, so the helper signs as signCursor does', () => {
+    const body = { v: CURSOR_VERSION, sort: 'name', keys: ['acme', ID], scope: SCOPE }
+    expect(verifyCursor(signedBody(body), EXPECTED)).toEqual(['acme', ID])
+    expect(signedBody(body)).toBe(signCursor('name', SCOPE, ['acme', ID]))
+  })
+
+  it('signs with the configured secret, so another secret refuses the cursor', () => {
+    secretOverride.value = 'f'.repeat(32)
+    const cursor = signCursor('name', SCOPE, ['acme', ID])
+    expect(verifyCursor(cursor, EXPECTED)).toEqual(['acme', ID])
+    secretOverride.value = 'g'.repeat(32)
+    expect(refusalOf(cursor)).toBeInstanceOf(InvalidCursorError)
+  })
+
   it('throws one InvalidCursorError shape with the validation body and code', () => {
     const error = refusalOf('nonsense')
     expect(error).toBeInstanceOf(InvalidCursorError)
@@ -61,11 +86,17 @@ describe('signCursor and verifyCursor', () => {
   })
 
   it.each([
-    ['oversize', 'a'.repeat(MAX_CURSOR_LENGTH + 1)],
+    ['oversize', oversizeCursor()],
     ['empty', ''],
     ['no signature', Buffer.from('{}').toString('base64url')],
     ['an extra segment', `${signCursor('name', SCOPE, ['acme', ID])}.x`],
     ['a flipped signature character', flipSignature(signCursor('name', SCOPE, ['acme', ID]))],
+    ['a padded signature', `${signCursor('name', SCOPE, ['acme', ID])}=`],
+    ['a garbage-suffixed signature', `${signCursor('name', SCOPE, ['acme', ID])}*`],
+    [
+      'a signature with a stray character',
+      insertIntoSignature(signCursor('name', SCOPE, ['acme', ID])),
+    ],
     ['a body that is not JSON', signedBodyRaw('not json')],
     [
       'another version',
@@ -138,6 +169,24 @@ describe('listScope', () => {
     expect(listScope({ ...base, filters: { status: ['inactive'] } })).not.toBe(scope)
   })
 })
+
+/**
+ * A correctly signed cursor longer than the cap, with keys the schema accepts,
+ * so only the length check can refuse it.
+ */
+function oversizeCursor(): string {
+  const cursor = signCursor('name', SCOPE, ['x'.repeat(3100), ID])
+  expect(cursor.length).toBeGreaterThan(MAX_CURSOR_LENGTH)
+  return cursor
+}
+
+/**
+ * A cursor with a character the base64url alphabet lacks inserted mid-signature.
+ */
+function insertIntoSignature(cursor: string): string {
+  const dot = cursor.lastIndexOf('.')
+  return `${cursor.slice(0, dot + 10)}!${cursor.slice(dot + 10)}`
+}
 
 /**
  * A cursor with the first character of its signature changed. The first

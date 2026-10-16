@@ -26,6 +26,11 @@ export const CURSOR_VERSION = 1
 export const MAX_CURSOR_LENGTH = 4096
 
 /**
+ * The only characters a signature segment may hold: unpadded base64url.
+ */
+const SIGNATURE_PATTERN = /^[\w-]+$/
+
+/**
  * One value in a cursor's `keys`: a sort value, or the row id.
  */
 export type CursorKey = string | number
@@ -47,10 +52,13 @@ export interface ListScopeInput {
 const NO_SEARCH = null
 
 /**
- * The decoded payload's shape, before its keys are checked against the sort.
+ * One key in a cursor: a string or a number.
  */
 const cursorKeySchema = z.union([z.string(), z.number()])
 
+/**
+ * The decoded payload's shape, before its keys are checked against the sort.
+ */
 const payloadSchema = z.strictObject({
   v: z.number(),
   sort: z.string(),
@@ -143,7 +151,13 @@ export function verifyCursor(
   }
   const given = Buffer.from(signature, 'base64url')
   const wanted = signatureOf(body)
-  if (given.length !== wanted.length || !timingSafeEqual(given, wanted)) {
+  // Node's decoder skips stray characters and trailing bits, so only the one canonical spelling passes.
+  if (
+    !SIGNATURE_PATTERN.test(signature) ||
+    given.toString('base64url') !== signature ||
+    given.length !== wanted.length ||
+    !timingSafeEqual(given, wanted)
+  ) {
     throw new InvalidCursorError()
   }
   let decoded: unknown
