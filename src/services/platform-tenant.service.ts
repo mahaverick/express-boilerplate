@@ -3,13 +3,12 @@
  * already checked the platform role; each write re-checks it under lock. The
  * per-user "your tenants" list stays in tenant.service.ts.
  */
-import { statesFor } from '@/constants/platform.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import {
   PlatformTenantRepository,
-  type PlatformTenantCursor,
   type PlatformTenantDetailRow,
   type PlatformTenantRow,
 } from '@/repositories/platform-tenant.repository'
@@ -27,11 +26,11 @@ import {
 } from '@/services/tenant-invitation.service'
 import type { Actor } from '@/types/actor'
 import type { EmailDelivery } from '@/types/email-delivery'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
   CreatePlatformTenantInput,
-  PlatformTenantSearchQuery,
+  PlatformTenantListQuery,
 } from '@/validators/platform.validators'
 
 const platformTenantRepository = new PlatformTenantRepository()
@@ -40,49 +39,20 @@ const userMembershipRepository = new UserMembershipRepository()
 const invitationRepository = new TenantInvitationRepository()
 
 /**
- * A page of search results and the opaque cursors either side of it.
- */
-export interface PlatformTenantSearchPage {
-  tenants: PlatformTenantRow[]
-  nextCursor: string | null
-  prevCursor: string | null
-}
-
-/**
  * One customer tenant, in any state, for the staff detail page.
  */
 export type PlatformTenantDetail = PlatformTenantDetailRow
 
 /**
- * An encoded cursor, or JSON null when there is none.
- * @param cursor - The keys, when rows lie that way.
- * @returns The opaque cursor, or null.
+ * One page of the staff tenant list.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-function encoded(cursor: PlatformTenantCursor | undefined): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null at either end
-  return cursor ? encodeCursor({ sortName: cursor.sortName, id: cursor.id }) : null
-}
-
-/**
- * Search every customer tenant by name or slug and lifecycle state, one keyset page at a time.
- * @param query - The validated query, with its cursor decoded.
- * @returns The page, and `nextCursor`/`prevCursor` (null at that end).
- */
-export async function searchAll(
-  query: PlatformTenantSearchQuery
-): Promise<PlatformTenantSearchPage> {
-  const page = await platformTenantRepository.searchAll({
-    q: query.q,
-    cursor: query.cursor,
-    limit: query.limit,
-    direction: query.direction,
-    states: statesFor(query.state),
-  })
-  return {
-    tenants: page.tenants,
-    nextCursor: encoded(page.nextCursor),
-    prevCursor: encoded(page.prevCursor),
-  }
+export async function listTenants(
+  query: PlatformTenantListQuery
+): Promise<ListPage<PlatformTenantRow>> {
+  return platformTenantRepository.list(query.params, query.filters)
 }
 
 /**

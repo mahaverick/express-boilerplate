@@ -23,6 +23,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { platformTenantListSchema } from '@/validators/platform.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
@@ -313,7 +314,11 @@ describe('platform access over the API', () => {
       })
       const platform = await platformTenant()
 
-      const result = await new PlatformTenantRepository().searchAll({ q: 'platform', limit: 50 })
+      const { params, filters } = platformTenantListSchema.parse({
+        search: 'platform',
+        limit: '50',
+      })
+      const result = await new PlatformTenantRepository().list(params, filters)
       const serialised = JSON.stringify(result)
 
       // The search works (the look-alike is found) and skips the platform tenant.

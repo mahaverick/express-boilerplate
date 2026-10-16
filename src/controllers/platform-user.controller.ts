@@ -10,9 +10,9 @@ import {
   deactivateUser,
   deleteUser,
   getUserDetail,
+  listUsers,
   reactivateUser,
   resendUserVerification,
-  searchUsers,
   sendPasswordSetup,
   signOutUser,
   updateUser,
@@ -22,7 +22,7 @@ import { parseBody } from '@/validators/parse.validators'
 import {
   newPlatformUserSchema,
   parseIdParameter,
-  platformUserSearchSchema,
+  platformUserListSchema,
   reasonBodySchema,
   updatePlatformUserSchema,
 } from '@/validators/platform.validators'
@@ -37,11 +37,11 @@ const USER_NOT_FOUND = 'User not found'
  */
 class PlatformUserController extends BaseController {
   /**
-   * `GET /platform/users`: search users (soft-deleted ones only under `status=deleted`).
+   * `GET /platform/users`: list users (soft-deleted ones only under `status=deleted`).
    */
   searchUsers = this.handle(async (request, response) => {
-    const query = parseBody(platformUserSearchSchema, request.query)
-    successResponse(response, await searchUsers(query), 'Users retrieved.')
+    const query = parseBody(platformUserListSchema, request.query)
+    successResponse(response, await listUsers(query), 'Users retrieved.')
   })
 
   /**

@@ -5,7 +5,8 @@ import {
   MAX_REASON_LENGTH,
   pageLimitField,
   parseIdParameter,
-  platformTenantSearchSchema,
+  platformTenantListSchema,
+  platformUserListSchema,
   reasonBodySchema,
   reasonSchema,
   searchQueryField,
@@ -109,13 +110,31 @@ describe('searchQueryField and pageLimitField', () => {
     expect(pageLimitField.safeParse('51').success).toBe(false)
     expect(pageLimitField.safeParse('0').success).toBe(false)
   })
+})
 
-  it('parses the tenant search query with the default direction and limit', () => {
-    expect(platformTenantSearchSchema.parse({ q: ' acme ' })).toEqual({
-      q: 'acme',
-      direction: 'next',
-      limit: 20,
+describe('platformTenantListSchema', () => {
+  it('defaults state to active and suspended and the sort to name', () => {
+    expect(platformTenantListSchema.parse({})).toMatchObject({
+      params: { sort: 'name' },
+      filters: { state: ['active', 'suspended'] },
     })
-    expect(platformTenantSearchSchema.safeParse({ q: '  ' }).success).toBe(false)
+  })
+
+  it('refuses a state that is not a lifecycle state', () => {
+    expect(platformTenantListSchema.safeParse({ state: 'all' }).success).toBe(false)
+  })
+})
+
+describe('platformUserListSchema', () => {
+  it('defaults status to live accounts and the sort to email', () => {
+    expect(platformUserListSchema.parse({})).toMatchObject({
+      params: { sort: 'email' },
+      filters: { status: ['active', 'inactive'] },
+    })
+  })
+
+  it('takes -lastSignIn and refuses lastSignIn ascending', () => {
+    expect(platformUserListSchema.parse({ sort: '-lastSignIn' }).params.sort).toBe('-lastSignIn')
+    expect(platformUserListSchema.safeParse({ sort: 'lastSignIn' }).success).toBe(false)
   })
 })

@@ -10,9 +10,9 @@ import {
   archiveTenant,
   createTenant,
   getTenantDetail,
+  listTenants,
   reactivateTenant,
   reissueOwnerInvitation,
-  searchAll,
   suspendTenant,
 } from '@/services/platform-tenant.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
@@ -22,7 +22,7 @@ import {
   parseIdParameter,
   platformNewTenantSchema,
   platformStatsQuerySchema,
-  platformTenantSearchSchema,
+  platformTenantListSchema,
   reasonBodySchema,
 } from '@/validators/platform.validators'
 
@@ -31,12 +31,11 @@ import {
  */
 class PlatformController extends BaseController {
   /**
-   * `GET /platform/tenants`: search every customer tenant by name or slug.
+   * `GET /platform/tenants`: list every customer tenant, searchable by name or slug.
    */
   searchTenants = this.handle(async (request, response) => {
-    const query = parseBody(platformTenantSearchSchema, request.query)
-    const page = await searchAll(query)
-    successResponse(response, page, 'Tenants retrieved.')
+    const query = parseBody(platformTenantListSchema, request.query)
+    successResponse(response, await listTenants(query), 'Tenants retrieved.')
   })
 
   /**

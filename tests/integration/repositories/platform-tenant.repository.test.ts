@@ -1,5 +1,5 @@
 /**
- * @file The staff search reads every tenant in this worker's database,
+ * @file The staff list reads every tenant in this worker's database,
  * including other files' leftovers, so each test names its tenants with a
  * marker unique to the test and searches by it.
  */
@@ -7,13 +7,13 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   PlatformTenantRepository,
-  type PlatformTenantCursor,
   type PlatformTenantRow,
 } from '@/repositories/platform-tenant.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { platformTenantListSchema } from '@/validators/platform.validators'
 
 const platformTenantRepository = new PlatformTenantRepository()
 const tenantRepository = new TenantRepository()
@@ -61,34 +61,46 @@ async function createTenant(name: string, slug: string): Promise<string> {
 }
 
 /**
- * Reads every page of a search for `q`, `limit` rows at a time, and returns the rows in page
+ * One page of the staff tenant list for these query params, parsed as the route parses them.
+ */
+async function listTenants(query: Record<string, string>) {
+  const { params, filters } = platformTenantListSchema.parse(query)
+  return platformTenantRepository.list(params, filters)
+}
+
+/**
+ * Reads every page of a search for `search`, `limit` rows at a time, and returns the rows in page
  * order. It stops after 20 pages, so a cursor that never ends fails an assertion instead of
  * hanging the test.
  */
-async function searchEveryPage(q: string, limit: number): Promise<PlatformTenantRow[]> {
+async function listEveryPage(search: string, limit: number): Promise<PlatformTenantRow[]> {
   const rows: PlatformTenantRow[] = []
-  let cursor: PlatformTenantCursor | undefined
+  let cursor: string | null | undefined
   let pages = 0
   do {
-    const page = await platformTenantRepository.searchAll({ q, limit, cursor })
-    rows.push(...page.tenants)
-    cursor = page.nextCursor
+    const page = await listTenants({
+      search,
+      limit: String(limit),
+      ...(typeof cursor === 'string' && { cursor }),
+    })
+    rows.push(...page.items)
+    cursor = page.page.nextCursor
     pages += 1
-  } while (cursor !== undefined && pages < 20)
+  } while (typeof cursor === 'string' && pages < 20)
   return rows
 }
 
-describe('PlatformTenantRepository.searchAll', () => {
+describe('PlatformTenantRepository.list', () => {
   it('never returns the platform tenant or a soft-deleted tenant', async () => {
     const tag = marker()
     await createTenant(`${tag} live`, `${tag}-live`)
     const deletedId = await createTenant(`${tag} gone`, `${tag}-gone`)
     await tenantRepository.softDelete(deletedId)
 
-    const byTag = await platformTenantRepository.searchAll({ q: tag, limit: 50 })
-    const byPlatform = await searchEveryPage('platform', 50)
+    const byTag = await listTenants({ search: tag, limit: '50' })
+    const byPlatform = await listEveryPage('platform', 50)
 
-    expect(byTag.tenants.map((tenant) => tenant.name)).toEqual([`${tag} live`])
+    expect(byTag.items.map((tenant) => tenant.name)).toEqual([`${tag} live`])
     expect(byPlatform.map((tenant) => tenant.slug)).not.toContain('platform')
   })
 
@@ -97,9 +109,9 @@ describe('PlatformTenantRepository.searchAll', () => {
     await createTenant(`Acme ${tag.toUpperCase()} Corp`, `${tag}-a`)
     await createTenant('Unrelated Name', `x-${tag}-slug`)
 
-    const result = await platformTenantRepository.searchAll({ q: tag.toUpperCase(), limit: 50 })
+    const result = await listTenants({ search: tag.toUpperCase(), limit: '50' })
 
-    const slugs = result.tenants.map((tenant) => tenant.slug)
+    const slugs = result.items.map((tenant) => tenant.slug)
     expect(slugs).toHaveLength(2)
     expect(slugs).toEqual(expect.arrayContaining([`${tag}-a`, `x-${tag}-slug`]))
   })
@@ -108,14 +120,14 @@ describe('PlatformTenantRepository.searchAll', () => {
     ['%', '100% off', '100x off'],
     ['_', 'a_b', 'axb'],
     ['\\', String.raw`back\slash`, 'backslash'],
-  ])('treats %s in q as a literal character', async (_character, literal, lookalike) => {
+  ])('treats %s in search as a literal character', async (_character, literal, lookalike) => {
     const tag = marker()
     await createTenant(`${tag} ${literal}`, `${tag}-literal`)
     await createTenant(`${tag} ${lookalike}`, `${tag}-lookalike`)
 
-    const result = await platformTenantRepository.searchAll({ q: `${tag} ${literal}`, limit: 50 })
+    const result = await listTenants({ search: `${tag} ${literal}`, limit: '50' })
 
-    expect(result.tenants.map((tenant) => tenant.slug)).toEqual([`${tag}-literal`])
+    expect(result.items.map((tenant) => tenant.slug)).toEqual([`${tag}-literal`])
   })
 
   it('orders by lower(name) then id, and pages without duplicates when names tie', async () => {
@@ -129,33 +141,33 @@ describe('PlatformTenantRepository.searchAll', () => {
       await createTenant(name, `${tag}-${index}`)
     }
 
-    const everything = await platformTenantRepository.searchAll({ q: tag, limit: 50 })
-    const paged = await searchEveryPage(tag, 1)
+    const everything = await listTenants({ search: tag, limit: '50' })
+    const paged = await listEveryPage(tag, 1)
 
-    expect(everything.tenants).toHaveLength(4)
-    expect(everything.nextCursor).toBeUndefined()
-    expect(everything.tenants[0]?.name).toBe(`${tag} alpha`)
-    expect(paged.map((tenant) => tenant.id)).toEqual(everything.tenants.map((tenant) => tenant.id))
-    const tiedIds = everything.tenants.slice(1).map((tenant) => tenant.id)
+    expect(everything.items).toHaveLength(4)
+    expect(everything.page.hasNext).toBe(false)
+    expect(everything.items[0]?.name).toBe(`${tag} alpha`)
+    expect(paged.map((tenant) => tenant.id)).toEqual(everything.items.map((tenant) => tenant.id))
+    const tiedIds = everything.items.slice(1).map((tenant) => tenant.id)
     expect(tiedIds).toEqual(await sortedByDatabase(tiedIds))
   })
 
-  it('stops at limit and hands back a cursor only when more rows remain', async () => {
+  it('stops at limit and reports more rows only while some remain', async () => {
     const tag = marker()
     for (let index = 0; index < 3; index += 1)
       await createTenant(`${tag} ${index}`, `${tag}-${index}`)
 
-    const first = await platformTenantRepository.searchAll({ q: tag, limit: 2 })
-    const last = await platformTenantRepository.searchAll({
-      q: tag,
-      limit: 2,
-      cursor: first.nextCursor,
+    const first = await listTenants({ search: tag, limit: '2' })
+    const last = await listTenants({
+      search: tag,
+      limit: '2',
+      cursor: String(first.page.nextCursor),
     })
 
-    expect(first.tenants).toHaveLength(2)
-    expect(first.nextCursor).toEqual({ sortName: `${tag} 1`, id: first.tenants[1]?.id })
-    expect(last.tenants).toHaveLength(1)
-    expect(last.nextCursor).toBeUndefined()
+    expect(first.items).toHaveLength(2)
+    expect(first.page.hasNext).toBe(true)
+    expect(last.items).toHaveLength(1)
+    expect(last.page.hasNext).toBe(false)
   })
 
   it('returns the row shape with a live-member count', async () => {
@@ -167,9 +179,9 @@ describe('PlatformTenantRepository.searchAll', () => {
     await userMembershipRepository.create({ userId: deletedMember, tenantId, role: 'viewer' })
     await userRepository.softDelete(deletedMember)
 
-    const { tenants } = await platformTenantRepository.searchAll({ q: tag, limit: 50 })
+    const { items } = await listTenants({ search: tag, limit: '50' })
 
-    expect(tenants).toEqual([
+    expect(items).toEqual([
       {
         id: tenantId,
         name: `${tag} Counted`,
@@ -179,19 +191,6 @@ describe('PlatformTenantRepository.searchAll', () => {
         createdAt: expect.any(Date) as Date,
       },
     ])
-  })
-
-  it('lists every customer tenant when q is omitted', async () => {
-    const tag = marker()
-    const tenantId = await createTenant(`${tag} anywhere`, `${tag}-anywhere`)
-
-    // Resume just before this test's names, so the first row is its own tenant.
-    const page = await platformTenantRepository.searchAll({
-      limit: 1,
-      cursor: { sortName: tag, id: '' },
-    })
-
-    expect(page.tenants.map((tenant) => tenant.id)).toEqual([tenantId])
   })
 })
 

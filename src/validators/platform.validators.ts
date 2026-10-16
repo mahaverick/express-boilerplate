@@ -1,9 +1,9 @@
 /**
- * @file The staff request bodies and queries. Search `q` is trimmed first, so
- * whitespace alone is a 400 rather than a match-everything search.
+ * @file The staff request bodies and queries. List queries come from `listParamsSchema`.
  */
 import { z } from 'zod'
-import { PAGE_DIRECTIONS, STATS_RANGES, TENANT_STATE_FILTERS } from '@/constants/platform.constants'
+import { PAGE_DIRECTIONS, STATS_RANGES } from '@/constants/platform.constants'
+import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
 import {
   TIMELINE_DEFAULT_RANGE,
   TIMELINE_DEFAULT_VIEW,
@@ -12,7 +12,7 @@ import {
 } from '@/constants/timeline.constants'
 import { HttpError } from '@/errors/http-error'
 import { emailSchema } from '@/validators/auth.validators'
-import { cursorField } from '@/validators/cursor.validators'
+import { booleanFilter, listFilter, listParamsSchema } from '@/validators/list.validators'
 import { updateProfileSchema } from '@/validators/profile.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 import { newTenantSchema } from '@/validators/tenant.validators'
@@ -27,13 +27,6 @@ const MAX_SEARCH_QUERY_LENGTH = 100
 function hasNoNul(value: string): boolean {
   return !value.includes('\0')
 }
-
-/**
- * The search cursor's decoded shape: the last row's `lower(name)` and id.
- */
-const platformTenantCursorSchema = z
-  .object({ sortName: z.string().refine(hasNoNul), id: z.uuid() })
-  .strict()
 
 /**
  * The trimmed `q` of the staff tenant, user, email and suppression searches.
@@ -62,31 +55,21 @@ export const pageLimitField = z.coerce
 export const directionField = z.enum(PAGE_DIRECTIONS).default('next')
 
 /**
- * `GET /api/v1/platform/tenants` query string. `direction=prev` pages back
- * from `cursor`, so it needs one.
+ * `GET /api/v1/platform/tenants` query: the shared list params; `state` is
+ * a comma list of lifecycle states, active and suspended unless given.
  */
-export const platformTenantSearchSchema = z
-  .object({
-    q: searchQueryField.optional(),
-    state: z.enum(TENANT_STATE_FILTERS).optional(),
-    cursor: cursorField(platformTenantCursorSchema).optional(),
-    direction: directionField,
-    limit: pageLimitField,
-  })
-  .superRefine((query, context) => {
-    if (query.direction === 'prev' && query.cursor === undefined) {
-      context.addIssue({
-        code: 'custom',
-        path: ['cursor'],
-        message: 'cursor is required when direction is prev.',
-      })
-    }
-  })
+export const platformTenantListSchema = listParamsSchema({
+  sorts: ['name', 'created', '-created'],
+  defaultSort: 'name',
+  filters: {
+    state: listFilter('state', TENANT_LIFECYCLE_STATES).default(['active', 'suspended']),
+  },
+})
 
 /**
- * The validated search query, with the cursor already decoded.
+ * A parsed staff tenant list query.
  */
-export type PlatformTenantSearchQuery = z.infer<typeof platformTenantSearchSchema>
+export type PlatformTenantListQuery = z.output<typeof platformTenantListSchema>
 
 /**
  * `GET /platform/stats` query: the window, 7 days unless asked otherwise.
@@ -156,45 +139,28 @@ export const reasonSchema = z.preprocess(
 export const reasonBodySchema = z.strictObject({ reason: reasonSchema })
 
 /**
- * A query-string boolean: exactly `true` or `false`.
+ * The user statuses a list may ask for: live accounts by `users.active`, or soft-deleted ones.
  */
-const booleanQueryField = z.enum(['true', 'false']).transform((value) => value === 'true')
+const PLATFORM_USER_STATUSES = ['active', 'inactive', 'deleted'] as const
 
 /**
- * The user search cursor's decoded shape: the last row's `lower(email)` and id.
+ * `GET /api/v1/platform/users` query: the shared list params; `status` is a
+ * comma list, live accounts (active and inactive) unless given.
  */
-const platformUserCursorSchema = z
-  .object({ sortEmail: z.string().refine(hasNoNul), id: z.uuid() })
-  .strict()
+export const platformUserListSchema = listParamsSchema({
+  sorts: ['email', 'created', '-created', '-lastSignIn'],
+  defaultSort: 'email',
+  filters: {
+    status: listFilter('status', PLATFORM_USER_STATUSES).default(['active', 'inactive']),
+    verified: booleanFilter.optional(),
+    staff: booleanFilter.optional(),
+  },
+})
 
 /**
- * `GET /api/v1/platform/users` query string. `direction=prev` needs a cursor:
- * there is no "last page" to start from.
+ * A parsed staff user list query.
  */
-export const platformUserSearchSchema = z
-  .object({
-    q: searchQueryField.optional(),
-    status: z.enum(['active', 'inactive', 'deleted']).optional(),
-    verified: booleanQueryField.optional(),
-    staff: booleanQueryField.optional(),
-    cursor: cursorField(platformUserCursorSchema).optional(),
-    direction: directionField,
-    limit: pageLimitField,
-  })
-  .superRefine((query, context) => {
-    if (query.direction === 'prev' && query.cursor === undefined) {
-      context.addIssue({
-        code: 'custom',
-        path: ['cursor'],
-        message: 'cursor is required when direction is prev.',
-      })
-    }
-  })
-
-/**
- * The validated user search query, with the cursor already decoded.
- */
-export type PlatformUserSearchQuery = z.infer<typeof platformUserSearchSchema>
+export type PlatformUserListQuery = z.output<typeof platformUserListSchema>
 
 const idParameterSchema = z.uuid()
 

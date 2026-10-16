@@ -10,6 +10,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import {
@@ -20,7 +21,6 @@ import {
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import {
   PlatformUserRepository,
-  type PlatformUserCursor,
   type PlatformUserMembership,
   type PlatformUserPendingInvitation,
   type PlatformUserRecord,
@@ -46,12 +46,12 @@ import { ACCOUNT_SETUP_TEMPLATE_KEY } from '@/templates/email/account-setup.temp
 import type { Actor } from '@/types/actor'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
   CreatePlatformUserInput,
-  PlatformUserSearchQuery,
+  PlatformUserListQuery,
   UpdatePlatformUserInput,
 } from '@/validators/platform.validators'
 
@@ -71,15 +71,6 @@ const userTokenRepository = new UserTokenRepository()
 export type PlatformUserRow = PlatformUserRecord
 
 /**
- * A page of users and the opaque cursors either side of it (null at each end).
- */
-export interface PlatformUserPage {
-  users: PlatformUserRow[]
-  nextCursor: string | null
-  prevCursor: string | null
-}
-
-/**
  * One user with everything the staff detail page shows.
  */
 export interface PlatformUserDetail extends PlatformUserRow {
@@ -90,36 +81,13 @@ export interface PlatformUserDetail extends PlatformUserRow {
 }
 
 /**
- * Encode a cursor for the wire.
- * @param cursor - The decoded cursor, if any.
- * @returns The opaque string, or null at that end of the list.
+ * One page of the staff user list: live users, or soft-deleted ones under `status=deleted`.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-function encodeUserCursor(cursor: PlatformUserCursor | undefined): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null at each end of the list
-  return cursor ? encodeCursor({ sortEmail: cursor.sortEmail, id: cursor.id }) : null
-}
-
-/**
- * Search users, one keyset page at a time, in either direction: live users,
- * or only soft-deleted ones under `status=deleted`.
- * @param query - The validated query, with its cursor decoded.
- * @returns The page and both cursors.
- */
-export async function searchUsers(query: PlatformUserSearchQuery): Promise<PlatformUserPage> {
-  const page = await platformUserRepository.search({
-    limit: query.limit,
-    direction: query.direction,
-    q: query.q,
-    status: query.status,
-    verified: query.verified,
-    staff: query.staff,
-    cursor: query.cursor,
-  })
-  return {
-    users: page.users,
-    nextCursor: encodeUserCursor(page.nextCursor),
-    prevCursor: encodeUserCursor(page.prevCursor),
-  }
+export async function listUsers(query: PlatformUserListQuery): Promise<ListPage<PlatformUserRow>> {
+  return platformUserRepository.list(query.params, query.filters)
 }
 
 /**
