@@ -504,6 +504,127 @@ handler by arity. It decides:
   to error tracking only when the capture rule admits it
   ([Error tracking](#error-tracking)).
 
+### List endpoints
+
+Every endpoint that returns a table's rows answers one shape, built by one
+helper, `listPage` (`src/utilities/list-page.utilities.ts`), from one
+request schema, `listParamsSchema` (`src/validators/list.validators.ts`).
+
+**The request.** `search` (1–100 characters, trimmed, no NUL; a literal,
+case-insensitive substring of the list's search columns), `sort` (one
+whitelisted key, `-` first for descending), `cursor` (opaque, from a previous
+page), `direction` (`next`, the default, or `prev`, which needs a cursor),
+`limit` (1–100, default 20) and `total=1`, plus the list's own filters. An
+enum filter takes a comma list (`status=active,inactive`); a filter's default
+is applied by the server, so a URL can omit it.
+
+**The response.** The envelope's `data` is
+`{ items, page: { nextCursor, prevCursor, hasNext, hasPrev, limit }, total? }`.
+`total` appears only for `total=1`: `{ count, capped }`, counted exactly up to
+1,000 rows and reported as `{ count: 1000, capped: true }` past them (a client
+shows "1,000+"; the query is `select count(*) from (<the list> limit 1001)`).
+
+| Endpoint                           | `search`                                           | Filters                                                      | Sorts (default first)                         |
+| ---------------------------------- | -------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------- |
+| `GET /platform/tenants`            | name, slug                                         | `state` (list; active, suspended)                            | `name`, `created`, `-created`                 |
+| `GET /platform/users`              | email, first and last name                         | `status` (list; active, inactive), `verified`, `staff`       | `email`, `created`, `-created`, `-lastSignIn` |
+| `GET /platform/emails`             | recipient                                          | `status`, `template` (lists), `user`, `tenant`, `from`, `to` | `-created`, `created`                         |
+| `GET /platform/email-suppressions` | address                                            | `state` (list; active)                                       | `-created`, `created`, `address`              |
+| `GET /platform/onboarding/tenants` | tenant name                                        | `state` (one; stuck)                                         | `progress` for stuck, else `-started`; `name` |
+| `GET /platform/audit-log`          | action, actor email, target email or name          | `tenant`, `actor`, `target`, `action`, `access` (lists)      | `-occurred`, `occurred`                       |
+| `GET /tenants/:slug/audit-log`     | action, actor email, the entry's own tenant's name | `action`, `access` (lists), `actor`                          | `-occurred`, `occurred`                       |
+| `GET /tenants/:slug/members`       | email, full name                                   | `role` (list)                                                | `name`, `email`, `role`, `-joined`            |
+| `GET /tenants/:slug/invitations`   | email                                              | `role` (list)                                                | `-created`, `email`                           |
+| `GET /tenants`                     | name                                               | `role` (list)                                                | `name`, `-joined`                             |
+| `GET /notifications`               | title, body                                        | `unread`                                                     | `-created`                                    |
+| `GET /platform/flags`              | key, description                                   | `kind`, `state` (lists)                                      | `key` (in memory)                             |
+| `GET /platform/flags/unregistered` | key                                                | none                                                         | `key` (in memory)                             |
+
+`GET /platform/flags/meta` is not a list: it carries the traits reference and
+the snapshot's age. The mark-read routes and the bell's `limit=5` read are
+unchanged.
+
+**The seek.** A sort is a list of columns; the helper appends the row id, in
+the first column's direction, as the tiebreaker. A page reads `limit + 1` rows
+after the cursor's keys: one row comparison `(a, id) > ($1, $2)` when every
+column runs one way, the OR-expansion `(a > $1) or (a = $1 and b < $2) or …`
+when they mix. `prev` reverses every comparison and the order, then flips the
+page back. Every sort column is NOT NULL, or coalesced the same way in the
+query and its index (`-lastSignIn` reads `coalesce(last_logged_in_at,
+'-infinity')` through `lastSignInSort`, so never-signed-in users come last).
+A cursor whose row is gone is not a gap: when the rows after a cursor are gone
+(deleted, or `prev` from the first row), the read answers the list's edge page
+on that side, so a page never skips a row and a client can always step back.
+My-tenants ties break on `tenant_id`, so memberships created in the same
+instant page in a stable order.
+
+**The sort-and-index rule.** Each whitelisted sort has an index of exactly
+its shape, filter prefix first: `(tenant_id, created_at, id)` for a tenant's
+invitations newest first. `tests/integration/database/list-indexes.test.ts`
+EXPLAINs the helper's own query for every sort and fails when the node under
+its `Limit` is a Sort. Three are bounded instead and say so there: member
+`name` and `email` and my-tenants `name` order a joined row, so they sort one
+tenant's members or one user's memberships, found through an index led by
+that tenant or user; onboarding orders the progress query's computed
+timestamps, so it sorts the tracked tenants, read through an index. Search runs
+on GIN trigram indexes (`pg_trgm`) of the same lowered expressions. Migration
+`0026_list_indexes.sql` builds them; its locking and the manual live-database
+path are in [DATABASE.md](DATABASE.md).
+
+**Cursors.** A cursor is base64url JSON `{ v, sort, keys, scope }`, a dot,
+and an HMAC-SHA256 under `CURSOR_SECRET` (`src/utilities/list-cursor.utilities.ts`).
+`scope` hashes the effective search, filters (defaults applied, comma lists
+sorted) and sort, so a cursor resumes only the view it came from. A list whose
+rows depend on more than the query string sets `bound` on its definition
+(`ListDefinition.bound`, `InMemoryListDefinition.bound`), and `bindScope`
+folds those values into the scope: a tenant's members, invitations and audit
+log bind the tenant, my tenants and notifications bind the user, and the two
+flag lists bind their list. A cursor from another tenant, user or list is
+therefore refused as `CURSOR_INVALID`, never read as a seek. Anything else is
+the one `400` `InvalidCursorError` (`code: 'CURSOR_INVALID'`,
+`errors.cursor: ['cursor is invalid.']`): empty, over 4,096 characters, a bad
+signature, another version, sort or scope, or keys of the wrong count or type.
+A client drops the cursor and reloads the first page.
+[SECURITY.md](SECURITY.md#input-and-output) has the threat.
+
+**Audit lists.** The read kind is required: `scope: 'tenant' | 'platform'`
+selects the joins and the search columns. A tenant read confines search to the
+tenant: it matches no user-target email, and the only target it joins is the
+entry's own tenant. Actions in `RETIRED_AUDIT_ACTIONS`
+(`src/constants/audit.constants.ts`) are no longer written but their stored
+rows stay, so they are listed and accepted by the `action` filter
+(`STORED_AUDIT_ACTION_NAMES`); `AUDIT_ACTIONS` is what a build may write.
+
+**Flags.** `listPageInMemory` gives the same contract over an array already
+searched and filtered: the flags registry and the flags PostHog has that it
+lacks. Both lists are split from `GET /platform/flags/meta`. A flag key longer
+than `LISTED_FLAG_KEY_MAX` (400) cannot round-trip through a cursor, so
+`listableUnregisteredFlags` leaves it out of the lists and logs one warning
+per snapshot; the system-status count uses the same function, so it agrees
+with the list. The key still evaluates.
+
+**Notifications.** `GET /notifications` is the shared list. The SSE
+`Last-Event-ID` replay is not a page: it reads the newest `SSE_REPLAY_LIMIT`
+notifications through `listRecent` (see [Realtime (SSE)](#realtime-sse)).
+
+**Adding a list.**
+
+1. In the repository, export a `defineList({ base, id, sorts, toItem })`
+   (plus `bound` when the rows depend on a path tenant or the caller):
+   `base(executor, seek)` selects the item's columns plus one text or number
+   column per sort column (`timestampKey(…)` for a timestamp), ANDs every
+   filter, `searchCondition(search, [lowered expressions])` and `seek` into
+   one `where`, and ends in `.$dynamic()`; `toItem` drops the sort columns. A
+   method calls `listPage(executor, definition, params)`.
+2. In the validator, `listParamsSchema({ sorts, defaultSort, filters })`, with
+   `listFilter(name, values)` for an enum filter and its default in the field.
+3. The service maps items if it must; the controller sends the page as `data`.
+4. Add each sort's index to the model, generate the migration, and add one
+   `EXPLAIN` row per sort to `list-indexes.test.ts`.
+5. Add a `describeListContract` block to
+   `tests/integration/api/list-contract.test.ts`
+   (`tests/helpers/list-contract.ts` lists what it proves).
+
 ### Request correlation
 
 `requestId` (`src/middlewares/request-id.middleware.ts`) honours a

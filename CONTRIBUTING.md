@@ -298,6 +298,12 @@ in Apex. The rules behind them are in
   a transition in `src/services/platform-tenant.service.ts` and an audit action,
   and decide whether `resolveTenant` and invitations treat it like
   `suspended`.
+- **A list staff or users page through.** One `defineList` in the repository
+  (`bound` when the rows depend on a path tenant or the caller), one
+  `listParamsSchema` in the validator, an index per sort in the model and the
+  migration, an `EXPLAIN` row in `list-indexes.test.ts` and a
+  `describeListContract` block. The steps are under
+  [List endpoints](ARCHITECTURE.md#list-endpoints).
 - **A staff action.** A POST under `/platform/users/:id/<verb>` or
   `/platform/tenants/:id/<verb>` with `requirePlatformRole(<least role>)`,
   `requireJsonContentType`, `requireRecentAuth()` when it is destructive, then

@@ -150,10 +150,24 @@ points at the code or doc that holds the detail. How things work is in
 - **Bind a timestamp in raw `sql` as `${date.toISOString()}::timestamptz`.**
   A `Date` inside a `sql` template reaches postgres-js unserialised and the
   query fails; `lt(column, date)` is fine.
+- **Every table's list goes through `listPage`, and every whitelisted sort has
+  an index of its exact shape** (`src/utilities/list-page.utilities.ts`): a
+  sort the index does not cover becomes a Sort over the whole filtered table.
+  Add its `EXPLAIN` row to `tests/integration/database/list-indexes.test.ts`
+  and its `describeListContract` block, as
+  [ARCHITECTURE.md](ARCHITECTURE.md#list-endpoints) describes.
 - **A list sort's timestamp key is validated by `sortAtField`**
   (`src/validators/cursor.validators.ts`), which `timestampSort` binds; never
   a bare regex or `z.iso.datetime()`: they let month 13 or year 0000 through,
-  and the `::timestamptz` cast then fails as a 500.
+  and the `::timestamptz` cast then fails as a 500. Select it as `timestampKey`:
+  the cursor carries the microsecond UTC text, and a `Date` drops the
+  microseconds, so a page boundary repeats or skips rows.
+- **Never hand back an unsigned cursor or accept one.** Cursors come only from
+  `signCursor` and are read only through `verifyCursor`, bound to the
+  request's `listScope`; a list whose rows depend on a path tenant or the
+  caller sets `bound` so `bindScope` ties the cursor to it. A list that
+  skipped either would let a client edit its seek values or replay a cursor
+  across tenants.
 - **Free-text fields use `safeText`:** single-line by default,
   `{ multiline: true }` for prose.
 - **Every Redis key and channel goes through `redisKey()`**

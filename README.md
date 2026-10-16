@@ -152,6 +152,8 @@ Optional keys have their own sections: `APEX_URL` in
 deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 `APP_ENV=local` only, is in
 [SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter).
+`CURSOR_SECRET` signs the list cursors; it is required on every `APP_ENV` but
+`local` (see [Lists](#lists)).
 
 ## Available scripts
 
@@ -190,6 +192,21 @@ address a role (`owner` to `viewer`) in the platform tenant, audited as
 exists, so this is how the first one is made.
 
 The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Lists
+
+Every list endpoint takes `search`, `sort` (`-` for descending), `cursor`,
+`direction` (`next` or `prev`), `limit` (1–100, 20 by default), `total=1`
+and its own filters, comma lists for enum filters, and answers
+`{ items, page: { nextCursor, prevCursor, hasNext, hasPrev, limit }, total? }`
+in `data`. `total=1` adds a count capped at 1,000 (`{ count: 1000, capped: true }`,
+shown as "1,000+"). A cursor is signed with `CURSOR_SECRET` and bound to the
+request's sort, search and filters, and to its tenant, user or list; a cursor
+that fails any check answers 400 `CURSOR_INVALID`, and the client starts again
+from the first page. Set `CURSOR_SECRET` to the same 32+ character secret on
+every replica (`openssl rand -hex 32`); on `APP_ENV=local` an unset one is
+generated per process. Each endpoint's search columns, filters and sorts are in
+[ARCHITECTURE.md](ARCHITECTURE.md#list-endpoints).
 
 ## Email tracking
 

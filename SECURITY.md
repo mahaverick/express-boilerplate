@@ -618,6 +618,20 @@ PostHog, describes what stays there.
   (`src/app.ts`). The email webhook and the collect proxy are mounted before
   those parsers: the webhook reads its raw body up to 256 KB, and the proxy
   streams bodies to PostHog unread and unbounded.
+- **List cursors are signed and bound.** A list cursor carries the last row's
+  sort values, which a client could otherwise edit to probe rows past a
+  filter's edge or feed the seek values its schema never produced. Each is
+  HMAC-SHA256 signed under `CURSOR_SECRET` and carries a hash of the request's
+  effective sort, search and filters, narrowed by `bindScope` to the path tenant,
+  the calling user or the flag list the page belongs to
+  (`src/utilities/list-cursor.utilities.ts`). A cursor that is empty or over
+  4,096 characters, with a bad signature, another version, or another sort,
+  scope, tenant, user or list is refused before any query runs, as one
+  `400 CURSOR_INVALID`, and the signature compare is constant-time. A decoded
+  key still meets its column's schema (`sortAtField` for a timestamp), so a
+  signed cursor can never reach a `::timestamptz` cast with text Postgres
+  refuses. Boot refuses an unset `CURSOR_SECRET` outside `local`; rotating it
+  sends every client back to its first page and nothing else.
 - **Free text.** `safeText` (`src/validators/safe-text.validators.ts`) refuses
   control characters, Unicode format characters (bidi marks and overrides,
   zero-width spaces and the like) and line and paragraph separators in every
