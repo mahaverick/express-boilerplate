@@ -294,7 +294,7 @@ function scopedParams<TQuery extends PgSelect, Item>(
 ): ListParams {
   return {
     ...params,
-    scope: bindScope(params.scope, { ...definition.bound, list: definition.name }),
+    scope: bindScope(bindScope(params.scope, { name: definition.name }), definition.bound ?? {}),
   }
 }
 
@@ -587,7 +587,7 @@ export function listPageInMemory<Row, Item>(
 ): ListPage<Item> {
   const scoped = {
     ...params,
-    scope: bindScope(params.scope, { ...definition.bound, list: definition.name }),
+    scope: bindScope(bindScope(params.scope, { name: definition.name }), definition.bound ?? {}),
   }
   const page =
     readMemoryPage(rows, definition, scoped) ??

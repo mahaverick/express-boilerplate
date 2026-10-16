@@ -172,7 +172,7 @@ function after(
   keys: readonly CursorKey[]
 ): ListParams {
   const base = first(sort)
-  const scope = bindScope(base.scope, { ...list.bound, list: list.name })
+  const scope = bindScope(bindScope(base.scope, { name: list.name }), list.bound ?? {})
   return { ...base, cursor: signCursor(sort, scope, keys) }
 }
 
@@ -535,5 +535,28 @@ describe('migration 0026: the tenant trigram indexes', () => {
     `
     expect(indexes).toHaveLength(2)
     for (const index of indexes) expect(index.indexdef).not.toContain('WHERE')
+  })
+})
+
+describe('list names', () => {
+  it('are unique across the database lists, since the name scopes a cursor to its list', () => {
+    const names = [
+      platformTenantList(undefined, live),
+      platformUserList(undefined, liveUsers),
+      platformEmailList(undefined, {}),
+      platformSuppressionList(undefined, { states: ['active'] }),
+      onboardingTenantList(undefined, {
+        state: 'stuck',
+        stuckBefore: new Date('2026-01-01T00:00:00.000Z'),
+        keys: { tenantKeys: ['a'], memberKeys: ['b'], requiredKeys: ['a'] },
+      }),
+      auditLogList(undefined, { scope: 'platform' }),
+      auditLogList(undefined, { scope: 'tenant', tenantId: ID }),
+      memberList(ID, undefined, noRoles),
+      invitationList(ID, undefined, noRoles),
+      myTenantList(ID, undefined, noRoles),
+      notificationList(ID, undefined, { unread: undefined }),
+    ].map((list) => list.name)
+    expect(new Set(names).size).toBe(names.length)
   })
 })

@@ -190,7 +190,7 @@ function staffCondition(
 }
 
 /**
- * The staff user list, searched by email, first and last name.
+ * The staff user list, searched by email, first and last name, and full name.
  * @param search - The parsed search, or undefined.
  * @param filters - Status, verified and staff.
  * @returns The list definition.
