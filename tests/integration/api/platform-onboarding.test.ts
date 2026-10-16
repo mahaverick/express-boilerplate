@@ -260,6 +260,33 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
     expect(dataOf<PageBody>(response).items.map((row) => row.id)).not.toContain(tenant.id)
   })
 
+  it('sorts a non-stuck state newest started first when no sort is given', async () => {
+    const tag = `od${randomUUID().slice(0, 8)}`
+    const { tenant: oldest } = await createOnboardingTenant({
+      startedAt: daysAgo(3),
+      name: `${tag} a`,
+    })
+    const { tenant: newest } = await createOnboardingTenant({
+      startedAt: daysAgo(1),
+      name: `${tag} c`,
+    })
+    const { tenant: middle } = await createOnboardingTenant({
+      startedAt: daysAgo(2),
+      name: `${tag} b`,
+    })
+
+    const response = await get(await viewerToken(), '/onboarding/tenants', {
+      state: 'in_progress',
+      search: tag,
+    })
+
+    expect(dataOf<PageBody>(response).items.map((row) => row.id)).toEqual([
+      newest.id,
+      middle.id,
+      oldest.id,
+    ])
+  })
+
   it('applies the state filter with a search and a non-default sort together', async () => {
     const tag = `ob${randomUUID().slice(0, 8)}`
     const { tenant: older } = await createOnboardingTenant({

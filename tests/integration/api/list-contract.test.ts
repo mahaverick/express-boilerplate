@@ -446,12 +446,13 @@ describeListContract({
   teardown: removeStaff,
   seed: async (count) => {
     // Weeks ago with no step done is stuck; rows 2k and 2k+1 share a start day, a tie.
+    const now = Date.now()
     const rows = Array.from({ length: count }, (_unused, index) => ({
       name: `${tag}-o${pad(index)}`,
       slug: `${tag}-o${pad(index)}`,
       onboarding_tracked: true,
       onboarding_started_at: new Date(
-        Date.now() - (30 + Math.floor(index / 2)) * 24 * 60 * 60 * 1000
+        now - (30 + Math.floor(index / 2)) * 24 * 60 * 60 * 1000
       ).toISOString(),
     }))
     await sql`insert into tenants ${sql(rows, 'name', 'slug', 'onboarding_tracked', 'onboarding_started_at')}`
