@@ -62,6 +62,8 @@ const like = {
   users: `${tag}-u%`,
   signInUsers: `${tag}-n%`,
   future: `${tag}-f%`,
+  emails: `${tag}-e%`,
+  suppressions: `${tag}-s%`,
 }
 
 /**
@@ -338,4 +340,78 @@ describe.each([
     const seeded = data.items.map((item) => item[key] ?? '').filter((name) => values.includes(name))
     expect(seeded).toEqual(values.slice(0, seeded.length))
   })
+})
+
+describeListContract({
+  name: 'GET /api/v1/platform/emails',
+  app: () => app,
+  path: () => '/api/v1/platform/emails',
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({ search: `${tag}-e` }),
+  sorts: ['-created', 'created'],
+  order: {
+    '-created': createdOf,
+    created: createdOf,
+  },
+  setup: createStaff,
+  teardown: removeStaff,
+  seed: async (count) => {
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      recipient: `${tag}-e${pad(index)}@example.test`,
+      template_key: index % 2 === 1 ? 'password_reset' : 'account_setup',
+      sender_class: 'transactional',
+      message_id_header: `<${tag}-e${pad(index)}@example.test>`,
+      status: index === 1 ? 'bounced' : 'sent',
+      created_at: createdAtOf(index),
+    }))
+    await sql`insert into email_messages ${sql(rows, 'recipient', 'template_key', 'sender_class', 'message_id_header', 'status', 'created_at')}`
+  },
+  clear: async () => {
+    await sql`delete from email_messages where recipient like ${like.emails}`
+  },
+  search: { text: `${tag}-e0003`, count: 1 },
+  filters: [
+    { query: { status: 'bounced' }, count: 1 },
+    { query: { status: 'sent,bounced' }, count: 5 },
+    { query: { template: 'password_reset' }, count: 2 },
+    { query: { template: 'password_reset,account_setup' }, count: 5 },
+  ],
+})
+
+describeListContract({
+  name: 'GET /api/v1/platform/email-suppressions',
+  app: () => app,
+  path: () => '/api/v1/platform/email-suppressions',
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  // Both states, so all five seeded rows are visible; the default (active only) is pinned in platform-emails.test.ts.
+  isolate: () => ({ search: `${tag}-s`, state: 'active,lifted' }),
+  sorts: ['-created', 'created', 'address'],
+  order: {
+    '-created': createdOf,
+    created: createdOf,
+    address: (item) => (item as { address: string }).address,
+  },
+  // Addresses are unique, so the address sort has no tie to test.
+  uniqueKeys: ['address'],
+  setup: createStaff,
+  teardown: removeStaff,
+  seed: async (count) => {
+    const now = new Date().toISOString()
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      address: `${tag}-s${pad(index)}@example.test`,
+      reason: 'hard_bounce',
+      lifted_at: index === 3 ? now : NONE,
+      lift_reason: index === 3 ? 'Test lift' : NONE,
+      created_at: createdAtOf(index),
+    }))
+    await sql`insert into email_suppressions ${sql(rows, 'address', 'reason', 'lifted_at', 'lift_reason', 'created_at')}`
+  },
+  clear: async () => {
+    await sql`delete from email_suppressions where address like ${like.suppressions}`
+  },
+  search: { text: `${tag}-s0002`, count: 1 },
+  filters: [
+    { query: { state: 'lifted' }, count: 1 },
+    { query: { state: 'active' }, count: 4 },
+  ],
 })

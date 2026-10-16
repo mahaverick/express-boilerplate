@@ -94,10 +94,10 @@ async function resendHintsOf(
   const detail = await get(token, `/emails/${message.id}`)
   const page = await request(app)
     .get('/api/v1/platform/emails')
-    .query({ q: message.recipient })
+    .query({ search: message.recipient })
     .set('Authorization', `Bearer ${token}`)
-  const rows = (page.body as ApiEnvelope<{ messages: { id: string; canResend: boolean }[] }>).data
-    ?.messages
+  const rows = (page.body as ApiEnvelope<{ items: { id: string; canResend: boolean }[] }>).data
+    ?.items
   return {
     detail: (detail.body as ApiEnvelope<{ canResend: boolean }>).data?.canResend ?? false,
     list: rows?.find((row) => row.id === message.id)?.canResend,

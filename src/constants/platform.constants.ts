@@ -24,17 +24,6 @@ export const PAGE_DIRECTIONS = ['next', 'prev'] as const
 export type PageDirection = (typeof PAGE_DIRECTIONS)[number]
 
 /**
- * The staff suppression list's state filter: suppressions in force, lifted
- * ones, or both.
- */
-export const EMAIL_SUPPRESSION_STATE_FILTERS = ['active', 'lifted', 'all'] as const
-
-/**
- * One of EMAIL_SUPPRESSION_STATE_FILTERS.
- */
-export type EmailSuppressionStateFilter = (typeof EMAIL_SUPPRESSION_STATE_FILTERS)[number]
-
-/**
  * The staff onboarding list's state filter: every state a tracked tenant
  * can be in. `not_tracked` is left out, since the list covers tracked
  * tenants only.

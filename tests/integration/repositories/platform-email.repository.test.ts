@@ -1,17 +1,19 @@
 /**
- * @file PlatformEmailRepository: the message search (filters, both paging
+ * @file PlatformEmailRepository: the message list (filters, both paging
  * directions, the ends, rows in the same millisecond), the suppression
- * search, and the batched `canResend` lookups. Every message search is
- * scoped by a per-test tag in the recipient, so rows from other files in
- * this worker never match.
+ * list, and the batched `canResend` lookups. Every message list is scoped
+ * by a per-test tag in the recipient, so rows from other files in this
+ * worker never match.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   PlatformEmailRepository,
-  type EmailPageCursor,
+  type PlatformEmailFilters,
 } from '@/repositories/platform-email.repository'
 import { sql } from '@/services/database.service'
+import { listParamsSchema } from '@/validators/list.validators'
+import { platformSuppressionListSchema } from '@/validators/platform-email.validators'
 import {
   addEvent,
   createTrackedMessage,
@@ -51,55 +53,74 @@ async function fiveMessages(tag: string): Promise<string[]> {
 }
 
 /**
- * Runs `search` and keeps only the ids of the rows it found, for filter assertions.
+ * Shared params for a `-created` list of `search`, parsed as the route parses them.
+ * @param search - The search text.
+ * @param extra - More query fields (`limit`, `cursor`, `direction`).
+ * @returns The parsed params.
  */
-async function idsOf(options: Parameters<PlatformEmailRepository['search']>[0]): Promise<string[]> {
-  const page = await repository.search(options)
-  return page.rows.map((row) => row.id)
+function paramsFor(search: string, extra: Record<string, string> = {}) {
+  return listParamsSchema({ sorts: ['-created'], defaultSort: '-created', filters: {} }).parse({
+    search,
+    ...extra,
+  }).params
 }
 
-describe('PlatformEmailRepository.search', () => {
+/**
+ * A cursor a page must have handed back.
+ * @param cursor - The page's `nextCursor` or `prevCursor`.
+ * @returns The cursor.
+ * @throws {Error} When the page has none.
+ */
+function required(cursor: string | null): string {
+  if (cursor === null) throw new Error('expected the page to hand back a cursor')
+  return cursor
+}
+
+/**
+ * Lists this tag's messages and keeps only the ids of the rows it found, for filter assertions.
+ * @param tag - The test's recipient tag.
+ * @param filters - The filters.
+ * @returns The ids, newest first.
+ */
+async function idsOf(tag: string, filters: PlatformEmailFilters): Promise<string[]> {
+  const page = await repository.list(paramsFor(tag, { limit: '10' }), filters)
+  return page.items.map((row) => row.id)
+}
+
+describe('PlatformEmailRepository.list', () => {
   it('pages newest first, forward and back, with no prevCursor on the first page', async () => {
     const tag = newTag()
     const ids = await fiveMessages(tag)
 
-    const first = await repository.search({ limit: 2, direction: 'next', q: tag })
-    expect(first.rows.map((row) => row.id)).toEqual(ids.slice(0, 2))
-    expect(first.prevCursor).toBeUndefined()
+    const first = await repository.list(paramsFor(tag, { limit: '2' }), {})
+    expect(first.items.map((row) => row.id)).toEqual(ids.slice(0, 2))
+    expect(first.page.prevCursor).toBeNull()
 
-    const second = await repository.search({
-      limit: 2,
-      direction: 'next',
-      q: tag,
-      cursor: first.nextCursor,
-    })
-    expect(second.rows.map((row) => row.id)).toEqual(ids.slice(2, 4))
+    const second = await repository.list(
+      paramsFor(tag, { limit: '2', cursor: required(first.page.nextCursor) }),
+      {}
+    )
+    expect(second.items.map((row) => row.id)).toEqual(ids.slice(2, 4))
 
-    const third = await repository.search({
-      limit: 2,
-      direction: 'next',
-      q: tag,
-      cursor: second.nextCursor,
-    })
-    expect(third.rows.map((row) => row.id)).toEqual(ids.slice(4))
-    expect(third.nextCursor).toBeUndefined()
+    const third = await repository.list(
+      paramsFor(tag, { limit: '2', cursor: required(second.page.nextCursor) }),
+      {}
+    )
+    expect(third.items.map((row) => row.id)).toEqual(ids.slice(4))
+    expect(third.page.nextCursor).toBeNull()
 
-    const back = await repository.search({
-      limit: 2,
-      direction: 'prev',
-      q: tag,
-      cursor: third.prevCursor,
-    })
-    expect(back.rows.map((row) => row.id)).toEqual(ids.slice(2, 4))
+    const back = await repository.list(
+      paramsFor(tag, { limit: '2', direction: 'prev', cursor: required(third.page.prevCursor) }),
+      {}
+    )
+    expect(back.items.map((row) => row.id)).toEqual(ids.slice(2, 4))
 
-    const start = await repository.search({
-      limit: 2,
-      direction: 'prev',
-      q: tag,
-      cursor: back.prevCursor,
-    })
-    expect(start.rows.map((row) => row.id)).toEqual(ids.slice(0, 2))
-    expect(start.prevCursor).toBeUndefined()
+    const start = await repository.list(
+      paramsFor(tag, { limit: '2', direction: 'prev', cursor: required(back.page.prevCursor) }),
+      {}
+    )
+    expect(start.items.map((row) => row.id)).toEqual(ids.slice(0, 2))
+    expect(start.page.prevCursor).toBeNull()
   })
 
   it('never skips rows created in the same millisecond at a page boundary', async () => {
@@ -114,37 +135,44 @@ describe('PlatformEmailRepository.search', () => {
     }
 
     const seen: string[] = []
-    let cursor: EmailPageCursor | undefined
+    let cursor: string | null | undefined
     for (let page = 0; page < 4; page += 1) {
-      const result = await repository.search({ limit: 1, direction: 'next', q: tag, cursor })
-      seen.push(...result.rows.map((row) => row.id))
-      cursor = result.nextCursor
-      if (!cursor) break
+      const result = await repository.list(
+        paramsFor(tag, { limit: '1', ...(typeof cursor === 'string' && { cursor }) }),
+        {}
+      )
+      seen.push(...result.items.map((row) => row.id))
+      cursor = result.page.nextCursor
+      if (typeof cursor !== 'string') break
     }
 
     expect(seen).toEqual(created.toSorted((a, b) => b.localeCompare(a)))
   })
 
-  it('answers an empty page past the end with the cursor as prevCursor', async () => {
+  it('answers the last page when the rows after the cursor are gone, with a way back', async () => {
     const tag = newTag()
-    await fiveMessages(tag)
-    const beyond: EmailPageCursor = { sortAt: '2001-01-01T00:00:00.000000Z', id: randomUUID() }
+    const ids = await fiveMessages(tag)
+    const first = await repository.list(paramsFor(tag, { limit: '4' }), {})
+    const cursor = required(first.page.nextCursor)
+    // The only row after the cursor is deleted, so the read finds nothing there.
+    await sql`delete from email_messages where id = ${ids[4] ?? ''}`
 
-    const page = await repository.search({ limit: 2, direction: 'next', q: tag, cursor: beyond })
+    const page = await repository.list(paramsFor(tag, { limit: '2', cursor }), {})
 
-    expect(page.rows).toEqual([])
-    expect(page.prevCursor).toEqual(beyond)
+    expect(page.items.map((row) => row.id)).toEqual(ids.slice(2, 4))
+    expect(page.page.hasNext).toBe(false)
+    expect(page.page.hasPrev).toBe(true)
   })
 
-  it('matches q case-insensitively and literally for % and _', async () => {
+  it('matches search case-insensitively and literally for % and _', async () => {
     const tag = newTag()
     const plain = await createTrackedMessage({ recipient: `${tag}-Plain@example.test` })
     const underscored = await createTrackedMessage({ recipient: `${tag}_x@example.test` })
 
-    expect(await idsOf({ limit: 10, direction: 'next', q: tag.toUpperCase() })).toHaveLength(2)
-    expect(await idsOf({ limit: 10, direction: 'next', q: `${tag}_` })).toEqual([underscored.id])
-    expect(await idsOf({ limit: 10, direction: 'next', q: `${tag}%` })).toEqual([])
-    expect(await idsOf({ limit: 10, direction: 'next', q: `${tag}-plain` })).toEqual([plain.id])
+    expect(await idsOf(tag.toUpperCase(), {})).toHaveLength(2)
+    expect(await idsOf(`${tag}_`, {})).toEqual([underscored.id])
+    expect(await idsOf(`${tag}%`, {})).toEqual([])
+    expect(await idsOf(`${tag}-plain`, {})).toEqual([plain.id])
   })
 
   it('filters by status, template, tenant, user and the created range', async () => {
@@ -167,15 +195,13 @@ describe('PlatformEmailRepository.search', () => {
       userId,
       createdAt: new Date('2026-09-12T12:00:00.000Z'),
     })
-    const base = { limit: 10, direction: 'next' as const, q: tag }
 
-    expect(await idsOf({ ...base, status: 'bounced' })).toEqual([bounced.id])
-    expect(await idsOf({ ...base, templateKey: 'tenant_invitation' })).toEqual([invitation.id])
-    expect(await idsOf({ ...base, tenantId })).toEqual([invitation.id])
-    expect(await idsOf({ ...base, userId })).toEqual([forUser.id])
+    expect(await idsOf(tag, { statuses: ['bounced'] })).toEqual([bounced.id])
+    expect(await idsOf(tag, { templateKeys: ['tenant_invitation'] })).toEqual([invitation.id])
+    expect(await idsOf(tag, { tenantId })).toEqual([invitation.id])
+    expect(await idsOf(tag, { userId })).toEqual([forUser.id])
     expect(
-      await idsOf({
-        ...base,
+      await idsOf(tag, {
         createdFrom: new Date('2026-09-11T00:00:00.000Z'),
         createdBefore: new Date('2026-09-12T00:00:00.000Z'),
       })
@@ -225,8 +251,8 @@ describe('PlatformEmailRepository detail reads', () => {
   })
 })
 
-describe('PlatformEmailRepository.searchSuppressions', () => {
-  it('lists active by default, lifted or all on request, newest first, with the source message', async () => {
+describe('PlatformEmailRepository.listSuppressions', () => {
+  it('lists active by default, lifted or both on request, newest first, with the source message', async () => {
     const tag = newTag()
     const message = await createTrackedMessage({ recipient: `${tag}-src@example.test` })
     const event = await addEvent(message.id, 'bounced', { bounceKind: 'hard' })
@@ -237,23 +263,25 @@ describe('PlatformEmailRepository.searchSuppressions', () => {
     const lifted = await createTrackedSuppression(`${tag}-b@example.test`, { isLifted: true })
     const newer = await createTrackedSuppression(`${tag}-c@example.test`)
     /**
-     * Searches this test's suppressions in one state, for the active, lifted and all assertions.
+     * Lists this test's suppressions for a state query, parsed as the route parses it.
+     * @param state - The `state` query value, or undefined for the default.
+     * @returns The rows, in page order.
      */
-    const search = async (state: 'active' | 'lifted' | 'all') => {
-      const page = await repository.searchSuppressions({
-        limit: 10,
-        direction: 'next',
-        state,
-        q: tag,
+    const list = async (state?: string) => {
+      const { params, filters } = platformSuppressionListSchema.parse({
+        search: tag,
+        limit: '10',
+        ...(state !== undefined && { state }),
       })
-      return page.rows
+      const page = await repository.listSuppressions(params, { states: filters.state })
+      return page.items
     }
 
-    const active = await search('active')
+    const active = await list()
     expect(active.map((row) => row.id)).toEqual([newer.id, older.id])
     expect(active[1]?.sourceMessageId).toBe(message.id)
-    const liftedRows = await search('lifted')
+    const liftedRows = await list('lifted')
     expect(liftedRows.map((row) => row.id)).toEqual([lifted.id])
-    expect(await search('all')).toHaveLength(3)
+    expect(await list('active,lifted')).toHaveLength(3)
   })
 })

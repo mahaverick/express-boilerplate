@@ -17,11 +17,11 @@ import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.cons
 import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { canActorGrantRole, canStaffMailTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
 import {
   PlatformEmailRepository,
-  type EmailPageCursor,
   type EmailUserRow,
   type PlatformEmailRecord,
   type PlatformSuppressionRecord,
@@ -51,25 +51,23 @@ import type {
   EmailGroupCounts,
   EmailHealth,
   EmailMessageDetail,
-  EmailMessagePage,
   EmailMessageSummary,
   EmailPerson,
   EmailPreview,
   EmailRate,
-  EmailSuppressionPage,
   EmailSuppressionView,
 } from '@/types/platform-email'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import {
   EMAIL_TEMPLATE_KEYS,
   type EmailTemplateKey,
   type ResendAction,
 } from '@/utilities/email-template.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
 import { isRecentAuth } from '@/utilities/recent-auth.utilities'
 import type {
-  PlatformEmailSearchQuery,
-  PlatformSuppressionSearchQuery,
+  PlatformEmailListQuery,
+  PlatformSuppressionListQuery,
 } from '@/validators/platform-email.validators'
 
 const platformEmailRepository = new PlatformEmailRepository()
@@ -160,16 +158,6 @@ function personOf(user: EmailUserRow | null): EmailPerson | null {
   if (user === null) return null
   const name = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
   return { id: user.id, name: name === '' ? user.email : name }
-}
-
-/**
- * Encode a cursor for the wire.
- * @param cursor - The decoded cursor, if any.
- * @returns The opaque string, or null at that end of the list.
- */
-function encodeEmailCursor(cursor: EmailPageCursor | undefined): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null at each end of the list
-  return cursor ? encodeCursor({ sortAt: cursor.sortAt, id: cursor.id }) : null
 }
 
 /**
@@ -314,35 +302,32 @@ function toSummary(message: PlatformEmailRecord, isResendable: boolean): EmailMe
 }
 
 /**
- * Search messages, newest first, one keyset page at a time in either direction.
+ * One page of the staff message list, each with whether this staff member may resend it.
  * @param actor - The requesting staff member, for `canResend`.
- * @param query - The validated query, with its cursor decoded.
- * @returns The page and both cursors.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-export async function searchEmails(
+export async function listEmails(
   actor: Actor,
-  query: PlatformEmailSearchQuery
-): Promise<EmailMessagePage> {
-  const page = await platformEmailRepository.search({
-    limit: query.limit,
-    direction: query.direction,
-    q: query.q,
-    status: query.status,
-    templateKey: query.template,
-    tenantId: query.tenantId,
-    userId: query.userId,
-    createdFrom: query.from === undefined ? undefined : new Date(`${query.from}T00:00:00.000Z`),
+  query: PlatformEmailListQuery
+): Promise<ListPage<EmailMessageSummary>> {
+  const { filters } = query
+  const page = await platformEmailRepository.list(query.params, {
+    statuses: filters.status,
+    templateKeys: filters.template,
+    tenantId: filters.tenant,
+    userId: filters.user,
+    createdFrom: filters.from === undefined ? undefined : new Date(`${filters.from}T00:00:00.000Z`),
     createdBefore:
-      query.to === undefined
+      filters.to === undefined
         ? undefined
-        : new Date(Date.parse(`${query.to}T00:00:00.000Z`) + DAY_MS),
-    cursor: query.cursor,
+        : new Date(Date.parse(`${filters.to}T00:00:00.000Z`) + DAY_MS),
   })
-  const context = await loadResendContext(actor, page.rows)
+  const context = await loadResendContext(actor, page.items)
   return {
-    messages: page.rows.map((message) => toSummary(message, canResendFor(actor, message, context))),
-    nextCursor: encodeEmailCursor(page.nextCursor),
-    prevCursor: encodeEmailCursor(page.prevCursor),
+    ...page,
+    items: page.items.map((message) => toSummary(message, canResendFor(actor, message, context))),
   }
 }
 
@@ -646,25 +631,18 @@ function toSuppressionView(suppression: PlatformSuppressionRecord): EmailSuppres
 }
 
 /**
- * Search suppressions, newest first: active ones unless asked otherwise.
- * @param query - The validated query, with its cursor decoded.
- * @returns The page and both cursors.
+ * One page of the staff suppression list.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
  */
-export async function searchSuppressions(
-  query: PlatformSuppressionSearchQuery
-): Promise<EmailSuppressionPage> {
-  const page = await platformEmailRepository.searchSuppressions({
-    limit: query.limit,
-    direction: query.direction,
-    state: query.state,
-    q: query.q,
-    cursor: query.cursor,
+export async function listSuppressions(
+  query: PlatformSuppressionListQuery
+): Promise<ListPage<EmailSuppressionView>> {
+  const page = await platformEmailRepository.listSuppressions(query.params, {
+    states: query.filters.state,
   })
-  return {
-    suppressions: page.rows.map((row) => toSuppressionView(row)),
-    nextCursor: encodeEmailCursor(page.nextCursor),
-    prevCursor: encodeEmailCursor(page.prevCursor),
-  }
+  return { ...page, items: page.items.map((row) => toSuppressionView(row)) }
 }
 
 /**

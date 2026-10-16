@@ -5,19 +5,9 @@
  */
 import { z } from 'zod'
 import { EMAIL_MESSAGE_STATUSES } from '@/constants/email.constants'
-import { EMAIL_SUPPRESSION_STATE_FILTERS, STATS_RANGES } from '@/constants/platform.constants'
+import { STATS_RANGES } from '@/constants/platform.constants'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
-import { cursorField, sortAtField } from '@/validators/cursor.validators'
-import { directionField, pageLimitField, searchQueryField } from '@/validators/platform.validators'
-
-/**
- * The email and suppression cursors' decoded shape: the last row's
- * `created_at` (microsecond text) and id.
- */
-const emailCursorSchema = z.strictObject({
-  sortAt: sortAtField,
-  id: z.uuid(),
-})
+import { listFilter, listParamsSchema } from '@/validators/list.validators'
 
 /**
  * A `YYYY-MM-DD` UTC day in years 0001-9998: Postgres has no year 0, and the
@@ -35,54 +25,32 @@ function utcDayField(name: string) {
 }
 
 /**
- * Refuse `direction=prev` without a cursor: there is no "last page" to start from.
- * @param query - The parsed query.
- * @param query.direction - Which way to page.
- * @param query.cursor - The decoded cursor, if any.
- * @param context - Zod's refinement context.
+ * `GET /api/v1/platform/emails` query: the shared list params, `search`
+ * matching the recipient; `status` and `template` comma lists; `user` and
+ * `tenant` ids; `from` and `to` UTC days, both inclusive, `from` not after `to`.
  */
-function requireCursorForPrevious(
-  query: { direction: string; cursor?: unknown },
-  context: z.RefinementCtx
-): void {
-  if (query.direction === 'prev' && query.cursor === undefined) {
-    context.addIssue({
-      code: 'custom',
-      path: ['cursor'],
-      message: 'cursor is required when direction is prev.',
-    })
-  }
-}
-
-/**
- * `GET /api/v1/platform/emails` query string. `q` matches the recipient
- * (case-insensitive substring); `from` and `to` are `YYYY-MM-DD` UTC days,
- * both inclusive, and `from` may not be after `to`.
- */
-export const platformEmailSearchSchema = z
-  .object({
-    q: searchQueryField.optional(),
-    status: z.enum(EMAIL_MESSAGE_STATUSES).optional(),
-    template: z.enum(EMAIL_TEMPLATE_KEYS).optional(),
-    tenantId: z.uuid('tenantId must be a valid UUID.').optional(),
-    userId: z.uuid('userId must be a valid UUID.').optional(),
+export const platformEmailListSchema = listParamsSchema({
+  sorts: ['-created', 'created'],
+  defaultSort: '-created',
+  filters: {
+    status: listFilter('status', EMAIL_MESSAGE_STATUSES).optional(),
+    template: listFilter('template', EMAIL_TEMPLATE_KEYS).optional(),
+    user: z.uuid('user must be a valid UUID.').optional(),
+    tenant: z.uuid('tenant must be a valid UUID.').optional(),
     from: utcDayField('from').optional(),
     to: utcDayField('to').optional(),
-    cursor: cursorField(emailCursorSchema).optional(),
-    direction: directionField,
-    limit: pageLimitField,
-  })
-  .superRefine((query, context) => {
-    requireCursorForPrevious(query, context)
-    if (query.from !== undefined && query.to !== undefined && query.from > query.to) {
+  },
+  refine: (filters, context) => {
+    if (filters.from !== undefined && filters.to !== undefined && filters.from > filters.to) {
       context.addIssue({ code: 'custom', path: ['to'], message: 'to must not be before from.' })
     }
-  })
+  },
+})
 
 /**
- * The validated email search query, with the cursor already decoded.
+ * A parsed staff email list query.
  */
-export type PlatformEmailSearchQuery = z.infer<typeof platformEmailSearchSchema>
+export type PlatformEmailListQuery = z.output<typeof platformEmailListSchema>
 
 /**
  * `GET /platform/emails/health` query: the window, 7 days unless asked otherwise.
@@ -92,20 +60,22 @@ export const emailHealthQuerySchema = z.object({
 })
 
 /**
- * `GET /api/v1/platform/email-suppressions` query string. `state` defaults
- * to `active`, the suppressions blocking sends.
+ * The suppression states a list may ask for.
  */
-export const platformSuppressionSearchSchema = z
-  .object({
-    q: searchQueryField.optional(),
-    state: z.enum(EMAIL_SUPPRESSION_STATE_FILTERS).default('active'),
-    cursor: cursorField(emailCursorSchema).optional(),
-    direction: directionField,
-    limit: pageLimitField,
-  })
-  .superRefine(requireCursorForPrevious)
+const SUPPRESSION_STATES = ['active', 'lifted'] as const
 
 /**
- * The validated suppression search query, with the cursor already decoded.
+ * `GET /api/v1/platform/email-suppressions` query: the shared list params,
+ * `search` matching the address; `state` a comma list, active (blocking
+ * sends) unless given.
  */
-export type PlatformSuppressionSearchQuery = z.infer<typeof platformSuppressionSearchSchema>
+export const platformSuppressionListSchema = listParamsSchema({
+  sorts: ['-created', 'created', 'address'],
+  defaultSort: '-created',
+  filters: { state: listFilter('state', SUPPRESSION_STATES).default(['active']) },
+})
+
+/**
+ * A parsed staff suppression list query.
+ */
+export type PlatformSuppressionListQuery = z.output<typeof platformSuppressionListSchema>

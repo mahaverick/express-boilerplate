@@ -242,7 +242,7 @@ the user's address: they belong to the mailbox, not the account.
 
 ### Staff reads, preview and resend
 
-- `GET /platform/emails` searches messages newest first, and
+- `GET /platform/emails` lists messages newest first (searchable by recipient), and
   `GET /platform/emails/:id` returns one message's timeline: attempts,
   provider events, the address's active suppression and the resend chain.
 - `GET /platform/emails/health?range=7d|30d` counts messages per UTC day and

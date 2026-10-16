@@ -9,17 +9,17 @@ import {
   getEmailDetail,
   getEmailHealth,
   liftSuppression,
+  listEmails,
+  listSuppressions,
   previewEmail,
   resendEmail,
-  searchEmails,
-  searchSuppressions,
 } from '@/services/platform-email.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
   emailHealthQuerySchema,
-  platformEmailSearchSchema,
-  platformSuppressionSearchSchema,
+  platformEmailListSchema,
+  platformSuppressionListSchema,
 } from '@/validators/platform-email.validators'
 import { parseIdParameter, reasonBodySchema } from '@/validators/platform.validators'
 
@@ -41,8 +41,8 @@ class PlatformEmailController extends BaseController {
    * `GET /platform/emails`: search messages, newest first.
    */
   searchEmails = this.handle(async (request, response) => {
-    const query = parseBody(platformEmailSearchSchema, request.query)
-    successResponse(response, await searchEmails(actorFrom(request), query), 'Emails retrieved.')
+    const query = parseBody(platformEmailListSchema, request.query)
+    successResponse(response, await listEmails(actorFrom(request), query), 'Emails retrieved.')
   })
 
   /**
@@ -83,8 +83,8 @@ class PlatformEmailController extends BaseController {
    * `GET /platform/email-suppressions`: search suppressions, newest first.
    */
   searchSuppressions = this.handle(async (request, response) => {
-    const query = parseBody(platformSuppressionSearchSchema, request.query)
-    successResponse(response, await searchSuppressions(query), 'Suppressions retrieved.')
+    const query = parseBody(platformSuppressionListSchema, request.query)
+    successResponse(response, await listSuppressions(query), 'Suppressions retrieved.')
   })
 
   /**

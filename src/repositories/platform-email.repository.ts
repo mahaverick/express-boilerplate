@@ -3,10 +3,8 @@
  * message search and detail, the health aggregates, the suppression list,
  * and the batched lookups `canResend` needs. Only
  * `services/platform-*.service.ts` may import this file (an eslint rule).
- * Keyset pages sort newest first on `(created_at, id)`; the cursor carries
- * `created_at` as UTC text that `::timestamptz` reads back exactly, and the
- * id breaks a tie, so rows sharing a `created_at` are never skipped at a
- * page boundary.
+ * Lists go through `listPage`; the cursor carries `created_at` as UTC text with
+ * microseconds and the id breaks a tie.
  */
 import {
   and,
@@ -33,7 +31,6 @@ import type {
   SuppressionReason,
 } from '@/constants/email.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
-import type { EmailSuppressionStateFilter, PageDirection } from '@/constants/platform.constants'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import { emailEventModel } from '@/database/models/email-event.model'
 import { emailLogModel, type EmailLogStatus } from '@/database/models/email-log.model'
@@ -43,17 +40,19 @@ import { tenantInvitationModel } from '@/database/models/tenant-invitation.model
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
+import type { InvalidCursorError } from '@/errors/list-errors'
 import { pendingCondition } from '@/repositories/tenant-invitation.repository'
 import { db, type DbExecutor } from '@/services/database.service'
-import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
-
-/**
- * A row's sort key: its `created_at` as UTC text with microseconds, and its id.
- */
-export interface EmailPageCursor {
-  sortAt: string
-  id: string
-}
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  textSort,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * The user a message or suppression names, as joined. `deletedAt` is set
@@ -92,30 +91,23 @@ export interface PlatformEmailRecord {
 }
 
 /**
- * The search's inputs. `q` matches the recipient as a literal,
- * case-insensitive substring; `createdFrom` is inclusive and `createdBefore`
- * exclusive.
+ * The message list's filters: each asked status and template, the user and
+ * tenant, `createdFrom` inclusive and `createdBefore` exclusive.
  */
-export interface PlatformEmailSearchOptions {
-  limit: number
-  direction: PageDirection
-  q?: string | undefined
-  status?: EmailMessageStatus | undefined
-  templateKey?: string | undefined
-  tenantId?: string | undefined
+export interface PlatformEmailFilters {
+  statuses?: EmailMessageStatus[] | undefined
+  templateKeys?: string[] | undefined
   userId?: string | undefined
+  tenantId?: string | undefined
   createdFrom?: Date | undefined
   createdBefore?: Date | undefined
-  cursor?: EmailPageCursor | undefined
 }
 
 /**
- * A page of rows and the cursors either side of it.
+ * The suppression list's filters: the asked states.
  */
-export interface KeysetPage<TRow> {
-  rows: TRow[]
-  nextCursor?: EmailPageCursor
-  prevCursor?: EmailPageCursor
+export interface PlatformSuppressionFilters {
+  states: ('active' | 'lifted')[]
 }
 
 /**
@@ -174,17 +166,6 @@ export interface PlatformSuppressionRecord {
 }
 
 /**
- * The suppression search's inputs.
- */
-export interface PlatformSuppressionSearchOptions {
-  limit: number
-  direction: PageDirection
-  state: EmailSuppressionStateFilter
-  q?: string | undefined
-  cursor?: EmailPageCursor | undefined
-}
-
-/**
  * Messages created on one UTC day in one status.
  */
 export interface EmailStatusDayRow {
@@ -235,83 +216,12 @@ const LEFT_SERVER_STATUSES: readonly EmailMessageStatus[] = [
 const UNDELIVERED_STATUSES: readonly EmailMessageStatus[] = ['bounced', 'failed']
 
 /**
- * A `timestamptz` column as UTC text with microseconds, the form a cursor
- * carries and `::timestamptz` reads back exactly.
- * @param column - The column.
- * @returns The text expression.
- */
-function sortAtOf(column: AnyPgColumn): SQL<string> {
-  return sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
-}
-
-/**
  * A timestamp's UTC day, as `YYYY-MM-DD`.
  * @param column - A `timestamptz` column.
  * @returns The day as text.
  */
 function utcDay(column: AnyPgColumn): SQL<string> {
   return sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD')`
-}
-
-/**
- * The keyset condition for a newest-first list: older rows for `next`,
- * newer ones for `prev`.
- * @param createdAt - The list's `created_at` column.
- * @param id - The list's `id` column.
- * @param cursor - The cursor.
- * @param isPrevious - Whether the page reads backwards.
- * @returns The condition.
- */
-function cursorCondition(
-  createdAt: AnyPgColumn,
-  id: AnyPgColumn,
-  cursor: EmailPageCursor,
-  isPrevious: boolean
-): SQL {
-  return isPrevious
-    ? sql`(${createdAt}, ${id}) > (${cursor.sortAt}::timestamptz, ${cursor.id})`
-    : sql`(${createdAt}, ${id}) < (${cursor.sortAt}::timestamptz, ${cursor.id})`
-}
-
-/**
- * The cursors either side of a page, rows already newest first. `prevCursor`
- * is absent on the first page; a page read from a cursor that comes back
- * empty hands that cursor back on the side it came from, so the client can
- * always step back.
- * @param rows - The page's rows, newest first.
- * @param hasMore - Whether a row beyond the page exists in the read direction.
- * @param direction - Which way the page was read.
- * @param cursor - The cursor it was read from, if any.
- * @returns The cursors to set.
- */
-function pageCursors(
-  rows: readonly { sortAt: string; id: string }[],
-  hasMore: boolean,
-  direction: PageDirection,
-  cursor: EmailPageCursor | undefined
-): Pick<KeysetPage<unknown>, 'nextCursor' | 'prevCursor'> {
-  const first = rows[0]
-  const last = rows.at(-1)
-  /**
-   * The cursor that resumes a keyset page at this row: the `(sortAt, id)` pair
-   * the keyset condition compares against.
-   */
-  const keyOf = (row: { sortAt: string; id: string }): EmailPageCursor => ({
-    sortAt: row.sortAt,
-    id: row.id,
-  })
-  if (direction === 'prev') {
-    const next = last ? keyOf(last) : cursor
-    return {
-      ...(hasMore && first && { prevCursor: keyOf(first) }),
-      ...(next && { nextCursor: next }),
-    }
-  }
-  const previous = first ? keyOf(first) : cursor
-  return {
-    ...(hasMore && last && { nextCursor: keyOf(last) }),
-    ...(cursor !== undefined && previous && { prevCursor: previous }),
-  }
 }
 
 /**
@@ -325,29 +235,6 @@ function withoutSortKey<TRow extends { sortAt: string }>({
   ...row
 }: TRow): Omit<TRow, 'sortAt'> {
   return row
-}
-
-/**
- * Trim the look-ahead row, put a backwards page newest first, and build its cursors.
- * @param rows - Up to `limit + 1` rows in read order.
- * @param limit - The page size.
- * @param direction - Which way the page was read.
- * @param cursor - The cursor it was read from, if any.
- * @returns The rows, newest first, and the cursors.
- */
-function toPage<TRow extends { sortAt: string; id: string }>(
-  rows: TRow[],
-  limit: number,
-  direction: PageDirection,
-  cursor: EmailPageCursor | undefined
-): KeysetPage<Omit<TRow, 'sortAt'>> {
-  const hasMore = rows.length > limit
-  if (hasMore) rows.pop()
-  if (direction === 'prev') rows.reverse()
-  return {
-    rows: rows.map((row) => withoutSortKey(row)),
-    ...pageCursors(rows, hasMore, direction, cursor),
-  }
 }
 
 /**
@@ -404,7 +291,7 @@ const messageColumns = {
   resentFromId: emailMessageModel.resentFromId,
   createdAt: emailMessageModel.createdAt,
   statusUpdatedAt: emailMessageModel.statusUpdatedAt,
-  sortAt: sortAtOf(emailMessageModel.createdAt),
+  sortAt: timestampKey(emailMessageModel.createdAt),
   joinedUserId: userModel.id,
   joinedUserEmail: userModel.email,
   joinedUserFirstName: userModel.firstName,
@@ -475,31 +362,86 @@ function toRecord(row: MessageSelection): PlatformEmailRecord & { sortAt: string
 }
 
 /**
- * The search's filters, before the cursor.
- * @param options - The search's inputs.
+ * The message list's conditions: search on the recipient, then the filters.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The filters.
  * @returns The conditions to AND together.
  */
-function messageFilters(options: PlatformEmailSearchOptions): SQL[] {
-  const conditions: SQL[] = []
-  if (options.q !== undefined) {
-    const pattern = `%${escapeLikePattern(options.q)}%`
-    conditions.push(sql`lower(${emailMessageModel.recipient}) like lower(${pattern}) escape '\\'`)
-  }
-  if (options.status !== undefined) conditions.push(eq(emailMessageModel.status, options.status))
-  if (options.templateKey !== undefined) {
-    conditions.push(eq(emailMessageModel.templateKey, options.templateKey))
-  }
-  if (options.tenantId !== undefined) {
-    conditions.push(eq(emailMessageModel.tenantId, options.tenantId))
-  }
-  if (options.userId !== undefined) conditions.push(eq(emailMessageModel.userId, options.userId))
-  if (options.createdFrom !== undefined) {
-    conditions.push(gte(emailMessageModel.createdAt, options.createdFrom))
-  }
-  if (options.createdBefore !== undefined) {
-    conditions.push(lt(emailMessageModel.createdAt, options.createdBefore))
-  }
-  return conditions
+function messageConditions(
+  search: string | undefined,
+  filters: PlatformEmailFilters
+): (SQL | undefined)[] {
+  return [
+    searchCondition(search, [sql`lower(${emailMessageModel.recipient})`]),
+    filters.statuses === undefined
+      ? undefined
+      : inArray(emailMessageModel.status, filters.statuses),
+    filters.templateKeys === undefined
+      ? undefined
+      : inArray(emailMessageModel.templateKey, filters.templateKeys),
+    filters.tenantId === undefined ? undefined : eq(emailMessageModel.tenantId, filters.tenantId),
+    filters.userId === undefined ? undefined : eq(emailMessageModel.userId, filters.userId),
+    filters.createdFrom === undefined
+      ? undefined
+      : gte(emailMessageModel.createdAt, filters.createdFrom),
+    filters.createdBefore === undefined
+      ? undefined
+      : lt(emailMessageModel.createdAt, filters.createdBefore),
+  ]
+}
+
+/**
+ * The staff message list, newest first by default.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The filters.
+ * @returns The list definition.
+ */
+function platformEmailList(search: string | undefined, filters: PlatformEmailFilters) {
+  return defineList({
+    base: (executor, seek) =>
+      selectMessages(executor).where(and(...messageConditions(search, filters), seek)),
+    id: emailMessageModel.id,
+    sorts: {
+      '-created': [timestampSort(emailMessageModel.createdAt, 'desc', 'sortAt')],
+      created: [timestampSort(emailMessageModel.createdAt, 'asc', 'sortAt')],
+    },
+    toItem: (row): PlatformEmailRecord => withoutSortKey(toRecord(row)),
+  })
+}
+
+/**
+ * The state filter: active (not lifted) or lifted, or nothing when both are asked for.
+ * @param states - The asked states, at least one.
+ * @returns The condition, or undefined for both.
+ */
+function suppressionStateCondition(states: PlatformSuppressionFilters['states']): SQL | undefined {
+  if (states.length !== 1) return undefined
+  return states[0] === 'active'
+    ? isNull(emailSuppressionModel.liftedAt)
+    : isNotNull(emailSuppressionModel.liftedAt)
+}
+
+/**
+ * The staff suppression list, newest first by default.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The states.
+ * @returns The list definition.
+ */
+function platformSuppressionList(search: string | undefined, filters: PlatformSuppressionFilters) {
+  const state = suppressionStateCondition(filters.states)
+  return defineList({
+    base: (executor, seek) =>
+      selectSuppressions(executor).where(
+        and(state, searchCondition(search, [sql`${emailSuppressionModel.address}`]), seek)
+      ),
+    id: emailSuppressionModel.id,
+    sorts: {
+      '-created': [timestampSort(emailSuppressionModel.createdAt, 'desc', 'sortAt')],
+      created: [timestampSort(emailSuppressionModel.createdAt, 'asc', 'sortAt')],
+      address: [textSort(emailSuppressionModel.address, 'asc', 'address')],
+    },
+    toItem: (row): PlatformSuppressionRecord => withoutSortKey(toSuppressionRecord(row)),
+  })
 }
 
 /**
@@ -521,41 +463,19 @@ function leftServerIn(from: Date, to: Date): SQL | undefined {
  */
 export class PlatformEmailRepository {
   /**
-   * A page of messages, newest first, keyset on `(created_at, id)`.
-   * @param options - Filters, page size, direction and cursor.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page and its cursors.
+   * One page of the staff message list.
+   * @param params - The parsed shared list params.
+   * @param filters - The filters.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
-  async search(
-    options: PlatformEmailSearchOptions,
+  async list(
+    params: ListParams,
+    filters: PlatformEmailFilters,
     executor: DbExecutor = db
-  ): Promise<KeysetPage<PlatformEmailRecord>> {
-    const isPrevious = options.direction === 'prev'
-    const conditions = messageFilters(options)
-    if (options.cursor !== undefined) {
-      conditions.push(
-        cursorCondition(
-          emailMessageModel.createdAt,
-          emailMessageModel.id,
-          options.cursor,
-          isPrevious
-        )
-      )
-    }
-    const rows = await selectMessages(executor)
-      .where(and(...conditions))
-      .orderBy(
-        ...(isPrevious
-          ? [asc(emailMessageModel.createdAt), asc(emailMessageModel.id)]
-          : [desc(emailMessageModel.createdAt), desc(emailMessageModel.id)])
-      )
-      .limit(options.limit + 1)
-    return toPage(
-      rows.map((row) => toRecord(row)),
-      options.limit,
-      options.direction,
-      options.cursor
-    )
+  ): Promise<ListPage<PlatformEmailRecord>> {
+    return listPage(executor, platformEmailList(params.search, filters), params)
   }
 
   /**
@@ -899,50 +819,19 @@ export class PlatformEmailRepository {
   }
 
   /**
-   * A page of suppressions, newest first, keyset on `(created_at, id)`.
-   * @param options - State, `q` (address substring), page size, direction and cursor.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page and its cursors.
+   * One page of the staff suppression list.
+   * @param params - The parsed shared list params.
+   * @param filters - The states.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
    */
-  async searchSuppressions(
-    options: PlatformSuppressionSearchOptions,
+  async listSuppressions(
+    params: ListParams,
+    filters: PlatformSuppressionFilters,
     executor: DbExecutor = db
-  ): Promise<KeysetPage<PlatformSuppressionRecord>> {
-    const isPrevious = options.direction === 'prev'
-    const conditions: SQL[] = []
-    if (options.state === 'active') {
-      conditions.push(isNull(emailSuppressionModel.liftedAt))
-    } else if (options.state === 'lifted') {
-      conditions.push(isNotNull(emailSuppressionModel.liftedAt))
-    }
-    if (options.q !== undefined) {
-      const pattern = `%${escapeLikePattern(options.q)}%`
-      conditions.push(sql`${emailSuppressionModel.address} like lower(${pattern}) escape '\\'`)
-    }
-    if (options.cursor !== undefined) {
-      conditions.push(
-        cursorCondition(
-          emailSuppressionModel.createdAt,
-          emailSuppressionModel.id,
-          options.cursor,
-          isPrevious
-        )
-      )
-    }
-    const rows = await selectSuppressions(executor)
-      .where(and(...conditions))
-      .orderBy(
-        ...(isPrevious
-          ? [asc(emailSuppressionModel.createdAt), asc(emailSuppressionModel.id)]
-          : [desc(emailSuppressionModel.createdAt), desc(emailSuppressionModel.id)])
-      )
-      .limit(options.limit + 1)
-    return toPage(
-      rows.map((row) => toSuppressionRecord(row)),
-      options.limit,
-      options.direction,
-      options.cursor
-    )
+  ): Promise<ListPage<PlatformSuppressionRecord>> {
+    return listPage(executor, platformSuppressionList(params.search, filters), params)
   }
 
   /**
@@ -978,7 +867,7 @@ function selectSuppressions(executor: DbExecutor) {
       createdAt: emailSuppressionModel.createdAt,
       liftedAt: emailSuppressionModel.liftedAt,
       liftReason: emailSuppressionModel.liftReason,
-      sortAt: sortAtOf(emailSuppressionModel.createdAt),
+      sortAt: timestampKey(emailSuppressionModel.createdAt),
       lifterId: userModel.id,
       lifterEmail: userModel.email,
       lifterFirstName: userModel.firstName,

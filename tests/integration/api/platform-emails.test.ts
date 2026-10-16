@@ -11,7 +11,6 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { sql } from '@/services/database.service'
 import { TOKEN_MASK } from '@/services/platform-email.service'
-import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addAttempt,
@@ -57,9 +56,8 @@ interface SummaryBody {
  * One page of the message list, with its cursors.
  */
 interface PageBody {
-  messages: SummaryBody[]
-  nextCursor: string | null
-  prevCursor: string | null
+  items: SummaryBody[]
+  page: { nextCursor: string | null; prevCursor: string | null }
 }
 
 const app = createApp()
@@ -105,7 +103,7 @@ async function canResendAs(token: string, messageId: string): Promise<boolean> {
 }
 
 /**
- * A short unique tag for recipients, so a `q` search finds only this test's rows.
+ * A short unique tag for recipients, so a `search` finds finds only this test's rows.
  */
 function tagged(): string {
   return `pe${randomUUID().slice(0, 8)}`
@@ -148,25 +146,25 @@ describe('GET /api/v1/platform/emails', () => {
       createdAt: new Date('2026-09-02T00:00:00Z'),
     })
 
-    const first = dataOf<PageBody>(await get(token, '/emails', { q: tag, limit: '1' }))
-    expect(first.messages.map((message) => message.id)).toEqual([newer.id])
-    expect(first.prevCursor).toBeNull()
+    const first = dataOf<PageBody>(await get(token, '/emails', { search: tag, limit: '1' }))
+    expect(first.items.map((message) => message.id)).toEqual([newer.id])
+    expect(first.page.prevCursor).toBeNull()
 
     const second = dataOf<PageBody>(
-      await get(token, '/emails', { q: tag, limit: '1', cursor: first.nextCursor ?? '' })
+      await get(token, '/emails', { search: tag, limit: '1', cursor: first.page.nextCursor ?? '' })
     )
-    expect(second.messages.map((message) => message.id)).toEqual([older.id])
-    expect(second.nextCursor).toBeNull()
+    expect(second.items.map((message) => message.id)).toEqual([older.id])
+    expect(second.page.nextCursor).toBeNull()
 
     const back = dataOf<PageBody>(
       await get(token, '/emails', {
-        q: tag,
+        search: tag,
         limit: '1',
         direction: 'prev',
-        cursor: second.prevCursor ?? '',
+        cursor: second.page.prevCursor ?? '',
       })
     )
-    expect(back.messages.map((message) => message.id)).toEqual([newer.id])
+    expect(back.items.map((message) => message.id)).toEqual([newer.id])
   })
 
   it('filters by an inclusive UTC date range', async () => {
@@ -190,13 +188,13 @@ describe('GET /api/v1/platform/emails', () => {
     })
 
     const page = dataOf<PageBody>(
-      await get(token, '/emails', { q: tag, from: '2026-09-10', to: '2026-09-11' })
+      await get(token, '/emails', { search: tag, from: '2026-09-10', to: '2026-09-11' })
     )
 
-    expect(page.messages.map((message) => message.id)).toEqual([last.id, first.id])
+    expect(page.items.map((message) => message.id)).toEqual([last.id, first.id])
   })
 
-  it('filters by status, template, userId and tenantId', async () => {
+  it('filters by status, template, user and tenant', async () => {
     const { token } = await createTrackedStaff('viewer')
     const tag = tagged()
     const user = await createTrackedUser()
@@ -215,21 +213,21 @@ describe('GET /api/v1/platform/emails', () => {
      * The ids of the messages listed for this test's tag, with the extra `query`.
      */
     const ids = async (query: Record<string, string>): Promise<string[]> =>
-      dataOf<PageBody>(await get(token, '/emails', { q: tag, ...query })).messages.map(
+      dataOf<PageBody>(await get(token, '/emails', { search: tag, ...query })).items.map(
         (message) => message.id
       )
 
     expect(await ids({ status: 'bounced' })).toEqual([bounced.id])
     expect(await ids({ template: 'tenant_invitation' })).toEqual([invitation.id])
-    expect(await ids({ userId: user.id })).toEqual([mine.id])
-    expect(await ids({ tenantId })).toEqual([invitation.id])
+    expect(await ids({ user: user.id })).toEqual([mine.id])
+    expect(await ids({ tenant: tenantId })).toEqual([invitation.id])
   })
 
   it.each([
     [{ direction: 'prev' }],
     [{ status: 'opened' }],
     [{ from: '2026-09-12', to: '2026-09-11' }],
-    [{ tenantId: 'nope' }],
+    [{ tenant: 'nope' }],
     [{ cursor: 'not-a-cursor' }],
   ])('answers 400 for %j', async (query) => {
     const { token } = await createTrackedStaff('viewer')
@@ -253,8 +251,8 @@ describe('GET /api/v1/platform/emails', () => {
       tenantId: randomUUID(),
     })
 
-    const page = dataOf<PageBody>(await get(token, '/emails', { q: tag }))
-    const byId = new Map(page.messages.map((message) => [message.id, message]))
+    const page = dataOf<PageBody>(await get(token, '/emails', { search: tag }))
+    const byId = new Map(page.items.map((message) => [message.id, message]))
 
     expect(byId.get(named.id)?.user).toEqual({ id: user.id, name: 'Ada Lovelace' })
     expect(byId.get(orphan.id)?.user).toBeNull()
@@ -325,10 +323,10 @@ describe('canResend', () => {
       templateKey,
     })
 
-    const page = dataOf<PageBody>(await get(token, '/emails', { q: tag }))
+    const page = dataOf<PageBody>(await get(token, '/emails', { search: tag }))
 
     expect(await canResendAs(token, message.id)).toBe(false)
-    expect(page.messages.find((row) => row.id === message.id)?.canResend).toBe(false)
+    expect(page.items.find((row) => row.id === message.id)?.canResend).toBe(false)
   })
 
   it('is true for a verification resend to an unverified, active user', async () => {
@@ -349,9 +347,9 @@ describe('canResend', () => {
     const user = await createTrackedUser({ email: `${tag}@example.test` })
     const message = await createTrackedMessage({ recipient: user.email, userId: user.id })
 
-    const page = dataOf<PageBody>(await get(token, '/emails', { q: tag }))
+    const page = dataOf<PageBody>(await get(token, '/emails', { search: tag }))
 
-    expect(page.messages.find((row) => row.id === message.id)?.canResend).toBe(
+    expect(page.items.find((row) => row.id === message.id)?.canResend).toBe(
       await canResendAs(token, message.id)
     )
   })
@@ -513,7 +511,7 @@ describe('GET /api/v1/platform/emails/health', () => {
 })
 
 describe('GET /api/v1/platform/email-suppressions', () => {
-  it('lists active suppressions by default, lifted and all on request, with the lifter named', async () => {
+  it('lists active suppressions by default, lifted and both on request, with the lifter named', async () => {
     const { token } = await createTrackedStaff('viewer')
     const tag = tagged()
     const active = await createTrackedSuppression(`${tag}-a@example.test`)
@@ -524,19 +522,19 @@ describe('GET /api/v1/platform/email-suppressions', () => {
      * The ids of the suppressions listed for this test's tag, with the extra `query`.
      */
     const ids = async (query: Record<string, string>): Promise<string[]> =>
-      dataOf<{ suppressions: { id: string }[] }>(
-        await get(token, '/email-suppressions', { q: tag, ...query })
-      ).suppressions.map((row) => row.id)
+      dataOf<{ items: { id: string }[] }>(
+        await get(token, '/email-suppressions', { search: tag, ...query })
+      ).items.map((row) => row.id)
 
     expect(await ids({})).toEqual([active.id])
     expect(await ids({ state: 'lifted' })).toEqual([lifted.id])
-    const all = await ids({ state: 'all' })
+    const all = await ids({ state: 'active,lifted' })
     expect(all.toSorted(byText)).toEqual([active.id, lifted.id].toSorted(byText))
 
-    const page = dataOf<{ suppressions: Record<string, unknown>[] }>(
-      await get(token, '/email-suppressions', { q: tag, state: 'lifted' })
+    const page = dataOf<{ items: Record<string, unknown>[] }>(
+      await get(token, '/email-suppressions', { search: tag, state: 'lifted' })
     )
-    expect(page.suppressions[0]).toMatchObject({
+    expect(page.items[0]).toMatchObject({
       address: `${tag}-b@example.test`,
       reason: 'hard_bounce',
       liftedBy: { id: lifter.id, name: 'Grace' },
@@ -553,16 +551,9 @@ describe('GET /api/v1/platform/email-suppressions', () => {
 })
 
 describe('out-of-range staff dates are a 400', () => {
-  const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
-
   it.each([
     ['/emails', { from: '9999-12-31', to: '9999-12-31' }],
     ['/emails', { from: '0000-01-01' }],
-    ['/emails', { cursor: encodeCursor({ sortAt: '9999-99-99T99:99:99.999999Z', id: ID }) }],
-    [
-      '/email-suppressions',
-      { cursor: encodeCursor({ sortAt: '2026-02-30T00:00:00.000000Z', id: ID }) },
-    ],
   ])('GET %s %j', async (path, query) => {
     const { token } = await createTrackedStaff('viewer')
     const response = await request(app)
@@ -572,17 +563,12 @@ describe('out-of-range staff dates are a 400', () => {
     expect(response.status).toBe(400)
   })
 
-  it('still accepts the widest real range and a real cursor', async () => {
+  it('still accepts the widest real range', async () => {
     const { token } = await createTrackedStaff('viewer')
     const range = await request(app)
       .get('/api/v1/platform/emails')
       .query({ from: '0001-01-01', to: '9998-12-31' })
       .set('Authorization', `Bearer ${token}`)
     expect(range.status).toBe(200)
-    const cursor = await request(app)
-      .get('/api/v1/platform/email-suppressions')
-      .query({ cursor: encodeCursor({ sortAt: '2024-02-29T23:59:59.999999Z', id: ID }) })
-      .set('Authorization', `Bearer ${token}`)
-    expect(cursor.status).toBe(200)
   })
 })
