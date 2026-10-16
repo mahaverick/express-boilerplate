@@ -20,15 +20,15 @@ interface Thing {
   id: string
   name: string
   kind: 'a' | 'b'
+  createdAt: string
 }
 
-// eslint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
-const NONE = null
 const things: Thing[] = []
+const BASE = Date.UTC(2026, 0, 1)
 const tag = `c${randomUUID().slice(0, 8)}`
 
 const schema = listParamsSchema({
-  sorts: ['name', '-name'],
+  sorts: ['name', '-name', 'created', '-created'],
   defaultSort: 'name',
   filters: { kind: listFilter('kind', ['a', 'b']).optional() },
 })
@@ -39,8 +39,25 @@ const definition: InMemoryListDefinition<Thing, Thing> = {
   sorts: {
     name: [{ direction: 'asc', of: (thing) => thing.name, value: z.string() }],
     '-name': [{ direction: 'desc', of: (thing) => thing.name, value: z.string() }],
+    created: [{ direction: 'asc', of: (thing) => thing.createdAt, value: z.string() }],
+    '-created': [{ direction: 'desc', of: (thing) => thing.createdAt, value: z.string() }],
   },
   toItem: (thing) => thing,
+}
+
+/**
+ * Add `count` things: names and creation times that repeat in pairs, so every sort has ties.
+ * @param count - How many.
+ */
+function seedThings(count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    things.push({
+      id: randomUUID(),
+      name: `${tag}-${String(Math.floor(index / 2)).padStart(4, '0')}`,
+      kind: index % 2 === 0 ? 'a' : 'b',
+      createdAt: new Date(BASE + Math.floor((index + 1) / 2) * 1000).toISOString(),
+    })
+  }
 }
 
 const app = express()
@@ -71,16 +88,16 @@ describeListContract({
   path: () => '/things',
   headers: () => ({}),
   isolate: () => ({ search: tag }),
-  sorts: ['name', '-name'],
+  sorts: ['name', '-name', 'created', '-created'],
+  order: {
+    name: (thing) => (thing as Thing).name,
+    '-name': (thing) => (thing as Thing).name,
+    created: (thing) => (thing as Thing).createdAt,
+    '-created': (thing) => (thing as Thing).createdAt,
+  },
   setup: async () => {},
   seed: (count) => {
-    for (let index = 0; index < count; index += 1) {
-      things.push({
-        id: randomUUID(),
-        name: `${tag}-${String(index).padStart(4, '0')}`,
-        kind: index % 2 === 0 ? 'a' : 'b',
-      })
-    }
+    seedThings(count)
     return Promise.resolve()
   },
   clear: () => {
@@ -88,72 +105,22 @@ describeListContract({
     return Promise.resolve()
   },
   teardown: async () => {},
-  search: { text: `${tag}-0003`, count: 1 },
+  search: { text: `${tag}-0001`, count: 2 },
   filters: [
     { query: { kind: 'a' }, count: 3 },
     { query: { kind: 'b,a' }, count: 5 },
   ],
 })
 
-/**
- * One page of `rows` read through the same schema and definition the contract uses.
- * @param rows - The rows left in the list.
- * @param query - The request's query.
- * @returns The page.
- */
-function readPage(
-  rows: Thing[],
-  query: Record<string, string>
-): ReturnType<typeof listPageInMemory> {
-  const { params } = parseBody(schema, query)
-  return listPageInMemory(rows, definition, params)
-}
-
-describe('an edge page read after the rows behind a cursor are deleted', () => {
-  const rows: Thing[] = Array.from({ length: 5 }, (_unused, index) => ({
-    id: randomUUID(),
-    name: `edge-${String(index)}`,
-    kind: 'a',
-  }))
-  /**
-   * The names on a page, in order.
-   * @param page - A page of things.
-   * @returns Its names.
-   */
-  const names = (page: ReturnType<typeof readPage>): string[] =>
-    page.items.map((item) => (item as Thing).name)
-
-  it('continues forward from a first page that has more rows beyond it', () => {
-    const second = readPage(rows, {
-      limit: '2',
-      cursor: String(readPage(rows, { limit: '2' }).page.nextCursor),
-    })
-    const remaining = rows.slice(2)
-    const first = readPage(remaining, {
-      limit: '2',
-      direction: 'prev',
-      cursor: String(second.page.prevCursor),
-    })
-    expect(names(first)).toEqual(['edge-2', 'edge-3'])
-    expect(first.page).toMatchObject({ hasPrev: false, hasNext: true, prevCursor: NONE })
-    const next = readPage(remaining, { limit: '2', cursor: String(first.page.nextCursor) })
-    expect(names(next)).toEqual(['edge-4'])
-    expect(next.page).toMatchObject({ hasPrev: true, hasNext: false, nextCursor: NONE })
-  })
-
-  it('continues backward from a last page that has more rows before it', () => {
-    const first = readPage(rows, { limit: '2' })
-    const second = readPage(rows, { limit: '2', cursor: String(first.page.nextCursor) })
-    const remaining = rows.slice(0, 4)
-    const last = readPage(remaining, { limit: '2', cursor: String(second.page.nextCursor) })
-    expect(names(last)).toEqual(['edge-2', 'edge-3'])
-    expect(last.page).toMatchObject({ hasNext: false, hasPrev: true, nextCursor: NONE })
-    const before = readPage(remaining, {
-      limit: '2',
-      direction: 'prev',
-      cursor: String(last.page.prevCursor),
-    })
-    expect(names(before)).toEqual(['edge-0', 'edge-1'])
-    expect(before.page).toMatchObject({ hasPrev: false, hasNext: true })
+describe('the test list seed', () => {
+  it('gives every sort key distinct values and a tie', () => {
+    things.length = 0
+    seedThings(5)
+    for (const key of ['name', 'createdAt'] as const) {
+      const values = things.map((thing) => thing[key])
+      expect(new Set(values).size).toBeGreaterThan(1)
+      expect(new Set(values).size).toBeLessThan(values.length)
+    }
+    things.length = 0
   })
 })

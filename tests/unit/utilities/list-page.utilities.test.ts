@@ -243,6 +243,28 @@ describe('listPageInMemory', () => {
     })
   })
 
+  it('continues forward from a first page read after the rows before the cursor are deleted', () => {
+    const second = page({ cursor: String(page({}).page.nextCursor) })
+    const remaining = rows.slice(2)
+    const first = page({ direction: 'prev', cursor: String(second.page.prevCursor) }, remaining)
+    expect(first.items).toEqual(['k2', 'k3'])
+    expect(first.page).toMatchObject({ hasPrev: false, hasNext: true, prevCursor: NONE })
+    const next = page({ cursor: String(first.page.nextCursor) }, remaining)
+    expect(next.items).toEqual(['k4'])
+    expect(next.page).toMatchObject({ hasPrev: true, hasNext: false, nextCursor: NONE })
+  })
+
+  it('continues backward from a last page read after the rows after the cursor are deleted', () => {
+    const second = page({ cursor: String(page({}).page.nextCursor) })
+    const remaining = rows.slice(0, 4)
+    const last = page({ cursor: String(second.page.nextCursor) }, remaining)
+    expect(last.items).toEqual(['k2', 'k3'])
+    expect(last.page).toMatchObject({ hasNext: false, hasPrev: true, nextCursor: NONE })
+    const before = page({ direction: 'prev', cursor: String(last.page.prevCursor) }, remaining)
+    expect(before.items).toEqual(['k0', 'k1'])
+    expect(before.page).toMatchObject({ hasPrev: false, hasNext: true })
+  })
+
   it('sorts descending, and breaks ties on the id in the first column’s direction', () => {
     expect(page({ sort: '-key', limit: '5' }).items).toEqual(['k4', 'k3', 'k2', 'k1', 'k0'])
     expect(page({ sort: 'rank', limit: '5' }).items).toEqual(['k0', 'k2', 'k4', 'k1', 'k3'])

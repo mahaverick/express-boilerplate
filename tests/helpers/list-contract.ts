@@ -1,13 +1,15 @@
 /**
  * @file The shared list contract suite. `describeListContract` runs, for one
  * list endpoint: the first page, next, prev back to the first page, every
- * sort read in pages and in one read (both ways), search, multi-value
- * filters, the exact total and the capped total, and the 400s (unknown
- * sort, `prev` with no cursor, a tampered, oversize or empty cursor, and a
- * cursor reused under another sort, search or filter, each the one
- * `CURSOR_INVALID` body). A list describes its rows
- * through a `ListContract`; `seed` inserts them in one statement, so rows
- * share a `created_at` and every sort's tiebreaker is exercised.
+ * sort read in pages and in one read (both ways) and checked against the
+ * real order of its key (monotonic, ids breaking ties, the seed varied
+ * enough to prove it), the default sort, search, multi-value filters, the
+ * exact total and the capped total, and the 400s (unknown sort, `prev`
+ * with no cursor, a tampered, oversize or empty cursor, and a cursor
+ * reused under another sort, search or filter, each the one
+ * `CURSOR_INVALID` body). A list describes its rows through a
+ * `ListContract`; `seed` inserts them in one statement and must give every
+ * sort key at least two distinct values and one tie, or the suite fails.
  */
 import type { RequestListener } from 'node:http'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -46,67 +48,75 @@ interface Envelope {
  */
 export interface ListContract {
   /**
-  The describe title, e.g. `GET /api/v1/platform/tenants`.
+   * The describe title, e.g. `GET /api/v1/platform/tenants`.
    */
   name: string
   /**
-  The app under test.
+   * The app under test.
    */
   app: () => RequestListener
   /**
-  The list's URL path, read after `setup` has run.
+   * The list's URL path, read after `setup` has run.
    */
   path: () => string
   /**
-  Headers that authenticate a caller who may read the list.
+   * Headers that authenticate a caller who may read the list.
    */
   headers: () => Record<string, string>
   /**
-  Params that select this contract's rows and nothing else in the worker's database; merged into every request.
+   * Params that select this contract's rows and nothing else in the worker's database; merged into every request.
    */
   isolate: () => Record<string, string>
   /**
-  Every whitelisted sort key, the default first.
+   * Every whitelisted sort key, the default first.
    */
   sorts: readonly [string, ...string[]]
   /**
-  Creates what every case needs (a caller, a tenant), once.
+   * One key function per entry of `sorts`, reading the sorted value as the response shows it (a computed key, like a role rank or `lastSignIn ?? -Infinity`, comes from the endpoint). A leading `-` on the sort means the keys must fall; ids break ties in the same direction.
+   */
+  order: Readonly<Record<string, (item: unknown) => string | number>>
+  /**
+   * The sort a request without `sort` uses, given the request's filter query; `sorts[0]` when absent.
+   */
+  defaultSort?: (filters: Record<string, string>) => string
+  /**
+   * Creates what every case needs (a caller, a tenant), once.
    */
   setup: () => Promise<void>
   /**
-  Inserts `count` rows that `isolate` selects, in one statement.
+   * Inserts `count` rows that `isolate` selects, in one statement.
    */
   seed: (count: number) => Promise<void>
   /**
-  Deletes every row `seed` inserted.
+   * Deletes every row `seed` inserted.
    */
   clear: () => Promise<void>
   /**
-  Deletes what `setup` created.
+   * Deletes what `setup` created.
    */
   teardown: () => Promise<void>
   /**
-  An item's id, for comparing pages; `item.id` when absent.
+   * An item's id, for comparing pages; `item.id` when absent.
    */
   idOf?: (item: unknown) => string
   /**
-  Rows `isolate` selects after `seed(5)`, when not 5: the caller's own membership adds one; the fixed flags registry has two.
+   * Rows `isolate` selects after `seed(5)`, when not 5: the caller's own membership adds one; the fixed flags registry has two.
    */
   visible?: number
   /**
-  The page size the paging tests use; 2 unless the list holds too few rows for three pages.
+   * The page size the paging tests use; 2 unless the list holds too few rows for three pages.
    */
   pageSize?: number
   /**
-  A search, isolated like every request, that selects exactly `count` rows after `seed(5)`.
+   * A search, isolated like every request, that selects exactly `count` rows after `seed(5)`.
    */
   search: { text: string; count: number }
   /**
-  Filter queries, each with the number of rows it selects after `seed(5)`; one per filter, a comma list where the filter takes one.
+   * Filter queries, each with the number of rows it selects after `seed(5)`; one per filter, a comma list where the filter takes one. The first must select a view other than the endpoint's default, or the cursor replay under it would hash the same and be accepted.
    */
   filters?: readonly { query: Record<string, string>; count: number }[]
   /**
-  False when the list cannot hold 1001 isolated rows (the fixed flags registry).
+   * False when the list cannot hold 1001 isolated rows (the fixed flags registry).
    */
   canCap?: boolean
 }
@@ -204,6 +214,63 @@ function tampered(cursor: string): string {
 }
 
 /**
+ * Compare two sort keys.
+ * @param left - One key.
+ * @param right - The other.
+ * @returns Negative when `left` is smaller, positive when larger, 0 when equal.
+ */
+function compare(left: string | number, right: string | number): number {
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+/**
+ * Assert that a page's items read in the real order of the sort's key: the
+ * keys never move against the sort's direction, and rows with equal keys
+ * have ids in the same direction.
+ * @param contract - The list.
+ * @param sort - The sort the items were read under.
+ * @param items - The items, in the order the server returned them.
+ */
+function expectOrdered(contract: ListContract, sort: string, items: readonly unknown[]): void {
+  const key = contract.order[sort]
+  if (key === undefined) throw new Error(`the contract has no order key for sort ${sort}`)
+  const sign = sort.startsWith('-') ? -1 : 1
+  for (let index = 1; index < items.length; index += 1) {
+    const before = items[index - 1]
+    const after = items[index]
+    const byKey = sign * compare(key(before), key(after))
+    const byId = sign * compare(idOf(contract, before), idOf(contract, after))
+    expect(
+      byKey,
+      `sort=${sort}: ${String(key(before))} before ${String(key(after))}`
+    ).toBeLessThanOrEqual(0)
+    if (byKey === 0) {
+      expect(byId, `sort=${sort}: ids of equal keys ${String(key(before))}`).toBeLessThan(0)
+    }
+  }
+}
+
+/**
+ * Assert the seed varies the sort's key enough for `expectOrdered` to bite:
+ * at least two distinct values and at least one tie.
+ * @param contract - The list.
+ * @param sort - The sort.
+ * @param items - The whole list read under that sort.
+ */
+function expectVariedSeed(contract: ListContract, sort: string, items: readonly unknown[]): void {
+  const key = contract.order[sort]
+  if (key === undefined) throw new Error(`the contract has no order key for sort ${sort}`)
+  const keys = items.map((item) => key(item))
+  const distinct = new Set(keys).size
+  expect(
+    distinct,
+    `sort=${sort}: the seed gives the key fewer than 2 distinct values`
+  ).toBeGreaterThan(1)
+  expect(distinct, `sort=${sort}: the seed gives the key no tie`).toBeLessThan(keys.length)
+}
+
+/**
  * Register the shared list contract suite for one endpoint.
  * @param contract - The list.
  */
@@ -242,25 +309,39 @@ export function describeListContract(contract: ListContract): void {
         expect(back.page).toMatchObject({ hasPrev: false, prevCursor: NONE, hasNext: true })
       })
 
-      it.each(contract.sorts)('sort=%s reads every row once, in pages either way', async (sort) => {
-        const whole = await pageOf(contract, { sort, limit: '100' })
-        const ids = whole.items.map((item) => idOf(contract, item))
-        expect(ids).toHaveLength(visible)
-        expect(new Set(ids).size).toBe(visible)
-        const { forward, backward } = await walk(contract, { sort })
-        expect(forward).toEqual(ids)
-        expect(backward).toEqual(ids)
-      })
+      const wholes = new Map<string, string[]>()
 
-      it('reads a descending sort as the exact reverse of its ascending pair', async () => {
+      it.each(contract.sorts)(
+        'sort=%s reads every row once, in order, in pages either way',
+        async (sort) => {
+          const whole = await pageOf(contract, { sort, limit: '100' })
+          const ids = whole.items.map((item) => idOf(contract, item))
+          wholes.set(sort, ids)
+          expect(ids).toHaveLength(visible)
+          expect(new Set(ids).size).toBe(visible)
+          expectVariedSeed(contract, sort, whole.items)
+          expectOrdered(contract, sort, whole.items)
+          const { forward, backward } = await walk(contract, { sort })
+          expect(forward).toEqual(ids)
+          expect(backward).toEqual(ids)
+        }
+      )
+
+      it('reads a descending sort as the exact reverse of its ascending pair', () => {
         const pairs = contract.sorts.filter((sort) => contract.sorts.includes(`-${sort}`))
         for (const sort of pairs) {
-          const up = await pageOf(contract, { sort, limit: '100' })
-          const down = await pageOf(contract, { sort: `-${sort}`, limit: '100' })
-          expect(down.items.map((item) => idOf(contract, item))).toEqual(
-            up.items.map((item) => idOf(contract, item)).toReversed()
-          )
+          const up = wholes.get(sort) ?? []
+          const down = wholes.get(`-${sort}`) ?? []
+          expect(up).toHaveLength(visible)
+          expect(down).toEqual(up.toReversed())
         }
+      })
+
+      it('reads the default sort when none is given', async () => {
+        const defaultSort = contract.defaultSort?.({}) ?? contract.sorts[0]
+        const unsorted = await pageOf(contract, { limit: '100' })
+        expectOrdered(contract, defaultSort, unsorted.items)
+        expect(unsorted.items.map((item) => idOf(contract, item))).toEqual(wholes.get(defaultSort))
       })
 
       it('searches', async () => {
@@ -273,6 +354,9 @@ export function describeListContract(contract: ListContract): void {
         for (const filter of filters) {
           const found = await pageOf(contract, { ...filter.query, limit: '100' })
           expect(found.items, JSON.stringify(filter.query)).toHaveLength(filter.count)
+          if (contract.defaultSort !== undefined) {
+            expectOrdered(contract, contract.defaultSort(filter.query), found.items)
+          }
         }
       })
 
@@ -295,26 +379,67 @@ export function describeListContract(contract: ListContract): void {
         expect(body.errors?.cursor).toEqual(['cursor is required when direction is prev.'])
       })
 
-      it('refuses a tampered, oversize, empty or replayed cursor with one body', async () => {
-        const first = await pageOf(contract, { limit: size })
-        const cursor = String(first.page.nextCursor)
-        const otherSort = contract.sorts[1]
-        const otherFilter = contract.filters?.[0]?.query
-        const refused: Record<string, string>[] = [
+      let issued: Promise<string> | undefined
+      /**
+       * A cursor the server issued for the unfiltered, default view; one read per block.
+       * @returns The cursor.
+       */
+      const issuedCursor = async (): Promise<string> => {
+        issued ??= (async () => {
+          const first = await pageOf(contract, { limit: size })
+          return String(first.page.nextCursor)
+        })()
+        return await issued
+      }
+
+      /**
+       * Assert a query is refused with the one cursor body.
+       * @param query - Params on top of the page size.
+       */
+      const expectRefused = async (query: Record<string, string>): Promise<void> => {
+        const { status, body } = await get(contract, { limit: size, ...query })
+        expect(status, JSON.stringify(query)).toBe(400)
+        expect(body.code).toBe('CURSOR_INVALID')
+        expect(body.errors).toEqual({ cursor: ['cursor is invalid.'] })
+      }
+
+      it('refuses a tampered, oversize or empty cursor with one body', async () => {
+        const cursor = await issuedCursor()
+        for (const query of [
           { cursor: tampered(cursor) },
           { cursor: 'a'.repeat(4097) },
           { cursor: '' },
-          { cursor, search: `${contract.isolate().search ?? ''}zzz` },
-          ...(otherSort === undefined ? [] : [{ cursor, sort: otherSort }]),
-          ...(otherFilter === undefined ? [] : [{ cursor, ...otherFilter }]),
-        ]
-        for (const query of refused) {
-          const { status, body } = await get(contract, { limit: size, ...query })
-          expect(status, JSON.stringify(query)).toBe(400)
-          expect(body.code).toBe('CURSOR_INVALID')
-          expect(body.errors).toEqual({ cursor: ['cursor is invalid.'] })
+        ]) {
+          await expectRefused(query)
         }
       })
+
+      it('refuses a cursor replayed under another search', async () => {
+        await expectRefused({
+          cursor: await issuedCursor(),
+          search: `${contract.isolate().search ?? ''}zzz`,
+        })
+      })
+
+      const otherSort = contract.sorts[1]
+      if (otherSort === undefined) {
+        // eslint-disable-next-line sonarjs/assertions-in-tests -- a skip that names why this list has nothing to replay
+        it.skip('refuses a cursor replayed under another sort (the list has one sort)', () => {})
+      } else {
+        it('refuses a cursor replayed under another sort', async () => {
+          await expectRefused({ cursor: await issuedCursor(), sort: otherSort })
+        })
+      }
+
+      const otherFilter = contract.filters?.[0]?.query
+      if (otherFilter === undefined) {
+        // eslint-disable-next-line sonarjs/assertions-in-tests -- a skip that names why this list has nothing to replay
+        it.skip('refuses a cursor replayed under another filter (the list has no filters)', () => {})
+      } else {
+        it('refuses a cursor replayed under another filter', async () => {
+          await expectRefused({ cursor: await issuedCursor(), ...otherFilter })
+        })
+      }
     })
 
     if (contract.canCap !== false) {
