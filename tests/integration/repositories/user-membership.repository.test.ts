@@ -27,7 +27,8 @@ const userRepository = new UserRepository()
  * worker's database hold.
  */
 function uniqueEmail(): string {
-  return `membership-repo-${randomUUID()}@example.test`
+  // Digits only: a hex UUID can contain a name a search test looks for ("ada").
+  return `membership-repo-${randomUUID().replaceAll(/\D/g, '')}@example.test`
 }
 
 /**
