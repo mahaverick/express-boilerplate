@@ -99,7 +99,7 @@ export default tseslint.config(
       // Collapses guard ladders such as canActorModifyTarget, and its output trips prefer-logical-operator-over-ternary.
       'unicorn/prefer-ternary': 'off',
 
-      // env, db and repository are the canonical names (process.env, Drizzle's db, *.repository.ts files).
+      // env, db and repository are the canonical names (process.env, Drizzle's db, *.repository.ts files); params and def are allowed only for the list contract's exported names (ListParams, listParamsSchema, SortDef), locals still spell parameters.
       'unicorn/name-replacements': [
         'error',
         { replacements: { env: false, db: false, repository: false, params: false, def: false } },

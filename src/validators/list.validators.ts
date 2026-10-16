@@ -26,7 +26,7 @@ const searchField = z
  * `limit`: 1–100, 20 by default.
  */
 const limitField = z.coerce
-  .number()
+  .number({ error: 'limit must be a whole number.' })
   .int('limit must be a whole number.')
   .min(1, 'limit must be at least 1.')
   .max(MAX_LIMIT, `limit must be at most ${MAX_LIMIT}.`)
@@ -53,7 +53,7 @@ export function listFilter<const TValues extends readonly [string, ...string[]]>
       })
       return z.NEVER
     }
-    return [...new Set(parts)].toSorted((a, b) => a.localeCompare(b))
+    return [...new Set(parts)].toSorted((a, b) => a.localeCompare(b, 'en'))
   })
 }
 

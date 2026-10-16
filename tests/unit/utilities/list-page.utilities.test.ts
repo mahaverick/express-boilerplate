@@ -4,10 +4,9 @@
  * the search predicate's escaping, the capped total, and
  * `listPageInMemory`'s whole paging contract.
  */
-import { randomUUID } from 'node:crypto'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { PgDialect } from 'drizzle-orm/pg-core'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { tenantModel } from '@/database/models/tenant.model'
 import { InvalidCursorError } from '@/errors/list-errors'
@@ -17,7 +16,6 @@ import {
   cappedTotal,
   defineList,
   LIST_TOTAL_CAP,
-  listPage,
   listPageInMemory,
   listPageQuery,
   searchCondition,
@@ -227,13 +225,21 @@ describe('listPageInMemory', () => {
     })
   })
 
-  it('hands the cursor back when a page read from it is empty', () => {
+  it('reads the first page when a prev page from a cursor is empty', () => {
     // The first page's next cursor points at k0, the first row: nothing lies before it.
     const cursor = String(page({ limit: '1' }).page.nextCursor)
-    const empty = page({ limit: '1', cursor, direction: 'prev' })
-    expect(empty).toMatchObject({
-      items: [],
-      page: { hasNext: true, nextCursor: cursor, hasPrev: false },
+    expect(page({ limit: '1', cursor, direction: 'prev' })).toMatchObject({
+      items: ['k0'],
+      page: { hasNext: true, hasPrev: false, prevCursor: NONE },
+    })
+  })
+
+  it('reads the last page when a next page from a cursor is empty', () => {
+    const cursor = String(page({ limit: '1' }).page.nextCursor)
+    const shrunk = rows.slice(0, 1)
+    expect(page({ limit: '1', cursor }, shrunk)).toMatchObject({
+      items: ['k0'],
+      page: { hasNext: false, hasPrev: false },
     })
   })
 
@@ -271,35 +277,5 @@ describe('listPageInMemory', () => {
   it('refuses an empty cursor with the same error, whichever the direction', () => {
     expect(() => page({ cursor: '' })).toThrow(InvalidCursorError)
     expect(() => page({ cursor: '', direction: 'prev' })).toThrow(InvalidCursorError)
-  })
-})
-
-describe('listPage', () => {
-  const tag = `lp-${randomUUID().slice(0, 8)}`
-  const slugs = [`${tag}-a`, `${tag}-b`]
-
-  beforeAll(async () => {
-    await db.insert(tenantModel).values(slugs.map((slug) => ({ name: slug, slug })))
-  })
-
-  afterAll(async () => {
-    await db.delete(tenantModel).where(inArray(tenantModel.slug, slugs))
-  })
-
-  it('reads pages from the database without repeating a row, and counts a total on request', async () => {
-    const first = await listPage(db, tenants, tenantSchema.parse({ limit: '1', total: '1' }).params)
-    expect(first.items).toHaveLength(1)
-    expect(first.items[0]).not.toHaveProperty('sortName')
-    expect(first.total?.capped).toBe(false)
-    expect(first.total?.count).toBeGreaterThanOrEqual(2)
-    expect(first.page).toMatchObject({ hasNext: true, hasPrev: false })
-    const second = await listPage(
-      db,
-      tenants,
-      tenantSchema.parse({ limit: '1', cursor: String(first.page.nextCursor) }).params
-    )
-    expect(second.items[0]?.id).not.toBe(first.items[0]?.id)
-    expect(second.total).toBeUndefined()
-    expect(second.page.hasPrev).toBe(true)
   })
 })

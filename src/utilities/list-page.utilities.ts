@@ -335,8 +335,7 @@ const NO_CURSOR = null
 
 /**
  * Trim the look-ahead row, put a backwards page back in display order, and
- * set both cursors. A page read from a cursor that comes back empty hands
- * that cursor back on the side it came from.
+ * set both cursors. A side with no rows beyond the page has no cursor.
  * @param assembly - The rows and how to read them.
  * @returns The page, without its total.
  */
@@ -350,12 +349,10 @@ function toListPage<Row, Item>(assembly: PageAssembly<Row, Item>): ListPage<Item
   const hasNext = isPrevious ? assembly.hadCursor : hasMore
   const hasPrevious = isPrevious ? hasMore : assembly.hadCursor
   /**
-   * The cursor at a boundary row, or the request's own when the page is empty.
+   * The cursor at a boundary row, none for an empty page.
    */
-  const cursorAt = (row: Row | undefined): string | null => {
-    if (row === undefined) return params.cursor ?? NO_CURSOR
-    return signCursor(params.sort, params.scope, assembly.keysOf(row))
-  }
+  const cursorAt = (row: Row | undefined): string | null =>
+    row === undefined ? NO_CURSOR : signCursor(params.sort, params.scope, assembly.keysOf(row))
   return {
     items: rows.map((row) => assembly.toItem(row)),
     page: {
@@ -378,7 +375,46 @@ export function cappedTotal(count: number): { count: number; capped: boolean } {
 }
 
 /**
+ * The request for the edge page a cursor read falls back to when it finds
+ * no rows: no cursor, and the direction flipped, so an empty `prev` reads
+ * the first page and an empty `next` reads the last.
+ * @param params - The request whose cursor read came back empty.
+ * @returns The request for the edge page.
+ */
+function edgeRequest(params: ListParams): ListParams {
+  return { ...params, cursor: undefined, direction: params.direction === 'prev' ? 'next' : 'prev' }
+}
+
+/**
+ * One page read from the request's own cursor.
+ * @param executor - Where to run the query.
+ * @param definition - The list.
+ * @param params - The parsed request.
+ * @returns The page without its total, or undefined when a cursor read finds no rows.
+ */
+async function readPage<TQuery extends PgSelect, Item>(
+  executor: DbExecutor,
+  definition: ListDefinition<TQuery, Item>,
+  params: ListParams
+): Promise<ListPage<Item> | undefined> {
+  const prepared = prepare(definition, params)
+  const rows = (await queryFor(executor, definition, params, prepared)) as ListRow<TQuery>[]
+  if (rows.length === 0 && prepared.keys !== undefined) return undefined
+  return toListPage({
+    rows,
+    params,
+    hadCursor: prepared.keys !== undefined,
+    isPrevious: prepared.isPrevious,
+    keysOf: (row) => keysOf(row, prepared.columns),
+    toItem: definition.toItem,
+  })
+}
+
+/**
  * One page of a list over the database, and its capped total when asked for.
+ * A page read from a cursor that finds no rows (the rows around it were
+ * deleted) is replaced by the edge page on that side, so no row the cursor
+ * stood beside is skipped or repeated.
  * @param executor - Where to run the queries.
  * @param definition - The list.
  * @param params - The parsed request.
@@ -390,16 +426,9 @@ export async function listPage<TQuery extends PgSelect, Item>(
   definition: ListDefinition<TQuery, Item>,
   params: ListParams
 ): Promise<ListPage<Item>> {
-  const prepared = prepare(definition, params)
-  const rows = (await queryFor(executor, definition, params, prepared)) as ListRow<TQuery>[]
-  const page = toListPage({
-    rows,
-    params,
-    hadCursor: prepared.keys !== undefined,
-    isPrevious: prepared.isPrevious,
-    keysOf: (row) => keysOf(row, prepared.columns),
-    toItem: definition.toItem,
-  })
+  const read = await readPage(executor, definition, params)
+  const page = read ?? (await readPage(executor, definition, edgeRequest(params)))
+  if (page === undefined) throw new Error('an edge page read has no cursor to find empty')
   if (!params.total) return page
   const counted = definition.base(executor, undefined).limit(LIST_TOTAL_CAP + 1)
   const [row] = await executor.execute<{ count: number }>(
@@ -453,19 +482,18 @@ function compareKeys(
 }
 
 /**
- * One page of an already filtered and searched array, with the same
- * contract, cursor and total as `listPage`.
+ * One page of an array read from the request's own cursor.
  * @param rows - Every row that matches the request's search and filters.
  * @param definition - The list.
  * @param params - The parsed request.
- * @returns The page.
+ * @returns The page without its total, or undefined when a cursor read finds no rows.
  * @throws {InvalidCursorError} When the cursor does not verify.
  */
-export function listPageInMemory<Row, Item>(
+function readMemoryPage<Row, Item>(
   rows: readonly Row[],
   definition: InMemoryListDefinition<Row, Item>,
   params: ListParams
-): ListPage<Item> {
+): ListPage<Item> | undefined {
   const sortColumns = definition.sorts[params.sort]
   if (sortColumns === undefined) throw new Error(`sort ${params.sort} is not whitelisted`)
   const columns = [
@@ -492,7 +520,8 @@ export function listPageInMemory<Row, Item>(
     .map((row) => ({ row, keys: keysOfRow(row) }))
     .toSorted((a, b) => compareKeys(a.keys, b.keys, directions))
     .filter((entry) => keys === undefined || compareKeys(entry.keys, keys, directions) > 0)
-  const page = toListPage({
+  if (keys !== undefined && ordered.length === 0) return undefined
+  return toListPage({
     rows: ordered.slice(0, params.limit + 1).map((entry) => entry.row),
     params,
     hadCursor: keys !== undefined,
@@ -500,6 +529,27 @@ export function listPageInMemory<Row, Item>(
     keysOf: keysOfRow,
     toItem: definition.toItem,
   })
+}
+
+/**
+ * One page of an already filtered and searched array, with the same
+ * contract, cursor and total as `listPage`, including the edge page an
+ * empty cursor read falls back to.
+ * @param rows - Every row that matches the request's search and filters.
+ * @param definition - The list.
+ * @param params - The parsed request.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export function listPageInMemory<Row, Item>(
+  rows: readonly Row[],
+  definition: InMemoryListDefinition<Row, Item>,
+  params: ListParams
+): ListPage<Item> {
+  const page =
+    readMemoryPage(rows, definition, params) ??
+    readMemoryPage(rows, definition, edgeRequest(params))
+  if (page === undefined) throw new Error('an edge page read has no cursor to find empty')
   return params.total ? { ...page, total: cappedTotal(rows.length) } : page
 }
 
@@ -523,7 +573,7 @@ export function textSort(
     value: z
       .string()
       .max(1024)
-      .refine((text) => !text.includes('\0')),
+      .refine((text) => !text.includes('\0'), 'cursor text must not contain a NUL character.'),
   }
 }
 
