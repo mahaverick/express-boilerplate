@@ -15,7 +15,7 @@ import { posthogFlagUrl } from '@/configs/analytics.config'
 import {
   FLAG_TRAITS,
   FLAGS,
-  POSTHOG_FLAG_KEY_MAX,
+  LISTED_FLAG_KEY_MAX,
   type FlagEntry,
 } from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
@@ -28,6 +28,7 @@ import { getFlagsStatus } from '@/services/flags/flag-counters.service'
 import { definitionOf, flagStateOf } from '@/services/flags/flag-evaluator.service'
 import { getFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { evaluateAll } from '@/services/flags/flags.service'
+import { logger } from '@/services/logger.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
 import { auditThrottledView } from '@/services/platform-view-audit.service'
 import { redisKey } from '@/services/redis.service'
@@ -100,11 +101,11 @@ function flagRow(entry: FlagEntry, definition: ParsedDefinition | undefined): Fl
 /**
  * The in-memory flag lists sort on the key alone, which is unique, in code-unit
  * order: the order the cursor seek compares in, so pages never skip or repeat a
- * key. A key as long as PostHog allows (what the snapshot accepts) fits a cursor.
+ * key. A key of at most LISTED_FLAG_KEY_MAX characters fits a cursor.
  */
 const BY_KEY = {
   id: (row: { key: string }) => row.key,
-  idValue: z.string().min(1).max(POSTHOG_FLAG_KEY_MAX),
+  idValue: z.string().min(1).max(LISTED_FLAG_KEY_MAX),
   sorts: { key: [] },
 } as const
 
@@ -116,6 +117,21 @@ const BY_KEY = {
  */
 function isMatch(search: string | undefined, ...texts: string[]): boolean {
   return search === undefined || texts.some((text) => text.toLowerCase().includes(search))
+}
+
+/**
+ * Whether a flag key fits a list cursor; a longer one is left out of the
+ * lists, with a warning, and still evaluates.
+ * @param key - The flag key.
+ * @returns True when the key can be listed.
+ */
+function isListable(key: string): boolean {
+  if (key.length <= LISTED_FLAG_KEY_MAX) return true
+  logger.warn('Flag key too long to list; leaving it out of the flags lists', {
+    keyLength: key.length,
+    keyPrefix: key.slice(0, 40),
+  })
+  return false
 }
 
 /**
@@ -157,7 +173,8 @@ export function listUnregisteredFlags(
   const registered = new Set<string>(FLAGS.map((entry) => entry.key))
   const search = query.params.search?.toLowerCase()
   const rows = Object.values(definitions)
-    .filter((flag) => !registered.has(flag.key) && isMatch(search, flag.key))
+    .filter((flag) => !registered.has(flag.key) && isListable(flag.key))
+    .filter((flag) => isMatch(search, flag.key))
     .map((flag) => ({ key: flag.key, active: flag.active, posthogUrl: posthogFlagUrl(flag.id) }))
   const definition: InMemoryListDefinition<UnregisteredRow, UnregisteredRow> = {
     ...BY_KEY,

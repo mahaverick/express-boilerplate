@@ -9,7 +9,6 @@ import {
   FLAG_PERSON_PROPERTY_KEYS,
   flagEntry,
   FLAGS,
-  POSTHOG_FLAG_KEY_MAX,
   type FlagEntry,
 } from '@/constants/flags.constants'
 import {
@@ -124,22 +123,6 @@ function tenantDefinition(conditionFields: Record<string, unknown> = {}): FlagDe
     }
   )
 }
-
-/**
- * Whether the definition schema accepts a flag whose key is `length` characters.
- * @param length - The key length.
- * @returns True when it parses.
- */
-function isKeyAccepted(length: number): boolean {
-  return flagDefinitionSchema.safeParse(rawDefinition({ key: 'a'.repeat(length) })).success
-}
-
-describe('flagDefinitionSchema key length', () => {
-  it('accepts a key of the longest length PostHog allows and refuses a longer one', () => {
-    expect(isKeyAccepted(POSTHOG_FLAG_KEY_MAX)).toBe(true)
-    expect(isKeyAccepted(POSTHOG_FLAG_KEY_MAX + 1)).toBe(false)
-  })
-})
 
 describe('parseDefinitionsResponse', () => {
   it('parses an empty project', () => {

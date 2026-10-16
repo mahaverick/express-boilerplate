@@ -34,7 +34,8 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
 })
 
 const { createApp } = await import('@/app')
-const { FLAG_SNAPSHOT_STALE_MS, POSTHOG_FLAG_KEY_MAX } = await import('@/constants/flags.constants')
+const { FLAG_SNAPSHOT_STALE_MS, LISTED_FLAG_KEY_MAX } = await import('@/constants/flags.constants')
+const { logger } = await import('@/services/logger.service')
 const { TenantRepository } = await import('@/repositories/tenant.repository')
 const { sql } = await import('@/services/database.service')
 const { startFlagSnapshot, stopFlagSnapshot } =
@@ -306,8 +307,8 @@ describe('GET /platform/flags/unregistered', () => {
     expect(page).toMatchObject({ hasNext: false, hasPrev: false })
   })
 
-  it('pages a key of the longest length PostHog allows across a page boundary', async () => {
-    const longKey = 'a'.repeat(POSTHOG_FLAG_KEY_MAX)
+  it('pages a key of the longest listed length across a page boundary', async () => {
+    const longKey = 'a'.repeat(LISTED_FLAG_KEY_MAX)
     await loadFlagDefinitions([flagDefinition(longKey), flagDefinition('b_probe_flag')])
     const { token } = await createTrackedStaff('viewer')
 
@@ -324,6 +325,28 @@ describe('GET /platform/flags/unregistered', () => {
     expect(first.items.map((item) => item.key)).toEqual([longKey])
     expect(dataOf<UnregisteredList>(second).items.map((item) => item.key)).toEqual(['b_probe_flag'])
     expect(dataOf<UnregisteredList>(back).items.map((item) => item.key)).toEqual([longKey])
+  })
+
+  it('leaves a key too long for a cursor out of the list, logs it, and loads the rest', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger)
+    const tooLong = 'a'.repeat(LISTED_FLAG_KEY_MAX + 1)
+    await loadFlagDefinitions([
+      flagDefinition(tooLong),
+      flagDefinition('b_probe_flag'),
+      flagDefinition('c_probe_flag'),
+      betaPageDefinition(true),
+    ])
+    const { token } = await createTrackedStaff('viewer')
+
+    const unregistered = dataOf<UnregisteredList>(await staffGet(token, '/flags/unregistered'))
+    const registry = dataOf<FlagsList>(await staffGet(token, '/flags'))
+
+    expect(unregistered.items.map((item) => item.key)).toEqual(['b_probe_flag', 'c_probe_flag'])
+    expect(registry.items[0]).toMatchObject({ key: 'example_beta_page', state: 'active' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('too long'), {
+      keyLength: LISTED_FLAG_KEY_MAX + 1,
+      keyPrefix: 'a'.repeat(40),
+    })
   })
 
   it('refuses a cursor from the registry list, and the registry list one from this list', async () => {

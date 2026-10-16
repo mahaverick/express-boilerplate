@@ -14,7 +14,6 @@ import {
   FLAG_GROUP_PROPERTY_KEYS,
   FLAG_PERSON_PROPERTY_KEYS,
   FLAGS,
-  POSTHOG_FLAG_KEY_MAX,
   type FlagEntry,
 } from '@/constants/flags.constants'
 
@@ -219,7 +218,7 @@ const filtersSchema = z
  */
 export const flagDefinitionSchema = z.object({
   id: z.number().int(),
-  key: z.string().min(1).max(POSTHOG_FLAG_KEY_MAX),
+  key: z.string().min(1),
   active: z.boolean(),
   deleted: z.boolean().default(false),
   ensure_experience_continuity: z.boolean().nullish(),

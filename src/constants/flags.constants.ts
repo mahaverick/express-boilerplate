@@ -26,12 +26,12 @@ const FLAG_STATE_SET = {
 export const FLAG_STATES = Object.keys(FLAG_STATE_SET) as [FlagState, ...FlagState[]]
 
 /**
- * The longest key PostHog allows a feature flag, and so the longest the
- * definitions snapshot accepts. A cursor carrying one (at most six bytes of
- * JSON escape per character, then base64) stays within the 4096-character
- * cursor cap.
+ * The longest flag key the paged flag lists carry: the longest a list cursor
+ * can hold under the 4096-character cursor cap (at most six bytes of JSON
+ * escape per character, then base64). A longer key still loads into the
+ * snapshot and is evaluated, but the lists leave it out. Not a PostHog limit.
  */
-export const POSTHOG_FLAG_KEY_MAX = 400
+export const LISTED_FLAG_KEY_MAX = 400
 
 /**
  * A flag key: snake_case, starting with a letter.
