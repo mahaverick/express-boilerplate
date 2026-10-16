@@ -97,7 +97,7 @@ describe('platformSuppressionListSchema', () => {
     ])
   })
 
-  it('refuses an unknown state, the retired all, and prev without a cursor', () => {
+  it('refuses an unknown state, state=all, and prev without a cursor', () => {
     expect(platformSuppressionListSchema.safeParse({ state: 'expired' }).success).toBe(false)
     expect(platformSuppressionListSchema.safeParse({ state: 'all' }).success).toBe(false)
     expect(platformSuppressionListSchema.safeParse({ direction: 'prev' }).success).toBe(false)

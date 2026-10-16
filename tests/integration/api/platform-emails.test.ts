@@ -103,7 +103,7 @@ async function canResendAs(token: string, messageId: string): Promise<boolean> {
 }
 
 /**
- * A short unique tag for recipients, so a `search` finds finds only this test's rows.
+ * A short unique tag for recipients, so a `search` finds only this test's rows.
  */
 function tagged(): string {
   return `pe${randomUUID().slice(0, 8)}`
@@ -221,6 +221,32 @@ describe('GET /api/v1/platform/emails', () => {
     expect(await ids({ template: 'tenant_invitation' })).toEqual([invitation.id])
     expect(await ids({ user: user.id })).toEqual([mine.id])
     expect(await ids({ tenant: tenantId })).toEqual([invitation.id])
+  })
+
+  it('applies several filters together, excluding rows that match only some', async () => {
+    const { token } = await createTrackedStaff('viewer')
+    const tag = tagged()
+    const both = await createTrackedMessage({
+      recipient: `${tag}-1@example.test`,
+      status: 'bounced',
+      templateKey: 'account_setup',
+    })
+    await createTrackedMessage({
+      recipient: `${tag}-2@example.test`,
+      status: 'bounced',
+      templateKey: 'password_reset',
+    })
+    await createTrackedMessage({
+      recipient: `${tag}-3@example.test`,
+      status: 'sent',
+      templateKey: 'account_setup',
+    })
+
+    const page = dataOf<PageBody>(
+      await get(token, '/emails', { search: tag, status: 'bounced', template: 'account_setup' })
+    )
+
+    expect(page.items.map((message) => message.id)).toEqual([both.id])
   })
 
   it.each([

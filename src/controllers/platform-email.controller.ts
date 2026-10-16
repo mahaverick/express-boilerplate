@@ -38,7 +38,7 @@ const SUPPRESSION_NOT_FOUND = 'Suppression not found'
  */
 class PlatformEmailController extends BaseController {
   /**
-   * `GET /platform/emails`: search messages, newest first.
+   * `GET /platform/emails`: one page of messages, searchable by recipient, sortable and filterable.
    */
   searchEmails = this.handle(async (request, response) => {
     const query = parseBody(platformEmailListSchema, request.query)
@@ -80,7 +80,7 @@ class PlatformEmailController extends BaseController {
   })
 
   /**
-   * `GET /platform/email-suppressions`: search suppressions, newest first.
+   * `GET /platform/email-suppressions`: one page of suppressions, searchable by address, sortable and filterable by state.
    */
   searchSuppressions = this.handle(async (request, response) => {
     const query = parseBody(platformSuppressionListSchema, request.query)
