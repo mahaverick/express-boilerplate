@@ -88,8 +88,7 @@ async function writeEntry(entry: AuditEntry, executor: DbExecutor): Promise<Audi
     },
     executor
   )
-  // Inserted with `entry.action`, a written action, so the stored union narrows back to it.
-  const written = inserted as WrittenAuditLog
+  const written: WrittenAuditLog = { ...inserted, action: entry.action }
   await enqueueAuditAnalytics(written, executor)
   return inserted
 }

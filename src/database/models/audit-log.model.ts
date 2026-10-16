@@ -103,6 +103,8 @@ export type AuditLog = InferSelectModel<typeof auditLogModel>
 export type WrittenAuditLog = Omit<AuditLog, 'action'> & { action: AuditAction }
 
 /**
- * An audit_logs row as written to the database.
+ * An audit_logs row as written to the database: only a written action, never a retired one.
  */
-export type NewAuditLog = InferInsertModel<typeof auditLogModel>
+export type NewAuditLog = Omit<InferInsertModel<typeof auditLogModel>, 'action'> & {
+  action: AuditAction
+}

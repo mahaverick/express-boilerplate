@@ -57,6 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  target.host = posthog().url
   posthog().groupTypes = [{ group_type: 'tenant', group_type_index: 0 }]
   posthog().groupTypesStatus = 200
   posthog().requests.length = 0
@@ -135,6 +136,7 @@ describe('tenantGroupTypeIndex', () => {
 
   it('logs a network failure at warn as an unanswered call', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     target.host = 'http://127.0.0.1:1'
 
     await expect(tenantGroupTypeIndex()).rejects.toBeInstanceOf(PosthogUnavailableError)
@@ -143,11 +145,12 @@ describe('tenantGroupTypeIndex', () => {
       operation: 'group types',
       outcome: 'network',
     })
-    target.host = posthog().url
+    expect(error).not.toHaveBeenCalled()
   })
 
   it('logs a timeout at warn as an unanswered call', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
       new DOMException('The operation timed out.', 'TimeoutError')
     )
@@ -158,6 +161,7 @@ describe('tenantGroupTypeIndex', () => {
       operation: 'group types',
       outcome: 'timeout',
     })
+    expect(error).not.toHaveBeenCalled()
   })
 
   it.each([

@@ -3,7 +3,7 @@
  * audit_logs_action_check's pattern and column width, and each metadata
  * schema to its exact keys.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import { z } from 'zod'
 import {
   AUDIT_ACCESS_KINDS,
@@ -87,19 +87,6 @@ const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
 const ACTIONS_WITH_METADATA_KEYS = ACTIONS.filter(
   (action) => Object.keys(VALID_METADATA[action]).length > 0
 )
-
-/**
- * Never called: it exists so the compiler checks the entry type.
- */
-const retiredEntry = (): AuditEntry => ({
-  // @ts-expect-error -- a retired action is not an AuditEntry action
-  action: 'user.errors_viewed',
-  actor: 'system',
-  access: 'platform',
-  tenantId: 'tenant',
-  targetId: 'target',
-  metadata: {},
-})
 
 describe('AUDIT_ACTIONS', () => {
   it('lists exactly the actions of the API contract', () => {
@@ -375,7 +362,7 @@ describe('audit value sets', () => {
     })
 
     it('cannot be recorded: an entry for one does not type-check', () => {
-      expect(typeof retiredEntry).toBe('function')
+      expectTypeOf<(typeof RETIRED_AUDIT_ACTIONS)[number]>().not.toExtend<AuditEntry['action']>()
     })
   })
 })
