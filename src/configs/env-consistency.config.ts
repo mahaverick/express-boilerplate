@@ -185,6 +185,19 @@ function rateLimitScaleProblems(env: Env): string[] {
 }
 
 /**
+ * The problem of a deployed environment with no `CURSOR_SECRET`: each replica
+ * would sign cursors with its own generated key.
+ * @param env - The validated environment.
+ * @returns One problem, or none when the secret is set.
+ */
+function cursorSecretProblems(env: Env): string[] {
+  if (env.CURSOR_SECRET !== undefined) return []
+  return [
+    `CURSOR_SECRET is not set, but APP_ENV is ${env.APP_ENV}. Set it to the same 32+ character secret on every replica (openssl rand -hex 32): a replica that generates its own refuses the list cursors the others sign.`,
+  ]
+}
+
+/**
  * Refuses unsafe or inconsistent configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -206,7 +219,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     )
   }
   if (!isLocal) {
-    problems.push(...mailpitDefaultProblems(env))
+    problems.push(...mailpitDefaultProblems(env), ...cursorSecretProblems(env))
     warnOnSharedSenderDomain(env, warn)
   }
 

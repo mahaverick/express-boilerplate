@@ -4,6 +4,7 @@
  * it), so a missing or malformed variable fails at boot in one readable list
  * instead of surfacing as `undefined` far from its cause.
  */
+import { randomBytes } from 'node:crypto'
 import { config } from 'dotenv'
 import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
@@ -160,6 +161,13 @@ const EnvSchema = z.object({
     .min(32)
     .describe(
       'Signs the express-session cookie used during the Google OAuth round-trip (passport.config.ts). Any 32+ character string works; use `openssl rand -hex 32`.'
+    ),
+  CURSOR_SECRET: z
+    .string()
+    .min(32)
+    .optional()
+    .describe(
+      'Signs the opaque cursors every list endpoint returns, so a client cannot forge or edit one (list-cursor.utilities.ts). Any 32+ character string works; use `openssl rand -hex 32`. Required whenever APP_ENV is not local, and the same on every replica, since any replica may verify a cursor another signed. Unset on local means each process generates its own, so a restart sends clients back to the first page. Changing it does the same everywhere.'
     ),
 
   /**
@@ -913,6 +921,24 @@ export function trustProxySetting(value: string): boolean | number | string {
 export function isProxyTrustOff(value: string): boolean {
   const setting = trustProxySetting(value)
   return setting === false || setting === 0
+}
+
+/**
+ * The generated cursor key of a process with no `CURSOR_SECRET`, made on first use.
+ */
+const generatedCursorSecret: { value: string | undefined } = { value: undefined }
+
+/**
+ * The key list cursors are signed with: `CURSOR_SECRET`, or on a local run
+ * without one a random key this process keeps until it exits. Boot refuses
+ * an unset `CURSOR_SECRET` outside local (`assertEnvConsistent`).
+ * @param env - The CURSOR_SECRET slice of the validated environment.
+ * @returns The signing key.
+ */
+export function cursorSecret(env: Pick<Env, 'CURSOR_SECRET'> = getEnv()): string {
+  if (env.CURSOR_SECRET !== undefined) return env.CURSOR_SECRET
+  generatedCursorSecret.value ??= randomBytes(32).toString('hex')
+  return generatedCursorSecret.value
 }
 
 /**

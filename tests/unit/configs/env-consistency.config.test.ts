@@ -27,6 +27,7 @@ const deployed: Record<string, string> = {
   MAIL_FROM: 'hello@example.net',
   MAIL_FROM_TRANSACTIONAL: 'auth@mail.example.net',
   TRUST_PROXY: '1',
+  CURSOR_SECRET: 'd'.repeat(32),
 }
 
 /**
@@ -56,6 +57,25 @@ function bothTimelineVariables(): Record<string, string> {
 }
 
 describe('assertEnvConsistent', () => {
+  describe('CURSOR_SECRET', () => {
+    const withoutSecret = { ...deployed }
+    delete withoutSecret.CURSOR_SECRET
+
+    it.each(['dev', 'qa', 'prod'])('is required on APP_ENV=%s', (appEnv) => {
+      expect(runChecks({ ...withoutSecret, APP_ENV: appEnv }).error).toContain(
+        `CURSOR_SECRET is not set, but APP_ENV is ${appEnv}.`
+      )
+    })
+
+    it.each(['dev', 'qa', 'prod'])('passes on APP_ENV=%s once set', (appEnv) => {
+      expect(runChecks({ ...deployed, APP_ENV: appEnv }).error).toBeUndefined()
+    })
+
+    it('is optional on local', () => {
+      expect(runChecks(local).error).toBeUndefined()
+    })
+  })
+
   describe('Google sign-in from Apex on another host', () => {
     const google = {
       GOOGLE_CLIENT_ID: 'id',

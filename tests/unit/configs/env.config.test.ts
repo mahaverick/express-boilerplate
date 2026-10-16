@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  cursorSecret,
   EnvSchemaShape,
   getDatabaseUrl,
   getEnv,
@@ -26,6 +27,22 @@ const valid = {
   JWT_ACCESS_SECRET: 'a'.repeat(32),
   SESSION_SECRET: 'c'.repeat(32),
 }
+
+describe('CURSOR_SECRET', () => {
+  it('refuses a secret shorter than 32 characters', () => {
+    expect(() => parseEnv({ ...valid, CURSOR_SECRET: 'short' })).toThrow(/CURSOR_SECRET/)
+  })
+
+  it('signs with the configured secret when set', () => {
+    expect(cursorSecret({ CURSOR_SECRET: 'e'.repeat(32) })).toBe('e'.repeat(32))
+  })
+
+  it('generates one key per process when unset, and keeps it', () => {
+    const first = cursorSecret({ CURSOR_SECRET: undefined })
+    expect(first).toMatch(/^[\da-f]{64}$/)
+    expect(cursorSecret({ CURSOR_SECRET: undefined })).toBe(first)
+  })
+})
 
 describe('parseEnv', () => {
   it('leaves APEX_URL undefined when it is unset or empty', () => {
