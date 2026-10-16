@@ -68,6 +68,8 @@ const like = {
   percentTenants: `${tag}-p%`,
   users: `${tag}-u%`,
   signInUsers: `${tag}-n%`,
+  fullNameUsers: `${tag}-w%`,
+  replayUsers: `${tag}-r%`,
   future: `${tag}-f%`,
   emails: `${tag}-e%`,
   suppressions: `${tag}-s%`,
@@ -228,6 +230,32 @@ describeListContract({
 function emailOf(suffix: string): string {
   return `${tag}-n${suffix}@example.test`
 }
+
+describe('GET /api/v1/platform/users search', () => {
+  beforeAll(createStaff)
+  afterAll(async () => {
+    await sql`delete from users where email like ${like.fullNameUsers}`
+    await removeStaff()
+  })
+
+  it('finds a user by first and last name together', async () => {
+    const rows = [
+      { email: `${tag}-w0@example.test`, first_name: `Ada${tag}`, last_name: 'Lovelace' },
+      { email: `${tag}-w1@example.test`, first_name: `Ada${tag}`, last_name: 'Byron' },
+    ]
+    await sql`insert into users ${sql(rows, 'email', 'first_name', 'last_name')}`
+    const response = await request(app)
+      .get('/api/v1/platform/users')
+      .query({ search: `ada${tag} lovelace` })
+      .set('Authorization', `Bearer ${staff.token}`)
+    expect(response.status).toBe(200)
+    expect(
+      (response.body as { data: { items: { email: string }[] } }).data.items.map(
+        (item) => item.email
+      )
+    ).toEqual([`${tag}-w0@example.test`])
+  })
+})
 
 describe('GET /api/v1/platform/users sort=-lastSignIn', () => {
   beforeAll(createStaff)
@@ -756,6 +784,43 @@ describeListContract({
     { query: { role: 'viewer' }, count: 2 },
     { query: { role: 'viewer,manager' }, count: 3 },
   ],
+})
+
+describe("a members cursor replayed on the same tenant's invitations", () => {
+  beforeAll(async () => {
+    await createOwnedTenant()
+    const users = await sql<{ id: string }[]>`insert into users ${sql(
+      [`${tag}-r0@example.test`, `${tag}-r1@example.test`].map((email) => ({ email })),
+      'email'
+    )} returning id`
+    await sql`insert into user_memberships ${sql(
+      users.map((user) => ({ user_id: user.id, tenant_id: owned.tenantId, role: 'viewer' })),
+      'user_id',
+      'tenant_id',
+      'role'
+    )}`
+  })
+
+  afterAll(async () => {
+    await sql`delete from users where email like ${like.replayUsers}`
+    await removeOwnedTenant()
+  })
+
+  it('answers CURSOR_INVALID, though both lists sort by email under the same tenant', async () => {
+    const headers = { Authorization: `Bearer ${owned.ownerToken}` }
+    const members = await request(app)
+      .get(`/api/v1/tenants/${owned.slug}/members`)
+      .query({ sort: 'email', limit: '1' })
+      .set(headers)
+    const cursor = (members.body as { data: { page: { nextCursor: string } } }).data.page.nextCursor
+    expect(typeof cursor).toBe('string')
+    const replay = await request(app)
+      .get(`/api/v1/tenants/${owned.slug}/invitations`)
+      .query({ sort: 'email', cursor })
+      .set(headers)
+    expect(replay.status).toBe(400)
+    expect((replay.body as { code: string }).code).toBe('CURSOR_INVALID')
+  })
 })
 
 /**

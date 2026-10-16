@@ -354,6 +354,7 @@ const startedSort = sql`coalesce(p.onboarding_started_at, p.created_at)`
 export function onboardingTenantList(search: string | undefined, filters: OnboardingListFilters) {
   const progress = sql`(${progressQuery(ACTIVE_TRACKED, filters)} select * from progress) p`
   return defineList({
+    name: 'platform-onboarding-tenants',
     base: (executor, seek) =>
       executor
         .select({

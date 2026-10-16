@@ -51,6 +51,7 @@ export function notificationList(
   filters: { unread: boolean | undefined }
 ) {
   return defineList({
+    name: 'notifications',
     base: (executor, seek) =>
       executor
         .select({

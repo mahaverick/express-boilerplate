@@ -105,8 +105,8 @@ export function listScope(input: ListScopeInput): string {
 
 /**
  * A scope hash narrowed to the values that define a list but are not query
- * params (a path tenant, the calling user): the same request under another
- * value hashes differently, so a cursor minted under one is refused under
+ * params (the list's name, a path tenant, the calling user): the same request
+ * under another value hashes differently, so a cursor minted under one is refused under
  * another.
  * @param scope - The request's `listScope`.
  * @param bound - The list's bound values.

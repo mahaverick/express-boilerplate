@@ -84,6 +84,7 @@ const tenantSortName = sql<string>`lower(${tenantModel.name})`
  */
 export function platformTenantList(search: string | undefined, filters: PlatformTenantFilters) {
   return defineList({
+    name: 'platform-tenants',
     base: (executor, seek) => {
       // Built with a join so drizzle qualifies its columns; the one-table outer select renders them bare.
       const liveMembers = executor

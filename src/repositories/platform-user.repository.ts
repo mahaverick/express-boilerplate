@@ -12,7 +12,7 @@ import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.co
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
-import { lastSignInSort, userModel } from '@/database/models/user.model'
+import { lastSignInSort, userFullNameSearch, userModel } from '@/database/models/user.model'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
 import {
@@ -197,7 +197,14 @@ function staffCondition(
  */
 export function platformUserList(search: string | undefined, filters: PlatformUserFilters) {
   return defineList({
+    name: 'platform-users',
     base: (executor, seek) => {
+      const searchExpressions = [
+        sql`lower(${userModel.email})`,
+        sql`lower(${userModel.firstName})`,
+        sql`lower(${userModel.lastName})`,
+        userFullNameSearch(userModel.firstName, userModel.lastName),
+      ]
       const { columns, platformRoleQuery } = recordSelection(executor)
       return executor
         .select({
@@ -209,11 +216,7 @@ export function platformUserList(search: string | undefined, filters: PlatformUs
         .where(
           and(
             statusCondition(filters.status),
-            searchCondition(search, [
-              sql`lower(${userModel.email})`,
-              sql`lower(${userModel.firstName})`,
-              sql`lower(${userModel.lastName})`,
-            ]),
+            searchCondition(search, searchExpressions),
             verifiedCondition(filters.verified),
             staffCondition(filters.staff, platformRoleQuery),
             seek

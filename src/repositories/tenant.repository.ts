@@ -68,6 +68,7 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
  */
 export function myTenantList(userId: string, search: string | undefined, filters: RoleFilters) {
   return defineList({
+    name: 'my-tenants',
     base: (executor, seek) =>
       executor
         .select({

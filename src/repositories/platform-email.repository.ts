@@ -398,6 +398,7 @@ function messageConditions(
  */
 export function platformEmailList(search: string | undefined, filters: PlatformEmailFilters) {
   return defineList({
+    name: 'platform-emails',
     base: (executor, seek) =>
       selectMessages(executor).where(and(...messageConditions(search, filters), seek)),
     id: emailMessageModel.id,
@@ -433,6 +434,7 @@ export function platformSuppressionList(
 ) {
   const state = suppressionStateCondition(filters.states)
   return defineList({
+    name: 'platform-email-suppressions',
     base: (executor, seek) =>
       selectSuppressions(executor).where(
         and(state, searchCondition(search, [sql`${emailSuppressionModel.address}`]), seek)

@@ -72,6 +72,7 @@ const memberSortName = sql<string>`lower(coalesce(nullif(trim(concat_ws(' ', ${u
  */
 export function memberList(tenantId: string, search: string | undefined, filters: RoleFilters) {
   return defineList({
+    name: 'members',
     base: (executor, seek) =>
       executor
         .select({

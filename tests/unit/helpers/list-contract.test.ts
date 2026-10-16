@@ -35,6 +35,7 @@ const schema = listParamsSchema({
 })
 
 const definition: InMemoryListDefinition<Thing, Thing> = {
+  name: 'things',
   id: (thing) => thing.id,
   idValue: z.uuid(),
   sorts: {

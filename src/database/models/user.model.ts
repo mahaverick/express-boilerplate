@@ -26,6 +26,19 @@ export function lastSignInSort(lastLoggedInAt: AnyPgColumn | SQL): SQL {
 }
 
 /**
+ * The full name as the users search reads it: first and last name joined by a
+ * space, trimmed and lowercased, so "ada lovelace" finds the user. Built with
+ * `||` and `coalesce` (immutable), so the trigram index can hold it; the list
+ * query and its index both call this, so their expressions are the same.
+ * @param firstName - The `first_name` column.
+ * @param lastName - The `last_name` column.
+ * @returns The search expression.
+ */
+export function userFullNameSearch(firstName: AnyPgColumn | SQL, lastName: AnyPgColumn | SQL): SQL {
+  return sql`lower(trim(coalesce(${firstName}, '') || ' ' || coalesce(${lastName}, '')))`
+}
+
+/**
  * The `users` table. Email is unique case-insensitively among live accounts
  * only, matching `findByEmail`'s soft-delete scope, so a soft-deleted user's
  * address can register again. `UserRepository.markEmailVerified` sets
@@ -73,6 +86,10 @@ export const userModel = pgTable(
     index('users_email_trgm_idx').using('gin', sql`lower(${table.email}) gin_trgm_ops`),
     index('users_first_name_trgm_idx').using('gin', sql`lower(${table.firstName}) gin_trgm_ops`),
     index('users_last_name_trgm_idx').using('gin', sql`lower(${table.lastName}) gin_trgm_ops`),
+    index('users_full_name_trgm_idx').using(
+      'gin',
+      sql`${userFullNameSearch(table.firstName, table.lastName)} gin_trgm_ops`
+    ),
   ]
 )
 

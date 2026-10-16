@@ -1,0 +1,1 @@
+CREATE INDEX "users_full_name_trgm_idx" ON "users" USING gin (lower(trim(coalesce("first_name", '') || ' ' || coalesce("last_name", ''))) gin_trgm_ops);

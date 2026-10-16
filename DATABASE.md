@@ -488,8 +488,20 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
 
   Then edit the `0026` file: delete its four `DROP INDEX` lines and add
   `IF NOT EXISTS` to every `CREATE INDEX`. Without that edit,
-  `pnpm db:migrate` drops the indexes you just built and rebuilds them under
-  the lock. With it, the migration only records `0026` as applied.
+  `pnpm db:migrate` fails on the first `DROP INDEX` of an index you already
+  dropped, and on each `CREATE INDEX` of one you built, so the batch rolls back
+  and the deploy stops. With it, the migration only records `0026` as applied.
+
+- **`0027` blocks writes to `users` until its one index is built.** It adds
+  `users_full_name_trgm_idx`, which the platform users search uses to match a
+  full name. A plain `CREATE INDEX` takes a `SHARE` lock, so reads continue but
+  writes wait. On a large table, build it first outside any transaction, then
+  let `pnpm db:migrate` record `0027`; edit the `0027` file to add
+  `IF NOT EXISTS` first, or the migration fails on the existing name:
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS users_full_name_trgm_idx ON users USING gin (lower(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, ''))) gin_trgm_ops);
+  ```
 
 ## The test database
 

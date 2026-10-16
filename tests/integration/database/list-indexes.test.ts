@@ -167,12 +167,12 @@ function first(sort: string): ListParams {
  * Params for the page after a boundary row: a cursor signed under the list's own scope, carrying the boundary's sort value then its id.
  */
 function after(
-  list: { bound?: Readonly<Record<string, string>> | undefined },
+  list: { name: string; bound?: Readonly<Record<string, string>> | undefined },
   sort: string,
   keys: readonly CursorKey[]
 ): ListParams {
   const base = first(sort)
-  const scope = list.bound === undefined ? base.scope : bindScope(base.scope, list.bound)
+  const scope = bindScope(base.scope, { ...list.bound, list: list.name })
   return { ...base, cursor: signCursor(sort, scope, keys) }
 }
 
@@ -501,6 +501,10 @@ describe('list search indexes', () => {
     ['users_email_trgm_idx', `select id from users where lower(email) like '%abc%'`],
     ['users_first_name_trgm_idx', `select id from users where lower(first_name) like '%abc%'`],
     ['users_last_name_trgm_idx', `select id from users where lower(last_name) like '%abc%'`],
+    [
+      'users_full_name_trgm_idx',
+      `select id from users where lower(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, ''))) like '%abc%'`,
+    ],
     [
       'email_messages_recipient_trgm_idx',
       `select id from email_messages where lower(recipient) like '%abc%'`,

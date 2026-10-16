@@ -527,7 +527,7 @@ shows "1,000+"; the query is `select count(*) from (<the list> limit 1001)`).
 | Endpoint                           | `search`                                           | Filters                                                      | Sorts (default first)                         |
 | ---------------------------------- | -------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------- |
 | `GET /platform/tenants`            | name, slug                                         | `state` (list; active, suspended)                            | `name`, `created`, `-created`                 |
-| `GET /platform/users`              | email, first and last name                         | `status` (list; active, inactive), `verified`, `staff`       | `email`, `created`, `-created`, `-lastSignIn` |
+| `GET /platform/users`              | email, first and last name, full name              | `status` (list; active, inactive), `verified`, `staff`       | `email`, `created`, `-created`, `-lastSignIn` |
 | `GET /platform/emails`             | recipient                                          | `status`, `template` (lists), `user`, `tenant`, `from`, `to` | `-created`, `created`                         |
 | `GET /platform/email-suppressions` | address                                            | `state` (list; active)                                       | `-created`, `created`, `address`              |
 | `GET /platform/onboarding/tenants` | tenant name                                        | `state` (one; stuck)                                         | `progress` for stuck, else `-started`; `name` |
@@ -566,20 +566,26 @@ its `Limit` is a Sort. Three are bounded instead and say so there: member
 `name` and `email` and my-tenants `name` order a joined row, so they sort one
 tenant's members or one user's memberships, found through an index led by
 that tenant or user; onboarding orders the progress query's computed
-timestamps, so it sorts the tracked tenants, read through an index. Search runs
-on GIN trigram indexes (`pg_trgm`) of the same lowered expressions. Migration
-`0026_list_indexes.sql` builds them; its locking and the manual live-database
-path are in [DATABASE.md](DATABASE.md).
+timestamps, so it sorts the tracked tenants, read through an index. The tenants,
+users, emails and suppressions searches run on GIN trigram indexes (`pg_trgm`)
+of the same lowered expressions. The members, invitations, my-tenants and
+notifications searches are bounded by their tenant or user instead. The
+platform audit-log search has no index: it scans by `occurred_at` across the
+log, and so does its `total=1` count, which is accepted. Migrations
+`0026_list_indexes.sql` and `0027_users_full_name_trgm.sql` build the indexes;
+their locking and the manual live-database path are in
+[DATABASE.md](DATABASE.md).
 
 **Cursors.** A cursor is base64url JSON `{ v, sort, keys, scope }`, a dot,
 and an HMAC-SHA256 under `CURSOR_SECRET` (`src/utilities/list-cursor.utilities.ts`).
 `scope` hashes the effective search, filters (defaults applied, comma lists
 sorted) and sort, so a cursor resumes only the view it came from. A list whose
 rows depend on more than the query string sets `bound` on its definition
-(`ListDefinition.bound`, `InMemoryListDefinition.bound`), and `bindScope`
-folds those values into the scope: a tenant's members, invitations and audit
-log bind the tenant, my tenants and notifications bind the user, and the two
-flag lists bind their list. A cursor from another tenant, user or list is
+(`ListDefinition.bound`, `InMemoryListDefinition.bound`). Every list also has a
+required `name`, unique among lists, and `bindScope` folds the name and the
+bound values into the scope: a tenant's members, invitations and audit log
+bind the tenant, my tenants and notifications bind the user. A cursor from
+another tenant, user or list, even one with the same sort and filters, is
 therefore refused as `CURSOR_INVALID`, never read as a seek. Anything else is
 the one `400` `InvalidCursorError` (`code: 'CURSOR_INVALID'`,
 `errors.cursor: ['cursor is invalid.']`): empty, over 4,096 characters, a bad
@@ -609,8 +615,8 @@ notifications through `listRecent` (see [Realtime (SSE)](#realtime-sse)).
 
 **Adding a list.**
 
-1. In the repository, export a `defineList({ base, id, sorts, toItem })`
-   (plus `bound` when the rows depend on a path tenant or the caller):
+1. In the repository, export a `defineList({ name, base, id, sorts, toItem })`
+   (a unique `name`, plus `bound` when the rows depend on a path tenant or the caller):
    `base(executor, seek)` selects the item's columns plus one text or number
    column per sort column (`timestampKey(…)` for a timestamp), ANDs every
    filter, `searchCondition(search, [lowered expressions])` and `seek` into

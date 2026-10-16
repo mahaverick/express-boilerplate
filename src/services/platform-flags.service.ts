@@ -140,7 +140,7 @@ export function listFlags(query: PlatformFlagListQuery): ListPage<FlagRow> {
   )
   const definition: InMemoryListDefinition<FlagRow, FlagRow> = {
     ...BY_KEY,
-    bound: { list: 'registry' },
+    name: 'platform-flags',
     toItem: (row) => row,
   }
   return listPageInMemory(rows, definition, query.params)
@@ -161,7 +161,7 @@ export function listUnregisteredFlags(
     .map((flag) => ({ key: flag.key, active: flag.active, posthogUrl: posthogFlagUrl(flag.id) }))
   const definition: InMemoryListDefinition<UnregisteredRow, UnregisteredRow> = {
     ...BY_KEY,
-    bound: { list: 'unregistered' },
+    name: 'platform-flags-unregistered',
     toItem: (row) => row,
   }
   return listPageInMemory(rows, definition, query.params)

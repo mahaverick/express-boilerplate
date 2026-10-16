@@ -94,6 +94,7 @@ describe('seekCondition', () => {
 })
 
 const tenants = defineList({
+  name: 'tenants',
   base: (executor, seek) =>
     executor
       .select({
@@ -125,7 +126,9 @@ describe('listPageQuery', () => {
   })
 
   it('reverses the order and seeks after the cursor for prev', () => {
-    const scope = tenantSchema.parse({ sort: '-created' }).params.scope
+    const scope = bindScope(tenantSchema.parse({ sort: '-created' }).params.scope, {
+      list: 'tenants',
+    })
     const cursor = signCursor('-created', scope, ['2026-01-01T00:00:00.000000Z', ID])
     const params = tenantSchema.parse({ sort: '-created', direction: 'prev', cursor }).params
     const query = listPageQuery(db, tenants, params).toSQL()
@@ -135,7 +138,7 @@ describe('listPageQuery', () => {
   })
 
   it('refuses a cursor signed for another sort before building anything', () => {
-    const scope = tenantSchema.parse({}).params.scope
+    const scope = bindScope(tenantSchema.parse({}).params.scope, { list: 'tenants' })
     const cursor = signCursor('-created', scope, ['2026-01-01T00:00:00.000000Z', ID])
     const params = tenantSchema.parse({ cursor }).params
     expect(() => listPageQuery(db, tenants, params)).toThrow(InvalidCursorError)
@@ -153,26 +156,36 @@ describe('a list with bound values', () => {
   const params = tenantSchema.parse({}).params
 
   it('accepts a cursor signed under the same bound value', () => {
-    const cursor = signCursor('name', bindScope(params.scope, { tenantId: 'a' }), ['x', ID])
+    const scope = bindScope(params.scope, { tenantId: 'a', list: 'tenants' })
+    const cursor = signCursor('name', scope, ['x', ID])
     const withCursor = { ...params, cursor }
     expect(() => listPageQuery(db, owned('a'), withCursor)).not.toThrow()
   })
 
   it('refuses a cursor signed under another bound value, or under none', () => {
-    const other = signCursor('name', bindScope(params.scope, { tenantId: 'b' }), ['x', ID])
-    const unbound = signCursor('name', params.scope, ['x', ID])
+    const other = signCursor('name', bindScope(params.scope, { tenantId: 'b', list: 'tenants' }), [
+      'x',
+      ID,
+    ])
+    const unbound = signCursor('name', bindScope(params.scope, { list: 'tenants' }), ['x', ID])
     for (const cursor of [other, unbound]) {
       expect(() => listPageQuery(db, owned('a'), { ...params, cursor })).toThrow(InvalidCursorError)
     }
   })
 
-  it('leaves a list without bound values on the plain scope', () => {
-    const cursor = signCursor('name', params.scope, ['x', ID])
+  it('scopes a list without bound values to its name alone', () => {
+    const cursor = signCursor('name', bindScope(params.scope, { list: 'tenants' }), ['x', ID])
     expect(() => listPageQuery(db, tenants, { ...params, cursor })).not.toThrow()
-    const bound = signCursor('name', bindScope(params.scope, { tenantId: 'a' }), ['x', ID])
-    expect(() => listPageQuery(db, tenants, { ...params, cursor: bound })).toThrow(
+    const plain = signCursor('name', params.scope, ['x', ID])
+    expect(() => listPageQuery(db, tenants, { ...params, cursor: plain })).toThrow(
       InvalidCursorError
     )
+  })
+
+  it('refuses a cursor issued by another list that differs only in name', () => {
+    const cursor = signCursor('name', bindScope(params.scope, { list: 'tenants' }), ['x', ID])
+    const other = { ...tenants, name: 'other-tenants' }
+    expect(() => listPageQuery(db, other, { ...params, cursor })).toThrow(InvalidCursorError)
   })
 })
 
@@ -182,7 +195,7 @@ describe('a list with bound values', () => {
  * @returns The definition.
  */
 function boundTo(list: string): InMemoryListDefinition<Row, string> {
-  return { ...memory, bound: { list } }
+  return { ...memory, bound: { owner: list } }
 }
 
 describe('an in-memory list with bound values', () => {
@@ -205,11 +218,19 @@ describe('an in-memory list with bound values', () => {
     )
   })
 
-  it('leaves a list without bound values on the plain scope', () => {
-    const cursor = signCursor('key', params.scope, ['k1'])
+  it('scopes a list without bound values to its name alone', () => {
+    const cursor = signCursor('key', bindScope(params.scope, { list: 'things' }), ['k1'])
     expect(listPageInMemory(rows, memory, { ...params, cursor }).items).toEqual(['k2', 'k3'])
-    const boundCursor = signCursor('key', bindScope(params.scope, { list: 'a' }), ['k1'])
-    expect(() => listPageInMemory(rows, memory, { ...params, cursor: boundCursor })).toThrow(
+    const plain = signCursor('key', params.scope, ['k1'])
+    expect(() => listPageInMemory(rows, memory, { ...params, cursor: plain })).toThrow(
+      InvalidCursorError
+    )
+  })
+
+  it('refuses a cursor issued by another list that differs only in name', () => {
+    const fromThings = String(listPageInMemory(rows, memory, params).page.nextCursor)
+    const other = { ...memory, name: 'other-things' }
+    expect(() => listPageInMemory(rows, other, { ...params, cursor: fromThings })).toThrow(
       InvalidCursorError
     )
   })
@@ -253,6 +274,7 @@ const rows: Row[] = Array.from({ length: 5 }, (_unused, index) => ({
 }))
 
 const memory: InMemoryListDefinition<Row, string> = {
+  name: 'things',
   id: (row) => row.key,
   idValue: z.string(),
   sorts: {

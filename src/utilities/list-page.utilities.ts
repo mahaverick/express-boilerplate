@@ -98,6 +98,10 @@ export interface ListPage<T> {
  */
 export interface ListDefinition<TQuery extends PgSelect, Item> {
   /**
+  The list's own name, unique among lists; folded into the scope so a cursor from one list is refused by another that shares its sort and filters.
+   */
+  name: string
+  /**
   select + joins + filters + search predicate, ANDed with `seek`, without order or limit; ends in `.$dynamic()`.
    */
   base: (executor: DbExecutor, seek: SQL | undefined) => TQuery
@@ -115,7 +119,7 @@ export interface ListDefinition<TQuery extends PgSelect, Item> {
    */
   sorts: Readonly<Record<string, readonly SortDef[]>>
   /**
-  Values that define the list without being query params (a path tenant, the calling user); folded into the scope a cursor is signed and checked against, so a cursor minted under one value is refused under another. Absent for a list with none.
+  Values that define the list without being query params (a path tenant, the calling user); folded into the scope with the name, so a cursor minted under one value is refused under another. Absent for a list with none.
    */
   bound?: Readonly<Record<string, string>>
   toItem: (row: ListRow<TQuery>) => Item
@@ -279,7 +283,7 @@ export function listPageQuery<TQuery extends PgSelect, Item>(
 }
 
 /**
- * The request with its scope narrowed to the list's bound values; the request itself when the list has none.
+ * The request with its scope narrowed to the list's name and bound values.
  * @param definition - The list.
  * @param params - The parsed request.
  * @returns The request cursors are signed and checked against.
@@ -288,8 +292,10 @@ function scopedParams<TQuery extends PgSelect, Item>(
   definition: ListDefinition<TQuery, Item>,
   params: ListParams
 ): ListParams {
-  if (definition.bound === undefined) return params
-  return { ...params, scope: bindScope(params.scope, definition.bound) }
+  return {
+    ...params,
+    scope: bindScope(params.scope, { ...definition.bound, list: definition.name }),
+  }
 }
 
 /**
@@ -478,12 +484,16 @@ interface InMemorySortDef<Row> {
  * One list over an array.
  */
 export interface InMemoryListDefinition<Row, Item> {
+  /**
+   * The list's own name, unique among lists; folded into the scope as the SQL lists do.
+   */
+  name: string
   id: (row: Row) => string
   idValue: z.ZodType<CursorKey>
   sorts: Readonly<Record<string, readonly InMemorySortDef<Row>[]>>
   toItem: (row: Row) => Item
   /**
-   * Values the list's cursors are bound to, folded into the scope as the SQL lists do; none when absent.
+   * Values the list's cursors are bound to, folded into the scope with the name; none when absent.
    */
   bound?: Readonly<Record<string, string>>
 }
@@ -575,10 +585,10 @@ export function listPageInMemory<Row, Item>(
   definition: InMemoryListDefinition<Row, Item>,
   params: ListParams
 ): ListPage<Item> {
-  const scoped =
-    definition.bound === undefined
-      ? params
-      : { ...params, scope: bindScope(params.scope, definition.bound) }
+  const scoped = {
+    ...params,
+    scope: bindScope(params.scope, { ...definition.bound, list: definition.name }),
+  }
   const page =
     readMemoryPage(rows, definition, scoped) ??
     readMemoryPage(rows, definition, edgeRequest(scoped))

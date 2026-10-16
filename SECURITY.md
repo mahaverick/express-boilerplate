@@ -622,8 +622,8 @@ PostHog, describes what stays there.
   sort values, which a client could otherwise edit to probe rows past a
   filter's edge or feed the seek values its schema never produced. Each is
   HMAC-SHA256 signed under `CURSOR_SECRET` and carries a hash of the request's
-  effective sort, search and filters, narrowed by `bindScope` to the path tenant,
-  the calling user or the flag list the page belongs to
+  effective sort, search and filters, narrowed by `bindScope` to the list's name, the
+  path tenant and the calling user
   (`src/utilities/list-cursor.utilities.ts`). A cursor that is empty or over
   4,096 characters, with a bad signature, another version, or another sort,
   scope, tenant, user or list is refused before any query runs, as one

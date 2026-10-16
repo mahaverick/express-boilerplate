@@ -110,6 +110,7 @@ export interface PendingInvitationSummary {
  */
 export function invitationList(tenantId: string, search: string | undefined, filters: RoleFilters) {
   return defineList({
+    name: 'invitations',
     base: (executor, seek) =>
       executor
         .select({

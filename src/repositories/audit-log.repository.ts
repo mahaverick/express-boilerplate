@@ -92,6 +92,7 @@ const targetTenant = alias(tenantModel, 'target_tenant')
  */
 export function auditLogList(search: string | undefined, filters: AuditLogFilters) {
   return defineList({
+    name: filters.scope === 'tenant' ? 'tenant-audit-log' : 'platform-audit-log',
     base: (executor, seek) =>
       executor
         .select({

@@ -165,7 +165,8 @@ points at the code or doc that holds the detail. How things work is in
 - **Never hand back an unsigned cursor or accept one.** Cursors come only from
   `signCursor` and are read only through `verifyCursor`, bound to the
   request's `listScope`; a list whose rows depend on a path tenant or the
-  caller sets `bound` so `bindScope` ties the cursor to it. A list that
+  caller sets `bound`, and every list has its own `name`, so `bindScope` ties the
+  cursor to them. A list that
   skipped either would let a client edit its seek values or replay a cursor
   across tenants.
 - **Free-text fields use `safeText`:** single-line by default,

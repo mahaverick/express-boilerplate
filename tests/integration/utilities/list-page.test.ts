@@ -18,6 +18,7 @@ const state = { tag: '', slugs: [] as string[] }
  * The tenants whose slug starts with this test's tag, by name.
  */
 const tenants = defineList({
+  name: 'tenants',
   base: (executor, seek) =>
     executor
       .select({
