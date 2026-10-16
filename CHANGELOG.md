@@ -1,5 +1,16 @@
 # Changelog
 
+## [5.0.0](https://github.com/mahaverick/express-boilerplate/compare/v4.3.0...v5.0.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* every list endpoint answers data as { items, page: { nextCursor, prevCursor, hasNext, hasPrev, limit }, total? }; the keys tenants, users, messages, suppressions, entries and notifications, and the bare arrays of GET /tenants, /tenants/:slug/members and /tenants/:slug/invitations, are gone, so /members, /invitations and /tenants are now paged (notifications already were; only their shape changes). Query params: q is search, tenantId is tenant, userId is user, actorUserId is actor, targetId is target; enum filters take comma lists, and the tenant and suppression state filters have no all value (send every state). Every list's limit is 1-100 with a default of 20; the audit-log default limit is 20 (it was 50). Cursors are signed and bound to their search, filters, sort, their own list and any tenant or user: set CURSOR_SECRET (32+ characters, the same on every replica) on every APP_ENV but local, or boot refuses; a cursor from another view or another list answers 400 CURSOR_INVALID. Every cursor issued before this release also answers 400 CURSOR_INVALID, so clients restart from the first page. GET /platform/flags returns the registry list only; its unregistered flags are GET /platform/flags/unregistered and its traits and snapshot GET /platform/flags/meta, so FlagsListResponse is now FlagsMetaResponse plus the two lists. GET /platform/users/:id/timeline, GET /platform/tenants/:id/timeline, GET /platform/users/:id/errors and GET /platform/tenants/:id/errors are removed; the audit actions user.timeline_viewed, tenant.timeline_viewed, user.errors_viewed and tenant.errors_viewed are no longer written (stored rows stay listable and filterable). TIMELINE_QUERY_BUDGET_PER_HOUR is removed. TIMELINE_REQUESTS_PER_MINUTE is renamed FLAG_EVALUATE_REQUESTS_PER_MINUTE and the old name is silently ignored, so the default of 20 applies until you rename it. The rate limiter platform-timeline is now flag-evaluate, so its counters reset on deploy. The error code TIMELINE_UNAVAILABLE is now POSTHOG_UNAVAILABLE. The PostHog personal API key no longer needs the query:read scope. Migrations 0026 (list sort and search indexes) and 0027 (a users full-name trigram index) take table locks: on a live database build their indexes by hand with CREATE INDEX CONCURRENTLY first, as DATABASE.md describes.
+
+### Features
+
+* one list API for every table ([a40e1d2](https://github.com/mahaverick/express-boilerplate/commit/a40e1d26a8e447230c08d8d17a4ac128d9d529bc))
+
 ## [4.3.0](https://github.com/mahaverick/express-boilerplate/compare/v4.2.0...v4.3.0) (2026-10-14)
 
 
