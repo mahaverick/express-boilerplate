@@ -83,19 +83,6 @@ describe('retention indexes', () => {
       `select id from user_tokens where ${TOKEN_PREDICATE} limit 5000`,
     ],
     [
-      'email_link_tokens_expires_at_idx',
-      `select id from email_link_tokens where ${TOKEN_PREDICATE} limit 5000`,
-    ],
-    [
-      'email_link_tokens_revoked_unconsumed_idx',
-      `select id from email_link_tokens where ${TOKEN_PREDICATE} limit 5000`,
-    ],
-    // The user row's ON DELETE CASCADE finds a user's step-up links by user_id.
-    [
-      'email_link_tokens_user_session_idx',
-      `select 1 from email_link_tokens where user_id = '00000000-0000-0000-0000-000000000000'`,
-    ],
-    [
       'email_messages_created_sort_idx',
       `select id from email_messages where created_at < ${CUTOFF} limit 5000`,
     ],

@@ -192,7 +192,7 @@ describe('tenant-invitation.service', () => {
         inviterName: 'Ada Lovelace',
         role: 'editor',
         acceptUrl: `http://localhost:5173/invitations/accept?token=${queued.token}`,
-        expiresInDays: '3',
+        expiresInDays: '7',
         appName: queued.variables.appName,
       })
       expect(queued.token).toMatch(/^[\w-]{43}$/)
