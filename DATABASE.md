@@ -90,8 +90,8 @@ not only through TypeScript's `$type<TokenPurpose>()`.
   copied forward unchanged by every rotation, which makes
   `SESSION_ABSOLUTE_TTL` an absolute ceiling. `authenticated_at` is when the
   session last proved who its user is, and is the source of the access
-  token's `auth_time`. NULL for a session an invitation link started, or one
-  from before 0018.
+  token's `auth_time`. NULL for a session a one-click invitation join
+  started, or one from before 0018.
 - `consumed_at` is set only by `UserTokenRepository.claimOnce`, so it
   separates a row spent through its single-use path from one revoked unused.
 - `replaced_by_id` points at the row a token rotated into. Nothing reads it; it
@@ -136,11 +136,12 @@ otherwise read as a kill marker and end the session), `findRefreshByHash` (the
 rotation and sign-out lookups), `liveSessionIdsExcept` and
 `markSessionAuthenticated`.
 
-Issuing a link revokes the live links it supersedes (every `sign_in_link`, or
-every `invitation_link`, of the address, through `user_tokens_live_email_idx`,
-or every `step_up_link` of the session) and inserts the new row in one transaction, under a
-transaction-scoped advisory lock on the address or the session taken first, so
-at most one of each stays live. The claim is `claimOnce`, which checks no
+Issuing a link revokes the live links it supersedes (every `sign_in_link` of
+the address, or every `invitation_link` of the address and invitation, through
+`user_tokens_live_email_idx`, or every `step_up_link` of the session) and
+inserts the new row in one transaction, under a transaction-scoped advisory
+lock on the address, the address and invitation, or the session taken first,
+so at most one of each stays live. The claim is `claimOnce`, which checks no
 expiry; the caller judges `expires_at` on the claimed row, so an expired link is
 spent by its one presentation. A `sign_in_link` or `invitation_link` row has
 no user, so a user purge deletes the purged address's links itself (`deleteForEmail`), up to the
@@ -204,13 +205,14 @@ marked by a comment in its file (0024's has none):
   - `DELETE FROM "user_tokens" WHERE "purpose" IN ('email_verification', 'password_reset')`;
   - `DELETE FROM "notifications" WHERE "type" IN ('verify_email', 'password_reset_requested', 'password_changed')`;
   - `DELETE FROM "notification_preferences" WHERE "notification_type" IN ('verify_email', 'password_reset_requested', 'password_changed')`.
+
+  Its generated statements drop both CHECKs, drop `users.password_hash`, and
+  add both CHECKs back narrowed.
+
 - `0030` has no hand-added statement, only a comment on why every existing
   row passes the two CHECKs it re-adds: the new `invitation_id` column starts
   null. It adds the `invitation_link` purpose, the column, its foreign key to
   `tenant_invitations` and `user_tokens_invitation_id_idx`.
-
-  Its generated statements drop both CHECKs, drop `users.password_hash`, and
-  add both CHECKs back narrowed.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
@@ -589,13 +591,13 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   `notifications` and `notification_preferences`. As for `0028`, run the
   retention purge first and apply `0029` in a quiet window.
 
-- **`0030` blocks every read and write on `user_tokens` until the batch
-  commits, and writes on `tenant_invitations` while its foreign key
-  validates.** Its `ALTER TABLE`s take an `ACCESS EXCLUSIVE` lock on
-  `user_tokens`, held while the two re-added CHECKs scan every row and while
-  `user_tokens_invitation_id_idx` builds. Adding the foreign key takes
-  `SHARE ROW EXCLUSIVE` on `tenant_invitations`, which blocks invitation
-  writes (invite, resend, revoke, accept) but not reads. Every existing row has
+- **`0030` blocks every read and write on `user_tokens`, and writes on
+  `tenant_invitations`, until the batch commits.** Its `ALTER TABLE`s take an
+  `ACCESS EXCLUSIVE` lock on `user_tokens`, held while the two re-added CHECKs
+  scan every row and while `user_tokens_invitation_id_idx` builds. Adding the
+  foreign key takes `SHARE ROW EXCLUSIVE` on `tenant_invitations`, held until
+  the batch commits, which blocks invitation writes (invite, resend, revoke,
+  accept) but not reads. Every existing row has
   `invitation_id` NULL, so the key's validation finds nothing to check. As for
   `0029`, run the retention purge first and apply `0030` in a quiet window.
 

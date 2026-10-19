@@ -429,11 +429,13 @@ invitee's mailbox receives the confirm link.
   of purpose `invitation_link` that holds the invitation's id, the address and
   the frontend (Apex for a platform invitation, web otherwise), stored as a
   SHA-256 hash like every link. A new one revokes the address's earlier confirm
-  link. Deleting the invitation deletes its links.
-- **Its mail is bounded.** At most one confirm mail per address per
-  `SIGN_IN_LINK_MAIL_COOLDOWN` (default `1m`), on a cooldown of its own, so a
-  sign-in request a moment earlier does not hold it. The daily budget is the
-  one sign-in links spend (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), not the
+  link for that invitation, never another invitation's. Deleting the
+  invitation deletes its links.
+- **Its mail is bounded.** At most one confirm mail per address and
+  invitation per `SIGN_IN_LINK_MAIL_COOLDOWN` (default `1m`), on a cooldown of
+  its own, so a sign-in request a moment earlier does not hold it, and a click
+  on one workspace's invitation does not hold back another's. The daily
+  budget, per address, is the one sign-in links spend (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), not the
   invitation budget, so a token holder cannot burn an admin's resends. Inside
   the cooldown, or once the budget is spent, the reply is the same `202` and
   nothing is mailed.
@@ -443,8 +445,11 @@ invitee's mailbox receives the confirm link.
   account all answer `404 invitation_invalid`. Each refusal spends nothing:
   the link is claimed inside the joining transaction, after the user row is
   locked, and the invitation is re-checked atomically by
-  `claimForAcceptById`, so a refusal rolls the claim back. Neither address is
-  logged.
+  `claimForAcceptById`, so a refusal rolls the claim back. A never-verified
+  account is claimed before the transaction, as a sign-in link claims one;
+  that claim stands even if the join is then refused. Neither address is
+  logged. The answer's message names both next steps: select Join again in
+  the invitation email, or ask for a new invite.
 - **The confirm session is a recent sign-in; the one-click session is not.**
   The confirm click proves the mailbox within 15 minutes with a single-use
   link, the proof a sign-in link gives. The one-click session starts with
@@ -642,7 +647,7 @@ their role there is their platform role (`src/services/platform.service.ts`).
 `requireRecentAuth` (`src/middlewares/auth.middleware.ts`) refuses a session
 that last authenticated more than `STEP_UP_MAX_AGE_MS` (10 minutes) ago with
 `401 REAUTH_REQUIRED`. The time comes from the token's `auth_time`, which the
-refresh row records at sign-in (an invitation-link sign-in records none) and
+refresh row records at sign-in (a one-click invitation join records none) and
 rotation carries forward; a token without it counts as stale. Staff move it forward by confirming it's them, by an emailed
 link or by Google
 ([Step-up by link and by Google](#step-up-by-link-and-by-google)).

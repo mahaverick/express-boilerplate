@@ -273,16 +273,18 @@ logged and never fails the emitter or the subscribers after it. Onboarding and
 the analytics forwarder are the subscribers.
 
 **Lock order.** Issuing a sign-in, step-up or invitation confirm link first
-takes a transaction-scoped advisory lock on the address or the session
-(`lockLinkIssue`, `pg_advisory_xact_lock`, `user-token.repository.ts`), alone,
-in a transaction that holds no other lock; it then locks the live link rows it
-revokes, in id order, and nothing else, so it joins no cycle. An invitation
-confirm link's insert also takes `FOR KEY SHARE` on its invitation row (the
-foreign key), which the accept and revoke UPDATEs (`FOR NO KEY UPDATE`) do
-not conflict with; only the retention purge's delete of an invitation settled
-for the retention period does, and an issue only reaches a redeemable one. Without it two
-concurrent issues each revoke before the other's insert commits, and both
-links stay live. Every transaction that locks more than one row set takes them
+takes a transaction-scoped advisory lock on the address, the address and
+invitation (for a confirm link), or the session (`lockLinkIssue`,
+`pg_advisory_xact_lock`, `user-token.repository.ts`), alone, in a transaction
+that holds no other lock; it then locks the live link rows it revokes, in id
+order, and nothing else, so it joins no cycle. Without it two concurrent
+issues each revoke before the other's insert commits, and both links stay
+live. An invitation confirm link's insert also takes `FOR KEY SHARE` on its
+invitation row (the foreign key), which the accept and revoke UPDATEs
+(`FOR NO KEY UPDATE`) do not conflict with. A resend, which rewrites the
+unique `token_hash` and so takes `FOR UPDATE`, and the retention purge's
+delete do. Each only waits: neither takes a `user_tokens` row or the issue's
+advisory lock, so no cycle forms. Every transaction that locks more than one row set takes them
 in this order:
 
 1. the user row (`lockById`, `user.repository.ts`), for a link, invitation or
