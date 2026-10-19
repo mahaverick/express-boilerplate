@@ -1,7 +1,9 @@
 /**
- * @file `pnpm platform:grant -- <email> <role>`: give an existing, verified
- * user a role in the platform tenant, audited as a system grant. The way to
- * make the first platform owner, since nobody can invite before one exists.
+ * @file `pnpm platform:grant -- <email> <role>`: give the account an address
+ * holds a role in the platform tenant, audited as a system grant, creating a
+ * verified account when the address has none and verifying an unverified
+ * one. The way to make the first platform owner, since nobody can invite
+ * before one exists.
  * Prints the outcome only, never a token or a hash.
  */
 import { fileURLToPath } from 'node:url'

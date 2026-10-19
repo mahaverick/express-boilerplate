@@ -332,13 +332,10 @@ describe('canResend', () => {
   )
 
   it.each([
-    ['a verification resend to a verified user', 'email_verification', {}],
-    ['a set-password resend to a deactivated user', 'account_setup', { active: false }],
-    [
-      'a verification resend to a deactivated user',
-      'email_verification',
-      { active: false, verified: false },
-    ],
+    ['a verification mail, which staff never resend', 'email_verification', {}],
+    ['a retired account_setup mail', 'account_setup', {}],
+    ['a sign-in link resend to a deactivated user', 'sign_in_link', { active: false }],
+    ['a welcome resend to a deactivated user', 'welcome', { active: false }],
   ])('is false, in the detail and the list, for %s', async (_label, templateKey, userOptions) => {
     const { token } = await createTrackedStaff('admin')
     const tag = tagged()
@@ -355,13 +352,13 @@ describe('canResend', () => {
     expect(page.items.find((row) => row.id === message.id)?.canResend).toBe(false)
   })
 
-  it('is true for a verification resend to an unverified, active user', async () => {
+  it('is true for a welcome resend to an unverified, active user', async () => {
     const { token } = await createTrackedStaff('admin')
     const user = await createTrackedUser({ verified: false })
     const message = await createTrackedMessage({
       recipient: user.email,
       userId: user.id,
-      templateKey: 'email_verification',
+      templateKey: 'welcome',
     })
 
     expect(await canResendAs(token, message.id)).toBe(true)

@@ -31,11 +31,7 @@ import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { utcDays } from '@/services/platform-stats.service'
-import {
-  platformTenantOrThrow,
-  resendUserVerification,
-  sendPasswordSetup,
-} from '@/services/platform-user.service'
+import { platformTenantOrThrow, sendSignInLinkByStaff } from '@/services/platform-user.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
 import { resend as resendInvitation } from '@/services/tenant-invitation.service'
 import {
@@ -196,9 +192,9 @@ export interface ResendContext {
  * enforce, which the resend endpoint still runs. True only when the actor
  * is a platform admin or owner, the template has a resend action, the row
  * carries the ids that action needs, the recipient is not suppressed, the
- * user (for user-targeted mail) is active and, for verification, not yet
- * verified, and the action's own actor check passes: `canStaffMailTarget`
- * against the user's platform role for verification and password mail, and
+ * user (for a sign-in link) is live and active, and the action's own actor
+ * check passes: `canStaffMailTarget` against the user's platform role for a
+ * sign-in link, and
  * `canActorGrantRole` on the invitation's role for an invitation, with the
  * actor's role in that tenant (membership first, as `lockTenantAccess`
  * resolves it, else the platform role). An invitation also needs to be
@@ -235,9 +231,8 @@ export function canResendFor(
   if (message.userId === null || message.user === null || message.user.deletedAt !== null) {
     return false
   }
-  // A deactivated user, or a verification resend to a verified one, is a certain 409
+  // A deactivated user is a certain 409
   if (!message.user.isActive) return false
-  if (action === 'verification' && message.user.isVerified) return false
   // eslint-disable-next-line unicorn/no-null -- a non-staff user has no platform role
   return canStaffMailTarget(actorRole, context.targetPlatformRoles.get(message.userId) ?? null)
 }
@@ -468,17 +463,6 @@ export function buildPreviewMessage(
           },
         }
       }
-      case 'account_setup': {
-        return {
-          to,
-          templateKey,
-          variables: {
-            firstName: fill('firstName'),
-            setupUrl: maskedLink(buildPasswordResetUrl, origin),
-            appName: fill('appName'),
-          },
-        }
-      }
       case 'tenant_invitation': {
         return {
           to,
@@ -532,6 +516,18 @@ export function buildPreviewMessage(
             expiresInMinutes: fill('expiresInMinutes'),
             appName: fill('appName'),
             reason: fill('reason') === 'staff' ? 'staff' : 'self',
+          },
+        }
+      }
+      case 'welcome': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            signInUrl: maskedLink(signInPageUrl, origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
           },
         }
       }
@@ -707,7 +703,7 @@ function resendTargetOf(
   action: ResendAction,
   message: PlatformEmailRecord
 ):
-  | { action: 'verification' | 'password_setup'; userId: string }
+  | { action: 'sign_in_link'; userId: string }
   | { action: 'invitation'; tenantId: string; invitationId: string } {
   if (action === 'invitation') {
     if (message.tenantId !== null && message.invitationId !== null) {
@@ -721,10 +717,10 @@ function resendTargetOf(
 
 /**
  * Resend a token email by running the action that sent it, which issues a
- * fresh token: resend-verification or password-setup for the user, or the
- * invitation resend for the invitation. Password-setup sends `account_setup`
- * or `password_reset` by the user's state now, which may differ from the
- * original. The delegated action's gates, errors and audit entry apply
+ * fresh token: the staff sign-in link for the user (for a `sign_in_link` or
+ * `welcome` message, both answered with a `sign_in_link` mail), or the
+ * invitation resend for the invitation. A retired template answers
+ * `template_unavailable`. The delegated action's gates, errors and audit entry apply
  * unchanged; this adds an `email.resent` entry with the reason once it
  * succeeds. That entry is written after, and separately from, the delegated
  * action's commit: if it fails the call answers 500 though the mail was
@@ -780,12 +776,8 @@ export async function resendEmail(
 
   let delivery: Partial<EmailDelivery> = {}
   switch (target.action) {
-    case 'verification': {
-      delivery = await resendUserVerification(actor, target.userId, options)
-      break
-    }
-    case 'password_setup': {
-      delivery = await sendPasswordSetup(actor, target.userId, options)
+    case 'sign_in_link': {
+      delivery = await sendSignInLinkByStaff(actor, target.userId, options)
       break
     }
     case 'invitation': {

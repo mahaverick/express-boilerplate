@@ -37,7 +37,6 @@ const SAMPLE_VARIABLES: {
     expiresInDays: '7',
     appName: 'App',
   },
-  account_setup: { firstName: 'Ada', setupUrl: 'https://x.test/s', appName: 'App' },
   onboarding_reminder: {
     tenantName: 'Acme',
     appName: 'App',
@@ -65,6 +64,12 @@ const SAMPLE_VARIABLES: {
     expiresInMinutes: '15',
     appName: 'App',
   },
+  welcome: {
+    firstName: 'Ada',
+    signInUrl: 'https://x.test/auth/link?token=t&email=a%40x.test',
+    expiresInMinutes: '15',
+    appName: 'App',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -79,17 +84,14 @@ describe('EMAIL_TEMPLATE_META', () => {
       email_verification: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'appName'],
-        resendAction: 'verification',
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
       },
       password_reset: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'appName'],
-        resendAction: 'password_setup',
-      },
-      account_setup: {
-        senderClass: 'transactional',
-        previewVariables: ['firstName', 'appName'],
-        resendAction: 'password_setup',
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
       },
       tenant_invitation: {
         senderClass: 'transactional',
@@ -123,14 +125,18 @@ describe('EMAIL_TEMPLATE_META', () => {
       sign_in_link: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
-        resendAction: null,
+        resendAction: 'sign_in_link',
       },
       step_up_link: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
+      },
+      welcome: {
+        senderClass: 'transactional',
+        previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+        resendAction: 'sign_in_link',
       },
     })
   })
@@ -212,7 +218,7 @@ describe('EmailTemplateMeta type rules', () => {
       // @ts-expect-error -- a template with a …Url variable must mail from the transactional sender
       senderClass: 'general',
       previewVariables: ['firstName'],
-      resendAction: 'password_setup',
+      resendAction: 'sign_in_link',
     }
     expect(meta.senderClass).toBe('general')
   })
@@ -222,7 +228,7 @@ describe('EmailTemplateMeta type rules', () => {
       senderClass: 'transactional',
       // @ts-expect-error -- resetUrl carries a token and may never be stored
       previewVariables: ['firstName', 'resetUrl'],
-      resendAction: 'password_setup',
+      resendAction: 'sign_in_link',
     }
     expect(meta.previewVariables).toHaveLength(2)
   })

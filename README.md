@@ -173,7 +173,7 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                             |
 | `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                  |
 | `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                        |
-| `pnpm platform:grant -- <e> <role>` | Gives an existing, verified user a role in the platform tenant; see below.                          |
+| `pnpm platform:grant -- <e> <role>` | Gives an address a role in the platform tenant, creating its account; see below.                    |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).          |
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).              |
 | `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).      |
@@ -186,10 +186,12 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
 | `pnpm prepare`                      | Installs the husky git hooks; `pnpm install` runs it.                                               |
 
-`pnpm platform:grant -- <email> <role>` gives an existing user with a verified
-address a role (`owner` to `viewer`) in the platform tenant, audited as
-`platform.member.granted`. Nobody can invite staff before a platform owner
-exists, so this is how the first one is made.
+`pnpm platform:grant -- <email> <role>` gives the account at an address a role
+(`owner` to `viewer`) in the platform tenant, audited as
+`platform.member.granted`. An address with no account gets a verified one,
+audited as `user.created`; an unverified account is verified and its sessions
+end. Nobody can invite staff before a platform owner exists, so this is how
+the first one is made.
 
 The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

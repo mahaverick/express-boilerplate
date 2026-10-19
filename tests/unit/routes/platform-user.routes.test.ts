@@ -65,8 +65,7 @@ describe('createPlatformUserRouter writes', () => {
   it.each([
     ['post', '/'],
     ['patch', '/:id'],
-    ['post', '/:id/password-setup'],
-    ['post', '/:id/resend-verification'],
+    ['post', '/:id/sign-in-link'],
   ])('%s %s: role gate, JSON gate, then the shared write limiter', (method, path) => {
     const handlers = handlersFor(createPlatformUserRouter(limiters), method, path)
 

@@ -331,19 +331,19 @@ Staff are the members of the one tenant with `is_platform` set. These services
 carry staff access; the routes in front of them check the platform role first,
 and every write re-checks it under lock.
 
-| Service                          | Job                                                                                                                                                                                                                                                |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tenant-access.service.ts`       | `lockTenantAccess`: locks owners, memberships and, when the actor has no membership, the platform membership, and returns the actor's access. Membership wins; the platform tenant is members-only.                                                |
-| `platform.service.ts`            | Reads a user's platform role (one indexed read, no cache), `assertStillPlatformRole` inside a staff write, and the grant behind `pnpm platform:grant`.                                                                                             |
-| `platform-tenant.service.ts`     | Staff tenant search and detail, create with an owner invitation, owner re-invitation, and the suspend, reactivate and archive transitions (`transitionLifecycle`).                                                                                 |
-| `platform-user.service.ts`       | The staff user directory and user actions (create, edit, set-password and verification mail, deactivate, reactivate, sign out, soft delete). Edits and state changes lock through `lockStaffPair`; the two mail actions check rank without a lock. |
-| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard delete of a user or a tenant. With `retention.service.ts`, the only code that names the audit trigger's purge settings, and the only code that names `app.audit_redact`.                              |
-| `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                           |
-| `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                               |
-| `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                  |
-| `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                            |
-| `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                            |
-| `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                        |
+| Service                          | Job                                                                                                                                                                                                                                                              |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant-access.service.ts`       | `lockTenantAccess`: locks owners, memberships and, when the actor has no membership, the platform membership, and returns the actor's access. Membership wins; the platform tenant is members-only.                                                              |
+| `platform.service.ts`            | Reads a user's platform role (one indexed read, no cache), `assertStillPlatformRole` inside a staff write, and the grant behind `pnpm platform:grant`.                                                                                                           |
+| `platform-tenant.service.ts`     | Staff tenant search and detail, create with an owner invitation, owner re-invitation, and the suspend, reactivate and archive transitions (`transitionLifecycle`).                                                                                               |
+| `platform-user.service.ts`       | The staff user directory and user actions (create with a welcome sign-in link, edit, staff-sent sign-in link, deactivate, reactivate, sign out, soft delete). Edits and state changes lock through `lockStaffPair`; the sign-in link checks rank without a lock. |
+| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard delete of a user or a tenant. With `retention.service.ts`, the only code that names the audit trigger's purge settings, and the only code that names `app.audit_redact`.                                            |
+| `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                                         |
+| `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                                             |
+| `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                                |
+| `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                                          |
+| `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                                          |
+| `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                                      |
 
 Each cross-tenant repository is imported by its own `platform-*` service only;
 `platform-user.repository.ts` also by `platform-purge.service.ts`. What staff may do, and the gates on it, are in
@@ -656,9 +656,9 @@ where `app` is `'web'` or `'apex'`, never a URL: it returns `APEX_URL` for
   links to `WEB_URL` (`tenant-invitation.service.ts`).
 - `register`, `resend-verification` and `forgot-password` take an optional
   `app` that picks the frontend of the link they mail.
-- Staff mail about a user (set-password and verification) takes no `app`: the
-  server links a staff target to Apex and anyone else to `WEB_URL`
-  (`platform-user.service.ts`).
+- A staff-sent sign-in link takes no `app`: the server links a staff target
+  to Apex and anyone else to `WEB_URL` (`platform-user.service.ts`). A user
+  staff create gets a `welcome` mail whose sign-in link opens `WEB_URL`.
 - `GET /auth/google?app=apex` stores the choice in the OAuth session, with a
   same-origin `redirect` when one is valid (`rememberOAuthApp`), and the
   callback redirects to that frontend's `/auth/callback`, carrying the

@@ -397,26 +397,48 @@ describe('POST /auth/link/request', () => {
     expect(link.searchParams.get('redirect')).toBe(redirect)
   })
 
-  it.each(['staff', 'welcome'] as const)(
-    'mails a %s link with the team-admin sentence, greeting the account by its stored name',
-    async (reason) => {
-      const user = await createTrackedUser({ email: uniqueEmail(reason), firstName: 'Grace' })
+  it('mails a staff link with the team-admin sentence, greeting the account by its stored name', async () => {
+    const user = await createTrackedUser({ email: uniqueEmail('staff'), firstName: 'Grace' })
 
-      await sendSignInLink({ email: user.email, app: 'web', userId: user.id, reason })
+    await sendSignInLink({ email: user.email, app: 'web', userId: user.id, reason: 'staff' })
 
-      const [message] = await sql<{ userId: string | null; variables: Record<string, unknown> }[]>`
-        select user_id as "userId", variables from email_messages
-        where recipient = ${user.email} and template_key = 'sign_in_link'
-      `
-      expect(message?.userId).toBe(user.id)
-      expect(message?.variables).toEqual({
-        firstName: 'Grace',
-        expiresInMinutes: '15',
-        appName: expect.any(String) as unknown,
-        reason: 'staff',
-      })
-    }
-  )
+    const [message] = await sql<{ userId: string | null; variables: Record<string, unknown> }[]>`
+      select user_id as "userId", variables from email_messages
+      where recipient = ${user.email} and template_key = 'sign_in_link'
+    `
+    expect(message?.userId).toBe(user.id)
+    expect(message?.variables).toEqual({
+      firstName: 'Grace',
+      expiresInMinutes: '15',
+      appName: expect.any(String) as unknown,
+      reason: 'staff',
+    })
+  })
+
+  it('mails the welcome template for the welcome reason, with no reason variable', async () => {
+    const user = await createTrackedUser({ email: uniqueEmail('welcome'), firstName: 'Grace' })
+
+    await sendSignInLink({ email: user.email, app: 'web', userId: user.id, reason: 'welcome' })
+
+    const messages = await sql<
+      { userId: string | null; templateKey: string; variables: Record<string, unknown> }[]
+    >`
+      select user_id as "userId", template_key as "templateKey", variables from email_messages
+      where recipient = ${user.email}
+    `
+    expect(messages).toEqual([
+      {
+        userId: user.id,
+        templateKey: 'welcome',
+        variables: {
+          firstName: 'Grace',
+          expiresInMinutes: '15',
+          appName: expect.any(String) as unknown,
+        },
+      },
+    ])
+    expect(await linkRows(user.email)).toHaveLength(1)
+  })
 
   it('refuses a bad redirect with 400 errors.redirect', async () => {
     const email = uniqueEmail('bad-redirect')

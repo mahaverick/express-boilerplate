@@ -143,9 +143,9 @@ describe('GET /api/v1/platform/users', () => {
 })
 
 describe('GET /api/v1/platform/users/:id', () => {
-  it('returns the user with memberships, sign-in methods, password flag and pending invitations', async () => {
+  it('returns the user with memberships, sign-in methods and pending invitations', async () => {
     const { token } = await createTrackedStaff('viewer')
-    const user = await createTrackedUser({ firstName: 'Ada', hasPassword: true })
+    const user = await createTrackedUser({ firstName: 'Ada' })
     await authProviderRepository.create({
       userId: user.id,
       provider: 'email',
@@ -165,7 +165,6 @@ describe('GET /api/v1/platform/users/:id', () => {
       id: user.id,
       email: user.email,
       firstName: 'Ada',
-      hasPassword: true,
       authProviders: ['email'],
       // eslint-disable-next-line unicorn/no-null -- JSON null: not staff
       platformRole: null,

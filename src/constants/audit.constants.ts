@@ -3,6 +3,7 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
+import { FRONTEND_APPS } from '@/constants/frontend.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
   ONBOARDING_STEP_KEY_MAX_LENGTH,
@@ -155,11 +156,11 @@ export const AUDIT_ACTIONS = {
   'user.deactivated': { target: 'user', metadata: z.strictObject({ reason }) },
   'user.reactivated': { target: 'user', metadata: z.strictObject({ reason }) },
   'user.signed_out': { target: 'user', metadata: z.strictObject({ reason }) },
-  'user.password_setup_sent': {
+  // A staff member mailed the user a sign-in link; `app` is the frontend it opens.
+  'user.sign_in_link_sent': {
     target: 'user',
-    metadata: z.strictObject({ kind: z.enum(['setup', 'reset']) }),
+    metadata: z.strictObject({ app: z.enum(FRONTEND_APPS) }),
   },
-  'user.verification_resent': { target: 'user', metadata: z.strictObject({}) },
   'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
   'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },
@@ -263,6 +264,8 @@ export const RETIRED_AUDIT_ACTIONS = [
   'tenant.errors_viewed',
   'platform.member.auto_joined',
   'auth.reauthenticated',
+  'user.password_setup_sent',
+  'user.verification_resent',
 ] as const
 
 /**

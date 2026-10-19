@@ -11,6 +11,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { bootstrapGrant, getPlatformMembership } from '@/services/platform.service'
 import { hashToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -22,6 +23,14 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 const STAFF_DOMAIN = 'staff.example.test'
+
+/**
+ * The user ids of every `email_verified` event emitted while this file runs, in order.
+ */
+const verifiedEvents: string[] = []
+subscribeDomainEvent('email_verified', (event) => {
+  verifiedEvents.push(event.userId)
+})
 
 /**
  * One audit_logs row, as the assertions below read it.
@@ -145,19 +154,83 @@ describe('platform.service', () => {
       expect(await getPlatformMembership(user.id)).toBe('admin')
     })
 
-    it('refuses an address with no account', async () => {
-      await expect(
-        bootstrapGrant(`nobody-${randomUUID()}@example.test`, 'owner')
-      ).rejects.toMatchObject({
-        statusCode: 404,
+    it('creates a verified user when platform:grant names an unknown address', async () => {
+      const email = `Grant-New-${randomUUID()}@example.test`
+      const platform = await platformTenant()
+      const verifiedBefore = verifiedEvents.length
+
+      const membership = await bootstrapGrant(email, 'owner')
+
+      const [created] = await sql<
+        { id: string; email: string; verified: boolean; hash: string | null }[]
+      >`
+        select id, email, email_verified_at is not null as verified, password_hash as hash
+        from users where email = ${email.toLowerCase()} and deleted_at is null`
+      expect(created).toBeDefined()
+      createdUserIds.push(created?.id ?? '')
+      // eslint-disable-next-line unicorn/no-null -- a created account has no password
+      expect(created).toMatchObject({ email: email.toLowerCase(), verified: true, hash: null })
+      expect(membership).toMatchObject({
+        userId: created?.id,
+        tenantId: platform.id,
+        role: 'owner',
       })
+      const providers =
+        await sql`select provider from auth_providers where user_id = ${created?.id ?? ''}`
+      expect(providers).toEqual([{ provider: 'email' }])
+      expect(await auditRowsFor(created?.id ?? '')).toEqual([
+        {
+          action: 'user.created',
+          actorKind: 'system',
+          // eslint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
+          actorUserId: null,
+          access: 'system',
+          tenantId: platform.id,
+          targetType: 'user',
+          targetId: created?.id,
+          metadata: { emailDomain: 'example.test' },
+        },
+      ])
+      const grantRows = await auditRowsFor(membership.id)
+      expect(grantRows.map((row) => row.action)).toEqual(['platform.member.granted'])
+      expect(verifiedEvents.slice(verifiedBefore)).toEqual([created?.id])
     })
 
-    it('refuses an unverified account, and grants nothing', async () => {
+    it('verifies and grants an existing unverified user', async () => {
       const user = await createUser(`grant-${randomUUID()}@example.test`, { isVerified: false })
+      const verifiedBefore = verifiedEvents.length
 
-      await expect(bootstrapGrant(user.email, 'owner')).rejects.toMatchObject({ statusCode: 409 })
-      expect(await getPlatformMembership(user.id)).toBeNull()
+      const membership = await bootstrapGrant(user.email, 'admin')
+
+      expect(membership).toMatchObject({ userId: user.id, role: 'admin' })
+      const [row] = await sql<{ verified: boolean }[]>`
+        select email_verified_at is not null as verified from users where id = ${user.id}`
+      expect(row?.verified).toBe(true)
+      expect(verifiedEvents.slice(verifiedBefore)).toEqual([user.id])
+      expect(await auditRowsFor(user.id)).toEqual([])
+    })
+
+    it('emits no email_verified for a user verified already', async () => {
+      const user = await createUser(`grant-${randomUUID()}@example.test`, { isVerified: true })
+      const verifiedBefore = verifiedEvents.length
+
+      await bootstrapGrant(user.email, 'viewer')
+
+      expect(verifiedEvents.slice(verifiedBefore)).toEqual([])
+    })
+
+    it('creates nothing when the grant fails', async () => {
+      const email = `grant-fail-${randomUUID()}@example.test`
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'lockOwners',
+        () => Promise.reject(new Error('grant failed')),
+        async () => {
+          await expect(bootstrapGrant(email, 'owner')).rejects.toThrow('grant failed')
+        }
+      )
+      expect(await sql`select 1 from users where email = ${email}`).toHaveLength(0)
     })
 
     it('refuses to demote the last platform owner', async () => {

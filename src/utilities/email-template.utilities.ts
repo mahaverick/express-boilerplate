@@ -18,12 +18,19 @@ export const EMAIL_TEMPLATE_KEYS = [
   'registration_attempt',
   'password_changed',
   'tenant_invitation',
-  'account_setup',
   'onboarding_reminder',
   'maintenance_mode_changed',
   'sign_in_link',
   'step_up_link',
+  'welcome',
 ] as const
+
+/**
+ * Template keys no build renders or sends, whose `email_messages` rows stay.
+ * The staff email list's `template` filter accepts them, so those rows stay
+ * findable; a resend of one answers `template_unavailable`.
+ */
+export const RETIRED_EMAIL_TEMPLATE_KEYS = ['account_setup'] as const
 
 /**
  * Which template rendered a message: the type of `MailMessage.templateKey`
@@ -125,9 +132,10 @@ export function requireEmailVariables<T extends object>(
 
 /**
  * The flows a staff resend can re-run. Each issues a fresh token; a
- * token email is never replayed.
+ * token email is never replayed. `sign_in_link` mails the user a fresh
+ * staff-sent sign-in link; `invitation` resends the invitation.
  */
-export type ResendAction = 'verification' | 'password_setup' | 'invitation'
+export type ResendAction = 'sign_in_link' | 'invitation'
 
 /**
  * The keys of a template's variables that carry a secret: every name ending

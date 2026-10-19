@@ -14,14 +14,15 @@ import type { EmailMessage } from '@/database/models/email-message.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
-import type { NotificationJobData } from '@/jobs/notification.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
+import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -66,6 +67,12 @@ const invitationRepository = new TenantInvitationRepository()
 const createdTenantIds: string[] = []
 const createdInvitationIds: string[] = []
 const REASON = 'Customer asked on the phone'
+
+/**
+ * Every address a resend mailed a sign-in link to: those rows carry no user,
+ * so `afterEach` deletes them by address.
+ */
+const usedEmails: string[] = []
 
 /**
  * Staff write requests; with no body they carry the staff `reason` every write needs.
@@ -215,6 +222,9 @@ afterEach(async () => {
     createdTenantIds.length = 0
   }
   await deleteTrackedUsers()
+  if (usedEmails.length === 0) return
+  await sql`delete from user_tokens where email = any(${usedEmails})`
+  usedEmails.length = 0
 })
 
 afterAll(async () => {
@@ -223,55 +233,59 @@ afterAll(async () => {
   await closeQueue()
 })
 
-describe('POST /platform/emails/:id/resend: password-setup messages', () => {
-  it('resends an account_setup mail as a fresh set-password link and audits both entries', async () => {
-    const { user: actor, token } = await createTrackedStaff('admin')
-    const user = await createTrackedUser({ hasPassword: false })
-    const original = await createTrackedMessage({ recipient: user.email, userId: user.id })
+describe('POST /platform/emails/:id/resend: sign-in link messages', () => {
+  it.each([SIGN_IN_LINK_TEMPLATE_KEY, WELCOME_TEMPLATE_KEY])(
+    'resends a sign_in_link or welcome message by sending a fresh sign-in link (%s)',
+    async (templateKey) => {
+      const { user: actor, token } = await createTrackedStaff('admin')
+      const user = await createTrackedUser()
+      usedEmails.push(user.email)
+      const original = await createTrackedMessage({
+        recipient: user.email,
+        userId: user.id,
+        templateKey,
+      })
 
-    const response = await resend(token, original)
+      const response = await resend(token, original)
 
-    expect(response.status).toBe(202)
-    expect((response.body as ApiEnvelope<unknown>).data).toEqual({ emailSent: true })
-    const [created] = await waitUntil(
-      async () => {
-        const rows = await resentRows(original.id)
-        return rows.length > 0 ? rows : undefined
-      },
-      { message: 'the resend creates a message linked back to the original' }
-    )
-    expect(created?.template_key).toBe('account_setup')
+      expect(response.status).toBe(202)
+      expect((response.body as ApiEnvelope<unknown>).data).toEqual({ emailSent: true })
+      const [created] = await waitUntil(
+        async () => {
+          const rows = await resentRows(original.id)
+          return rows.length > 0 ? rows : undefined
+        },
+        { message: 'the resend creates a message linked back to the original' }
+      )
+      expect(created?.template_key).toBe(SIGN_IN_LINK_TEMPLATE_KEY)
+      const job = await waitForJob<EmailJobData>(
+        getEmailQueue(),
+        (data) => data.to === user.email && data.templateKey === SIGN_IN_LINK_TEMPLATE_KEY
+      )
+      expect((job.data.variables as { reason: string }).reason).toBe('staff')
+      const [link] = await sql<{ count: number }[]>`
+        select count(*)::int as count from user_tokens
+        where email = ${user.email} and purpose = 'sign_in_link' and revoked_at is null`
+      expect(link?.count).toBe(1)
 
-    const platform = await platformTenant()
-    expect(await auditRows(original.id)).toEqual([
-      {
-        action: 'email.resent',
-        tenant_id: platform.id,
-        target_type: 'email_message',
-        access: 'platform',
-        metadata: { reason: REASON, emailDomain: 'example.test', templateKey: 'account_setup' },
-      },
-    ])
-    expect(await auditActions(user.id)).toEqual(['user.password_setup_sent'])
-    const [resentEntry] = await sql<{ actor_user_id: string }[]>`
-      select actor_user_id from audit_logs where action = 'email.resent' and target_id = ${original.id}`
-    expect(resentEntry?.actor_user_id).toBe(actor.id)
-  })
-
-  it('sends password_reset for a user who has a password now, whatever the original was', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const user = await createTrackedUser({ hasPassword: true })
-    const original = await createTrackedMessage({ recipient: user.email, userId: user.id })
-
-    const response = await resend(token, original)
-
-    expect(response.status).toBe(202)
-    const job = await waitForJob<NotificationJobData>(
-      getNotificationQueue(),
-      (data) => data.userId === user.id && data.email?.templateKey === 'password_reset'
-    )
-    expect(job.data.emailContext?.resentFromId).toBe(original.id)
-  })
+      const platform = await platformTenant()
+      expect(await auditRows(original.id)).toEqual([
+        {
+          action: 'email.resent',
+          tenant_id: platform.id,
+          target_type: 'email_message',
+          access: 'platform',
+          metadata: { reason: REASON, emailDomain: 'example.test', templateKey },
+        },
+      ])
+      expect(await auditRows(user.id)).toMatchObject([
+        { action: 'user.sign_in_link_sent', metadata: { app: 'web' } },
+      ])
+      const [resentEntry] = await sql<{ actor_user_id: string }[]>`
+        select actor_user_id from audit_logs where action = 'email.resent' and target_id = ${original.id}`
+      expect(resentEntry?.actor_user_id).toBe(actor.id)
+    }
+  )
 
   it('passes the 403 through when the target outranks the actor, and writes no email.resent', async () => {
     const { token } = await createTrackedStaff('admin')
@@ -308,50 +322,6 @@ describe('POST /platform/emails/:id/resend: password-setup messages', () => {
       'This account is deactivated; reactivate it first'
     )
     expect((deactivated.body as ApiEnvelope<unknown>).code).toBeUndefined()
-  })
-})
-
-describe('POST /platform/emails/:id/resend: verification messages', () => {
-  it('resends through resend-verification, carrying resentFromId to the notification job', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const user = await createTrackedUser({ hasPassword: true, verified: false })
-    const original = await createTrackedMessage({
-      recipient: user.email,
-      userId: user.id,
-      templateKey: 'email_verification',
-    })
-
-    const response = await resend(token, original)
-
-    expect(response.status).toBe(202)
-    expect((response.body as ApiEnvelope<unknown>).data).toEqual({ emailSent: true })
-    const job = await waitForJob<NotificationJobData>(
-      getNotificationQueue(),
-      (data) => data.userId === user.id && data.type === 'verify_email'
-    )
-    expect(job.data.emailContext?.resentFromId).toBe(original.id)
-    expect(await auditActions(user.id)).toEqual(['user.verification_resent'])
-    const resentEntries = await auditRows(original.id)
-    expect(resentEntries.map((row) => row.metadata)).toEqual([
-      { reason: REASON, emailDomain: 'example.test', templateKey: 'email_verification' },
-    ])
-  })
-
-  it('passes the code-less 409 through for an address verified since', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const user = await createTrackedUser({ hasPassword: true, verified: true })
-    const original = await createTrackedMessage({
-      recipient: user.email,
-      userId: user.id,
-      templateKey: 'email_verification',
-    })
-
-    const response = await resend(token, original)
-
-    expect(response.status).toBe(409)
-    expect(response.body).toMatchObject({ message: 'Email address already verified' })
-    expect((response.body as ApiEnvelope<unknown>).code).toBeUndefined()
-    expect(await auditRows(original.id)).toEqual([])
   })
 })
 
@@ -535,29 +505,33 @@ describe('canResend for invitation emails', () => {
 })
 
 describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
-  it.each(['password_changed', 'registration_attempt', 'onboarding_reminder'])(
-    'answers 409 not_resendable for %s, which has no resend action',
-    async (templateKey) => {
-      const { token } = await createTrackedStaff('owner')
-      const user = await createTrackedUser()
-      const original = await createTrackedMessage({
-        recipient: user.email,
-        userId: user.id,
-        templateKey,
-        senderClass: 'general',
-      })
+  it.each([
+    'password_changed',
+    'registration_attempt',
+    'onboarding_reminder',
+    'email_verification',
+    'password_reset',
+    'step_up_link',
+  ])('answers 409 not_resendable for %s, which has no resend action', async (templateKey) => {
+    const { token } = await createTrackedStaff('owner')
+    const user = await createTrackedUser()
+    const original = await createTrackedMessage({
+      recipient: user.email,
+      userId: user.id,
+      templateKey,
+      senderClass: 'general',
+    })
 
-      const response = await resend(token, original)
+    const response = await resend(token, original)
 
-      expect(response.status).toBe(409)
-      expect((response.body as ApiEnvelope<unknown>).code).toBe('not_resendable')
-      expect(await auditRows(original.id)).toEqual([])
-    }
-  )
+    expect(response.status).toBe(409)
+    expect((response.body as ApiEnvelope<unknown>).code).toBe('not_resendable')
+    expect(await auditRows(original.id)).toEqual([])
+  })
 
   it('answers 409 not_resendable for legacy rows without the ids their action needs', async () => {
     const { token } = await createTrackedStaff('admin')
-    const setup = await createTrackedMessage({ templateKey: 'account_setup', variables: {} })
+    const setup = await createTrackedMessage({ templateKey: 'sign_in_link', variables: {} })
     const invitation = await createTrackedMessage({ templateKey: 'tenant_invitation' })
 
     for (const message of [setup, invitation]) {
@@ -577,9 +551,27 @@ describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
     expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
   })
 
+  it('answers 409 template_unavailable for a retired template', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const user = await createTrackedUser()
+    const original = await createTrackedMessage({
+      recipient: user.email,
+      userId: user.id,
+      templateKey: 'account_setup',
+    })
+
+    const response = await resend(token, original)
+
+    expect(response.status).toBe(409)
+    expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
+    expect(await auditRows(original.id)).toEqual([])
+    expect(await auditRows(user.id)).toEqual([])
+  })
+
   it('answers 409 recipient_suppressed, and resends once the suppression is lifted', async () => {
     const { token } = await staffSignedIn('admin')
     const user = await createTrackedUser()
+    usedEmails.push(user.email)
     const original = await createTrackedMessage({ recipient: user.email, userId: user.id })
     const suppression = await createTrackedSuppression(user.email)
 

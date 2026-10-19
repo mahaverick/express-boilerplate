@@ -6,7 +6,10 @@
 import { z } from 'zod'
 import { EMAIL_MESSAGE_STATUSES } from '@/constants/email.constants'
 import { STATS_RANGES } from '@/constants/platform.constants'
-import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
+import {
+  EMAIL_TEMPLATE_KEYS,
+  RETIRED_EMAIL_TEMPLATE_KEYS,
+} from '@/utilities/email-template.utilities'
 import { listFilter, listParamsSchema } from '@/validators/list.validators'
 
 /**
@@ -26,7 +29,8 @@ function utcDayField(name: string) {
 
 /**
  * `GET /api/v1/platform/emails` query: the shared list params, `search`
- * matching the recipient; `status` and `template` comma lists; `user` and
+ * matching the recipient; `status` and `template` comma lists, `template`
+ * taking a retired key too, so old messages stay findable; `user` and
  * `tenant` ids; `from` and `to` UTC days, both inclusive, `from` not after `to`.
  */
 export const platformEmailListSchema = listParamsSchema({
@@ -34,7 +38,10 @@ export const platformEmailListSchema = listParamsSchema({
   defaultSort: '-created',
   filters: {
     status: listFilter('status', EMAIL_MESSAGE_STATUSES).optional(),
-    template: listFilter('template', EMAIL_TEMPLATE_KEYS).optional(),
+    template: listFilter('template', [
+      ...EMAIL_TEMPLATE_KEYS,
+      ...RETIRED_EMAIL_TEMPLATE_KEYS,
+    ]).optional(),
     user: z.uuid('user must be a valid UUID.').optional(),
     tenant: z.uuid('tenant must be a valid UUID.').optional(),
     from: utcDayField('from').optional(),

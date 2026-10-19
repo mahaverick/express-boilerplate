@@ -1,7 +1,8 @@
 /**
  * @file The platform fields on existing responses: platformRole on the
- * profile and the login user, isPlatform on the tenant list, and role,
- * access and isPlatform on the tenant detail.
+ * profile and the login user, isPlatform on the tenant list, role, access
+ * and isPlatform on the tenant detail, and the exact key sets of the staff
+ * user responses.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -61,6 +62,13 @@ async function join(userId: string, tenant: Tenant, role: MembershipRole): Promi
  */
 function readTenant(slug: string, token: string) {
   return request(app).get(`/api/v1/tenants/${slug}`).set('Authorization', `Bearer ${token}`)
+}
+
+/**
+ * The sorted keys of an object.
+ */
+function keysOf(value: unknown): string[] {
+  return Object.keys(value as object).toSorted((a, b) => a.localeCompare(b))
 }
 
 describe('platform response fields', () => {
@@ -252,6 +260,60 @@ describe('platform response fields', () => {
       const detail = dataOf<Record<string, unknown>>(await readTenant('platform', token))
 
       expect(detail).toMatchObject({ isPlatform: true, access: 'member', role: 'viewer' })
+    })
+  })
+
+  describe('/api/v1/platform/users', () => {
+    /**
+     * The keys every staff user response carries for one user.
+     */
+    const RECORD_KEYS = [
+      'active',
+      'createdAt',
+      'deletedAt',
+      'email',
+      'emailVerifiedAt',
+      'firstName',
+      'id',
+      'lastLoggedInAt',
+      'lastName',
+      'membershipCount',
+      'platformRole',
+    ]
+
+    it('omits hasPassword from every user response', async () => {
+      const { user: admin } = await createUser()
+      await makeStaff(admin.id, 'admin')
+      const token = signAccessToken(admin, randomUUID())
+      const { user: target } = await createUser()
+      const auth = { Authorization: `Bearer ${token}` }
+
+      const list = await request(app)
+        .get('/api/v1/platform/users')
+        .query({ search: target.email })
+        .set(auth)
+      const detail = await request(app).get(`/api/v1/platform/users/${target.id}`).set(auth)
+      const patched = await request(app)
+        .patch(`/api/v1/platform/users/${target.id}`)
+        .set(auth)
+        .send({ firstName: 'Keys' })
+      const email = `fields-${randomUUID()}@example.test`
+      const created = await request(app).post('/api/v1/platform/users').set(auth).send({ email })
+      const createdBody = dataOf<{ user: { id: string }; emailSent: boolean }>(created)
+      createdUserIds.push(createdBody.user.id)
+      await sql`delete from user_tokens where email = ${email}`
+
+      const items = dataOf<{ items: unknown[] }>(list).items
+      expect(items).toHaveLength(1)
+      expect(keysOf(items[0])).toEqual(RECORD_KEYS)
+      expect(keysOf(dataOf(detail))).toEqual(
+        [...RECORD_KEYS, 'authProviders', 'memberships', 'pendingInvitations'].toSorted((a, b) =>
+          a.localeCompare(b)
+        )
+      )
+      expect(keysOf(dataOf(patched))).toEqual(RECORD_KEYS)
+      expect(keysOf(createdBody)).toEqual(['emailSent', 'user'])
+      expect(keysOf(createdBody.user)).toEqual(RECORD_KEYS)
     })
   })
 })

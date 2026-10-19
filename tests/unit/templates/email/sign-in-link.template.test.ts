@@ -49,12 +49,11 @@ describe('renderSignInLinkTemplate', () => {
     expect(rendered.text).toContain('<b>Ada</b>')
   })
 
-  it('has senderClass transactional and stores no …Url variable', () => {
+  it('has senderClass transactional, resends as a fresh link and stores no …Url variable', () => {
     expect(SIGN_IN_LINK_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
       previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
-      // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
-      resendAction: null,
+      resendAction: 'sign_in_link',
     })
     expect(SIGN_IN_LINK_TEMPLATE_META.previewVariables).not.toContain('signInUrl')
   })

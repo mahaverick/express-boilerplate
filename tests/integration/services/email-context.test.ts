@@ -1,7 +1,7 @@
 /**
  * @file Each mail flow threads its context onto the `email_messages` row:
  * the invitation's tenant, invitation and link app; the link app of the
- * verification, reset and account-setup links; and a staff resend's
+ * verification, reset and staff-sent sign-in links; and a staff resend's
  * `resentFromId`, through both the direct and the notification path. No
  * Worker runs here: jobs stay on the queues, and a notification job is
  * processed by calling `processNotificationJob` directly.
@@ -16,7 +16,7 @@ import type { NotificationJobData } from '@/jobs/notification.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sendPasswordResetMail } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
-import { sendPasswordSetup } from '@/services/platform-user.service'
+import { sendSignInLinkByStaff } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { invite, listPending, resend } from '@/services/tenant-invitation.service'
 import { sendVerificationMail } from '@/services/verification.service'
@@ -46,8 +46,10 @@ const recipients: string[] = []
 
 afterEach(async () => {
   await truncateAuditLogs()
-  if (recipients.length > 0)
+  if (recipients.length > 0) {
     await sql`delete from email_messages where recipient = any(${recipients})`
+    await sql`delete from user_tokens where email = any(${recipients})`
+  }
   recipients.length = 0
   if (createdTenantIds.length > 0)
     await sql`delete from tenants where id = any(${createdTenantIds})`
@@ -213,8 +215,8 @@ describe('notification-path mail', () => {
   })
 })
 
-describe('staff password setup', () => {
-  it('an account-setup mail records the web app, the user and a resend origin', async () => {
+describe('staff sign-in link', () => {
+  it('a staff-sent sign-in link records the web app, the user and a resend origin', async () => {
     const { user: admin } = await createTrackedStaff('admin')
     const target = await trackedUser()
     const origin = await trackedUser({ hasPassword: true, verified: false })
@@ -223,18 +225,18 @@ describe('staff password setup', () => {
     const originEmail = await emailJobTo(origin.email, 'email_verification')
 
     await expect(
-      sendPasswordSetup({ userId: admin.id }, target.id, {
+      sendSignInLinkByStaff({ userId: admin.id }, target.id, {
         resentFromId: originEmail.data.messageId ?? '',
       })
     ).resolves.toEqual({ emailSent: true })
 
-    const row = await rowOf(await emailJobTo(target.email, 'account_setup'))
+    const row = await rowOf(await emailJobTo(target.email, 'sign_in_link'))
     expect(row).toMatchObject({
       link_app: 'web',
       user_id: target.id,
       resent_from_id: originEmail.data.messageId,
       sender_class: 'transactional',
-      variables: { firstName: 'Ada' },
+      variables: { firstName: 'Ada', reason: 'staff' },
     })
   })
 })

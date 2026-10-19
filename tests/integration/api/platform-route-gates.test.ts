@@ -148,14 +148,7 @@ const ROUTES: readonly GateRow[] = [
   },
   {
     method: 'post',
-    path: '/users/:id/password-setup',
-    minRole: 'admin',
-    requiresStepUp: false,
-    target: 'user',
-  },
-  {
-    method: 'post',
-    path: '/users/:id/resend-verification',
+    path: '/users/:id/sign-in-link',
     minRole: 'admin',
     requiresStepUp: false,
     target: 'user',

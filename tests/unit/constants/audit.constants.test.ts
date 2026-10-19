@@ -37,8 +37,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'user.deactivated': { reason: 'Chargeback fraud, ticket 4411' },
   'user.reactivated': { reason: 'Cleared by support' },
   'user.signed_out': { reason: 'Lost laptop' },
-  'user.password_setup_sent': { kind: 'setup' },
-  'user.verification_resent': {},
+  'user.sign_in_link_sent': { app: 'web' },
   'user.deleted': { reason: 'Erasure request' },
   'tenant.suspended': { reason: 'Unpaid invoice' },
   'tenant.reactivated': { reason: 'Invoice paid' },
@@ -121,12 +120,11 @@ describe('AUDIT_ACTIONS', () => {
       'user.deactivated',
       'user.deleted',
       'user.flags_evaluated',
-      'user.password_setup_sent',
       'user.purged',
       'user.reactivated',
+      'user.sign_in_link_sent',
       'user.signed_out',
       'user.updated',
-      'user.verification_resent',
     ])
   })
 
@@ -202,13 +200,14 @@ describe('AUDIT_ACTIONS', () => {
     expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
   })
 
-  it('pins the closed value sets of user.password_setup_sent and the step-up actions', () => {
+  it('pins the closed value sets of user.sign_in_link_sent and the step-up actions', () => {
     expect(
-      AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'reset' }).success
+      AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({ app: 'apex' }).success
     ).toBe(true)
     expect(
-      AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'invite' }).success
+      AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({ app: 'mobile' }).success
     ).toBe(false)
+    expect(AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({}).success).toBe(false)
     expect(
       AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'google' }).success
     ).toBe(true)
@@ -226,7 +225,8 @@ describe('AUDIT_ACTIONS', () => {
   it('records only a known template key on email.resent', () => {
     const schema = AUDIT_ACTIONS['email.resent'].metadata
     const valid = VALID_METADATA['email.resent']
-    expect(schema.safeParse({ ...valid, templateKey: 'account_setup' }).success).toBe(true)
+    expect(schema.safeParse({ ...valid, templateKey: 'welcome' }).success).toBe(true)
+    expect(schema.safeParse({ ...valid, templateKey: 'account_setup' }).success).toBe(false)
     expect(schema.safeParse({ ...valid, templateKey: 'not_a_template' }).success).toBe(false)
   })
 
@@ -359,6 +359,8 @@ describe('audit value sets', () => {
         'tenant.errors_viewed',
         'platform.member.auto_joined',
         'auth.reauthenticated',
+        'user.password_setup_sent',
+        'user.verification_resent',
       ])
       for (const action of RETIRED_AUDIT_ACTIONS) {
         expect(Object.hasOwn(AUDIT_ACTIONS, action)).toBe(false)

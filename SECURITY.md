@@ -363,7 +363,7 @@ matches the token's purpose, so a reset or account-setup token never verifies an
 address and a verification token never resets a password. The reset link is
 shorter-lived than the verification link because redeeming it takes the account
 over. Staff never set a user's password: a staff-created account gets a
-set-password link.
+`welcome` mail with a sign-in link.
 
 ### Verification needs the password
 
@@ -950,7 +950,7 @@ reload and the queue pause.
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                   |
 | HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                             |
 | Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                   |
-| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role to an existing verified user.                     |
+| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role, creating a verified account when needed.         |
 
 ## Reporting a vulnerability
 

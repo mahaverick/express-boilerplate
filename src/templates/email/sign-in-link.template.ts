@@ -34,13 +34,12 @@ export interface SignInLinkVariables {
 /**
  * How email tracking treats this template. Its link is a full credential,
  * so it mails from the transactional sender and `signInUrl` is never
- * stored.
+ * stored. A staff resend sends a fresh staff-sent sign-in link.
  */
 export const SIGN_IN_LINK_TEMPLATE_META: EmailTemplateMeta<SignInLinkVariables> = {
   senderClass: 'transactional',
   previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
-  // eslint-disable-next-line unicorn/no-null -- no staff resend re-runs this flow
-  resendAction: null,
+  resendAction: 'sign_in_link',
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof SignInLinkVariables> = [

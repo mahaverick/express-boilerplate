@@ -11,11 +11,6 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { stackFrameLinesOf } from '@/errors/stack-frames'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
-import {
-  ACCOUNT_SETUP_TEMPLATE_KEY,
-  renderAccountSetupTemplate,
-  type AccountSetupVariables,
-} from '@/templates/email/account-setup.template'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
   EMAIL_VERIFICATION_TEMPLATE_KEY,
@@ -62,6 +57,11 @@ import {
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
 } from '@/templates/email/tenant-invitation.template'
+import {
+  renderWelcomeTemplate,
+  WELCOME_TEMPLATE_KEY,
+  type WelcomeVariables,
+} from '@/templates/email/welcome.template'
 import { senderFor } from '@/utilities/email-sender.utilities'
 import type { RenderedEmail } from '@/utilities/email-template.utilities'
 
@@ -106,11 +106,6 @@ export type MailMessage =
     }
   | {
       to: string
-      templateKey: typeof ACCOUNT_SETUP_TEMPLATE_KEY
-      variables: AccountSetupVariables
-    }
-  | {
-      to: string
       templateKey: typeof ONBOARDING_REMINDER_TEMPLATE_KEY
       variables: OnboardingReminderVariables
     }
@@ -128,6 +123,11 @@ export type MailMessage =
       to: string
       templateKey: typeof STEP_UP_LINK_TEMPLATE_KEY
       variables: StepUpLinkVariables
+    }
+  | {
+      to: string
+      templateKey: typeof WELCOME_TEMPLATE_KEY
+      variables: WelcomeVariables
     }
 
 /**
@@ -171,9 +171,6 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     case TENANT_INVITATION_TEMPLATE_KEY: {
       return renderTenantInvitationTemplate(message.variables)
     }
-    case ACCOUNT_SETUP_TEMPLATE_KEY: {
-      return renderAccountSetupTemplate(message.variables)
-    }
     case ONBOARDING_REMINDER_TEMPLATE_KEY: {
       return renderOnboardingReminderTemplate(message.variables)
     }
@@ -185,6 +182,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case STEP_UP_LINK_TEMPLATE_KEY: {
       return renderStepUpLinkTemplate(message.variables)
+    }
+    case WELCOME_TEMPLATE_KEY: {
+      return renderWelcomeTemplate(message.variables)
     }
     default: {
       throw new Error(

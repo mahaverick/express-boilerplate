@@ -50,6 +50,7 @@ import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import { resendPlatformInvitationForSignIn } from '@/services/tenant-invitation.service'
 import { MISSING_FIRST_NAME_FALLBACK } from '@/services/verification.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
+import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import type { EmailResendOptions } from '@/types/email-context'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import type { SignInLinkRequestInput } from '@/validators/sign-in-link.validators'
@@ -103,7 +104,8 @@ function linkInvalid(): HttpError {
  * Issue a sign-in link for an address and queue its mail. Issuing revokes
  * the address's earlier live links. Rejects when the link or the job cannot
  * be written; a caller after its reply catches that. The `welcome` reason
- * renders the sign-in mail with the staff sentence.
+ * mails the `welcome` template; `self` and `staff` mail `sign_in_link`, with
+ * the staff sentence for `staff`.
  * @param target - The address, the frontend the link opens, a stored redirect, the account and the reason.
  * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.
  * @returns Resolves once the mail job is queued.
@@ -125,18 +127,18 @@ export async function sendSignInLink(
   // The stored name, never a submitted one: that would be attacker-chosen text in the inbox.
   const account =
     target.userId === undefined ? undefined : await userRepository.findById(target.userId)
+  const to = target.email.toLowerCase()
+  const variables = {
+    firstName: account?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+    signInUrl: buildSignInLinkUrl(raw, row),
+    expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+    appName: getEnv().APP_NAME,
+  }
+  const reason = target.reason ?? 'self'
   await addEmailJob(
-    {
-      to: target.email.toLowerCase(),
-      templateKey: SIGN_IN_LINK_TEMPLATE_KEY,
-      variables: {
-        firstName: account?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        signInUrl: buildSignInLinkUrl(raw, row),
-        expiresInMinutes: String(Math.round(ttlMs / 60_000)),
-        appName: getEnv().APP_NAME,
-        reason: (target.reason ?? 'self') === 'self' ? 'self' : 'staff',
-      },
-    },
+    reason === 'welcome'
+      ? { to, templateKey: WELCOME_TEMPLATE_KEY, variables }
+      : { to, templateKey: SIGN_IN_LINK_TEMPLATE_KEY, variables: { ...variables, reason } },
     target.userId ?? '',
     { context: { linkApp: target.app, ...options } }
   )

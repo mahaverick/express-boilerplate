@@ -5,7 +5,6 @@
  * before anything can store it.
  */
 import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
-import { ACCOUNT_SETUP_TEMPLATE_META } from '@/templates/email/account-setup.template'
 import { EMAIL_VERIFICATION_TEMPLATE_META } from '@/templates/email/email-verification.template'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_META } from '@/templates/email/maintenance-mode-changed.template'
 import { ONBOARDING_REMINDER_TEMPLATE_META } from '@/templates/email/onboarding-reminder.template'
@@ -15,6 +14,7 @@ import { REGISTRATION_ATTEMPT_TEMPLATE_META } from '@/templates/email/registrati
 import { SIGN_IN_LINK_TEMPLATE_META } from '@/templates/email/sign-in-link.template'
 import { STEP_UP_LINK_TEMPLATE_META } from '@/templates/email/step-up-link.template'
 import { TENANT_INVITATION_TEMPLATE_META } from '@/templates/email/tenant-invitation.template'
+import { WELCOME_TEMPLATE_META } from '@/templates/email/welcome.template'
 import type { EmailTemplateKey, EmailTemplateMetaEntry } from '@/utilities/email-template.utilities'
 
 /**
@@ -53,9 +53,9 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     registration_attempt: REGISTRATION_ATTEMPT_TEMPLATE_META,
     password_changed: PASSWORD_CHANGED_TEMPLATE_META,
     tenant_invitation: TENANT_INVITATION_TEMPLATE_META,
-    account_setup: ACCOUNT_SETUP_TEMPLATE_META,
     onboarding_reminder: ONBOARDING_REMINDER_TEMPLATE_META,
     maintenance_mode_changed: MAINTENANCE_MODE_CHANGED_TEMPLATE_META,
     sign_in_link: SIGN_IN_LINK_TEMPLATE_META,
     step_up_link: STEP_UP_LINK_TEMPLATE_META,
+    welcome: WELCOME_TEMPLATE_META,
   })

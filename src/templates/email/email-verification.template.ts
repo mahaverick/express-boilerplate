@@ -30,13 +30,14 @@ export interface EmailVerificationVariables {
 
 /**
  * How email tracking treats this template. Its link carries a token, so it
- * mails from the transactional sender; a resend issues a new verification
- * link.
+ * mails from the transactional sender. Never resent by staff: a staff
+ * member sends a sign-in link instead, whose click verifies the address.
  */
 export const EMAIL_VERIFICATION_TEMPLATE_META: EmailTemplateMeta<EmailVerificationVariables> = {
   senderClass: 'transactional',
   previewVariables: ['firstName', 'appName'],
-  resendAction: 'verification',
+  // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+  resendAction: null,
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof EmailVerificationVariables> = [

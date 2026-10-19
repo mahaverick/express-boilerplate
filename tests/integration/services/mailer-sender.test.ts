@@ -42,7 +42,10 @@ describe('sendMail sender', () => {
   it.each([
     ['email_verification', { firstName: 'Ada', verificationUrl: 'https://x.test/v', appName: 'A' }],
     ['password_reset', { firstName: 'Ada', resetUrl: 'https://x.test/r', appName: 'A' }],
-    ['account_setup', { firstName: 'Ada', setupUrl: 'https://x.test/s', appName: 'A' }],
+    [
+      'welcome',
+      { firstName: 'Ada', signInUrl: 'https://x.test/l', expiresInMinutes: '15', appName: 'A' },
+    ],
   ] as const)(
     'sends %s, a token template, from the transactional sender',
     async (templateKey, variables) => {
