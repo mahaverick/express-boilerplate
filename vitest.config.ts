@@ -16,7 +16,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
-    setupFiles: ['./tests/helpers/setup-global.ts'],
+    /**
+     * setup-global.ts loads the test env and the worker's database and Redis
+     * prefix; setup-rate-limits.ts, after it, clears this worker's rate-limit
+     * counters before each file. vitest.unit.config.ts keeps only the first.
+     */
+    setupFiles: ['./tests/helpers/setup-global.ts', './tests/helpers/setup-rate-limits.ts'],
     /**
      * Runs once in the main process before any worker starts: it creates and
      * migrates every worker's own database and clears leftover rate-limit

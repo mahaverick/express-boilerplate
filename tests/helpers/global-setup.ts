@@ -4,8 +4,8 @@
  * and clears leftover Redis rate-limit counters from an earlier run.
  */
 import postgres from 'postgres'
-import { createClient } from 'redis'
 import { runMigrations } from '@/database/migrate'
+import { clearRedisKeys } from './clear-redis-keys'
 import { loadTestEnv } from './env'
 import { WORKER_RATE_LIMIT_KEY_PATTERN } from './redis-prefix'
 import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
@@ -37,34 +37,7 @@ import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
  * the watcher if that surfaces.
  */
 async function clearRateLimitCounters(): Promise<void> {
-  const url = process.env.REDIS_URL
-  if (url === undefined) return
-
-  const client = createClient({
-    url,
-    // Bounded like redis.service.ts's own client: an unbounded connect() would hang the whole suite instead of falling through to the warning below.
-    socket: {
-      connectTimeout: 2000,
-      reconnectStrategy: (retries) => (retries > 1 ? new Error('Redis unreachable') : 100),
-    },
-  })
-  // Without a listener, EventEmitter throws node-redis's emitted 'error' and crashes the process.
-  client.on('error', () => {})
-
-  try {
-    await client.connect()
-    const batches = client.scanIterator({ MATCH: WORKER_RATE_LIMIT_KEY_PATTERN, COUNT: 500 })
-    for await (const keys of batches) {
-      if (keys.length > 0) await client.del(keys)
-    }
-  } catch (error) {
-    console.warn(
-      'global-setup: could not clear rate-limit counters in Redis; continuing.',
-      (error as Error).message
-    )
-  } finally {
-    if (client.isOpen) client.destroy()
-  }
+  await clearRedisKeys(WORKER_RATE_LIMIT_KEY_PATTERN, 'global-setup')
 }
 
 /**
