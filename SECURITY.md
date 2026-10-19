@@ -61,8 +61,9 @@ the first check that says no:
 Issuing a link revokes the address's earlier live links, so at most one is
 live. It lasts `SIGN_IN_LINK_TTL` (default `15m`). The link opens
 `<app origin>/auth/link?token=…&email=…`, plus `&redirect=…` when the request
-stored one; its `email` and `redirect` are display hints the server never reads
-([Email links](#email-links)).
+stored one. Its `redirect` is a display hint the server never reads; its
+`email` is read only when the client sends it back for the mismatch check
+below ([Email links](#email-links)).
 
 `POST /auth/link/verify` takes `{ token, email? }` and signs in the account the
 link's address holds (`verifySignInLink`):
@@ -101,6 +102,12 @@ expired or was already used.` It is a 400, never a 401, because the clients
 **Accepted:** the cooldown and the budget are silent by design, so a second
 request inside a minute mails nothing. The frontends show a 60-second
 countdown after every send instead.
+
+**Accepted:** the daily budget can lock an owner out of email links. Anyone
+who knows an address can spend its 10 links with requests spaced past the
+1-minute cooldown, and the owner then gets no link for up to 24 hours. The
+bound: every one of those links reaches the owner's own mailbox, the newest
+stays live for 15 minutes, and Google sign-in, where it is set up, still works.
 
 ### Account creation on click
 
@@ -633,8 +640,8 @@ session (`src/services/step-up.service.ts`).
 
 - **By link, bound to the session.** `POST /auth/step-up/link/request` mails a
   link to the account's own address and answers `202` with
-  `resendAvailableAt`. Another request inside `STEP_UP_LINK_COOLDOWN` (default
-  `1m`) answers `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
+  `resendAvailableAt`. Another request by the same staff member, from any of
+  their sessions, inside `STEP_UP_LINK_COOLDOWN` (default `1m`) answers `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
   `step_up_link` row names the user and the session (the token's `sid`) that
   asked: a new link revokes that session's earlier one, and a sign-out revokes
   it. `POST /auth/step-up/link/verify` claims it only for that user and
@@ -963,9 +970,11 @@ fails a write route with no limiter.
 The auth limiters each answer a specific threat:
 
 - **Sign-in link request** counts by IP alone (10 in 15 minutes). A
-  per-address limiter would let anyone who knows an address deny its owner
-  their link; the silent mail cooldown and the daily budget bound one inbox
-  instead, after the reply.
+  per-address limiter on the request would let anyone who knows an address
+  deny its owner their link; the silent mail cooldown and the daily budget
+  bound one inbox instead, after the reply. The budget itself can lock an
+  owner out for up to 24 hours, which is accepted under
+  [Sign-in links](#sign-in-links-one-answer-one-reply-before-the-lookup).
 - **Sign-in link verify and invitation verify** count by IP (20 in 15 minutes
   each). A link carries 256 random bits, so they bound a client working through
   dead links, not guessing.

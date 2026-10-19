@@ -276,7 +276,7 @@ const EnvSchema = z.object({
         'STEP_UP_LINK_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
     })
     .describe(
-      'Shortest gap between two step-up confirmation mails for one session, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own session. Defaults to 1m.'
+      'Shortest gap between two step-up confirmation mails for one staff member, across all their sessions, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own sessions. Defaults to 1m.'
     ),
 
   INVITATION_TTL: z
