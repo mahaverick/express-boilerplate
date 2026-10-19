@@ -24,6 +24,7 @@ import {
   isRedisReachable,
   RECONNECT_DELAY_CAP_MS,
   REDIS_CONNECT_TIMEOUT_MS,
+  redisKey,
 } from '@/services/redis.service'
 import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
@@ -202,6 +203,13 @@ describe('Redis clients survive an outage', () => {
     )
     app.use(errorHandler)
     const body = { token: `dead-link-${randomUUID()}` }
+    // The budget is per IP and per worker: an earlier file's link verifies would count against this limit of 2.
+    const redis = await getRedis()
+    const spent: string[] = []
+    const keyPattern = `${redisKey('rl', RATE_LIMITS.signInLinkVerify.name)}:*`
+    const batches = redis.scanIterator({ MATCH: keyPattern })
+    for await (const batch of batches) spent.push(...batch)
+    if (spent.length > 0) await redis.del(spent)
 
     // Counted in Redis (the store switches to Redis on this first request).
     const counted = await request(app).post('/link/verify').send(body)
