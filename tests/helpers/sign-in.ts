@@ -7,6 +7,7 @@
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { issueLinkToken } from '@/services/link-token.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -41,7 +42,8 @@ export async function issueTestLink(
 
 /**
  * Sign in by a fresh link: the account is created on this click when the
- * address has none.
+ * address has none. The link verify's IP budget is cleared first, so the
+ * sign-ins of every file a worker runs never add up to a 429.
  * @param email - The address to sign in as.
  * @param app - The frontend the link opens; `web` by default.
  * @returns The access token, the refresh cookie as `name=value` for a `Cookie` header, and the user's id.
@@ -52,6 +54,7 @@ export async function signInByLink(
   app: FrontendApp = 'web'
 ): Promise<{ accessToken: string; refreshCookie: string; userId: string }> {
   const token = await issueTestLink(email, app)
+  await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
   built.app ??= createApp()
   const response = await request(built.app).post('/api/v1/auth/link/verify').send({ token })
   if (response.status !== 200) {

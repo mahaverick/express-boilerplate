@@ -105,7 +105,7 @@ export interface MaintenanceRouteRule {
 /**
  * The customer routes Apex calls outside `/platform/*` (its tenant,
  * members, invitations and Staff pages, leaving a tenant, a staff member's
- * own profile, password and other sessions, and accepting an invitation), as
+ * own profile and other sessions, and accepting an invitation), as
  * `METHOD path`. Platform staff pass the gate on these in both modes;
  * everyone else is refused as on any route. Every one sits behind
  * `requireAuth`, which runs the staff check.
@@ -115,7 +115,6 @@ export interface MaintenanceRouteRule {
  */
 export const MAINTENANCE_STAFF_ROUTES: readonly string[] = [
   'PATCH /api/v1/profile',
-  'POST /api/v1/auth/change-password',
   'POST /api/v1/auth/sessions/revoke-others',
   'POST /api/v1/invitations/accept',
   'GET /api/v1/tenants/:slug',
@@ -216,8 +215,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('*', '/api/v1/collect', 'prefix'),
   letThrough('GET', '/api/v1/status/maintenance'),
   letThrough('*', '/api/v1/platform', 'prefix'),
-  // Sign-in: let through; in `full` the auth service refuses non-staff after identifying them.
-  letThrough('POST', '/api/v1/auth/login'),
+  // Google sign-in: let through; in `full` the auth service refuses non-staff after identifying them.
   letThrough('GET', '/api/v1/auth/google'),
   letThrough('GET', '/api/v1/auth/google/callback'),
   // The link routes decide in the service: a request for a non-staff address in `full` mails nothing, and verify peeks before it claims.
@@ -235,12 +233,6 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),
   // Account writes: refused in both modes.
-  write('POST', '/api/v1/auth/register'),
-  write('POST', '/api/v1/auth/verify-email'),
-  write('POST', '/api/v1/auth/resend-verification'),
-  write('POST', '/api/v1/auth/forgot-password'),
-  write('POST', '/api/v1/auth/reset-password'),
-  write('POST', '/api/v1/auth/change-password'),
   write('POST', '/api/v1/auth/sessions/revoke-others'),
   write('PATCH', '/api/v1/profile'),
   read('/api/v1/notifications/stream'),

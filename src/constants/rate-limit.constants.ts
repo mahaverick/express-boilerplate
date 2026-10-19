@@ -5,9 +5,7 @@
  * file, and `import-x/no-cycle` is an error.
  */
 import type { Request } from 'express'
-import { ipKeyGenerator } from 'express-rate-limit'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
-import { loginSchema } from '@/validators/auth.validators'
 
 /**
  * One rate limiter's configuration: window, budget and counting key.
@@ -31,8 +29,7 @@ export interface RateLimiterSpec {
    * default key generator (IP only), `'user'` uses
    * `authenticatedUserRateLimitKey`, `'email'` uses
    * `submittedEmailRateLimitKey`, and a function is a custom key generator,
-   * as `login`'s composite ip+email key and `emailWebhook`'s per-provider
-   * key are.
+   * as `emailWebhook`'s per-provider key is.
    */
   keyBy: 'ip' | 'user' | 'email' | ((request: Request) => string)
   /**
@@ -53,25 +50,15 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 32 limiters in `RATE_LIMITS`.
+ * The names of the 24 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
-  | 'register'
-  | 'login'
-  | 'loginIp'
-  | 'loginAccount'
   | 'refresh'
   | 'logout'
-  | 'verifyEmail'
-  | 'resendVerificationIp'
-  | 'resendVerificationEmail'
-  | 'forgotPasswordIp'
-  | 'resetPassword'
   | 'googleOAuth'
   | 'googleOAuthCallback'
   | 'createTenant'
   | 'inviteTenantMember'
-  | 'changePassword'
   | 'invitationPreview'
   | 'invitationAccept'
   | 'platformSearch'
@@ -113,30 +100,6 @@ function submittedEmail(request: Request): string {
   const body = request.body as Record<string, unknown> | undefined
   const email = body?.email
   return typeof email === 'string' ? email.trim().toLowerCase() : ''
-}
-
-/**
- * The composite key `login`'s limiter counts attempts by: client IP and
- * submitted email together, never either alone (see the `login` entry in
- * `RATE_LIMITS`). The email part is `hashRateLimitIdentity`'s digest, so the
- * Redis key never names an address.
- * @param request - The incoming request.
- * @returns A key combining the client's IP and the submitted email's digest.
- */
-function loginRateLimitKey(request: Request): string {
-  return `${ipKeyGenerator(request.ip ?? 'unknown')}:${hashRateLimitIdentity(submittedEmail(request))}`
-}
-
-/**
- * Whether a login body would fail `loginSchema`, so the route answers it 400
- * without checking a password. `loginAccount` skips such a request: it costs
- * the sender no bcrypt work, so counting it would let anyone lock an account
- * out for free.
- * @param request - The incoming request.
- * @returns True when the body is not a well-formed login.
- */
-function isMalformedLogin(request: Request): boolean {
-  return !loginSchema.safeParse(request.body).success
 }
 
 /**
@@ -193,69 +156,13 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 30 rate-limit specs this API enforces, each commented with the reason
+ * The 24 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
  * pins the list and order.
  */
 export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
-  /**
-   * Keyed on IP alone, not email: an attacker enumerating addresses varies
-   * the email on every request, so only an IP key bounds anything. Bounds
-   * bcrypt CPU and outbound mail volume. The identical response for a free
-   * and a taken address closes the enumeration oracle, not this limiter.
-   */
-  register: {
-    name: 'register',
-    windowMs: 60 * 60 * 1000,
-    limit: 100,
-    keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * The composite ip+email key: email alone would let anyone who merely
-   * knows a victim's address lock them out for free, and IP alone would let
-   * a distributed attacker bypass the limit entirely. Checked first, ahead
-   * of loginIp and loginAccount, so a request it rejects spends neither of
-   * their budgets.
-   */
-  login: {
-    name: 'login',
-    windowMs: 15 * 60 * 1000,
-    limit: 5,
-    keyBy: loginRateLimitKey,
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * Per-IP, behind the composite key: bounds one IP spraying many accounts
-   * (credential stuffing), which the ip+email key cannot see.
-   */
-  loginIp: {
-    name: 'login-ip',
-    windowMs: 15 * 60 * 1000,
-    limit: 100,
-    keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * Per-account, keyed on the submitted email alone: bounds distributed
-   * guessing against one account from many IPs. Counts only well-formed
-   * attempts that were refused: a malformed body (`isMalformedLogin`) and
-   * successful sign-ins spend nothing. The limit is high on purpose, and the
-   * residual lockout is accepted: 100 well-formed wrong passwords in an
-   * hour, each a bcrypt-checked request (the composite `login` key holds
-   * each IP to 5 per 15 minutes per address), still lock the account.
-   */
-  loginAccount: {
-    name: 'login-account',
-    windowMs: 60 * 60 * 1000,
-    limit: 100,
-    keyBy: 'email',
-    counts: 'rejected',
-    skip: isMalformedLogin,
-    message: RATE_LIMITED_MESSAGE,
-  },
   /**
    * Keyed on IP alone; volume protection, not a security boundary. A
    * refresh token is 256 bits of randomness, and reuse detection revokes
@@ -277,69 +184,6 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     name: 'logout',
     windowMs: 5 * 60 * 1000,
     limit: 300,
-    keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * Keyed on IP alone: the token is single-use and high-entropy, so no
-   * per-token budget is worth counting. This bounds a client working
-   * through many tokens.
-   */
-  verifyEmail: {
-    name: 'verify-email',
-    windowMs: 15 * 60 * 1000,
-    limit: 30,
-    keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * The tight half of a pair with resendVerificationEmail, run in series.
-   * A tight per-address budget would itself be an attack (anyone who knows
-   * the address could spend it and deny the real owner their mail), so this
-   * IP side is what stops an attacker.
-   */
-  resendVerificationIp: {
-    name: 'resend-verification-ip',
-    windowMs: 60 * 60 * 1000,
-    limit: 5,
-    keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * The generous half of the pair with resendVerificationIp: bounds
-   * mail-bombing one address without letting someone who merely knows the
-   * address exhaust the owner's own verification budget.
-   */
-  resendVerificationEmail: {
-    name: 'resend-verification-email',
-    windowMs: 60 * 60 * 1000,
-    limit: 20,
-    keyBy: 'email',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * The only limiter on forgot-password, keyed on IP alone. There is no
-   * per-address limiter: anyone who knows an address could spend it and
-   * deny its owner their reset mail. One address's inbox is bounded instead
-   * by a silent per-address mail cooldown (`PASSWORD_RESET_MAIL_COOLDOWN`,
-   * `requestPasswordReset`), behind a reply that never changes.
-   */
-  forgotPasswordIp: {
-    name: 'forgot-password-ip',
-    windowMs: 60 * 60 * 1000,
-    limit: 5,
-    keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * Keyed on IP alone: the token is single-use and high-entropy (256
-   * bits), so this bounds a client working through many tokens or
-   * malformed attempts, not guessing.
-   */
-  resetPassword: {
-    name: 'reset-password',
-    windowMs: 15 * 60 * 1000,
-    limit: 10,
     keyBy: 'ip',
     message: RATE_LIMITED_MESSAGE,
   },
@@ -394,19 +238,6 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * Budget of 5 per 15 minutes, matching login rather than resetPassword's
-   * 10: this is a password oracle (it compares a caller-supplied
-   * `currentPassword` against the stored hash), so it gets login's budget.
-   * Keyed on the caller's id, not IP, since it runs behind `requireAuth`.
-   */
-  changePassword: {
-    name: 'change-password',
-    windowMs: 15 * 60 * 1000,
-    limit: 5,
-    keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
    * Keyed on IP alone: a public route, with no caller identity to key on.
    */
   invitationPreview: {
@@ -417,7 +248,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * Keyed on the caller's id, behind `requireAuth`, as changePassword is: an
+   * Keyed on the caller's id, behind `requireAuth`, as createTenant is: an
    * IP key would let anonymous requests from a shared address lock a
    * signed-in invitee out. The token is 256 bits, so this bounds a user
    * working through many tokens, not guessing.

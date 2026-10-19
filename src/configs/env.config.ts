@@ -95,14 +95,14 @@ const EnvSchema = z.object({
     .url({ protocol: /^https?$/ })
     .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
     .describe(
-      'Public origin of the frontend, with no query or fragment. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
+      'Public origin of the frontend, with no query or fragment. Sign-in and invitation links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
     ),
   APEX_URL: z
     .url({ protocol: /^https?$/ })
     .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
     .optional()
     .describe(
-      'Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, and the verification, password-reset and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.'
+      'Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, step-up links, and the sign-in link and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.'
     ),
 
   DATABASE_URL: z
@@ -279,78 +279,6 @@ const EnvSchema = z.object({
       'Shortest gap between two step-up confirmation mails for one session, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own session. Defaults to 1m.'
     ),
 
-  EMAIL_VERIFICATION_TTL: z
-    .string()
-    .default('24h')
-    .refine((value) => parseDurationMs(value) !== undefined, {
-      message:
-        'EMAIL_VERIFICATION_TTL must be a duration string ms() can parse, e.g. "24h" or "86400000".',
-    })
-    .describe(
-      'How long an email-verification link stays valid. Defaulted to 24h; a link the user finds the next morning should still work.'
-    ),
-
-  /**
-   * Its own variable, shorter than EMAIL_VERIFICATION_TTL: redeeming the link
-   * sets a new password and revokes every session.
-   */
-  PASSWORD_RESET_TTL: z
-    .string()
-    .default('1h')
-    .refine((value) => parseDurationMs(value) !== undefined, {
-      message:
-        'PASSWORD_RESET_TTL must be a duration string ms() can parse, e.g. "1h" or "3600000".',
-    })
-    .describe(
-      'How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.'
-    ),
-
-  /**
-   * A silent per-address cooldown (forgot-password still answers 202), not a
-   * refusing per-address limiter, which anyone who knows an address could
-   * spend to deny its owner their reset mail.
-   */
-  PASSWORD_RESET_MAIL_COOLDOWN: z
-    .string()
-    .default('5m')
-    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
-      message:
-        'PASSWORD_RESET_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "5m" or "300000".',
-    })
-    .describe(
-      'Shortest gap between two password-reset mails to one address, as an ms()-parseable duration (e.g. "5m"). Forgot-password answers the same 202 to every request; a request inside the gap mails nothing, so an owner\'s own request is at most one gap late and one address gets at most 12 reset mails an hour at the default. Defaults to 5m.'
-    ),
-
-  /**
-   * A notice, not a login path: it is skipped when Redis is down. No 429 on
-   * register instead, which would tell a caller the address is taken.
-   */
-  REGISTRATION_ATTEMPT_NOTICE_COOLDOWN: z
-    .string()
-    .default('1h')
-    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
-      message:
-        'REGISTRATION_ATTEMPT_NOTICE_COOLDOWN must be a positive duration string ms() can parse, e.g. "1h" or "3600000".',
-    })
-    .describe(
-      'Shortest gap between two "someone tried to register with your address" notices to one address, as an ms()-parseable duration (e.g. "1h"). Register answers the same 202 either way; an attempt inside the gap mails nothing, so nobody can mail-bomb an account owner through register. Defaults to 1h.'
-    ),
-
-  /**
-   * Longer than PASSWORD_RESET_TTL: the recipient of a staff-created account
-   * did not ask for the mail. The link is single-use either way.
-   */
-  ACCOUNT_SETUP_TTL: z
-    .string()
-    .default('24h')
-    .refine((value) => parseDurationMs(value) !== undefined, {
-      message:
-        'ACCOUNT_SETUP_TTL must be a duration string ms() can parse, e.g. "24h" or "86400000".',
-    })
-    .describe(
-      'How long the set-password link mailed to a staff-created account stays valid. Defaulted to 24h: the recipient did not ask for the mail, so it must last until the next working day; the link is single-use either way.'
-    ),
-
   INVITATION_TTL: z
     .string()
     .default('3d')
@@ -515,7 +443,7 @@ const EnvSchema = z.object({
     .max(36_500)
     .default(7)
     .describe(
-      'Days to keep a user_tokens row (a refresh token, a mailed token or an emailed link) once it has expired, or once it was revoked without ever being used (logout, reuse, password change, a newer link). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
+      'Days to keep a user_tokens row (a refresh token, a mailed token or an emailed link) once it has expired, or once it was revoked without ever being used (logout, reuse, a sign-out of other sessions, a newer link). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
     ),
   RETENTION_INVITATIONS_DAYS: z.coerce
     .number()
@@ -786,7 +714,7 @@ const EnvSchema = z.object({
     .email()
     .default('no-reply@example.com')
     .describe(
-      'The From address of the general sender: every email whose links carry no token (password changed, registration attempt, onboarding reminder), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+      'The From address of the general sender: every email whose links carry no token (onboarding reminder, maintenance-mode notice), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
     ),
   /**
    * No schema default: it falls back to MAIL_FROM, which `.default()` cannot
@@ -796,7 +724,7 @@ const EnvSchema = z.object({
     .email()
     .optional()
     .describe(
-      'The From address of the transactional sender: every email whose link carries a token (email verification, password reset, account setup, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
+      'The From address of the transactional sender: every email whose link carries a token (sign-in link, step-up link, welcome, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
     ),
 
   APP_NAME: z
@@ -804,7 +732,7 @@ const EnvSchema = z.object({
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name in outbound email copy and notification text: verification, password reset, password changed, invitation and onboarding reminder messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts, platform-onboarding.service.ts). Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: sign-in link, step-up link, welcome, invitation, maintenance-mode and onboarding reminder messages. Defaults to "Express Boilerplate".'
     ),
 
   /**

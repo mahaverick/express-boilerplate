@@ -1,8 +1,8 @@
 /**
- * @file What migration 0028 added to `user_tokens` for emailed links,
+ * @file What migrations 0028 and 0029 leave on `user_tokens` for emailed links,
  * asserted with raw SQL inserts so no application check stands in for the
  * database's: `user_tokens_shape_check` per purpose, `user_tokens_app_check`
- * and the widened `user_tokens_purpose_check`. Every column but the one under
+ * and `user_tokens_purpose_check`. Every column but the one under
  * test is valid, so each insert fails on exactly the constraint it names.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -114,19 +114,16 @@ describe('user_tokens link CHECKs', () => {
     )
   })
 
-  it.each(['refresh', 'email_verification', 'password_reset'])(
-    'refuses a %s row that carries an address',
-    async (purpose) => {
-      await expect(
-        insertTokenRow({
-          purpose,
-          userId: await insertUser(),
-          sessionId: randomUUID(),
-          app: SQL_NULL,
-        })
-      ).rejects.toMatchObject(SHAPE)
-    }
-  )
+  it('refuses a refresh row that carries an address', async () => {
+    await expect(
+      insertTokenRow({
+        purpose: 'refresh',
+        userId: await insertUser(),
+        sessionId: randomUUID(),
+        app: SQL_NULL,
+      })
+    ).rejects.toMatchObject(SHAPE)
+  })
 
   it('refuses a refresh row with no user', async () => {
     await expect(

@@ -1,8 +1,8 @@
 /**
  * @file Each mail flow threads its context onto the `email_messages` row:
- * the invitation's tenant, invitation and link app; the link app of the
- * verification, reset and staff-sent sign-in links; and a staff resend's
- * `resentFromId`, through both the direct and the notification path. No
+ * the invitation's tenant, invitation and link app; the link app of a
+ * staff-sent sign-in link and of a notification job's mail; and a staff
+ * resend's `resentFromId`, through both the direct and the notification path. No
  * Worker runs here: jobs stay on the queues, and a notification job is
  * processed by calling `processNotificationJob` directly.
  */
@@ -13,13 +13,12 @@ import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
+import { addNotificationJob } from '@/jobs/notification.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
-import { sendPasswordResetMail } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
 import { sendSignInLinkByStaff } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { invite, listPending, resend } from '@/services/tenant-invitation.service'
-import { sendVerificationMail } from '@/services/verification.service'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { processNotificationJob } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -67,9 +66,7 @@ afterAll(async () => {
  * Creates a user whose `email_messages` rows are deleted in `afterEach`, so a test's mail
  * does not outlive it.
  */
-async function trackedUser(
-  options: { hasPassword?: boolean; verified?: boolean } = {}
-): Promise<User> {
+async function trackedUser(options: { verified?: boolean } = {}): Promise<User> {
   const user = await createTrackedUser({ firstName: 'Ada', ...options })
   recipients.push(user.email)
   return user
@@ -169,49 +166,62 @@ async function notificationJobFor(
   )
 }
 
+/**
+ * The message id of a staff-sent sign-in link to a fresh user: an earlier
+ * message a resend can name as its origin.
+ * @param admin - The staff member who sends it.
+ * @returns The earlier message's id.
+ */
+async function earlierMessageId(admin: User): Promise<string> {
+  const earlier = await trackedUser()
+  await sendSignInLinkByStaff({ userId: admin.id }, earlier.id)
+  const job = await emailJobTo(earlier.email, 'sign_in_link')
+  return job.data.messageId ?? ''
+}
+
 describe('notification-path mail', () => {
-  it('password reset records the link app and a resend origin, and a retried job reuses the row', async () => {
-    const user = await trackedUser({ hasPassword: true })
-    const earlier = await trackedUser()
-    await sendVerificationMail(earlier, 'web')
-    const earlierJob = await notificationJobFor(earlier.id, 'verify_email')
-    await processNotificationJob(earlierJob)
-    const earlierEmail = await emailJobTo(earlier.email, 'email_verification')
+  it('records the link app and a resend origin, and a retried job reuses the row', async () => {
+    const { user: admin } = await createTrackedStaff('admin')
+    const user = await trackedUser()
+    const resentFromId = await earlierMessageId(admin)
 
-    await sendPasswordResetMail(user, 'apex', { resentFromId: earlierEmail.data.messageId ?? '' })
-
-    const job = await notificationJobFor(user.id, 'password_reset_requested')
-    expect(job.data.emailContext).toEqual({
-      linkApp: 'apex',
-      resentFromId: earlierEmail.data.messageId,
+    await addNotificationJob({
+      userId: user.id,
+      type: 'maintenance_mode_changed',
+      title: 'Maintenance mode changed',
+      body: 'Customers can only read until maintenance ends.',
+      metadata: { templateKey: 'maintenance_mode_changed' },
+      email: {
+        to: user.email,
+        templateKey: 'maintenance_mode_changed',
+        variables: {
+          firstName: 'Ada',
+          appName: 'Test App',
+          mode: 'read_only',
+          actorName: 'Grace',
+          reason: 'Database upgrade',
+          changedAt: '2026-10-06T10:42:00.000Z',
+        },
+      },
+      emailContext: { linkApp: 'apex', resentFromId },
     })
+
+    const job = await notificationJobFor(user.id, 'maintenance_mode_changed')
+    expect(job.data.emailContext).toEqual({ linkApp: 'apex', resentFromId })
     await processNotificationJob(job)
     await processNotificationJob(job)
 
     const rows = await sql`
       select id, link_app, resent_from_id, job_key, user_id from email_messages
-      where recipient = ${user.email} and template_key = 'password_reset'
+      where recipient = ${user.email} and template_key = 'maintenance_mode_changed'
     `
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
       link_app: 'apex',
-      resent_from_id: earlierEmail.data.messageId,
+      resent_from_id: resentFromId,
       job_key: `notification-email-${String(job.id)}-${String(job.timestamp)}`,
       user_id: user.id,
     })
-  })
-
-  it('verification records the web app by default', async () => {
-    const user = await trackedUser({ hasPassword: true, verified: false })
-
-    await sendVerificationMail(user)
-
-    const job = await notificationJobFor(user.id, 'verify_email')
-    expect(job.data.emailContext).toEqual({ linkApp: 'web' })
-    await processNotificationJob(job)
-    const row = await rowOf(await emailJobTo(user.email, 'email_verification'))
-    expect(row).toMatchObject({ link_app: 'web', user_id: user.id })
-    expect(row.resent_from_id).toBeNull()
   })
 })
 
@@ -219,22 +229,17 @@ describe('staff sign-in link', () => {
   it('a staff-sent sign-in link records the web app, the user and a resend origin', async () => {
     const { user: admin } = await createTrackedStaff('admin')
     const target = await trackedUser()
-    const origin = await trackedUser({ hasPassword: true, verified: false })
-    await sendVerificationMail(origin)
-    await processNotificationJob(await notificationJobFor(origin.id, 'verify_email'))
-    const originEmail = await emailJobTo(origin.email, 'email_verification')
+    const resentFromId = await earlierMessageId(admin)
 
     await expect(
-      sendSignInLinkByStaff({ userId: admin.id }, target.id, {
-        resentFromId: originEmail.data.messageId ?? '',
-      })
+      sendSignInLinkByStaff({ userId: admin.id }, target.id, { resentFromId })
     ).resolves.toEqual({ emailSent: true })
 
     const row = await rowOf(await emailJobTo(target.email, 'sign_in_link'))
     expect(row).toMatchObject({
       link_app: 'web',
       user_id: target.id,
-      resent_from_id: originEmail.data.messageId,
+      resent_from_id: resentFromId,
       sender_class: 'transactional',
       variables: { firstName: 'Ada', reason: 'staff' },
     })

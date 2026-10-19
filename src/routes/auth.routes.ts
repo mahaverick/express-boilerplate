@@ -2,9 +2,9 @@
  * @file The `/api/v1/auth` router. Every route except `GET /providers` (a read
  * of the caller's own data) carries a rate limiter, and routes that share a
  * budget share one limiter instance and its store prefix: an unlimited auth
- * route is an enumeration oracle, a bcrypt or mail
- * amplifier, or a password oracle. `RATE_LIMITS`
- * (rate-limit.constants.ts) holds each limiter's reasoning.
+ * route is an enumeration oracle, a mail amplifier, or a link-guessing
+ * oracle. `RATE_LIMITS` (rate-limit.constants.ts) holds each limiter's
+ * reasoning.
  */
 import { Router, type RequestHandler } from 'express'
 import passport from 'passport'
@@ -16,7 +16,6 @@ import {
 } from '@/configs/passport.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { authController } from '@/controllers/auth.controller'
-import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
@@ -25,7 +24,10 @@ import { refusePlatformOptions, requirePlatformRole } from '@/middlewares/platfo
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
- * Build the auth routes.
+ * Build the auth routes. A person signs in by an emailed link
+ * (`/link/request`, then `/link/verify`) or by Google. The refresh cookie
+ * drives `/refresh` and `/logout`, a bearer drives `/sessions/revoke-others`
+ * and `/providers`, and staff confirm it's them under `/step-up`.
  *
  * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
  * CSRF control (see content-type.middleware.ts). A GET carries no content
@@ -47,10 +49,10 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * cookie attached. `/link/verify` refuses one too: it sets the refresh
  * cookie and revokes the session the presented one names, so another page
  * must not be able to sign the browser in to an account of its choosing.
- * `/change-password` and `/sessions/revoke-others` read the cookie too, but
- * only to narrow what they spare; they authenticate with the bearer token,
- * which a browser never attaches on its own, so no other page can make it
- * send one and they need no Origin check.
+ * `/sessions/revoke-others` reads the cookie too, but only to narrow what it
+ * spares; it authenticates with the bearer token, which a browser never
+ * attaches on its own, so no other page can make it send one and it needs no
+ * Origin check.
  *
  * Google OAuth routes, the two Google step-up routes included, are mounted
  * only when `isGoogleOAuthEnabled()`. `configurePassport()` runs here, before
@@ -71,15 +73,6 @@ export function createAuthRouter(): Router {
   router.use(requireJsonContentType)
   // Express would answer OPTIONS on the staff routes with an Allow header; an unknown auth path gets this 404.
   router.use('/step-up', refusePlatformOptions)
-  router.post('/register', createRateLimiter(RATE_LIMITS.register), authController.register)
-  // ip+email 5/15min, then IP 100/15min, then account 100/h; a rejection spends no later budget.
-  router.post(
-    '/login',
-    createRateLimiter(RATE_LIMITS.login),
-    createRateLimiter(RATE_LIMITS.loginIp),
-    createRateLimiter(RATE_LIMITS.loginAccount),
-    authController.login
-  )
   // The two routes the refresh cookie authenticates: the Origin check runs before the limiter, so a refused page spends no budget.
   router.post(
     '/refresh',
@@ -93,18 +86,6 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.logout),
     authController.logout
   )
-  router.post(
-    '/verify-email',
-    createRateLimiter(RATE_LIMITS.verifyEmail),
-    verificationController.verifyEmail
-  )
-  // Two limiters in series, not a composite key: each bounds its own threat.
-  router.post(
-    '/resend-verification',
-    createRateLimiter(RATE_LIMITS.resendVerificationIp),
-    createRateLimiter(RATE_LIMITS.resendVerificationEmail),
-    verificationController.resendVerification
-  )
   // Per-IP only: a per-address limit would let anyone deny the owner; the follow-up's cooldown and daily budget bound one inbox.
   router.post(
     '/link/request',
@@ -117,24 +98,6 @@ export function createAuthRouter(): Router {
     requireAllowedOriginWhenPresent,
     createRateLimiter(RATE_LIMITS.signInLinkVerify),
     authController.verifySignInLink
-  )
-  // Per-IP only: a per-address limit would let anyone deny the owner; the service's mail cooldown bounds one inbox.
-  router.post(
-    '/forgot-password',
-    createRateLimiter(RATE_LIMITS.forgotPasswordIp),
-    authController.forgotPassword
-  )
-  router.post(
-    '/reset-password',
-    createRateLimiter(RATE_LIMITS.resetPassword),
-    authController.resetPassword
-  )
-  // requireAuth first: this limiter keys on request.user.id, which requireAuth sets.
-  router.post(
-    '/change-password',
-    requireAuth,
-    createRateLimiter(RATE_LIMITS.changePassword),
-    authController.changePassword
   )
   // requireAuth first: this limiter keys on request.user.id, which requireAuth sets.
   router.post(

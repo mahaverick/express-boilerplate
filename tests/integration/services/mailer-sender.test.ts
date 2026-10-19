@@ -40,8 +40,20 @@ async function fromAddressOf(message: MailMessage): Promise<string> {
 
 describe('sendMail sender', () => {
   it.each([
-    ['email_verification', { firstName: 'Ada', verificationUrl: 'https://x.test/v', appName: 'A' }],
-    ['password_reset', { firstName: 'Ada', resetUrl: 'https://x.test/r', appName: 'A' }],
+    [
+      'sign_in_link',
+      {
+        firstName: 'Ada',
+        signInUrl: 'https://x.test/l',
+        expiresInMinutes: '15',
+        appName: 'A',
+        reason: 'self',
+      },
+    ],
+    [
+      'step_up_link',
+      { firstName: 'Ada', confirmUrl: 'https://x.test/c', expiresInMinutes: '15', appName: 'A' },
+    ],
     [
       'welcome',
       { firstName: 'Ada', signInUrl: 'https://x.test/l', expiresInMinutes: '15', appName: 'A' },
@@ -58,8 +70,13 @@ describe('sendMail sender', () => {
   it('sends a token-free template from MAIL_FROM', async () => {
     const from = await fromAddressOf({
       to: uniqueRecipient(),
-      templateKey: 'password_changed',
-      variables: { firstName: 'Ada', appName: 'A' },
+      templateKey: 'onboarding_reminder',
+      variables: {
+        tenantName: 'Acme',
+        appName: 'A',
+        nextStep: 'Invite a teammate',
+        overviewLink: 'https://example.test/tenants/acme',
+      },
     })
     expect(from).toBe('no-reply@example.com')
   }, 15_000)

@@ -6,23 +6,13 @@
  * so there is nothing separate to clean up there.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  userTokenModel,
-  type LinkTokenPurpose,
-  type NewUserToken,
-} from '@/database/models/user-token.model'
+import { type LinkTokenPurpose, type NewUserToken } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import {
-  hashToken,
-  issueRefreshToken,
-  issueToken,
-  rotateRefreshToken,
-} from '@/services/session.service'
+import { hashToken, issueRefreshToken, rotateRefreshToken } from '@/services/session.service'
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
@@ -134,6 +124,25 @@ async function claimedLinkId(
 ): Promise<string | undefined> {
   const row = await userTokenRepository.claimOnce(tokenHash, purpose, db, bound)
   return row?.id
+}
+
+/**
+ * Inserts a live `step_up_link` row for `userId` under `tokenHash`, with
+ * every column its shape CHECK requires.
+ * @param userId - The link's user.
+ * @param tokenHash - The row's hash.
+ * @returns Resolves once the row is stored.
+ */
+async function stepUpLinkRow(userId: string, tokenHash: string): Promise<void> {
+  await userTokenRepository.create({
+    userId,
+    purpose: 'step_up_link',
+    sessionId: randomUUID(),
+    email: `step-up-${randomUUID()}@example.test`,
+    app: 'apex',
+    tokenHash,
+    expiresAt: new Date(Date.now() + 60_000),
+  })
 }
 
 describe('UserTokenRepository', () => {
@@ -281,44 +290,32 @@ describe('UserTokenRepository', () => {
 
   /**
    * The `purpose` predicate keeps a token minted for one purpose from being
-   * spent as another (SECURITY.md): a password-reset token as an email
-   * verification, or a verification link, valid for `EMAIL_VERIFICATION_TTL`
-   * (24h by default) and mailed without a reset request, as a reset link,
-   * outside the window `PASSWORD_RESET_TTL` (1h by default) keeps reset links to.
+   * spent as another (SECURITY.md): a step-up link as a sign-in link, which
+   * would sign a session in with a link mailed to confirm one.
    */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
-    await userTokenRepository.create({
-      userId,
-      purpose: 'password_reset',
-      tokenHash,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
+    await stepUpLinkRow(userId, tokenHash)
 
     // Wrong purpose: the row exists and is live, but must not be claimable as anything other than what it was issued for.
-    const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
+    const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'sign_in_link')
     expect(wrongPurpose).toBeUndefined()
 
     // The row must be untouched by the rejected claim above: a claimOnce that revoked on a purpose mismatch would silently burn a legitimate token on a mere probe.
     const stillLive = await userTokenRepository.findByHash(tokenHash)
     expect(stillLive?.revokedAt).toBeNull()
 
-    const rightPurpose = await userTokenRepository.claimOnce(tokenHash, 'password_reset')
+    const rightPurpose = await userTokenRepository.claimOnce(tokenHash, 'step_up_link')
     expect(rightPurpose).toBeDefined()
     expect(rightPurpose?.revokedAt).not.toBeNull()
   })
 
-  it('claimOnce rejects a refresh claim for a token issued as a password reset, and vice versa', async () => {
+  it('claimOnce rejects a refresh claim for a token issued as a step-up link, and vice versa', async () => {
     const userId = await createUser()
-    const resetHash = uniqueHash()
+    const linkHash = uniqueHash()
     const refreshHash = uniqueHash()
-    await userTokenRepository.create({
-      userId,
-      purpose: 'password_reset',
-      tokenHash: resetHash,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
+    await stepUpLinkRow(userId, linkHash)
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
@@ -327,11 +324,11 @@ describe('UserTokenRepository', () => {
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    expect(await userTokenRepository.claimOnce(resetHash, 'refresh')).toBeUndefined()
-    expect(await userTokenRepository.claimOnce(refreshHash, 'password_reset')).toBeUndefined()
+    expect(await userTokenRepository.claimOnce(linkHash, 'refresh')).toBeUndefined()
+    expect(await userTokenRepository.claimOnce(refreshHash, 'step_up_link')).toBeUndefined()
 
     // Both remain claimable under their real, original purpose.
-    expect(await userTokenRepository.claimOnce(resetHash, 'password_reset')).toBeDefined()
+    expect(await userTokenRepository.claimOnce(linkHash, 'step_up_link')).toBeDefined()
     expect(await userTokenRepository.claimOnce(refreshHash, 'refresh')).toBeDefined()
   })
 
@@ -418,7 +415,7 @@ describe('UserTokenRepository', () => {
     // No sessionId: contributes nothing to the returned list.
     await userTokenRepository.create({
       userId,
-      purpose: 'password_reset',
+      purpose: 'refresh',
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
@@ -515,7 +512,7 @@ describe('UserTokenRepository', () => {
       })
       const noSessionToken = await userTokenRepository.create({
         userId,
-        purpose: 'password_reset',
+        purpose: 'refresh',
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -638,9 +635,9 @@ describe('UserTokenRepository', () => {
       const spared = await refreshRow(userId, callerSessionId)
       const sibling = await refreshRow(userId, callerSessionId)
       const other = await refreshRow(userId, otherSessionId)
-      const reset = await userTokenRepository.create({
+      const sessionless = await userTokenRepository.create({
         userId,
-        purpose: 'password_reset',
+        purpose: 'refresh',
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -651,7 +648,7 @@ describe('UserTokenRepository', () => {
       })
 
       expect(await revokedAtOf(spared.tokenHash)).toBeNull()
-      for (const row of [sibling, other, reset]) {
+      for (const row of [sibling, other, sessionless]) {
         expect(await revokedAtOf(row.tokenHash)).toBeInstanceOf(Date)
       }
       // The caller's own session is never reported: denying it would end the caller's access token.
@@ -680,30 +677,6 @@ describe('UserTokenRepository', () => {
     })
   })
 
-  describe('revokeAllForUserAndPurpose', () => {
-    it('revokes the named purpose and leaves a live refresh token alone', async () => {
-      const userId = await createUser()
-      const refresh = await issueRefreshToken(userId, randomUUID())
-      await issueToken(userId, 'email_verification', 60_000)
-
-      await userTokenRepository.revokeAllForUserAndPurpose(userId, 'email_verification')
-
-      // This assertion is the entire reason the method exists: revokeAllForUser matches on userId alone, so calling it here would log the user out of every device as a side effect of requesting a verification mail.
-      expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
-
-      // IssuedToken (session.service.ts) carries no row id, so the verification row is identified by userId + purpose.
-      const [remaining] = await db
-        .select()
-        .from(userTokenModel)
-        .where(
-          and(eq(userTokenModel.userId, userId), eq(userTokenModel.purpose, 'email_verification'))
-        )
-      // Proves a row was actually found: remaining?.revokedAt alone passes when remaining is undefined too.
-      expect(remaining).toBeDefined()
-      expect(remaining?.revokedAt).not.toBeNull()
-    })
-  })
-
   describe('isSessionKilled', () => {
     it('is false for a session holding only a rotated token and its live successor', async () => {
       const userId = await createUser()
@@ -722,7 +695,7 @@ describe('UserTokenRepository', () => {
       expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
     })
 
-    it('is true once every session of the user is revoked (password reset)', async () => {
+    it('is true once every session of the user is revoked (an account claim)', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
       const presented = await consumedHashIn(userId, sessionId)

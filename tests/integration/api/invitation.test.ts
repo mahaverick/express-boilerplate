@@ -43,13 +43,9 @@ import {
   recentAuthTokenFor,
   tokenFor,
 } from '../../helpers/platform-users'
-import {
-  expectNoJob,
-  waitForInvitationEmail,
-  waitForJob,
-  waitForVerificationToken,
-} from '../../helpers/queue-jobs'
+import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
+import { signInByLink } from '../../helpers/sign-in'
 import { settle } from '../../helpers/timing'
 
 /**
@@ -70,7 +66,6 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 const HOUR_MS = 60 * 60 * 1000
-const PASSWORD = 'correct horse battery staple'
 const INVITATION_SENT = {
   success: true,
   message: 'If that address can be invited, an invitation has been sent.',
@@ -1286,32 +1281,17 @@ describe('invitations API', () => {
   })
 
   describe('an invitation to an unregistered address', () => {
-    it('is accepted after the invitee registers, verifies and logs in', async () => {
+    it('is accepted after the invitee signs up by a sign-in link', async () => {
       const { ownerToken, tenant } = await setup()
       const email = uniqueEmail()
       const invited = await inviteVia(tenant.slug, ownerToken, { email, role: 'editor' })
       expect(invited.status).toBe(202)
       const { token: invitationToken } = await waitForInvitationEmail(email)
 
-      const registered = await request(app)
-        .post('/api/v1/auth/register')
-        .send({ email, password: PASSWORD, firstName: 'Grace' })
-      expect(registered.status).toBe(202)
-      const user = await userRepository.findByEmail(email)
-      if (!user) throw new Error('registration created no user')
-      createdUserIds.push(user.id)
-
-      const verificationToken = await waitForVerificationToken(user.id)
-      const verified = await request(app)
-        .post('/api/v1/auth/verify-email')
-        .send({ token: verificationToken, password: PASSWORD })
-      expect(verified.status).toBe(200)
-
-      const login = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email, password: PASSWORD })
-      expect(login.status).toBe(200)
-      const accessToken = envelopeOf<{ accessToken: string }>(login).data?.accessToken ?? ''
+      const { accessToken, userId } = await signInByLink(email)
+      createdUserIds.push(userId)
+      const user = await userRepository.findById(userId)
+      if (!user) throw new Error('the sign-in link created no user')
 
       const accepted = await acceptVia(invitationToken, accessToken)
 

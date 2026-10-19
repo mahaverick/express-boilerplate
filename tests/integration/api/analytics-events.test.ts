@@ -49,11 +49,10 @@ const { deleteTrackingRows, insertTestMessage, signedFakeBody } =
   await import('../../helpers/email-tracking')
 const { startFakePosthog } = await import('../../helpers/fake-posthog')
 const { withMutatedMethod } = await import('../../helpers/mutate')
-const { waitForInvitationEmail, waitForVerificationToken } =
-  await import('../../helpers/queue-jobs')
+const { waitForInvitationEmail } = await import('../../helpers/queue-jobs')
 const { testRefreshCookie } = await import('../../helpers/refresh-cookie')
 const { request } = await import('../../helpers/request')
-const { waitUntil } = await import('../../helpers/timing')
+const { issueTestLink } = await import('../../helpers/sign-in')
 
 /**
  * The fake PostHog that records what the drainer sends.
@@ -64,7 +63,6 @@ type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
  */
 type BatchEvent = FakePosthog['batches'][number][number]
 
-const PASSWORD = 'correct horse battery staple'
 const PROBE_FIRST_NAME = 'Pii'
 const PROBE_LAST_NAME = 'Probe'
 const HEX_16 = /^[\da-f]{16}$/
@@ -138,6 +136,17 @@ function eventsOf(events: BatchEvent[], traceId: string): BatchEvent[] {
 }
 
 /**
+ * The one event of a name a request sent, by its trace.
+ * @param events - Every event the fake PostHog received.
+ * @param traceId - The request's trace id.
+ * @param name - The event name.
+ * @returns The event, or undefined when the request sent none of that name.
+ */
+function eventNamed(events: BatchEvent[], traceId: string, name: string): BatchEvent | undefined {
+  return eventsOf(events, traceId).find((event) => event.event === name)
+}
+
+/**
  * The event names one request caused, oldest first.
  * @param events - Every event sent.
  * @param traceId - The request's trace id.
@@ -148,27 +157,12 @@ function namesOf(events: BatchEvent[], traceId: string): string[] {
 }
 
 /**
- * Wait until a product event the request's deferred work enqueues after the reply is in the outbox.
- * @param event - The event name.
- * @param distinctId - Its user.
- * @returns Resolves once the row exists.
- */
-async function waitForOutboxRow(event: string, distinctId: string): Promise<void> {
-  await waitUntil(
-    async () => {
-      const rows = await sql`
-        select 1 from analytics_outbox where event = ${event} and distinct_id = ${distinctId}`
-      return rows.length > 0
-    },
-    { message: `${event} reached the outbox` }
-  )
-}
-
-/**
- * Register, verify and sign in a user through the API, each under its own trace.
+ * Sign a fresh address up and in through the API by a sign-in link, under one
+ * trace (the click creates, verifies and signs the account in), then give the
+ * account its names, so a later event that leaked them would show.
  * @param email - The address.
  * @param sessionId - A browser session to send on the sign-in as `X-POSTHOG-SESSION-ID`.
- * @returns The user id, the access token, the refresh cookie and each step's trace id.
+ * @returns The user id, the access token, the refresh cookie and the sign-in's trace id.
  */
 async function signUpVerifyAndSignIn(
   email: string,
@@ -177,44 +171,25 @@ async function signUpVerifyAndSignIn(
   userId: string
   accessToken: string
   refreshCookie: string
-  traces: { signUp: string; verify: string; signIn: string }
+  traces: { signIn: string }
 }> {
   const { app } = running()
-  const signUp = await traced(
-    request(app).post('/api/v1/auth/register').send({
-      email,
-      password: PASSWORD,
-      firstName: PROBE_FIRST_NAME,
-      lastName: PROBE_LAST_NAME,
-    })
-  )
-  expect(signUp.status).toBe(202)
+  const signInRequest = request(app).post('/api/v1/auth/link/verify')
+  if (sessionId !== undefined) void signInRequest.set('X-POSTHOG-SESSION-ID', sessionId)
+  const signIn = await traced(signInRequest.send({ token: await issueTestLink(email) }))
+  expect(signIn.status).toBe(200)
   const user = await userRepository.findByEmail(email)
   if (!user) throw new Error(`no user for ${email}`)
   state.userIds.push(user.id)
-  await waitForOutboxRow('user_signed_up', user.id)
-
-  const token = await waitForVerificationToken(user.id)
-  const verify = await traced(
-    request(app).post('/api/v1/auth/verify-email').send({ token, password: PASSWORD })
-  )
-  expect(verify.status).toBe(200)
-
-  const signInRequest = request(app).post('/api/v1/auth/login')
-  if (sessionId !== undefined) void signInRequest.set('X-POSTHOG-SESSION-ID', sessionId)
-  const signIn = await traced(signInRequest.send({ email, password: PASSWORD }))
-  expect(signIn.status).toBe(200)
+  await sql`
+    update users set first_name = ${PROBE_FIRST_NAME}, last_name = ${PROBE_LAST_NAME}
+    where id = ${user.id}`
   const accessToken = (signIn.body as { data: { accessToken: string } }).data.accessToken
   const refreshCookie = signIn.cookies.find((cookie) =>
     cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`)
   )
   if (refreshCookie === undefined) throw new Error('sign-in set no refresh cookie')
-  return {
-    userId: user.id,
-    accessToken,
-    refreshCookie,
-    traces: { signUp: signUp.traceId, verify: verify.traceId, signIn: signIn.traceId },
-  }
+  return { userId: user.id, accessToken, refreshCookie, traces: { signIn: signIn.traceId } }
 }
 
 beforeAll(async () => {
@@ -284,50 +259,48 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
 
       const events = await drainAll()
 
-      expect(namesOf(events, owner.traces.signUp)).toEqual(['user_signed_up'])
-      expect(namesOf(events, owner.traces.verify)).toEqual(['email_verified'])
-      expect(namesOf(events, owner.traces.signIn)).toEqual(['user_signed_in'])
+      // One click creates, verifies and signs the account in, so the three share its trace; the sign-up is stamped with the account's creation time, so it sorts first.
+      expect(namesOf(events, owner.traces.signIn)).toEqual([
+        'user_signed_up',
+        'email_verified',
+        'user_signed_in',
+      ])
       // The tenant's group row is built in the same savepoint as its audit event, so it shares the trace.
       expect(namesOf(events, tenantCreation.traceId)).toEqual(['tenant_created', '$groupidentify'])
       expect(namesOf(events, invite.traceId)).toEqual([
         'invitation_created',
         'onboarding_step_completed',
       ])
-      expect(namesOf(events, invitee.traces.signUp)).toEqual(['user_signed_up'])
-      expect(namesOf(events, invitee.traces.verify)).toEqual(['email_verified'])
-      expect(namesOf(events, invitee.traces.signIn)).toEqual(['user_signed_in'])
+      expect(namesOf(events, invitee.traces.signIn)).toEqual([
+        'user_signed_up',
+        'email_verified',
+        'user_signed_in',
+      ])
       expect(namesOf(events, accept.traceId)).toEqual([
         'invitation_accepted',
         'onboarding_step_completed',
       ])
 
       // Who each event is about, and its tenant group: user-level events carry none.
-      expect(eventsOf(events, owner.traces.signUp)[0]).toMatchObject({
+      expect(eventNamed(events, owner.traces.signIn, 'user_signed_up')).toMatchObject({
         distinct_id: owner.userId,
         properties: {
           source: 'product',
           app: 'api',
-          method: 'password',
+          method: 'link',
           via_invitation: false,
-          $set: { is_staff: false, platform_role: NOT_STAFF, email_verified: false },
+          $set: { is_staff: false, platform_role: NOT_STAFF, email_verified: true },
         },
       })
-      expect(eventsOf(events, invitee.traces.signUp)[0]).toMatchObject({
+      expect(eventNamed(events, invitee.traces.signIn, 'user_signed_up')).toMatchObject({
         distinct_id: invitee.userId,
         properties: { via_invitation: true },
       })
-      expect(eventsOf(events, owner.traces.signIn)[0]).toMatchObject({
+      expect(eventNamed(events, owner.traces.signIn, 'user_signed_in')).toMatchObject({
         distinct_id: owner.userId,
-        properties: { method: 'password', $set: { is_staff: false, email_verified: true } },
+        properties: { method: 'link', $set: { is_staff: false, email_verified: true } },
       })
-      for (const traceId of [
-        owner.traces.signUp,
-        owner.traces.verify,
-        owner.traces.signIn,
-        invitee.traces.signUp,
-        invitee.traces.verify,
-        invitee.traces.signIn,
-      ]) {
+      for (const traceId of [owner.traces.signIn, invitee.traces.signIn]) {
         expect(eventsOf(events, traceId)[0]?.properties.$groups).toBeUndefined()
       }
       expect(eventsOf(events, tenantCreation.traceId)[0]).toMatchObject({
@@ -432,7 +405,9 @@ describe('browser session attribution', () => {
 
       const events = await drainAll()
       // The sign-in has no authenticated user yet, so its session is the user's own.
-      expect(eventsOf(events, owner.traces.signIn)[0]?.properties.$session_id).toBe(signInSession)
+      expect(
+        eventNamed(events, owner.traces.signIn, 'user_signed_in')?.properties.$session_id
+      ).toBe(signInSession)
       const [created, groupIdentify] = eventsOf(events, tenantCreation.traceId)
       expect(created?.event).toBe('tenant_created')
       expect(created?.properties.$session_id).toBe(apiSession)
@@ -493,7 +468,7 @@ describe('browser session attribution', () => {
   )
 
   it(
-    'ends the session a re-login presents without a user_signed_out',
+    'ends the session a second sign-in presents without a user_signed_out',
     async () => {
       const { app } = running()
       const email = `analytics-relogin-${randomUUID()}@example.test`
@@ -501,9 +476,9 @@ describe('browser session attribution', () => {
 
       const second = await traced(
         request(app)
-          .post('/api/v1/auth/login')
+          .post('/api/v1/auth/link/verify')
           .set('Cookie', first.refreshCookie.split(';', 1)[0] as string)
-          .send({ email, password: PASSWORD })
+          .send({ token: await issueTestLink(email) })
       )
       expect(second.status).toBe(200)
 

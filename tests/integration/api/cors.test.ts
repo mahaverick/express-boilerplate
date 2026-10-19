@@ -9,7 +9,7 @@ const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
 describe('CORS', () => {
   it('answers a preflight from an allowed origin with credentials enabled', async () => {
     const response = await request(app)
-      .options('/api/v1/auth/login')
+      .options('/api/v1/auth/link/verify')
       .set('Origin', allowedOrigin)
       .set('Access-Control-Request-Method', 'POST')
       .set('Access-Control-Request-Headers', 'authorization,content-type')
@@ -61,11 +61,11 @@ describe('CORS', () => {
 
   it('does not grant access to an origin that is not allowed', async () => {
     const response = await request(app)
-      .options('/api/v1/auth/login')
+      .options('/api/v1/auth/link/verify')
       .set('Origin', 'https://evil.example')
       .set('Access-Control-Request-Method', 'POST')
 
-    // `cors` withholds the grant header but calls next() rather than ending the request, so this falls through to Express's built-in OPTIONS responder (Allow: POST, since /login registers only POST); the missing grant header is what actually blocks the browser, and the status is pinned too so a future short-circuit here fails loudly instead of passing unchanged.
+    // `cors` withholds the grant header but calls next() rather than ending the request, so this falls through to Express's built-in OPTIONS responder (Allow: POST, since /link/verify registers only POST); the missing grant header is what actually blocks the browser, and the status is pinned too so a future short-circuit here fails loudly instead of passing unchanged.
     expect(response.status).toBe(200)
     expect(response.headers['access-control-allow-origin']).toBeUndefined()
   })

@@ -82,7 +82,7 @@ function sourceFiles(): string[] {
 describe('users.email_verified_at has one writer', () => {
   it('flags each writer shape it exists to catch (the patterns are not vacuous)', () => {
     const bad = [
-      'await userRepository.update(id, { passwordHash, emailVerifiedAt: new Date() })',
+      'await userRepository.update(id, { firstName, emailVerifiedAt: new Date() })',
       'await sql`update users set email_verified_at = now() where id = ${id}`',
       'await userRepository.markEmailVerified(user.id)',
     ].join('\n')

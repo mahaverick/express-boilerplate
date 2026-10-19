@@ -124,7 +124,7 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * What a failed database query may be logged as.
  *
  * A query error's `message` embeds the bound parameter values (for a failed
- * user insert, the email address and password hash), and so does its stack.
+ * user insert, the email address), and so does its stack.
  * The record keeps the parameterised SQL text, the driver's SQLSTATE code,
  * the parameter count and the call frames: enough to diagnose a 500 with
  * no values. The message is dropped, not truncated, and the driver error's

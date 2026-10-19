@@ -13,7 +13,6 @@ import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
-import { hashPassword } from '@/utilities/password.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -85,7 +84,7 @@ describe('/api/v1/profile', () => {
    * access token with a random session id.
    */
   async function createAuthenticatedUser(
-    overrides: Partial<{ email: string; passwordHash: string }> = {}
+    overrides: Partial<{ email: string; emailVerifiedAt: Date }> = {}
   ): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail(), ...overrides })
     createdIds.push(user.id)
@@ -93,7 +92,7 @@ describe('/api/v1/profile', () => {
   }
 
   describe('GET /api/v1/profile', () => {
-    it('returns the authenticated user and no password field of any kind', async () => {
+    it('returns the authenticated user and no other column', async () => {
       const { user, token } = await createAuthenticatedUser()
 
       const response = await request(app)
@@ -101,7 +100,7 @@ describe('/api/v1/profile', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      // toEqual, not toMatchObject: a leaked passwordHash or any other unexpected column must fail.
+      // toEqual, not toMatchObject: a leaked emailVerifiedAt or any other unexpected column must fail.
       expect(envelopeOf<PublicUserBody>(response).data).toEqual({
         id: user.id,
         email: user.email,
@@ -260,11 +259,8 @@ describe('/api/v1/profile', () => {
     })
 
     // Mass assignment: a filtered response can still hide a write, so the row is read back with raw SQL, independent of the repository under test.
-    it('ignores email, id, passwordHash, and active even when supplied, and the stored row proves it', async () => {
-      const originalPasswordHash = await hashPassword('OriginalPassword123!')
-      const { user, token } = await createAuthenticatedUser({
-        passwordHash: originalPasswordHash,
-      })
+    it('ignores email, id, emailVerifiedAt, and active even when supplied, and the stored row proves it', async () => {
+      const { user, token } = await createAuthenticatedUser({ emailVerifiedAt: new Date() })
       const attackerId = randomUUID()
       const attackerEmail = uniqueEmail()
 
@@ -275,7 +271,8 @@ describe('/api/v1/profile', () => {
           firstName: 'Updated',
           email: attackerEmail,
           id: attackerId,
-          passwordHash: 'attacker-controlled-hash',
+          // eslint-disable-next-line unicorn/no-null -- an attacker's attempt to unverify the account
+          emailVerifiedAt: null,
           active: false,
         })
 
@@ -287,14 +284,14 @@ describe('/api/v1/profile', () => {
       expect(body?.email).toBe(user.email)
 
       const [row] = await sql`
-        select id, email, password_hash, active, first_name
+        select id, email, email_verified_at is not null as verified, active, first_name
         from users
         where id = ${user.id}
       `
       expect(row).toEqual({
         id: user.id,
         email: user.email,
-        password_hash: originalPasswordHash,
+        verified: true,
         active: true,
         first_name: 'Updated',
       })

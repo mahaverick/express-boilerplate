@@ -85,7 +85,7 @@ const notificationJobDefaults: JobsOptions = {
 
 /**
  * Enqueue a notification job, named by its `type` (for example
- * `'verify_email'`), as `addEmailJob` names a job by its template key.
+ * `'maintenance_mode_changed'`), as `addEmailJob` names a job by its template key.
  * @param data - The notification's payload — who it's for, what it says, and the optional paired email.
  * @param options - Override default job options.
  * @returns The created job.

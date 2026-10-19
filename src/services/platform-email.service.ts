@@ -34,12 +34,7 @@ import { utcDays } from '@/services/platform-stats.service'
 import { platformTenantOrThrow, sendSignInLinkByStaff } from '@/services/platform-user.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
 import { resend as resendInvitation } from '@/services/tenant-invitation.service'
-import {
-  buildInvitationAcceptUrl,
-  buildPasswordResetUrl,
-  buildVerificationUrl,
-  frontendUrl,
-} from '@/services/verification.service'
+import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import type { Actor } from '@/types/actor'
 import type { EmailDelivery } from '@/types/email-delivery'
@@ -441,28 +436,6 @@ export function buildPreviewMessage(
   const to = TOKEN_MASK
   const message = ((): MailMessage => {
     switch (templateKey) {
-      case 'email_verification': {
-        return {
-          to,
-          templateKey,
-          variables: {
-            firstName: fill('firstName'),
-            verificationUrl: maskedLink(buildVerificationUrl, origin),
-            appName: fill('appName'),
-          },
-        }
-      }
-      case 'password_reset': {
-        return {
-          to,
-          templateKey,
-          variables: {
-            firstName: fill('firstName'),
-            resetUrl: maskedLink(buildPasswordResetUrl, origin),
-            appName: fill('appName'),
-          },
-        }
-      }
       case 'tenant_invitation': {
         return {
           to,
@@ -541,14 +514,6 @@ export function buildPreviewMessage(
             expiresInMinutes: fill('expiresInMinutes'),
             appName: fill('appName'),
           },
-        }
-      }
-      case 'password_changed':
-      case 'registration_attempt': {
-        return {
-          to,
-          templateKey,
-          variables: { firstName: fill('firstName'), appName: fill('appName') },
         }
       }
     }

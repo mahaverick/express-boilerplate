@@ -92,8 +92,7 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * would trade that for a window in which a disabled account keeps working,
  * and is deliberately not built. Session revocations in session.service.ts
  * deny the session too (`denySession`, directly or through
- * `denySessionsAfterCommit`); `revokeAllForUserAndPurpose` (verification-link
- * cleanup) is not a session revocation and denies nothing.
+ * `denySessionsAfterCommit`).
  *
  * A verified token without `sid` skips the denylist and is admitted until it
  * expires (at most `ACCESS_TOKEN_TTL`). To drop that tolerance, throw a 401

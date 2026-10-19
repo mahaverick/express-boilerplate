@@ -35,7 +35,7 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
   return {
     id: MESSAGE_ID,
     recipient: 'user@example.com',
-    templateKey: 'email_verification',
+    templateKey: 'step_up_link',
     userId: 'user-123',
     // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     tenantId: null,
@@ -64,10 +64,11 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
 function untrackedData(): EmailJobData {
   return {
     to: 'user@example.com',
-    templateKey: 'email_verification',
+    templateKey: 'step_up_link',
     variables: {
       firstName: 'Ada',
-      verificationUrl: 'https://example.com/verify?token=abc',
+      confirmUrl: 'https://example.com/auth/confirm?token=abc',
+      expiresInMinutes: '15',
       appName: 'Test',
     },
     userId: 'user-123',
@@ -114,7 +115,7 @@ describe('processEmailJob', () => {
     vi.mocked(mailerService.sendMail).mockResolvedValue('sent')
     await expect(processEmailJob(mockJob())).resolves.toBeUndefined()
     expect(mailerService.sendMail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: 'user@example.com', templateKey: 'email_verification' }),
+      expect.objectContaining({ to: 'user@example.com', templateKey: 'step_up_link' }),
       { messageId: MESSAGE_ID, messageIdHeader: `<${MESSAGE_ID}@mail.example.com>` }
     )
     expect(emailMessageService.markMessageSent).toHaveBeenCalledWith(MESSAGE_ID)
@@ -135,7 +136,7 @@ describe('processEmailJob', () => {
 
   it('includes the job id and templateKey in the thrown error, for operator triage', async () => {
     vi.mocked(mailerService.sendMail).mockResolvedValue('failed')
-    await expect(processEmailJob(mockJob())).rejects.toThrow(/test-job-1.*email_verification/)
+    await expect(processEmailJob(mockJob())).rejects.toThrow(/test-job-1.*step_up_link/)
   })
 
   it('completes without retrying when recording sent fails: a retry would send the email twice', async () => {
@@ -198,7 +199,7 @@ describe('processEmailJob', () => {
       const rejected = expect(processEmailJob(mockJob())).rejects
       await rejected.toThrow(expect.not.stringContaining('user@example.com'))
       await rejected.toThrow(
-        /Email job test-job-1 failed before sending, for template email_verification/
+        /Email job test-job-1 failed before sending, for template step_up_link/
       )
       expect(mailerService.sendMail).not.toHaveBeenCalled()
       expect(loggerError).toHaveBeenCalledWith(

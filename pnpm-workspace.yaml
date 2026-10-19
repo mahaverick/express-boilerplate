@@ -1,9 +1,5 @@
 # Each bypass here has a line in CONTRIBUTING.md, "Supply-chain bypasses".
 allowBuilds:
-  # bcrypt's install script runs node-gyp-build: it tests the prebuilt native
-  # binding in the package's prebuilds/ for the host platform, or compiles one
-  # via node-gyp. bcrypt is a native addon and does not work without it.
-  bcrypt: true
   # esbuild: its postinstall checks the host platform's native binary and
   # downloads it when the optional per-platform package is missing.
   esbuild: true

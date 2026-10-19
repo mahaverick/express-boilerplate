@@ -159,8 +159,6 @@ describe('POST /api/v1/platform/users', () => {
     expect(body.user).toMatchObject({ email, active: true, emailVerifiedAt: null })
     const userId = body.user.id
 
-    const [stored] = await sql`select password_hash from users where id = ${userId}`
-    expect(stored?.password_hash).toBeNull()
     const providers = await sql`select provider from auth_providers where user_id = ${userId}`
     expect(providers).toEqual([{ provider: 'email' }])
 
@@ -251,7 +249,7 @@ describe('POST /api/v1/platform/users', () => {
 
     const response = await post(viewer.token, '', { email })
     expect(response.status).toBe(404)
-    const response2 = await post(admin.token, '', { email, password: 'chosen-by-staff' })
+    const response2 = await post(admin.token, '', { email, active: false })
     expect(response2.status).toBe(400)
     // The server picks the link's frontend: a new user holds no platform role, so it is the web app.
     const response3 = await post(admin.token, '', { email, app: 'apex' })

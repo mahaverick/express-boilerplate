@@ -27,8 +27,13 @@ const MESSAGE_ID = '0190a000-0000-7000-8000-000000000002'
 
 const message: MailMessage = {
   to: 'user@example.com',
-  templateKey: 'password_reset',
-  variables: { firstName: 'Ada', resetUrl: 'https://example.com/r?token=abc', appName: 'Test' },
+  templateKey: 'onboarding_reminder',
+  variables: {
+    tenantName: 'Acme',
+    appName: 'Test',
+    nextStep: 'Invite a teammate',
+    overviewLink: 'https://example.com/tenants/acme',
+  },
 }
 
 describe('addEmailJob', () => {
@@ -55,7 +60,7 @@ describe('addEmailJob', () => {
     )
     expect(queueService.addJob).toHaveBeenCalledWith(
       { name: 'email' },
-      'password_reset',
+      'onboarding_reminder',
       { ...message, userId: 'user-1', messageId: MESSAGE_ID },
       { ...emailJobDefaults, jobId: 'notification-email-7-1' }
     )
@@ -89,7 +94,7 @@ describe('addEmailJob', () => {
     try {
       const rejected = expect(addEmailJob(message, 'user-1')).rejects
       await rejected.toThrow(expect.not.stringContaining('user@example.com'))
-      await rejected.toThrow(/password_reset/)
+      await rejected.toThrow(/onboarding_reminder/)
     } finally {
       loggerError.mockRestore()
     }

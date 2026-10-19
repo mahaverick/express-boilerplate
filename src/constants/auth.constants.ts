@@ -1,49 +1,8 @@
 /**
- * @file Auth-domain values that need exactly one definition: password
- * hashing limits, field lengths, and the refresh cookie's name, path and
+ * @file Auth-domain values that need exactly one definition: field
+ * lengths, and the refresh cookie's name, path and
  * domain (`refreshCookieSpec`), so a set, a read and a clear cannot drift.
  */
-
-/**
- * bcrypt work factor (log2 of the number of hashing rounds) applied to
- * every password this boilerplate hashes. Each +1 doubles the time per hash.
- *
- * bcrypt stores the cost in each hash, so raising this affects only
- * passwords hashed afterwards, and a successful `login` (auth.service.ts)
- * rewrites a hash made at a lower cost.
- *
- * Raising it opens a timing gap: `login` answers an unknown email by
- * verifying against a dummy hash made at the current cost, while each stored
- * hash verifies at the cost it was written with. A higher cost makes an
- * unknown email measurably slower than a wrong password for an account whose
- * hash is still at the old cost, which tells whether that email is
- * registered. The gap closes for each account at its next successful login.
- */
-export const BCRYPT_COST = 12
-
-/**
- * The longest password bcrypt will actually use, in bytes.
- *
- * bcrypt silently ignores everything past the 72nd byte, so two passwords
- * sharing their first 72 bytes would verify against each other's hash.
- * `password.utilities.ts` rejects longer input at hash and verify time.
- * Counted in UTF-8 bytes, not characters.
- */
-export const MAX_PASSWORD_BYTES = 72
-
-/**
- * The shortest password `auth.validators.ts` accepts at registration,
- * password reset and password change.
- *
- * 15 is the NIST SP 800-63B revision 4 minimum for a password used as a
- * single factor, with no composition rules, which this boilerplate does not
- * impose. Only a password being set must meet it: `loginSchema`, step-up and
- * change-password's current password do not enforce it, so an account whose
- * password was set under a shorter floor still signs in, and a too-short
- * password fails login with the same 401 as a wrong one rather than a
- * distinguishable 400.
- */
-export const MIN_PASSWORD_LENGTH = 15
 
 /**
  * The longest email address this API stores, in characters, and therefore
@@ -136,12 +95,12 @@ export const GOOGLE_STRATEGY_NAME = 'google'
  * chain that reuse detection never catches. The sibling shares the session,
  * so it lives until SESSION_ABSOLUTE_TTL, until it goes unused for
  * REFRESH_TOKEN_TTL, or until the session ends: a logout from either chain,
- * a password reset, a password change or `POST /auth/sessions/revoke-others`
- * from another session, a Google account claim, a staff sign-out,
+ * `POST /auth/sessions/revoke-others` from another session, an account
+ * claim, a staff sign-out,
  * deactivation or deletion, or a sign-in in a browser that presents either
  * chain's cookie.
  *
- * A password change or revoke-others from the same session ends the sibling
+ * A revoke-others from the same session ends the sibling
  * too when the request presents the caller's live refresh cookie, and spares
  * it when it presents no usable one (none, unknown, revoked, or another
  * session's or user's). The sibling's access tokens share the caller's

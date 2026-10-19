@@ -129,17 +129,6 @@ describe('GET /api/v1/platform/users', () => {
       expect(response2.status).toBe(400)
     })
   })
-
-  it('never returns a password hash', async () => {
-    const { token } = await createTrackedStaff('viewer')
-    const tag = `ph${randomUUID().slice(0, 8)}`
-    await createTrackedUser({ email: `${tag}@example.test`, hasPassword: true })
-
-    const response = await list(token, { search: tag })
-
-    expect(JSON.stringify(response.body)).not.toContain('passwordHash')
-    expect(JSON.stringify(response.body)).not.toContain('$2')
-  })
 })
 
 describe('GET /api/v1/platform/users/:id', () => {
@@ -172,7 +161,6 @@ describe('GET /api/v1/platform/users/:id', () => {
       memberships: [{ tenantId: tenant.id, tenantName: 'Analytical Engines', role: 'owner' }],
       pendingInvitations: [],
     })
-    expect(JSON.stringify(response.body)).not.toContain('passwordHash')
   })
 
   it('gives each pending invitation lastSentAt and resendAvailableAt', async () => {

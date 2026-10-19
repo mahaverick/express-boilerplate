@@ -121,7 +121,7 @@ describe('didClaimMailCooldown', () => {
     set.mockResolvedValue('OK')
 
     await expect(
-      didClaimMailCooldown('password-reset-notice', 'Owner@Example.com', 300_000, {
+      didClaimMailCooldown('sign-in-link', 'Owner@Example.com', 300_000, {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
@@ -132,7 +132,7 @@ describe('didClaimMailCooldown', () => {
     set.mockResolvedValue('OK')
 
     await expect(
-      didClaimMailCooldown('password-reset-notice', 'owner@example.com', 1.5, {
+      didClaimMailCooldown('sign-in-link', 'owner@example.com', 1.5, {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
@@ -144,7 +144,7 @@ describe('didClaimMailCooldown', () => {
     set.mockResolvedValue(null)
 
     await expect(
-      didClaimMailCooldown('password-reset-notice', 'owner@example.com', 300_000, {
+      didClaimMailCooldown('sign-in-link', 'owner@example.com', 300_000, {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(false)
@@ -153,10 +153,10 @@ describe('didClaimMailCooldown', () => {
   it('keys on the scope and a digest of the trimmed, lowercased address, never the address', async () => {
     set.mockResolvedValue('OK')
 
-    await didClaimMailCooldown('password-reset-notice', ' Owner@Example.com ', 1000, {
+    await didClaimMailCooldown('sign-in-link', ' Owner@Example.com ', 1000, {
       whenUnavailable: 'send',
     })
-    await didClaimMailCooldown('password-reset-notice', 'owner@example.com', 1000, {
+    await didClaimMailCooldown('sign-in-link', 'owner@example.com', 1000, {
       whenUnavailable: 'send',
     })
     await didClaimMailCooldown('registration-attempt-notice', 'owner@example.com', 1000, {
@@ -164,7 +164,7 @@ describe('didClaimMailCooldown', () => {
     })
 
     const [first, second, third] = set.mock.calls.map((call) => call[0])
-    expect(first).toBe(`test:password-reset-notice:${hashRateLimitIdentity('owner@example.com')}`)
+    expect(first).toBe(`test:sign-in-link:${hashRateLimitIdentity('owner@example.com')}`)
     expect(second).toBe(first)
     expect(third).toMatch(/^test:registration-attempt-notice:/)
     expect(set.mock.calls.map((call) => call[0]).join(' ')).not.toContain('example.com')
@@ -174,7 +174,7 @@ describe('didClaimMailCooldown', () => {
     vi.mocked(getRedis).mockRejectedValue(new Error('redis down'))
 
     await expect(
-      didClaimMailCooldown('password-reset-notice', 'owner@example.com', 1000, {
+      didClaimMailCooldown('sign-in-link', 'owner@example.com', 1000, {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
@@ -194,7 +194,7 @@ describe('didClaimMailCooldown', () => {
       set.mockImplementation(stalledCommand)
       expect(
         await answerWithinBound(
-          didClaimMailCooldown('password-reset-notice', 'owner@example.com', 300_000, {
+          didClaimMailCooldown('sign-in-link', 'owner@example.com', 300_000, {
             whenUnavailable,
           })
         )

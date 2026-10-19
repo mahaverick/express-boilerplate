@@ -174,7 +174,7 @@ describe('UserMembershipRepository', () => {
   })
 
   describe('listByTenant', () => {
-    it('lists every member with their safe user info, never passwordHash', async () => {
+    it('lists every member with their safe user info, never a private column', async () => {
       const owner = await createUser({ firstName: 'Ada', lastName: 'Lovelace' })
       const tenant = await createTenant(owner.id)
       const member = await createUser({ firstName: 'Alan', lastName: 'Turing' })
@@ -192,7 +192,7 @@ describe('UserMembershipRepository', () => {
         membership: { role: 'owner' },
         user: { id: owner.id, email: owner.email, firstName: 'Ada', lastName: 'Lovelace' },
       })
-      expect(ownerRow?.user).not.toHaveProperty('passwordHash')
+      expect(ownerRow?.user).not.toHaveProperty('emailVerifiedAt')
 
       const memberRow = rows.find((row) => row.user.id === member.id)
       expect(memberRow?.membership.role).toBe('viewer')

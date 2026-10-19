@@ -134,7 +134,7 @@ describe('requireAuth', () => {
 
     expect(next).toHaveBeenCalledTimes(1)
     expect(lastCallArgument()).toBeUndefined()
-    // toEqual, not toMatchObject: a leaked passwordHash would slip past a subset match but must fail this one.
+    // toEqual, not toMatchObject: a leaked emailVerifiedAt would slip past a subset match but must fail this one.
     expect(request.user).toEqual({
       id: user.id,
       email: user.email,

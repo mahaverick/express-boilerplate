@@ -63,13 +63,13 @@ describe('NotificationPreferenceRepository', () => {
     it('creates a preference row when none exists', async () => {
       const userId = await createUser()
 
-      const row = await preferenceRepository.upsert(userId, 'verify_email', {
+      const row = await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
 
       expect(row.userId).toBe(userId)
-      expect(row.notificationType).toBe('verify_email')
+      expect(row.notificationType).toBe('tenant_invitation')
       expect(row.emailEnabled).toBe(true)
       expect(row.inAppEnabled).toBe(false)
     })
@@ -92,13 +92,13 @@ describe('NotificationPreferenceRepository', () => {
 
     it('leaves an existing row unchanged when a later upsert is refused', async () => {
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'verify_email', {
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
 
       await expect(
-        preferenceRepository.upsert(userId, 'verify_email', {
+        preferenceRepository.upsert(userId, 'tenant_invitation', {
           emailEnabled: false,
           inAppEnabled: true,
         })
@@ -111,12 +111,12 @@ describe('NotificationPreferenceRepository', () => {
 
     it('updates the existing row in place on a second call for the same user and type', async () => {
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'verify_email', {
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: true,
       })
 
-      const updated = await preferenceRepository.upsert(userId, 'verify_email', {
+      const updated = await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
@@ -131,12 +131,12 @@ describe('NotificationPreferenceRepository', () => {
     it('does not affect another user’s preference row for the same notification type', async () => {
       const userId = await createUser()
       const otherUserId = await createUser()
-      await preferenceRepository.upsert(otherUserId, 'verify_email', {
+      await preferenceRepository.upsert(otherUserId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
 
-      await preferenceRepository.upsert(userId, 'verify_email', {
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: true,
       })
@@ -156,14 +156,14 @@ describe('NotificationPreferenceRepository', () => {
 
     it('returns only the rows this user explicitly set', async () => {
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'verify_email', {
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
 
       const rows = await preferenceRepository.findByUser(userId)
       expect(rows).toHaveLength(1)
-      expect(rows[0]?.notificationType).toBe('verify_email')
+      expect(rows[0]?.notificationType).toBe('tenant_invitation')
     })
   })
 
@@ -171,60 +171,50 @@ describe('NotificationPreferenceRepository', () => {
     it('returns true for both channels when no row exists — the opt-out default', async () => {
       const userId = await createUser()
 
-      expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'email')).toBe(
-        true
-      )
-      expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'in_app')).toBe(
-        true
-      )
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'email')
+      ).toBe(true)
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'in_app')
+      ).toBe(true)
     })
 
     it('reflects an explicit row once one exists', async () => {
       const userId = await createUser()
-      // in-app is disabled here to prove isChannelEnabled reads the real row for a channel that is disableable — verify_email's email channel never reaches this branch at all.
-      await preferenceRepository.upsert(userId, 'verify_email', {
+      // in-app is disabled here to prove isChannelEnabled reads the real row for a channel that is disableable; tenant_invitation's email channel never reaches this branch at all.
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
 
-      expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'in_app')).toBe(
-        false
-      )
-    })
-
-    it('always returns true for verify_email’s email channel, even when a stored row disables it', async () => {
-      const userId = await createUser()
-      await seedRow(userId, 'verify_email', false, false)
-
-      // This repository never reports this channel disabled: a user who turned it off would lock themselves out of verifying their own account. in_app, by contrast, honours the row above.
-      expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'email')).toBe(
-        true
-      )
-      expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'in_app')).toBe(
-        false
-      )
-    })
-
-    it('always returns true for password_changed’s email channel, even when a stored row disables it', async () => {
-      // Same NON_DISABLEABLE_EMAIL_TYPES mechanism as verify_email above, but this one locks nobody out: it exists so an attacker who took over the account cannot silence the message that tells the real owner it happened.
-      const userId = await createUser()
-      await seedRow(userId, 'password_changed', false, false)
-
-      expect(await preferenceRepository.isChannelEnabled(userId, 'password_changed', 'email')).toBe(
-        true
-      )
       expect(
-        await preferenceRepository.isChannelEnabled(userId, 'password_changed', 'in_app')
+        await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'in_app')
+      ).toBe(false)
+    })
+
+    it('always returns true for maintenance_mode_changed’s email channel, even when a stored row disables it', async () => {
+      // NON_DISABLEABLE_EMAIL_TYPES: every platform owner and admin must learn that customers are locked out. in_app, by contrast, honours the row above.
+      const userId = await createUser()
+      await seedRow(userId, 'maintenance_mode_changed', false, false)
+
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'maintenance_mode_changed', 'email')
+      ).toBe(true)
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'maintenance_mode_changed', 'in_app')
       ).toBe(false)
     })
 
     it('always returns true for tenant_invitation’s email channel, even when a stored row disables it', async () => {
       const userId = await createUser()
-      await seedRow(userId, 'tenant_invitation', false, true)
+      await seedRow(userId, 'tenant_invitation', false, false)
 
       expect(
         await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'email')
       ).toBe(true)
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'in_app')
+      ).toBe(false)
     })
   })
 
@@ -246,7 +236,7 @@ describe('NotificationPreferenceRepository', () => {
 
     it('fills in an explicit row for the type it exists for, and defaults for every other type', async () => {
       const userId = await createUser()
-      await preferenceRepository.upsert(userId, 'verify_email', {
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
         emailEnabled: true,
         inAppEnabled: false,
       })
@@ -254,8 +244,8 @@ describe('NotificationPreferenceRepository', () => {
       const matrix = await preferenceRepository.getFullMatrix(userId)
 
       expect(matrix).toHaveLength(NOTIFICATION_TYPES.length)
-      const verifyEmailEntry = matrix.find((entry) => entry.notificationType === 'verify_email')
-      expect(verifyEmailEntry).toMatchObject({ emailEnabled: true, inAppEnabled: false })
+      const invitationEntry = matrix.find((entry) => entry.notificationType === 'tenant_invitation')
+      expect(invitationEntry).toMatchObject({ emailEnabled: true, inAppEnabled: false })
     })
   })
 })

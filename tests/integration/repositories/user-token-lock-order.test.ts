@@ -11,7 +11,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { userTokenModel, type TokenPurpose } from '@/database/models/user-token.model'
+import { userTokenModel } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql as rawSql, type DbExecutor } from '@/services/database.service'
@@ -161,24 +161,7 @@ async function unorderedRevokeAllForUserExceptToken(
 }
 
 /**
- * A `revokeAllForUserAndPurpose` stand-in that updates by its predicate with no id-ordered lock,
- * so it locks rows in scan order.
- */
-async function unorderedRevokeAllForUserAndPurpose(
-  userId: string,
-  purpose: TokenPurpose,
-  executor: DbExecutor = db
-): Promise<void> {
-  await executor
-    .update(userTokenModel)
-    .set(revokedNow())
-    .where(
-      sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null and ${userTokenModel.deletedAt} is null`
-    )
-}
-
-/**
- * Runs `run` with the five revokers swapped for their unordered stand-ins, and restores every
+ * Runs `run` with the four revokers swapped for their unordered stand-ins, and restores every
  * writer afterwards.
  */
 async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
@@ -194,13 +177,7 @@ async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
             prototype,
             'revokeAllForUserExceptToken',
             unorderedRevokeAllForUserExceptToken,
-            () =>
-              withMutatedMethod(
-                prototype,
-                'revokeAllForUserAndPurpose',
-                unorderedRevokeAllForUserAndPurpose,
-                run
-              )
+            run
           )
       )
     )
@@ -448,11 +425,6 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
         { id: randomUUID(), sessionId: randomUUID() },
         executor
       ),
-  },
-  {
-    name: 'revokeAllForUserAndPurpose',
-    run: (executor) =>
-      userTokenRepository.revokeAllForUserAndPurpose(randomUUID(), 'email_verification', executor),
   },
   {
     name: 'revokeLiveFor (sign-in links of an address)',

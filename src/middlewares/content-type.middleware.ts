@@ -38,7 +38,8 @@ function mediaTypeOf(request: Request): string {
  *
  * The attack: app.ts mounts `express.urlencoded()` globally, so without this
  * an attacker's page could auto-submit a cross-site form to
- * `POST /auth/login` with the attacker's credentials. A form POST needs no
+ * `POST /auth/link/verify` with a sign-in link the attacker requested for
+ * their own account. A form POST needs no
  * CORS permission, and `sameSite: 'strict'` governs when a cookie is sent,
  * not whether a cross-site response may set one, so the victim's browser
  * would store the refresh cookie and be signed in to the attacker's account.

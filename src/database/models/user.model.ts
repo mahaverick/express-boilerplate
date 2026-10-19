@@ -57,10 +57,6 @@ export const userModel = pgTable(
       .primaryKey()
       .default(sql`uuidv7()`),
     email: varchar('email', { length: MAX_EMAIL_LENGTH }).notNull(),
-    /**
-     * Null for a federated-only user, who has no password.
-     */
-    passwordHash: varchar('password_hash', { length: 60 }),
     firstName: varchar('first_name', { length: MAX_NAME_LENGTH }),
     lastName: varchar('last_name', { length: MAX_NAME_LENGTH }),
     active: boolean('active').notNull().default(true),

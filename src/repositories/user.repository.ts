@@ -67,36 +67,10 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
   }
 
   /**
-   * Replace a user's password hash only while it still equals the hash the
-   * caller verified, for a login's rehash at a higher cost. A password
-   * change or reset that committed in between changed the hash, so this
-   * writes nothing and never restores the old password.
-   * @param id - The user's id.
-   * @param expectedHash - The hash the caller compared the password against.
-   * @param newHash - The hash of the same password at the current cost.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Whether the hash was replaced.
-   */
-  async replacePasswordHash(
-    id: string,
-    expectedHash: string,
-    newHash: string,
-    executor: DbExecutor = db
-  ): Promise<boolean> {
-    const unchanged = sql`${userModel.id} = ${id} and ${userModel.passwordHash} = ${expectedHash}`
-    const row = await this.updateOne(
-      this.scope(unchanged),
-      this.touched({ passwordHash: newHash }),
-      executor
-    )
-    return row !== undefined
-  }
-
-  /**
    * Find a live user by id and lock the row until the transaction ends.
-   * `'no key update'` is for password writes, the Google claim, logout and
-   * the refresh kills, and still lets inserts that reference the user
-   * through. `'share'` is for a login's re-read of the hash, a refresh
+   * `'no key update'` is for an account claim, logout and the refresh
+   * kills, and still lets inserts that reference the user through.
+   * `'share'` is for a sign-in's re-read of the account, a refresh
    * rotation, or a write that makes the user a tenant owner or platform
    * staff (`lockUserForOwnership`), which wait for that write and let each other
    * through; a single-statement update of the row (last login, a profile

@@ -414,7 +414,7 @@ describe('session attribution', () => {
 
   it('omits $session_id from an unauthenticated event that is not a sign-in', () => {
     const row = buildProductEvent(
-      { type: 'password_reset_completed', userId: TARGET_ID, at: OCCURRED_AT },
+      { type: 'email_verified', userId: TARGET_ID, at: OCCURRED_AT },
       session
     )
     expect(row.properties).not.toHaveProperty('$session_id')
@@ -424,7 +424,7 @@ describe('session attribution', () => {
     'adds $session_id to %s when the request has no authenticated user',
     (type) => {
       const row = buildProductEvent(
-        { type, userId: TARGET_ID, method: 'password', at: OCCURRED_AT },
+        { type, userId: TARGET_ID, method: 'link', at: OCCURRED_AT },
         session
       )
       expect(row.properties).toHaveProperty('$session_id', TRACE.posthogSessionId)
@@ -449,7 +449,7 @@ describe('session attribution', () => {
 
   it('omits $session_id from a sign-in made while another user is authenticated', () => {
     const row = buildProductEvent(
-      { type: 'user_signed_in', userId: TARGET_ID, method: 'password', at: OCCURRED_AT },
+      { type: 'user_signed_in', userId: TARGET_ID, method: 'link', at: OCCURRED_AT },
       { ...session, userId: ACTOR_ID }
     )
     expect(row.properties).not.toHaveProperty('$session_id')
@@ -714,47 +714,44 @@ describe('buildProductEvent', () => {
 
   it('defaults via_invitation to false and leaves person properties off when none were read', () => {
     const row = buildProductEvent(
-      { type: 'user_signed_up', userId: ACTOR_ID, method: 'password', at: OCCURRED_AT },
+      { type: 'user_signed_up', userId: ACTOR_ID, method: 'link', at: OCCURRED_AT },
       {}
     )
-    expect(row.properties).toMatchObject({ method: 'password', via_invitation: false })
+    expect(row.properties).toMatchObject({ method: 'link', via_invitation: false })
     expect(row.properties).not.toHaveProperty('$set')
     expect(row.properties).not.toHaveProperty('$set_once')
   })
 
   it('gives a sign-in its method and person properties, but no invitation flag', () => {
     const row = buildProductEvent(
-      { type: 'user_signed_in', userId: ACTOR_ID, method: 'password', at: OCCURRED_AT },
+      { type: 'user_signed_in', userId: ACTOR_ID, method: 'link', at: OCCURRED_AT },
       {},
       'member',
-      { person: { ...person, authProvider: 'password' } }
+      { person: { ...person, authProvider: 'link' } }
     )
     expect(row.properties).toMatchObject({
-      method: 'password',
-      $set: { auth_provider: 'password' },
+      method: 'link',
+      $set: { auth_provider: 'link' },
     })
     expect(row.properties).not.toHaveProperty('via_invitation')
   })
 
-  it.each([
-    'user_signed_out',
-    'password_changed',
-    'other_sessions_revoked',
-    'password_reset_completed',
-    'email_verified',
-  ] as const)('sends %s as the user with only the common properties and no group', (type) => {
-    const row = buildProductEvent({ type, userId: ACTOR_ID, at: OCCURRED_AT }, {})
-    expect(row).toEqual({
-      event: type,
-      distinctId: ACTOR_ID,
-      occurredAt: OCCURRED_AT,
-      properties: { source: 'product', access: 'member', app: 'api' },
-    })
-  })
+  it.each(['user_signed_out', 'other_sessions_revoked', 'email_verified'] as const)(
+    'sends %s as the user with only the common properties and no group',
+    (type) => {
+      const row = buildProductEvent({ type, userId: ACTOR_ID, at: OCCURRED_AT }, {})
+      expect(row).toEqual({
+        event: type,
+        distinctId: ACTOR_ID,
+        occurredAt: OCCURRED_AT,
+        properties: { source: 'product', access: 'member', app: 'api' },
+      })
+    }
+  )
 
   it('never sets person properties on an event other than a sign-up or sign-in', () => {
     const row = buildProductEvent(
-      { type: 'password_changed', userId: ACTOR_ID, at: OCCURRED_AT },
+      { type: 'other_sessions_revoked', userId: ACTOR_ID, at: OCCURRED_AT },
       {},
       'member',
       { person }
@@ -812,12 +809,10 @@ describe('buildProductEvent', () => {
 
   it('gives every product event snake_case keys only', () => {
     const events: ProductDomainEvent[] = [
-      { type: 'user_signed_up', userId: ACTOR_ID, method: 'password', at: OCCURRED_AT },
+      { type: 'user_signed_up', userId: ACTOR_ID, method: 'link', at: OCCURRED_AT },
       { type: 'user_signed_in', userId: ACTOR_ID, method: 'google', at: OCCURRED_AT },
       { type: 'user_signed_out', userId: ACTOR_ID, at: OCCURRED_AT },
-      { type: 'password_changed', userId: ACTOR_ID, at: OCCURRED_AT },
       { type: 'other_sessions_revoked', userId: ACTOR_ID, at: OCCURRED_AT },
-      { type: 'password_reset_completed', userId: ACTOR_ID, at: OCCURRED_AT },
       { type: 'email_verified', userId: ACTOR_ID, at: OCCURRED_AT },
       {
         type: 'onboarding_step_completed',

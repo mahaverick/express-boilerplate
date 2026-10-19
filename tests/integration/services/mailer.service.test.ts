@@ -20,9 +20,9 @@ import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { db, sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { sendMail, type MailMessage } from '@/services/mailer.service'
-import { renderEmailVerificationTemplate } from '@/templates/email/email-verification.template'
-import { renderPasswordResetTemplate } from '@/templates/email/password-reset.template'
-import { renderRegistrationAttemptTemplate } from '@/templates/email/registration-attempt.template'
+import { renderSignInLinkTemplate } from '@/templates/email/sign-in-link.template'
+import { renderStepUpLinkTemplate } from '@/templates/email/step-up-link.template'
+import { renderWelcomeTemplate } from '@/templates/email/welcome.template'
 import {
   assertNoMailpitMessage,
   deleteMailpitMessage,
@@ -42,14 +42,20 @@ function uniqueRecipient(label: string): string {
 }
 
 /**
- * Returns valid `PasswordResetVariables` for a test that needs some valid
- * password_reset message and does not care about its content. Each call has a
- * fresh `resetUrl`, so two calls in one test never share a token-shaped value.
+ * Returns valid `StepUpLinkVariables` for a test that needs some valid
+ * step_up_link message and does not care about its content. Each call has a
+ * fresh `confirmUrl`, so two calls in one test never share a token-shaped value.
  */
-function validPasswordResetVariables(): { firstName: string; resetUrl: string; appName: string } {
+function validStepUpLinkVariables(): {
+  firstName: string
+  confirmUrl: string
+  expiresInMinutes: string
+  appName: string
+} {
   return {
     firstName: 'Ada',
-    resetUrl: `https://example.test/reset?token=${randomUUID()}`,
+    confirmUrl: `https://example.test/auth/confirm?token=${randomUUID()}`,
+    expiresInMinutes: '15',
     appName: 'Test App',
   }
 }
@@ -156,16 +162,16 @@ describe('sendMail', () => {
    * no body text.
    *
    * The Subject assertion is computed independently, by calling
-   * `renderPasswordResetTemplate` directly with the same variables rather than
+   * `renderStepUpLinkTemplate` directly with the same variables rather than
    * comparing to a literal, so it proves the Subject Mailpit received is the
    * template's own output and not something the caller supplied.
    */
   it('sends a real, template-rendered message that Mailpit receives, and records it as sent', async () => {
     const recipient = uniqueRecipient('real-send')
-    const variables = validPasswordResetVariables()
-    const expectedSubject = renderPasswordResetTemplate(variables).subject
+    const variables = validStepUpLinkVariables()
+    const expectedSubject = renderStepUpLinkTemplate(variables).subject
 
-    await sendMail({ to: recipient, templateKey: 'password_reset', variables })
+    await sendMail({ to: recipient, templateKey: 'step_up_link', variables })
 
     const messages = await findMailpitMessages(recipient)
     expect(messages).toHaveLength(1)
@@ -177,22 +183,22 @@ describe('sendMail', () => {
     createdLogIds.push(...rows.map((row) => row.id))
     expect(rows).toHaveLength(1)
     expect(rows[0]?.status).toBe('sent')
-    expect(rows[0]?.templateKey).toBe('password_reset')
+    expect(rows[0]?.templateKey).toBe('step_up_link')
     expect(rows[0]?.providerMessageId).toBeTruthy()
     expect(rows[0]?.errorCode).toBeNull()
     /**
      * The delivery log records that a mail was sent, never what it said: no
-     * rendered content, not even the reset URL, reaches this table (see
+     * rendered content, not even the confirm URL, reaches this table (see
      * `email-log.model.ts`'s header comment).
      */
-    expect(JSON.stringify(rows[0])).not.toContain(variables.resetUrl)
+    expect(JSON.stringify(rows[0])).not.toContain(variables.confirmUrl)
   })
 
   /**
    * `renderForMessage`'s switch (`mailer.service.ts`) has one case per
-   * template, and the other tests exercise it through `'password_reset'`
-   * and the unknown-key default. This drives `email_verification`, `password_reset` and
-   * `registration_attempt` through the real `sendMail`, one call per template
+   * template, and the other tests exercise it through `'step_up_link'`
+   * and the unknown-key default. This drives `sign_in_link`, `step_up_link` and
+   * `welcome` through the real `sendMail`, one call per template
    * (not a loop over a mixed-shape array, which would need an `any` to pair
    * each `templateKey` with its own variables type; the discriminated union
    * proves that pairing at compile time, in
@@ -209,64 +215,62 @@ describe('sendMail', () => {
    * override below.
    */
   it('dispatches every templateKey to its own template — sent Subject and logged templateKey always agree', async () => {
-    const verificationRecipient = uniqueRecipient('dispatch-email-verification')
-    const verificationVariables = {
+    const signInRecipient = uniqueRecipient('dispatch-sign-in-link')
+    const signInVariables = {
       firstName: 'Grace',
-      verificationUrl: `https://example.test/verify?token=${randomUUID()}`,
+      signInUrl: `https://example.test/auth/link?token=${randomUUID()}`,
+      expiresInMinutes: '15',
+      appName: 'Test App',
+      reason: 'self' as const,
+    }
+    await sendMail({ to: signInRecipient, templateKey: 'sign_in_link', variables: signInVariables })
+    const signInMessages = await findMailpitMessages(signInRecipient)
+    expect(signInMessages).toHaveLength(1)
+    const expectedSignInSubject = renderSignInLinkTemplate(signInVariables).subject
+    expect(signInMessages[0]?.Subject).toBe(expectedSignInSubject)
+    if (signInMessages[0]) await deleteMailpitMessage(signInMessages[0].ID)
+    const signInRows = await emailLogRepository.findByRecipient(signInRecipient)
+    createdLogIds.push(...signInRows.map((row) => row.id))
+    expect(signInRows[0]?.status).toBe('sent')
+    expect(signInRows[0]?.templateKey).toBe('sign_in_link')
+
+    const stepUpRecipient = uniqueRecipient('dispatch-step-up-link')
+    const stepUpVariables = validStepUpLinkVariables()
+    await sendMail({ to: stepUpRecipient, templateKey: 'step_up_link', variables: stepUpVariables })
+    const stepUpMessages = await findMailpitMessages(stepUpRecipient)
+    expect(stepUpMessages).toHaveLength(1)
+    const expectedStepUpSubject = renderStepUpLinkTemplate(stepUpVariables).subject
+    expect(stepUpMessages[0]?.Subject).toBe(expectedStepUpSubject)
+    if (stepUpMessages[0]) await deleteMailpitMessage(stepUpMessages[0].ID)
+    const stepUpRows = await emailLogRepository.findByRecipient(stepUpRecipient)
+    createdLogIds.push(...stepUpRows.map((row) => row.id))
+    expect(stepUpRows[0]?.status).toBe('sent')
+    expect(stepUpRows[0]?.templateKey).toBe('step_up_link')
+
+    const welcomeRecipient = uniqueRecipient('dispatch-welcome')
+    const welcomeVariables = {
+      firstName: 'Alan',
+      signInUrl: `https://example.test/auth/link?token=${randomUUID()}`,
+      expiresInMinutes: '15',
       appName: 'Test App',
     }
-    await sendMail({
-      to: verificationRecipient,
-      templateKey: 'email_verification',
-      variables: verificationVariables,
-    })
-    const verificationMessages = await findMailpitMessages(verificationRecipient)
-    expect(verificationMessages).toHaveLength(1)
-    const expectedVerificationSubject =
-      renderEmailVerificationTemplate(verificationVariables).subject
-    expect(verificationMessages[0]?.Subject).toBe(expectedVerificationSubject)
-    if (verificationMessages[0]) await deleteMailpitMessage(verificationMessages[0].ID)
-    const verificationRows = await emailLogRepository.findByRecipient(verificationRecipient)
-    createdLogIds.push(...verificationRows.map((row) => row.id))
-    expect(verificationRows[0]?.status).toBe('sent')
-    expect(verificationRows[0]?.templateKey).toBe('email_verification')
-
-    const resetRecipient = uniqueRecipient('dispatch-password-reset')
-    const resetVariables = validPasswordResetVariables()
-    await sendMail({ to: resetRecipient, templateKey: 'password_reset', variables: resetVariables })
-    const resetMessages = await findMailpitMessages(resetRecipient)
-    expect(resetMessages).toHaveLength(1)
-    const expectedResetSubject = renderPasswordResetTemplate(resetVariables).subject
-    expect(resetMessages[0]?.Subject).toBe(expectedResetSubject)
-    if (resetMessages[0]) await deleteMailpitMessage(resetMessages[0].ID)
-    const resetRows = await emailLogRepository.findByRecipient(resetRecipient)
-    createdLogIds.push(...resetRows.map((row) => row.id))
-    expect(resetRows[0]?.status).toBe('sent')
-    expect(resetRows[0]?.templateKey).toBe('password_reset')
-
-    const attemptRecipient = uniqueRecipient('dispatch-registration-attempt')
-    const attemptVariables = { firstName: 'Alan', appName: 'Test App' }
-    await sendMail({
-      to: attemptRecipient,
-      templateKey: 'registration_attempt',
-      variables: attemptVariables,
-    })
-    const attemptMessages = await findMailpitMessages(attemptRecipient)
-    expect(attemptMessages).toHaveLength(1)
-    const expectedAttemptSubject = renderRegistrationAttemptTemplate(attemptVariables).subject
-    expect(attemptMessages[0]?.Subject).toBe(expectedAttemptSubject)
-    if (attemptMessages[0]) await deleteMailpitMessage(attemptMessages[0].ID)
-    const attemptRows = await emailLogRepository.findByRecipient(attemptRecipient)
-    createdLogIds.push(...attemptRows.map((row) => row.id))
-    expect(attemptRows[0]?.status).toBe('sent')
-    expect(attemptRows[0]?.templateKey).toBe('registration_attempt')
+    await sendMail({ to: welcomeRecipient, templateKey: 'welcome', variables: welcomeVariables })
+    const welcomeMessages = await findMailpitMessages(welcomeRecipient)
+    expect(welcomeMessages).toHaveLength(1)
+    const expectedWelcomeSubject = renderWelcomeTemplate(welcomeVariables).subject
+    expect(welcomeMessages[0]?.Subject).toBe(expectedWelcomeSubject)
+    if (welcomeMessages[0]) await deleteMailpitMessage(welcomeMessages[0].ID)
+    const welcomeRows = await emailLogRepository.findByRecipient(welcomeRecipient)
+    createdLogIds.push(...welcomeRows.map((row) => row.id))
+    expect(welcomeRows[0]?.status).toBe('sent')
+    expect(welcomeRows[0]?.templateKey).toBe('welcome')
 
     /**
      * Distinct subjects rule out every branch rendering the same thing and
      * passing this test silently.
      */
     expect(
-      new Set([expectedVerificationSubject, expectedResetSubject, expectedAttemptSubject]).size
+      new Set([expectedSignInSubject, expectedStepUpSubject, expectedWelcomeSubject]).size
     ).toBe(3)
   }, 40_000)
 
@@ -287,13 +291,13 @@ describe('sendMail', () => {
         const [existingOutcome, unknownOutcome] = await Promise.allSettled([
           sendMail({
             to: existingLikeRecipient,
-            templateKey: 'password_reset',
-            variables: validPasswordResetVariables(),
+            templateKey: 'step_up_link',
+            variables: validStepUpLinkVariables(),
           }),
           sendMail({
             to: unknownLikeRecipient,
-            templateKey: 'password_reset',
-            variables: validPasswordResetVariables(),
+            templateKey: 'step_up_link',
+            variables: validStepUpLinkVariables(),
           }),
         ])
 
@@ -339,9 +343,9 @@ describe('sendMail', () => {
     const unknownLikeRecipient = uniqueRecipient('render-fail-unknown')
 
     await withMutatedModule(
-      '@/templates/email/password-reset.template',
+      '@/templates/email/step-up-link.template',
       {
-        renderPasswordResetTemplate: () => {
+        renderStepUpLinkTemplate: () => {
           throw new Error('a variable present on only one enumeration branch was missing')
         },
       },
@@ -350,13 +354,13 @@ describe('sendMail', () => {
         const [existingOutcome, unknownOutcome] = await Promise.allSettled([
           mailerServiceModule.sendMail({
             to: existingLikeRecipient,
-            templateKey: 'password_reset',
-            variables: validPasswordResetVariables(),
+            templateKey: 'step_up_link',
+            variables: validStepUpLinkVariables(),
           }),
           mailerServiceModule.sendMail({
             to: unknownLikeRecipient,
-            templateKey: 'password_reset',
-            variables: validPasswordResetVariables(),
+            templateKey: 'step_up_link',
+            variables: validStepUpLinkVariables(),
           }),
         ])
 
@@ -435,8 +439,8 @@ describe('sendMail', () => {
 
     await sendMail({
       to: recipient,
-      templateKey: 'password_reset',
-      variables: { ...validPasswordResetVariables(), firstName: payload },
+      templateKey: 'step_up_link',
+      variables: { ...validStepUpLinkVariables(), firstName: payload },
     })
 
     const messages = await findMailpitMessages(recipient)
@@ -484,8 +488,8 @@ describe('sendMail', () => {
             await expect(
               sendMail({
                 to: recipient,
-                templateKey: 'password_reset',
-                variables: validPasswordResetVariables(),
+                templateKey: 'step_up_link',
+                variables: validStepUpLinkVariables(),
               })
             ).resolves.toBe('sent')
           }
@@ -546,8 +550,8 @@ describe('sendMail', () => {
               await expect(
                 sendMail({
                   to: overWidthRecipient,
-                  templateKey: 'password_reset',
-                  variables: validPasswordResetVariables(),
+                  templateKey: 'step_up_link',
+                  variables: validStepUpLinkVariables(),
                 })
               ).resolves.toBe('sent')
             }
@@ -591,8 +595,8 @@ describe('sendMail', () => {
     const transporter = getMailTransporter()
     const recipient = uniqueRecipient('leak-proof')
     const rawToken = randomBytes(32).toString('hex')
-    const resetUrl = `https://example.test/reset?token=${rawToken}`
-    const leakyMessage = `550 rejected: message body contained "Reset your password: ${resetUrl}"`
+    const confirmUrl = `https://example.test/auth/confirm?token=${rawToken}`
+    const leakyMessage = `550 rejected: message body contained "Confirm it's you: ${confirmUrl}"`
 
     /**
      * A `sendMail` stub that rejects with an error whose message holds the raw token and the
@@ -622,8 +626,13 @@ describe('sendMail', () => {
           await expect(
             sendMail({
               to: recipient,
-              templateKey: 'password_reset',
-              variables: { firstName: 'Ada', resetUrl, appName: 'Test App' },
+              templateKey: 'step_up_link',
+              variables: {
+                firstName: 'Ada',
+                confirmUrl,
+                expiresInMinutes: '15',
+                appName: 'Test App',
+              },
             })
           ).resolves.toBe('failed')
         }
@@ -644,7 +653,7 @@ describe('sendMail', () => {
       expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
       const serializedRow = JSON.stringify(row)
       expect(serializedRow).not.toContain(rawToken)
-      expect(serializedRow).not.toContain(resetUrl)
+      expect(serializedRow).not.toContain(confirmUrl)
       expect(serializedRow).not.toContain('550 rejected')
 
       /**
@@ -664,7 +673,7 @@ describe('sendMail', () => {
       // eslint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
       const inspectedLogged = inspect(sendFailureCall?.[1], { depth: null })
       expect(inspectedLogged).not.toContain(rawToken)
-      expect(inspectedLogged).not.toContain(resetUrl)
+      expect(inspectedLogged).not.toContain(confirmUrl)
       expect(inspectedLogged).not.toContain('550 rejected')
     } finally {
       loggerErrorSpy.mockRestore()
@@ -682,8 +691,8 @@ describe('sendMail', () => {
       async () => {
         await sendMail({
           to: recipient,
-          templateKey: 'password_reset',
-          variables: validPasswordResetVariables(),
+          templateKey: 'step_up_link',
+          variables: validStepUpLinkVariables(),
         })
       }
     )
@@ -705,8 +714,8 @@ describe('sendMail', () => {
         await expect(
           sendMail({
             to: recipient,
-            templateKey: 'password_reset',
-            variables: validPasswordResetVariables(),
+            templateKey: 'step_up_link',
+            variables: validStepUpLinkVariables(),
           })
         ).resolves.toBe('failed')
       }
@@ -744,8 +753,8 @@ describe('sendMail', () => {
         await expect(
           mailerServiceModule.sendMail({
             to: recipient,
-            templateKey: 'password_reset',
-            variables: validPasswordResetVariables(),
+            templateKey: 'step_up_link',
+            variables: validStepUpLinkVariables(),
           })
         ).resolves.toBe('failed')
       }

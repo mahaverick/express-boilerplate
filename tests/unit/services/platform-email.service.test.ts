@@ -52,8 +52,6 @@ describe('buildPreviewMessage', () => {
   })
 
   it.each<[EmailTemplateKey, string]>([
-    ['email_verification', '/verify-email?token='],
-    ['password_reset', '/reset-password?token='],
     ['tenant_invitation', '/invitations/accept?token='],
     ['sign_in_link', '/auth/link?token='],
     ['welcome', '/auth/link?token='],
@@ -69,8 +67,8 @@ describe('buildPreviewMessage', () => {
 
   it('uses the stored first name and product name and is not partial', () => {
     const { message, isPartial } = buildPreviewMessage(
-      'password_reset',
-      { firstName: 'Ada', appName: 'Acme' },
+      'step_up_link',
+      { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15' },
       ORIGIN
     )
     const rendered = renderForMessage(message)
@@ -81,17 +79,17 @@ describe('buildPreviewMessage', () => {
   })
 
   it('is partial when a stored variable is missing (a legacy row), filling it with the mask', () => {
-    const { message, isPartial } = buildPreviewMessage('password_changed', {}, ORIGIN)
+    const { message, isPartial } = buildPreviewMessage('step_up_link', {}, ORIGIN)
 
     expect(isPartial).toBe(true)
     expect(renderForMessage(message).text).toContain(TOKEN_MASK)
   })
 
   it('never uses a stored secret, even one that reached the row', () => {
-    const leaked = `${ORIGIN}/reset-password?token=${'ab'.repeat(32)}`
+    const leaked = `${ORIGIN}/auth/confirm?token=${'ab'.repeat(32)}`
     const { message } = buildPreviewMessage(
-      'password_reset',
-      { firstName: 'Ada', appName: 'Acme', resetUrl: leaked },
+      'step_up_link',
+      { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15', confirmUrl: leaked },
       ORIGIN
     )
     const rendered = renderForMessage(message)
@@ -133,8 +131,8 @@ describe('buildPreviewMessage', () => {
 
   it('ignores a non-string stored value', () => {
     const { isPartial } = buildPreviewMessage(
-      'registration_attempt',
-      { firstName: 42, appName: 'Acme' },
+      'step_up_link',
+      { firstName: 42, appName: 'Acme', expiresInMinutes: '15' },
       ORIGIN
     )
     expect(isPartial).toBe(true)

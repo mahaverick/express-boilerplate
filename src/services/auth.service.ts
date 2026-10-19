@@ -1,85 +1,26 @@
 /**
- * @file Email-and-password authentication. An unknown email and a wrong password
- * get the same status and body and each pay one bcrypt comparison (`getDummyHash`),
- * so status and body do not tell a registered address from an unregistered one, and
- * the timing matches while stored hashes use the current `BCRYPT_COST`; a successful
- * login rewrites an older-cost hash at it. Work that
- * runs after the reply (register's mail, requestPasswordReset) never rejects: the
- * controller does not await it, so a rejection would be unhandled and treated as a
- * process fault (index.ts), and on one branch only that would tell a free address
- * from a taken one.
+ * @file The session pieces every sign-in shares: the platform role a sign-in
+ * response reports, the refresh rotation, and the caller's linked sign-in
+ * methods. Signing in itself is by an emailed link (sign-in-link.service.ts),
+ * an invitation link (tenant-invitation.service.ts) or Google
+ * (google-auth.service.ts).
  */
-import { randomUUID } from 'node:crypto'
-import { getEnv } from '@/configs/env.config'
-import type { FrontendApp } from '@/constants/frontend.constants'
-import { JobPriority } from '@/constants/queue.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
-import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
-import { addEmailJob } from '@/jobs/email.job'
-import { addNotificationJob } from '@/jobs/notification.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { withTransaction } from '@/services/database.service'
-import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
-import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
-import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import {
-  claimToken,
-  denySessionsAfterCommit,
-  issueRefreshToken,
-  issueToken,
-  revokeAllSessions,
-  revokeSessionRows,
   rotateRefreshToken,
   signAccessToken,
   type IssuedRefreshToken,
 } from '@/services/session.service'
-import {
-  buildPasswordResetUrl,
-  frontendUrl,
-  markEmailVerified,
-  MISSING_FIRST_NAME_FALLBACK,
-  sendVerificationMail,
-} from '@/services/verification.service'
-import { PASSWORD_CHANGED_TEMPLATE_KEY } from '@/templates/email/password-changed.template'
-import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
-import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
-import type { EmailResendOptions } from '@/types/email-context'
-import { requireDurationMs } from '@/utilities/duration.utilities'
-import {
-  getDummyHash,
-  hashPassword,
-  isHashCostOutdated,
-  isPasswordValid,
-} from '@/utilities/password.utilities'
-import type {
-  ChangePasswordInput,
-  LoginInput,
-  RegisterInput,
-  ResetPasswordInput,
-} from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
-
-const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
-const FEDERATED_ONLY_MESSAGE =
-  'This account signs in with Google and has no password. Use forgot-password to set one.'
-
-/**
- * A successful login: the user row, a signed access token and a new refresh token.
- */
-export interface LoginResult {
-  user: User
-  accessToken: string
-  refreshToken: IssuedRefreshToken
-  platformRole: MembershipRole | null
-}
 
 /**
  * A successful refresh: a new access token and the rotated refresh token.
@@ -90,127 +31,8 @@ export interface RefreshResult {
 }
 
 /**
- * A user's linked sign-in methods, and whether the account has a password.
- */
-export interface AuthProvidersResult {
-  providers: AuthProviderRecord[]
-  hasPassword: boolean
-}
-
-/**
- * Tell the owner of an already-registered address that someone tried to
- * register it, at most once per `REGISTRATION_ATTEMPT_NOTICE_COOLDOWN` per
- * address (`didClaimMailCooldown`; skipped when Redis is down, since it is only
- * a notice). The holder may have been soft-deleted since the insert failed;
- * then the fallback name is used and the job's user id is `''`, which is
- * stored as `email_messages.user_id` NULL.
- * @param email - The address that was submitted.
- */
-async function sendRegistrationAttemptMail(email: string): Promise<void> {
-  const cooldownMs = requireDurationMs(getEnv().REGISTRATION_ATTEMPT_NOTICE_COOLDOWN)
-  const canSend = await didClaimMailCooldown('registration-attempt-notice', email, cooldownMs, {
-    whenUnavailable: 'skip',
-  })
-  if (!canSend) return
-  const existing = await userRepository.findByEmail(email)
-  await addEmailJob(
-    {
-      to: email,
-      templateKey: REGISTRATION_ATTEMPT_TEMPLATE_KEY,
-      variables: {
-        // The stored name, never the submitted one: that is attacker-chosen text in the victim's inbox.
-        firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        appName: getEnv().APP_NAME,
-      },
-    },
-    existing?.id ?? '',
-    { priority: JobPriority.normal }
-  )
-}
-
-/**
- * Whether a registration write failed because the address is taken. Both
- * repositories translate a Postgres unique violation into HttpError 409.
- * @param error - The error the registration transaction threw.
- * @returns True for that 409.
- */
-function isAddressTaken(error: unknown): boolean {
-  return error instanceof HttpError && error.statusCode === 409
-}
-
-/**
- * Register a user with an email and password.
- *
- * A free and a taken address get the same reply; only the mail differs. The
- * user row and its 'email' provider row commit together or not at all.
- * `providerId` is lowercased here as well as by `emailSchema`, so this
- * insert stays correct if that schema changes. `user_signed_up` is emitted
- * inside the returned follow-up, after the reply: emitting it before would
- * make a free address measurably slower to answer than a taken one.
- * @param input - The validated registration body.
- * @returns The follow-up work (the sign-up event and the mail), for the controller to start after replying; it never rejects.
- */
-export async function register(input: RegisterInput): Promise<() => Promise<void>> {
-  const passwordHash = await hashPassword(input.password)
-
-  let created: User | undefined
-  try {
-    created = await withTransaction(async (tx) => {
-      const user = await userRepository.create(
-        {
-          email: input.email,
-          passwordHash,
-          firstName: input.firstName,
-          lastName: input.lastName,
-        },
-        tx
-      )
-
-      // A soft-deleted account may still hold this address's 'email' row; release it for the new account.
-      await authProviderRepository.releaseEmailOfDeletedUsers(input.email.toLowerCase(), tx)
-
-      await authProviderRepository.create(
-        { userId: user.id, provider: 'email', providerId: input.email.toLowerCase() },
-        tx
-      )
-
-      return user
-    })
-  } catch (error) {
-    // Only a 409 (a live account holds the address) becomes the 202; anything else must surface.
-    if (!isAddressTaken(error)) throw error
-  }
-
-  if (created) {
-    const user = created
-    return async () => {
-      // Never rejects: a failing subscriber is logged by the seam.
-      await emitDomainEvent({
-        type: 'user_signed_up',
-        userId: user.id,
-        method: 'password',
-        at: user.createdAt,
-      })
-      try {
-        await sendVerificationMail(user, input.app)
-      } catch (error) {
-        logger.error('Verification mail failed', { error: redactedForLog(error) })
-      }
-    }
-  }
-
-  return async () => {
-    try {
-      await sendRegistrationAttemptMail(input.email)
-    } catch (error) {
-      logger.error('Registration-attempt mail failed', { error: redactedForLog(error) })
-    }
-  }
-}
-
-/**
  * The signed-in user's platform role, for a sign-in response only (a
- * password login or a sign-in link). A failed read answers null: the
+ * sign-in link or an invitation link). A failed read answers null: the
  * sign-in passed, and the next /profile corrects it.
  * @param userId - The user who just signed in.
  * @returns Their platform role, or null.
@@ -226,99 +48,6 @@ export async function platformRoleForLogin(userId: string): Promise<MembershipRo
     // eslint-disable-next-line unicorn/no-null -- the login user reports JSON null for "not staff"
     return null
   }
-}
-
-/**
- * Rewrite a just-verified password's hash at `BCRYPT_COST` when it was made
- * at a lower cost. Runs only after a successful login, so a wrong password
- * never pays for it, and never throws: a failure is logged and the login
- * goes on with the old hash.
- * @param userId - The user who signed in.
- * @param password - The password that matched.
- * @param comparedHash - The stored hash it matched; the write lands only while it is unchanged.
- */
-async function rehashIfOutdated(
-  userId: string,
-  password: string,
-  comparedHash: string
-): Promise<void> {
-  if (!isHashCostOutdated(comparedHash)) return
-  try {
-    const newHash = await hashPassword(password)
-    await userRepository.replacePasswordHash(userId, comparedHash, newHash)
-  } catch (error) {
-    logger.warn('Password rehash on login failed', { error: redactedForLog(error), userId })
-  }
-}
-
-/**
- * Log in with an email and password.
- *
- * Unknown, wrong-password, inactive and unverified all fail through ONE
- * guard, after ONE bcrypt comparison, with one 401 — a separate early
- * return for any of them would be a timing oracle. The message is literally
- * false for an unverified account with the right password; that is accepted.
- *
- * The token is issued in a transaction that re-reads the user FOR SHARE. A
- * password change or reset still in flight is waited for, and one that
- * committed after the compare answers the same 401, so no session outlives it.
- * A hash that changed since the first read is compared again under the lock:
- * one the submitted password still matches (another login's rehash, or a
- * reset to the same password) signs in after that write committed; any other
- * change answers the same 401.
- * A deactivation or soft delete that committed after the first read answers
- * the same 401 there too. In `full` maintenance a user with no platform role
- * is refused (`assertSignInAllowed`) once the credentials have passed and
- * before anything is written.
- * @param input - The validated login body.
- * @returns The user, their platform role, an access token and a new refresh token.
- * @throws {HttpError} 401 'Invalid email or password', or 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
- */
-export async function login(input: LoginInput): Promise<LoginResult> {
-  const user = await userRepository.findByEmail(input.email)
-  const hashToCompare = user?.passwordHash ?? (await getDummyHash())
-  const isPasswordCorrect = await isPasswordValid(input.password, hashToCompare)
-
-  if (!user || !isPasswordCorrect || !user.active || !user.passwordHash || !user.emailVerifiedAt) {
-    throw new HttpError('Invalid email or password', 401)
-  }
-
-  // After the credential guard and before any write, so a refused sign-in leaves no trace.
-  await assertSignInAllowed(user.id)
-
-  // After the guard, so a failed attempt leaves no trace; before tokens, so a failed UPDATE sets no cookie.
-  await userRepository.update(user.id, { lastLoggedInAt: new Date() })
-
-  const sessionId = randomUUID()
-  const { refreshToken, verifiedHash } = await withTransaction(async (tx) => {
-    const locked = await userRepository.lockById(user.id, 'share', tx)
-    // Re-checked under the lock: a deactivation or delete that committed since the first read wins.
-    if (!locked?.active || !locked.passwordHash) {
-      throw new HttpError('Invalid email or password', 401)
-    }
-    // A changed hash still signs in when the submitted password matches it: a rehash, or a reset to the same password.
-    if (
-      locked.passwordHash !== user.passwordHash &&
-      !(await isPasswordValid(input.password, locked.passwordHash))
-    ) {
-      throw new HttpError('Invalid email or password', 401)
-    }
-    return {
-      refreshToken: await issueRefreshToken(user.id, sessionId, tx),
-      verifiedHash: locked.passwordHash,
-    }
-  })
-  // After the token's transaction, whose re-read compares the hash this would change.
-  await rehashIfOutdated(user.id, input.password, verifiedHash)
-  const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
-  const platformRole = await platformRoleForLogin(user.id)
-  await emitDomainEvent({
-    type: 'user_signed_in',
-    userId: user.id,
-    method: 'password',
-    at: new Date(),
-  })
-  return { user, accessToken, refreshToken, platformRole }
 }
 
 /**
@@ -343,238 +72,16 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
 }
 
 /**
- * Issue a password-reset token for `user` and queue the reset mail. Rejects
- * when the token or the job cannot be written; the forgot-password caller
- * swallows that. The mail's message row records `app` as the frontend its link opens.
- * @param user - The account to reset.
- * @param app - The frontend the reset link opens.
- * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.
- * @returns Resolves once the mail job is queued.
- */
-export async function sendPasswordResetMail(
-  user: User,
-  app: FrontendApp,
-  options: EmailResendOptions = {}
-): Promise<void> {
-  const issued = await issueToken(
-    user.id,
-    'password_reset',
-    requireDurationMs(getEnv().PASSWORD_RESET_TTL)
-  )
-
-  await addNotificationJob({
-    userId: user.id,
-    type: 'password_reset_requested',
-    title: 'Password reset requested',
-    body: `We received a request to reset your ${getEnv().APP_NAME} password.`,
-    metadata: { templateKey: PASSWORD_RESET_TEMPLATE_KEY },
-    email: {
-      to: user.email,
-      templateKey: PASSWORD_RESET_TEMPLATE_KEY,
-      variables: {
-        firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        resetUrl: buildPasswordResetUrl(issued.raw, frontendUrl(app)),
-        appName: getEnv().APP_NAME,
-      },
-    },
-    emailContext: { linkApp: app, ...options },
-  })
-}
-
-/**
- * Issue a password-reset token and mail the link, but only when `email`
- * belongs to an existing, active account.
- * @param email - The address submitted to `/forgot-password`.
- * @param app - The frontend the reset link opens.
- */
-async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp): Promise<void> {
-  const user = await userRepository.findByEmail(email)
-  // A deactivated account could not sign in after resetting; the caller's reply is the same either way.
-  if (!user?.active) return
-  await sendPasswordResetMail(user, app)
-}
-
-/**
- * Mail a reset link if the address has an account, at most once per
- * `PASSWORD_RESET_MAIL_COOLDOWN` per address (`didClaimMailCooldown`; when
- * Redis is down the mail is sent, since the owner must be able to reset).
- * The claim is taken for any address, registered or not, and before the
- * lookup: if the lookup or the enqueue then throws, that address gets no
- * mail until the cooldown ends. The controller replies BEFORE calling
- * this — the lookup itself would otherwise be a timing oracle — so it must
- * never reject.
- * @param email - The address submitted to `/forgot-password`.
- * @param app - The frontend the reset link opens; the customer app by default.
- * @returns Resolves when the work is done or its failure is logged.
- */
-export async function requestPasswordReset(email: string, app: FrontendApp = 'web'): Promise<void> {
-  try {
-    const cooldownMs = requireDurationMs(getEnv().PASSWORD_RESET_MAIL_COOLDOWN)
-    const canSend = await didClaimMailCooldown('password-reset-notice', email, cooldownMs, {
-      whenUnavailable: 'send',
-    })
-    if (!canSend) return
-    await sendPasswordResetMailIfRegistered(email, app)
-  } catch (error) {
-    logger.error('Forgot-password mail failed', { error: redactedForLog(error) })
-  }
-}
-
-/**
- * Reset a password with a token from the mailed link.
- *
- * Any claim failure (unknown, wrong purpose, used, expired) and a deleted
- * account answer the same 400. Every token is revoked first, in a committed
- * transaction of its own under the user row lock (`revokeAllSessions`), so
- * every refresh token that existed, and the successor of a rotation that was
- * in flight, is already revoked if the write fails, and every purpose goes,
- * so older reset links die too. The user row is then locked, the hash stored and the tokens revoked again in
- * one transaction. That second revoke catches a session a login or refresh
- * created after the first: either it committed before the lock and is revoked
- * here, or it waited on the lock and sees the new state. Those sessions are
- * denied after commit; if Redis refuses, the reset stands and one error line
- * is logged.
- * @param input - The validated `{ token, password }` body.
- * @returns Resolves once the password is stored.
- * @throws {HttpError} 400 'Invalid or expired reset link.'
- */
-export async function resetPassword(input: ResetPasswordInput): Promise<void> {
-  const claimed = await claimToken(input.token, 'password_reset')
-  const user = claimed ? await userRepository.findById(claimed.userId) : undefined
-  if (!claimed || !user) {
-    throw new HttpError(INVALID_RESET_TOKEN_MESSAGE, 400)
-  }
-
-  const passwordHash = await hashPassword(input.password)
-
-  await revokeAllSessions(user.id)
-
-  const revokedSessionIds = await withTransaction(async (tx) => {
-    const locked = await userRepository.lockById(user.id, 'no key update', tx)
-    if (!locked) throw new HttpError(INVALID_RESET_TOKEN_MESSAGE, 400)
-    if (!locked.emailVerifiedAt) {
-      // A federated link on a never-verified account may be a squatter's; the reset proves the mailbox.
-      await authProviderRepository.deleteFederatedForUser(user.id, tx)
-    }
-    await userRepository.update(user.id, { passwordHash }, {}, tx)
-    // A reset proves the mailbox; markEmailVerified never moves an earlier timestamp.
-    if (!locked.emailVerifiedAt) await markEmailVerified(user.id, tx)
-    return revokeSessionRows(user.id, {}, tx)
-  })
-  await denySessionsAfterCommit(user.id, revokedSessionIds)
-  await emitDomainEvent({ type: 'password_reset_completed', userId: user.id, at: new Date() })
-}
-
-/**
- * Change the caller's own password.
- *
- * Order: federated-only guard (before any compare, so a password-less
- * account is not told "wrong password"); verify current; reject a no-op;
- * hash; then one transaction that locks the user row, stores the hash and
- * revokes every OTHER session; then deny those sessions; then notify.
- *
- * The one transaction closes the race with a login: the login either
- * commits first and loses its session here, or waits on the row lock and
- * sees the new hash. A failed store changes nothing. If the denylist write
- * fails after commit, the change stands, one error line is logged, and the
- * revoked sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL.
- *
- * Without a session id (no `sid` claim) every session is revoked, the
- * caller's included, because there is no session to spare.
- *
- * When the request presented the caller's live refresh cookie, only that
- * token's row is spared: a sibling a grace-window replay minted in the caller's
- * session is revoked too (`revokeSessionRows`). Its access tokens share the
- * caller's `sid`, so they are not denied and last until ACCESS_TOKEN_TTL. No
- * Origin check is needed: the route authenticates with a bearer token, which
- * a browser never attaches on its own, and the cookie only narrows what is
- * spared.
+ * Which methods can sign an account in.
  * @param userId - The authenticated caller's id.
- * @param currentSessionId - The session to spare, when the token carried one.
- * @param input - The validated `{ currentPassword, newPassword }` body.
- * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only that token's row when it is the caller's live refresh token.
- * @returns Resolves once the password is stored. The notification is not
- *   awaited, so a mail failure never fails a change that already committed;
- *   the mail carries no secret.
- * @throws {HttpError} 401 when the account is gone; 400 for federated-only, a wrong current password, or no change.
- */
-export async function changePassword(
-  userId: string,
-  currentSessionId: string | undefined,
-  input: ChangePasswordInput,
-  presentedRefreshToken?: string
-): Promise<void> {
-  // request.user carries no passwordHash; re-load the real row.
-  const user = await userRepository.findById(userId)
-  if (!user) {
-    throw new HttpError('Account no longer exists or is inactive', 401)
-  }
-
-  if (!user.passwordHash) {
-    throw new HttpError(FEDERATED_ONLY_MESSAGE, 400)
-  }
-
-  const isCurrentPasswordCorrect = await isPasswordValid(input.currentPassword, user.passwordHash)
-  if (!isCurrentPasswordCorrect) {
-    throw new HttpError('Current password is incorrect.', 400)
-  }
-
-  const isSameAsCurrent = await isPasswordValid(input.newPassword, user.passwordHash)
-  if (isSameAsCurrent) {
-    throw new HttpError('New password must be different from the current password.', 400)
-  }
-
-  const passwordHash = await hashPassword(input.newPassword)
-
-  const revokeOptions = currentSessionId
-    ? { exceptSessionId: currentSessionId, presentedRefreshToken }
-    : {}
-  const revokedSessionIds = await withTransaction(async (tx) => {
-    const locked = await userRepository.lockById(user.id, 'no key update', tx)
-    if (!locked) throw new HttpError('Account no longer exists or is inactive', 401)
-    await userRepository.update(user.id, { passwordHash }, {}, tx)
-    return revokeSessionRows(user.id, revokeOptions, tx)
-  })
-  await denySessionsAfterCommit(user.id, revokedSessionIds)
-  await emitDomainEvent({ type: 'password_changed', userId: user.id, at: new Date() })
-
-  const notificationJob = addNotificationJob({
-    userId: user.id,
-    type: 'password_changed',
-    title: 'Password changed',
-    body: `Your ${getEnv().APP_NAME} password was changed.`,
-    metadata: { templateKey: PASSWORD_CHANGED_TEMPLATE_KEY },
-    email: {
-      to: user.email,
-      templateKey: PASSWORD_CHANGED_TEMPLATE_KEY,
-      variables: {
-        firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        appName: getEnv().APP_NAME,
-      },
-    },
-  })
-  // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and the change has already been committed regardless of whether it sends
-  notificationJob.catch((error: unknown) => {
-    logger.error('Password-changed mail failed', { error })
-  })
-}
-
-/**
- * Which methods can sign an account in, and whether it has a password.
- *
- * `hasPassword` is not derivable from the rows: a Google signup also writes
- * an 'email' row, so that row is present for accounts that cannot log in
- * with a password.
- * @param userId - The authenticated caller's id.
- * @returns The provider rows (unordered) and whether a password is set.
+ * @returns The provider rows (unordered).
  * @throws {HttpError} 404 'User not found'.
  */
-export async function getAuthProviders(userId: string): Promise<AuthProvidersResult> {
+export async function getAuthProviders(userId: string): Promise<AuthProviderRecord[]> {
   const user = await userRepository.findById(userId)
   if (!user) {
     throw new HttpError('User not found', 404)
   }
 
-  const providers = await authProviderRepository.findByUser(userId)
-  return { providers, hasPassword: user.passwordHash !== null }
+  return authProviderRepository.findByUser(userId)
 }

@@ -133,7 +133,7 @@ export async function releaseCooldown(scope: string, key: string): Promise<void>
  * this call won the slot and the caller may send; false while an earlier
  * claim holds it. Never rejects: a Redis failure is logged at warn and
  * answered by `whenUnavailable`.
- * @param scope - The mail kind, a fixed key segment such as `'password-reset-notice'`.
+ * @param scope - The mail kind, a fixed key segment such as `'sign-in-link'`.
  * @param email - The recipient address.
  * @param cooldownMs - How long a won claim holds the slot, rounded up to a whole millisecond.
  * @param options - What to answer when Redis cannot be reached.

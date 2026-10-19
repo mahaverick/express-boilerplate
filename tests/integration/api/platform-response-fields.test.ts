@@ -17,11 +17,11 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
-import { hashPassword } from '@/utilities/password.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
+import { issueTestLink } from '../../helpers/sign-in'
 
 /**
  * The response envelope, narrowed to the fields these tests read.
@@ -71,6 +71,15 @@ function keysOf(value: unknown): string[] {
   return Object.keys(value as object).toSorted((a, b) => a.localeCompare(b))
 }
 
+/**
+ * Signs in the way a client does, by a sign-in link, to read the user the response carries.
+ */
+async function login(email: string): Promise<Response> {
+  return request(app)
+    .post('/api/v1/auth/link/verify')
+    .send({ token: await issueTestLink(email) })
+}
+
 describe('platform response fields', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -109,6 +118,18 @@ describe('platform response fields', () => {
     return tenant
   }
 
+  /**
+   * A user with a verified address, tracked for cleanup.
+   */
+  async function createVerifiedUser(): Promise<User> {
+    const user = await userRepository.create({
+      email: `fields-login-${randomUUID()}@example.test`,
+    })
+    createdUserIds.push(user.id)
+    await sql`update users set email_verified_at = now() where id = ${user.id}`
+    return user
+  }
+
   describe('GET and PATCH /api/v1/profile', () => {
     it('reports platformRole null for a user who is not staff', async () => {
       const { token } = await createUser()
@@ -139,31 +160,9 @@ describe('platform response fields', () => {
     })
   })
 
-  describe('POST /api/v1/auth/login', () => {
-    const PASSWORD = 'correct horse battery staple'
-
-    /**
-     * A user with a password and a verified address, tracked for cleanup.
-     */
-    async function createVerifiedPasswordUser(): Promise<User> {
-      const user = await userRepository.create({
-        email: `fields-login-${randomUUID()}@example.test`,
-        passwordHash: await hashPassword(PASSWORD),
-      })
-      createdUserIds.push(user.id)
-      await sql`update users set email_verified_at = now() where id = ${user.id}`
-      return user
-    }
-
-    /**
-     * Signs in the way a client does, to read the user the login response carries.
-     */
-    function login(email: string): Promise<Response> {
-      return request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
-    }
-
+  describe('POST /api/v1/auth/link/verify', () => {
     it('returns the user with platformRole null for a user who is not staff', async () => {
-      const user = await createVerifiedPasswordUser()
+      const user = await createVerifiedUser()
 
       const data = dataOf<{ user: { platformRole: unknown } }>(await login(user.email))
 
@@ -171,7 +170,7 @@ describe('platform response fields', () => {
     })
 
     it('returns the platform role on the login user, so staff UI needs no reload', async () => {
-      const user = await createVerifiedPasswordUser()
+      const user = await createVerifiedUser()
       await makeStaff(user.id, 'admin')
 
       const data = dataOf<{ user: { platformRole: unknown } }>(await login(user.email))
@@ -180,7 +179,7 @@ describe('platform response fields', () => {
     })
 
     it('still signs in, with platformRole null, when the platform read fails', async () => {
-      const user = await createVerifiedPasswordUser()
+      const user = await createVerifiedUser()
       await makeStaff(user.id, 'admin')
 
       await withMutatedMethod(

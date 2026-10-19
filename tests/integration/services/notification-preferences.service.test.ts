@@ -30,8 +30,8 @@ describe('updatePreferences', () => {
 
     await expect(
       updatePreferences(user.id, [
-        { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: false },
-        { notificationType: 'password_changed', emailEnabled: false, inAppEnabled: true },
+        { notificationType: 'tenant_invitation', emailEnabled: true, inAppEnabled: false },
+        { notificationType: 'maintenance_mode_changed', emailEnabled: false, inAppEnabled: true },
       ])
     ).rejects.toMatchObject({ statusCode: 400 })
 
@@ -45,11 +45,14 @@ describe('updatePreferences', () => {
 
     // Listed against `NOTIFICATION_TYPES` order, which the writes follow: the rows still come back as listed.
     const rows = await updatePreferences(user.id, [
-      { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
-      { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: false },
+      { notificationType: 'maintenance_mode_changed', emailEnabled: true, inAppEnabled: false },
+      { notificationType: 'tenant_invitation', emailEnabled: true, inAppEnabled: false },
     ])
 
-    expect(rows.map((row) => row.notificationType)).toEqual(['password_changed', 'verify_email'])
+    expect(rows.map((row) => row.notificationType)).toEqual([
+      'maintenance_mode_changed',
+      'tenant_invitation',
+    ])
   })
 
   it('lets two concurrent updates that list the same types in opposite orders both succeed', async () => {
@@ -58,8 +61,8 @@ describe('updatePreferences', () => {
     const enabled = { emailEnabled: true, inAppEnabled: true }
     const disabled = { emailEnabled: true, inAppEnabled: false }
     await updatePreferences(user.id, [
-      { notificationType: 'verify_email', ...enabled },
-      { notificationType: 'password_changed', ...enabled },
+      { notificationType: 'tenant_invitation', ...enabled },
+      { notificationType: 'maintenance_mode_changed', ...enabled },
     ])
 
     // A dedicated connection: the two updates hold both pool connections (`DB_POOL_MAX=2`).
@@ -76,12 +79,12 @@ describe('updatePreferences', () => {
         `
         const updates = Promise.allSettled([
           updatePreferences(user.id, [
-            { notificationType: 'verify_email', ...disabled },
-            { notificationType: 'password_changed', ...disabled },
+            { notificationType: 'tenant_invitation', ...disabled },
+            { notificationType: 'maintenance_mode_changed', ...disabled },
           ]),
           updatePreferences(user.id, [
-            { notificationType: 'password_changed', ...disabled },
-            { notificationType: 'verify_email', ...disabled },
+            { notificationType: 'maintenance_mode_changed', ...disabled },
+            { notificationType: 'tenant_invitation', ...disabled },
           ]),
         ])
         const isQueued = await pollUntil(
@@ -117,12 +120,12 @@ describe('updatePreferences', () => {
       expect(outcomes).toEqual(['fulfilled', 'fulfilled'])
       if (first?.status !== 'fulfilled' || second?.status !== 'fulfilled') return
       expect(first.value.map((row) => row.notificationType)).toEqual([
-        'verify_email',
-        'password_changed',
+        'tenant_invitation',
+        'maintenance_mode_changed',
       ])
       expect(second.value.map((row) => row.notificationType)).toEqual([
-        'password_changed',
-        'verify_email',
+        'maintenance_mode_changed',
+        'tenant_invitation',
       ])
     } finally {
       await holder.end({ timeout: 5 })

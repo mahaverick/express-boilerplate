@@ -520,7 +520,7 @@ describe('/api/v1/tenants', () => {
   })
 
   describe('GET /api/v1/tenants/:slug/members', () => {
-    it('lists members for any role, never leaking passwordHash', async () => {
+    it('lists members for any role, never leaking a private column', async () => {
       const { user, token } = await createAuthenticatedUser()
       const { user: viewerUser } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -533,7 +533,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(200)
       const members = envelopeOf<{ items: unknown[] }>(response).data?.items
       expect(members).toHaveLength(2)
-      expect(JSON.stringify(response.body)).not.toMatch(/password/i)
+      expect(JSON.stringify(response.body)).not.toMatch(/emailVerifiedAt|lastLoggedInAt/)
     })
 
     it('omits active on a customer tenant, even for a deactivated member', async () => {

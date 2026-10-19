@@ -28,8 +28,8 @@ import {
 import { sortAtField } from '@/validators/cursor.validators'
 
 /**
- * One user as the staff search and detail return it. Never carries the
- * password hash.
+ * One user as the staff search and detail return it: an explicit
+ * projection, never the full row.
  */
 export interface PlatformUserRecord {
   id: string

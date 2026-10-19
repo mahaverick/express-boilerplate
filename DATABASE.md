@@ -69,8 +69,7 @@ Drizzle's own bookkeeping table is separate from these.
 `id` is a `uuidv7()` primary key. `email` is unique case-insensitively among
 rows that are not soft-deleted, through a partial `lower(email)` index
 (`users_email_unique`), not a plain unique constraint, so a soft-deleted user's
-address can register again. `password_hash` is null for a user who signs in
-only with Google. The rest: `first_name`, `last_name`, `active`,
+address can sign up again. The rest: `first_name`, `last_name`, `active`,
 `email_verified_at`, `last_logged_in_at`, `analytics_opt_out` (the user turned
 off browser analytics; server events ignore it) and the
 `deleted_at`/`created_at`/`updated_at` trio every soft-deletable table carries.
@@ -78,8 +77,8 @@ off browser analytics; server events ignore it) and the
 ### `user_tokens`
 
 One table holds every token purpose (`purpose`: `'refresh'`,
-`'email_verification'`, `'password_reset'`, `'sign_in_link'`,
-`'step_up_link'`), since they share hashing, lookup, expiry and revocation.
+`'sign_in_link'`, `'step_up_link'`), since they share hashing, lookup, expiry
+and revocation.
 The `user_tokens_purpose_check` constraint enforces the list in the database,
 not only through TypeScript's `$type<TokenPurpose>()`.
 
@@ -110,8 +109,7 @@ row, never from the request; `user_tokens_app_check`) and `redirect` (a
 same-origin path checked by `redirectPathSchema`). `user_tokens_shape_check`
 holds each purpose's shape:
 
-- `refresh`, `email_verification` and `password_reset` rows name a user and
-  none of the three link columns.
+- A `refresh` row names a user and none of the three link columns.
 - A `sign_in_link` row names an address and an app, and never a `user_id` or
   `session_id`. The click looks the account up by address, so a link can be
   mailed to an address with no account yet, and a soft-deleted user's address
@@ -149,7 +147,7 @@ Rotation is append-only, because reuse detection needs the old row to
 recognise a replay. With a 15-minute `ACCESS_TOKEN_TTL`, a client that stays
 signed in adds about 96 rows a day. The retention purge deletes a row once
 `RETENTION_TOKENS_DAYS` days have passed since its `expires_at`, or since a
-revoke that never consumed it (logout, reuse, a password change):
+revoke that never consumed it (logout, reuse, a sign-out of other sessions):
 `expires_at < cutoff or (revoked_at < cutoff and consumed_at is null)`. A
 rotated-away row carries `consumed_at`, so it stays until it expires. The
 indexes on `expires_at` and on the revoked-unconsumed partial predicate serve
@@ -189,6 +187,15 @@ marked by a comment in its file (0024's has none):
   after that backfill.
 - `0024` inserts the single `maintenance_mode_state` row (mode `off`,
   version 0).
+- `0029` deletes, before it narrows `user_tokens_purpose_check` to
+  `refresh`, `sign_in_link` and `step_up_link` and drops the
+  `email_verification`/`password_reset` branch of `user_tokens_shape_check`:
+  - `DELETE FROM "user_tokens" WHERE "purpose" IN ('email_verification', 'password_reset')`;
+  - `DELETE FROM "notifications" WHERE "type" IN ('verify_email', 'password_reset_requested', 'password_changed')`;
+  - `DELETE FROM "notification_preferences" WHERE "notification_type" IN ('verify_email', 'password_reset_requested', 'password_changed')`.
+
+  Its generated statements drop both CHECKs, drop `users.password_hash`, and
+  add both CHECKs back narrowed.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
@@ -559,6 +566,13 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   holds no row yet. Every refresh reads that table, so on a large one
   run the retention purge first to shorten the scans, and apply `0028` in a
   quiet window.
+
+- **`0029` blocks every read and write on `user_tokens` and `users` until the
+  batch commits.** Its `ALTER TABLE`s take `ACCESS EXCLUSIVE` locks. Dropping
+  `users.password_hash` changes only the catalog, but the two re-added
+  `user_tokens` CHECKs scan every row, after its `DELETE`s scan `user_tokens`,
+  `notifications` and `notification_preferences`. As for `0028`, run the
+  retention purge first and apply `0029` in a quiet window.
 
 ## The test database
 

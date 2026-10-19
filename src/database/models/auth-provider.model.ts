@@ -16,15 +16,13 @@ import { userModel } from '@/database/models/user.model'
 const AUTH_PROVIDER_SQL_LIST = AUTH_PROVIDERS.map((provider) => `'${provider}'`).join(', ')
 
 /**
- * The `auth_providers` table: one row per auth method a user has, e.g. an
- * `'email'` row for a password-based login and/or a `'google'` row for a
- * linked Google account.
+ * The `auth_providers` table: one row per auth method a user has: an
+ * `'email'` row for signing in by an emailed link and/or a `'google'` row
+ * for a linked Google account.
  *
- * Every password sign-up (`register()`) and every Google sign-up writes an
- * `'email'` row (migration 0010 created one for each user with a password),
- * so the unique index covers email identities as well. A Google sign-up's
- * row exists without a password, so `users.password_hash` is the only
- * password signal. No `deletedAt`:
+ * Every account a link, an invitation or the grant creates
+ * (`createLinkedAccount`) and every Google sign-up writes an `'email'` row,
+ * so the unique index covers email identities as well. No `deletedAt`:
  * nothing un-deletes a login method, so `AuthProviderRepository` does not
  * extend `BaseRepository`, which requires one. No OAuth token columns:
  * nothing calls a Google API for the user, so storing them would keep

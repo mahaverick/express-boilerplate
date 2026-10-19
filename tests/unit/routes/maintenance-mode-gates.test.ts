@@ -225,11 +225,6 @@ function shapeOf(call: string): string {
  * none needs the staff pass.
  */
 const PRE_SIGN_IN_CALLS = new Set([
-  'POST /api/v1/auth/register',
-  'POST /api/v1/auth/forgot-password',
-  'POST /api/v1/auth/reset-password',
-  'POST /api/v1/auth/verify-email',
-  'POST /api/v1/auth/resend-verification',
   'POST /api/v1/invitations/preview',
   'POST /api/v1/invitations/verify',
 ])
@@ -283,7 +278,6 @@ describe('maintenance-mode route classification', () => {
         '* /api/v1/collect',
         'GET /api/v1/status/maintenance',
         '* /api/v1/platform',
-        'POST /api/v1/auth/login',
         'GET /api/v1/auth/google',
         'GET /api/v1/auth/google/callback',
         'POST /api/v1/auth/link/request',

@@ -83,19 +83,19 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
 
 /**
  * A verified Google identity takes over a never-verified account
- * (`claimNeverVerifiedAccount`): inside its locked transaction, a squatter's
- * password and any OTHER Google link are removed and this identity is
- * linked; the email is then marked verified and every session revoked.
+ * (`claimNeverVerifiedAccount`): inside its locked transaction, any OTHER
+ * Google link is removed and this identity is linked; the email is then
+ * marked verified and every session revoked.
  *
  * Precondition: the caller has checked that Google verified the profile's
  * email, that it matches this account's address, and that the account's email
  * was never verified (checked before the lock). Nothing here checks any of it.
  * @param userId - The unverified account's id.
  * @param googleId - Google's stable profile id of the claiming identity.
- * @returns The account, now verified, federated-only and linked.
+ * @returns The account, now verified and linked.
  * @throws {HttpError} 500 when the account vanished mid-claim.
  */
-export function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
+function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
   return claimNeverVerifiedAccount(userId, async (tx) => {
     // Cleared first, or resolveGoogleUser's first lookup would still resolve that other Google id here.
     await authProviderRepository.deleteGoogleLinksExcept(userId, googleId, tx)
@@ -103,9 +103,6 @@ export function claimUnverifiedAccount(userId: string, googleId: string): Promis
       { userId, provider: 'google', providerId: googleId },
       tx
     )
-    // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
-    const updated = await userRepository.update(userId, { passwordHash: null }, {}, tx)
-    if (!updated) throw new HttpError('Update returned no row', 500)
   })
 }
 
@@ -189,14 +186,7 @@ async function resolveGoogleUser(
   if (!options.allowCreate) throw googleAuthFailed('No account uses this Google address')
 
   const created = await withTransaction(async (tx) => {
-    const createdUser = await userRepository.create(
-      {
-        email,
-        // eslint-disable-next-line unicorn/no-null -- passwordHash is nullable specifically for a federated-only user (user.model.ts) — this account IS that case
-        passwordHash: null,
-      },
-      tx
-    )
+    const createdUser = await userRepository.create({ email }, tx)
 
     await authProviderRepository.releaseEmailOfDeletedUsers(email, tx)
 

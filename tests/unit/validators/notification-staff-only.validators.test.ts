@@ -55,7 +55,10 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
 
   it('refuses a body that mixes a valid entry with an email-off one', () => {
     const result = updatePreferencesSchemaFor(true).safeParse({
-      preferences: [entry('verify_email', true, false), entry('password_changed', false, true)],
+      preferences: [
+        entry('tenant_invitation', true, false),
+        entry('maintenance_mode_changed', false, true),
+      ],
     })
     expect(result.success).toBe(false)
     expect(result.error?.issues).toHaveLength(1)
@@ -65,7 +68,10 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
 
   it('refuses a type listed twice, even when only the second entry turns email off', () => {
     const result = updatePreferencesSchemaFor(true).safeParse({
-      preferences: [entry('verify_email', true, true), entry('verify_email', false, true)],
+      preferences: [
+        entry('tenant_invitation', true, true),
+        entry('tenant_invitation', false, true),
+      ],
     })
     expect(result.success).toBe(false)
     const issues = result.error?.issues ?? []
@@ -79,7 +85,10 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
 
   it('refuses a type listed twice with both entries valid, so one request never races two upserts', () => {
     const result = updatePreferencesSchemaFor(true).safeParse({
-      preferences: [entry('verify_email', true, true), entry('verify_email', true, false)],
+      preferences: [
+        entry('tenant_invitation', true, true),
+        entry('tenant_invitation', true, false),
+      ],
     })
     expect(result.success).toBe(false)
     expect(result.error?.issues[0]?.path).toEqual(['preferences', 1, 'notificationType'])
@@ -87,15 +96,19 @@ describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
 
   it('does not let an extra key smuggle a disabled email channel through', () => {
     const result = updatePreferencesSchemaFor(true).safeParse({
-      preferences: [{ ...entry('verify_email', true, true), emailEnabled_: false, email: false }],
+      preferences: [
+        { ...entry('tenant_invitation', true, true), emailEnabled_: false, email: false },
+      ],
     })
     expect(result.success).toBe(true)
-    expect(result.data?.preferences[0]).toEqual(entry('verify_email', true, true))
+    expect(result.data?.preferences[0]).toEqual(entry('tenant_invitation', true, true))
   })
 
   it.each([undefined, 'false', 0])('refuses a non-boolean emailEnabled (%s)', (value) => {
     const result = updatePreferencesSchemaFor(true).safeParse({
-      preferences: [{ notificationType: 'verify_email', emailEnabled: value, inAppEnabled: true }],
+      preferences: [
+        { notificationType: 'tenant_invitation', emailEnabled: value, inAppEnabled: true },
+      ],
     })
     expect(result.success).toBe(false)
   })
@@ -105,7 +118,7 @@ describe('updatePreferencesSchemaFor entry count', () => {
   it('refuses more entries than there are notification types', () => {
     const result = updatePreferencesSchemaFor(true).safeParse({
       preferences: Array.from({ length: NOTIFICATION_TYPES.length + 1 }, () =>
-        entry('verify_email', true, true)
+        entry('tenant_invitation', true, true)
       ),
     })
     expect(result.success).toBe(false)

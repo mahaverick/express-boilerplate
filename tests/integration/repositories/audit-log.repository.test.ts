@@ -212,7 +212,7 @@ describe('AuditLogRepository.list, one tenant', () => {
       firstName: 'Ada',
       lastName: 'Lovelace',
     })
-    expect(userRow?.actor).not.toHaveProperty('passwordHash')
+    expect(userRow?.actor).not.toHaveProperty('emailVerifiedAt')
     expect(systemRow?.actor).toBeNull()
   })
 })

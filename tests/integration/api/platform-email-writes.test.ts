@@ -23,6 +23,7 @@ import { hashToken, signAccessToken } from '@/services/session.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
+import { RETIRED_EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -505,29 +506,25 @@ describe('canResend for invitation emails', () => {
 })
 
 describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
-  it.each([
-    'password_changed',
-    'registration_attempt',
-    'onboarding_reminder',
-    'email_verification',
-    'password_reset',
-    'step_up_link',
-  ])('answers 409 not_resendable for %s, which has no resend action', async (templateKey) => {
-    const { token } = await createTrackedStaff('owner')
-    const user = await createTrackedUser()
-    const original = await createTrackedMessage({
-      recipient: user.email,
-      userId: user.id,
-      templateKey,
-      senderClass: 'general',
-    })
+  it.each(['onboarding_reminder', 'maintenance_mode_changed', 'step_up_link'])(
+    'answers 409 not_resendable for %s, which has no resend action',
+    async (templateKey) => {
+      const { token } = await createTrackedStaff('owner')
+      const user = await createTrackedUser()
+      const original = await createTrackedMessage({
+        recipient: user.email,
+        userId: user.id,
+        templateKey,
+        senderClass: 'general',
+      })
 
-    const response = await resend(token, original)
+      const response = await resend(token, original)
 
-    expect(response.status).toBe(409)
-    expect((response.body as ApiEnvelope<unknown>).code).toBe('not_resendable')
-    expect(await auditRows(original.id)).toEqual([])
-  })
+      expect(response.status).toBe(409)
+      expect((response.body as ApiEnvelope<unknown>).code).toBe('not_resendable')
+      expect(await auditRows(original.id)).toEqual([])
+    }
+  )
 
   it('answers 409 not_resendable for legacy rows without the ids their action needs', async () => {
     const { token } = await createTrackedStaff('admin')
@@ -551,22 +548,25 @@ describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
     expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
   })
 
-  it('answers 409 template_unavailable for a retired template', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const user = await createTrackedUser()
-    const original = await createTrackedMessage({
-      recipient: user.email,
-      userId: user.id,
-      templateKey: 'account_setup',
-    })
+  it.each(RETIRED_EMAIL_TEMPLATE_KEYS)(
+    'answers 409 template_unavailable for the retired %s',
+    async (templateKey) => {
+      const { token } = await createTrackedStaff('admin')
+      const user = await createTrackedUser()
+      const original = await createTrackedMessage({
+        recipient: user.email,
+        userId: user.id,
+        templateKey,
+      })
 
-    const response = await resend(token, original)
+      const response = await resend(token, original)
 
-    expect(response.status).toBe(409)
-    expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
-    expect(await auditRows(original.id)).toEqual([])
-    expect(await auditRows(user.id)).toEqual([])
-  })
+      expect(response.status).toBe(409)
+      expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
+      expect(await auditRows(original.id)).toEqual([])
+      expect(await auditRows(user.id)).toEqual([])
+    }
+  )
 
   it('answers 409 recipient_suppressed, and resends once the suppression is lifted', async () => {
     const { token } = await staffSignedIn('admin')

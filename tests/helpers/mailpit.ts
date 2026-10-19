@@ -82,19 +82,6 @@ export async function getMailpitMessage(id: string): Promise<MailpitMessageDetai
 }
 
 /**
- * Delete the messages to one recipient, so a later assertion on the same
- * address is not confused by an earlier test's mail. It searches with
- * `findMailpitMessages`, so it also waits out those polls when nothing is there.
- * @param recipient - The `To:` address to clear.
- */
-export async function drainMailpit(recipient: string): Promise<void> {
-  const messages = await findMailpitMessages(recipient)
-  for (const message of messages) {
-    await deleteMailpitMessage(message.ID)
-  }
-}
-
-/**
  * Delete one message from Mailpit by id, ignoring failure. The mailbox is
  * shared across the whole test run, so this is scoped to one id and cannot
  * touch another test's in-flight mail.

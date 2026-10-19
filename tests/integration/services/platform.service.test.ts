@@ -189,15 +189,12 @@ describe('platform.service', () => {
 
       const membership = await bootstrapGrant(email, 'owner')
 
-      const [created] = await sql<
-        { id: string; email: string; verified: boolean; hash: string | null }[]
-      >`
-        select id, email, email_verified_at is not null as verified, password_hash as hash
+      const [created] = await sql<{ id: string; email: string; verified: boolean }[]>`
+        select id, email, email_verified_at is not null as verified
         from users where email = ${email.toLowerCase()} and deleted_at is null`
       expect(created).toBeDefined()
       createdUserIds.push(created?.id ?? '')
-      // eslint-disable-next-line unicorn/no-null -- a created account has no password
-      expect(created).toMatchObject({ email: email.toLowerCase(), verified: true, hash: null })
+      expect(created).toMatchObject({ email: email.toLowerCase(), verified: true })
       expect(membership).toMatchObject({
         userId: created?.id,
         tenantId: platform.id,
@@ -238,11 +235,10 @@ describe('platform.service', () => {
       expect(await auditRowsFor(user.id)).toEqual([])
     })
 
-    it("clears a squatter's password and Google link and revokes their sessions before granting", async () => {
+    it("clears a squatter's Google link and revokes their sessions before granting", async () => {
       const user = await createUser(`grant-squat-${randomUUID()}@example.test`, {
         isVerified: false,
       })
-      await sql`update users set password_hash = 'squatter-hash' where id = ${user.id}`
       await authProviderRepository.create({
         userId: user.id,
         provider: 'email',
@@ -257,11 +253,9 @@ describe('platform.service', () => {
 
       await bootstrapGrant(user.email, 'owner')
 
-      const [row] = await sql<{ hash: string | null; verified: boolean }[]>`
-        select password_hash as hash, email_verified_at is not null as verified
-        from users where id = ${user.id}`
-      // eslint-disable-next-line unicorn/no-null -- the squatter's password is gone
-      expect(row).toEqual({ hash: null, verified: true })
+      const [row] = await sql<{ verified: boolean }[]>`
+        select email_verified_at is not null as verified from users where id = ${user.id}`
+      expect(row).toEqual({ verified: true })
       const providers = await sql`select provider from auth_providers where user_id = ${user.id}`
       expect(providers).toEqual([{ provider: 'email' }])
       const sessions = await sql<{ revoked: boolean }[]>`

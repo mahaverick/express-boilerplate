@@ -65,7 +65,7 @@ function warnOnSharedSenderDomain(env: Env, warn: (message: string) => void): vo
       ? 'MAIL_FROM_TRANSACTIONAL is unset, so token emails'
       : `MAIL_FROM_TRANSACTIONAL shares MAIL_FROM's domain, so token emails`
   warn(
-    `${which} (verification, password reset, account setup, invitations) go out from ${domain}. If your provider tracks clicks on ${domain}, it rewrites their links and sees every token. Set MAIL_FROM_TRANSACTIONAL to an address on a domain with click tracking off; see "Two senders" in README.md.`
+    `${which} (sign-in links, step-up links, welcome mails, invitations) go out from ${domain}. If your provider tracks clicks on ${domain}, it rewrites their links and sees every token. Set MAIL_FROM_TRANSACTIONAL to an address on a domain with click tracking off; see "Two senders" in README.md.`
   )
 }
 

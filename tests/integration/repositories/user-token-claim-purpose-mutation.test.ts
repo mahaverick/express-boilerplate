@@ -1,11 +1,8 @@
 /**
  * @file Proves that without the `purpose` predicate in `claimOnce`'s single
  * atomic statement, a token minted for one purpose can be claimed as another:
- * here a password-reset token is claimed as an email verification. The same
- * gap would let a verification link, valid for `EMAIL_VERIFICATION_TTL`
- * (24h by default) and mailed without a reset request, be spent as a reset
- * link, outside the window `PASSWORD_RESET_TTL` (1h by default) keeps reset
- * links to. The
+ * here a mailed step-up link is claimed as a refresh token, which would let a
+ * link read out of a mailbox rotate into a session. The
  * always-green proof of this lives in
  * `tests/integration/repositories/user-token.repository.test.ts` and
  * `tests/integration/services/session.service.test.ts`; this file exists to
@@ -68,6 +65,21 @@ async function purposeBlindClaimOnce(
   return row
 }
 
+/**
+ * Inserts a live `step_up_link` row for `userId` under `tokenHash`.
+ */
+async function insertStepUpLink(userId: string, tokenHash: string): Promise<void> {
+  await userTokenRepository.create({
+    userId,
+    purpose: 'step_up_link',
+    sessionId: randomUUID(),
+    email: uniqueEmail(),
+    app: 'apex',
+    tokenHash,
+    expiresAt: new Date(Date.now() + 60_000),
+  })
+}
+
 describe('mutation-test harness, proven on claimOnce’s purpose predicate', () => {
   const createdUserIds: string[] = []
 
@@ -88,48 +100,32 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
 
   /**
    * Always on: mutates `claimOnce` to the purpose-blind predicate (tokenHash + revokedAt IS NULL,
-   * no purpose check), shows a password-reset token is claimable as an email verification, then
+   * no purpose check), shows a step-up link is claimable as a refresh token, then
    * shows a fresh token is rejected after the real method is restored.
    */
-  it('a purpose-blind claimOnce lets a password-reset token be claimed as an email verification; restoring the predicate blocks it again', async () => {
+  it('a purpose-blind claimOnce lets a step-up link be claimed as a refresh token; restoring the predicate blocks it again', async () => {
     const userId = await createUser()
 
     // MUTATED: claimOnce ignores purpose entirely — under the real implementation this claim must be rejected; under this mutation it must succeed, exactly the vulnerability this predicate closes.
     const mutatedHash = uniqueHash()
-    await userTokenRepository.create({
-      userId,
-      purpose: 'password_reset',
-      tokenHash: mutatedHash,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
+    await insertStepUpLink(userId, mutatedHash)
 
     await withMutatedMethod(
       UserTokenRepository.prototype,
       'claimOnce',
       purposeBlindClaimOnce,
       async () => {
-        const wronglyClaimed = await userTokenRepository.claimOnce(
-          mutatedHash,
-          'email_verification'
-        )
-        // The bug this proves: with the predicate gone, a reset token is spendable as a verification.
+        const wronglyClaimed = await userTokenRepository.claimOnce(mutatedHash, 'refresh')
+        // The bug this proves: with the predicate gone, a step-up link is spendable as a refresh token.
         expect(wronglyClaimed).toBeDefined()
-        expect(wronglyClaimed?.purpose).toBe('password_reset')
+        expect(wronglyClaimed?.purpose).toBe('step_up_link')
       }
     )
 
     // RESTORED: a fresh token of the same shape, same sequence of calls, proves the predicate is back.
     const restoredHash = uniqueHash()
-    await userTokenRepository.create({
-      userId,
-      purpose: 'password_reset',
-      tokenHash: restoredHash,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
-    const correctlyRejected = await userTokenRepository.claimOnce(
-      restoredHash,
-      'email_verification'
-    )
+    await insertStepUpLink(userId, restoredHash)
+    const correctlyRejected = await userTokenRepository.claimOnce(restoredHash, 'refresh')
     expect(correctlyRejected).toBeUndefined()
   })
 
@@ -147,19 +143,14 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
     async () => {
       const userId = await createUser()
       const tokenHash = uniqueHash()
-      await userTokenRepository.create({
-        userId,
-        purpose: 'password_reset',
-        tokenHash,
-        expiresAt: new Date(Date.now() + 60_000),
-      })
+      await insertStepUpLink(userId, tokenHash)
 
       await withMutatedMethod(
         UserTokenRepository.prototype,
         'claimOnce',
         purposeBlindClaimOnce,
         async () => {
-          const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
+          const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'refresh')
           // The real test's own assertion, reproduced against the mutated, purpose-blind implementation — this is what goes red, not a hand-written stand-in.
           expect(wrongPurpose).toBeUndefined()
         }

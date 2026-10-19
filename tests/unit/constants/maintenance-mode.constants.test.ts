@@ -39,7 +39,6 @@ const ALWAYS: [string, string][] = [
   ['POST', '/api/v1/platform/tenants/0190a8e2-0000-7000-8000-000000000001/suspend'],
   ['PUT', '/api/v1/platform/maintenance-mode'],
   ['POST', '/api/v1/platform/me/flags/exposures'],
-  ['POST', '/api/v1/auth/login'],
   ['GET', '/api/v1/auth/google'],
   ['GET', '/api/v1/auth/google/callback'],
   ['POST', '/api/v1/auth/link/request'],
@@ -54,15 +53,7 @@ const ALWAYS: [string, string][] = [
   ['GET', '/api/v1/profile'],
 ]
 
-const AUTH_WRITES = [
-  '/api/v1/auth/register',
-  '/api/v1/auth/forgot-password',
-  '/api/v1/auth/reset-password',
-  '/api/v1/auth/verify-email',
-  '/api/v1/auth/resend-verification',
-  '/api/v1/auth/change-password',
-  '/api/v1/auth/sessions/revoke-others',
-]
+const AUTH_WRITES = ['/api/v1/auth/sessions/revoke-others']
 
 const READS = [
   '/api/v1/notifications',
@@ -173,7 +164,21 @@ describe('maintenanceVerdict', () => {
     expect(classifyMaintenanceRoute('POST', '/api/v1/invitations/accept')?.staffPass).toBe(true)
     expect(classifyMaintenanceRoute('POST', '/api/v1/invitations/verify')?.staffPass).toBe(false)
     expect(classifyMaintenanceRoute('GET', '/api/v1/notifications')?.staffPass).toBe(false)
-    expect(classifyMaintenanceRoute('POST', '/api/v1/auth/register')?.staffPass).toBe(false)
+    expect(classifyMaintenanceRoute('PUT', '/api/v1/notifications/preferences')?.staffPass).toBe(
+      false
+    )
+  })
+
+  it.each([
+    'register',
+    'login',
+    'verify-email',
+    'resend-verification',
+    'forgot-password',
+    'reset-password',
+    'change-password',
+  ])('has no rule for the removed POST /api/v1/auth/%s', (path) => {
+    expect(classifyMaintenanceRoute('POST', `/api/v1/auth/${path}`)).toBeUndefined()
   })
 })
 

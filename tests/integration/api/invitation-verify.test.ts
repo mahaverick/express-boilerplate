@@ -350,7 +350,6 @@ describe('POST /api/v1/invitations/verify', () => {
     const invitee = await createTrackedUser({
       email: uniqueEmail('never-verified'),
       verified: false,
-      hasPassword: true,
     })
     await issueRefreshToken(invitee.id, randomUUID())
     await authProviderRepository.create({
@@ -374,8 +373,7 @@ describe('POST /api/v1/invitations/verify', () => {
     expect(await refreshRows(invitee.id)).toEqual([{ revoked: true }, { revoked: false }])
     const claimed = await userRepository.findById(invitee.id)
     expect(claimed?.emailVerifiedAt).toBeInstanceOf(Date)
-    // The click proves the mailbox, so a squatter's password and federated links go.
-    expect(claimed?.passwordHash).toBeNull()
+    // The click proves the mailbox, so a squatter's federated links go.
     const providers = await authProviderRepository.findByUser(invitee.id)
     expect(providers.map((provider) => provider.provider)).toEqual(['email'])
     expect(eventsFor(invitee.id).filter((event) => event.type === 'email_verified')).toHaveLength(1)

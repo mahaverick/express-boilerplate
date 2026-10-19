@@ -316,7 +316,7 @@ describe('canResend', () => {
   })
 
   it.each(['password_changed', 'registration_attempt'])(
-    'is false for the security notice %s',
+    'is false for the retired notice %s',
     async (templateKey) => {
       const { token } = await createTrackedStaff('owner')
       const user = await createTrackedUser()
@@ -332,7 +332,7 @@ describe('canResend', () => {
   )
 
   it.each([
-    ['a verification mail, which staff never resend', 'email_verification', {}],
+    ['a retired verification mail', 'email_verification', {}],
     ['a retired account_setup mail', 'account_setup', {}],
     ['a sign-in link resend to a deactivated user', 'sign_in_link', { active: false }],
     ['a welcome resend to a deactivated user', 'welcome', { active: false }],
@@ -444,9 +444,9 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
   it('re-renders the stored template with the link masked on the stored frontend', async () => {
     const { token } = await createTrackedStaff('viewer')
     const message = await createTrackedMessage({
-      templateKey: 'password_reset',
+      templateKey: 'sign_in_link',
       linkApp: 'web',
-      variables: { firstName: 'Ada', appName: 'Acme' },
+      variables: { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15', reason: 'self' },
     })
 
     const preview = dataOf<{ subject: string; html: string; text: string; partial: boolean }>(
@@ -457,14 +457,14 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
     expect(preview.subject).toContain('Acme')
     expect(preview.text).toContain('Ada')
     const origin = new URL(getEnv().WEB_URL).origin
-    expect(preview.text).toContain(`${origin}/reset-password?token=${TOKEN_MASK}`)
+    expect(preview.text).toContain(`${origin}/auth/link?token=${TOKEN_MASK}`)
     expect(preview.html).not.toMatch(HEX_TOKEN)
     expect(preview.text).not.toMatch(HEX_TOKEN)
   })
 
   it('marks a legacy row with no stored variables partial', async () => {
     const { token } = await createTrackedStaff('viewer')
-    const legacy = await createTrackedMessage({ templateKey: 'password_changed', variables: {} })
+    const legacy = await createTrackedMessage({ templateKey: 'step_up_link', variables: {} })
 
     const preview = dataOf<{ partial: boolean; text: string }>(
       await get(token, `/emails/${legacy.id}/preview`)

@@ -1,10 +1,9 @@
 /**
- * @file The `user_tokens` table: refresh, email-verification and
- * password-reset tokens, and the single-use links a mail carries for signing
- * in and confirming a step-up, stored only as SHA-256 hashes. SHA-256, not bcrypt:
- * the token is 256 random bits, so a slow salted hash buys nothing, bcrypt
- * would truncate it at 72 bytes, and a deterministic hash is what makes a
- * lookup by hash possible.
+ * @file The `user_tokens` table: refresh tokens, and the single-use links a
+ * mail carries for signing in and confirming a step-up, stored only as
+ * SHA-256 hashes. A fast deterministic hash, not a slow salted one: the
+ * token is 256 random bits, so a slow hash buys nothing, and a deterministic
+ * hash is what makes a lookup by hash possible.
  */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
@@ -25,13 +24,7 @@ import { userModel } from '@/database/models/user.model'
  * `user_tokens_purpose_check` constraint are both built from it, so the
  * type and the constraint that stops a raw SQL insert cannot drift.
  */
-const TOKEN_PURPOSES = [
-  'refresh',
-  'email_verification',
-  'password_reset',
-  'sign_in_link',
-  'step_up_link',
-] as const
+const TOKEN_PURPOSES = ['refresh', 'sign_in_link', 'step_up_link'] as const
 
 /**
  * `TOKEN_PURPOSES` as a literal SQL value list, outside the CHECK's template
@@ -46,8 +39,8 @@ const APP_SQL_LIST = FRONTEND_APPS.map((app) => `'${app}'`).join(', ')
 
 /**
  * What a `user_tokens` row is for. Every claim (`UserTokenRepository.
- * claimOnce`) is scoped to exactly one purpose, so a password-reset token
- * can never be spent as an email verification, or the other way around.
+ * claimOnce`) is scoped to exactly one purpose, so a sign-in link can never
+ * be spent as a step-up confirmation or a refresh, or the other way around.
  */
 export type TokenPurpose = (typeof TOKEN_PURPOSES)[number]
 
@@ -81,7 +74,7 @@ export type LinkTokenPurpose = (typeof LINK_TOKEN_PURPOSES)[LinkTokenIntent]
  * of the purposes above. `user_tokens_shape_check` holds each purpose's
  * columns: a `sign_in_link` row names an address and no user, since the
  * click looks the account up by address; a `step_up_link` row names the user
- * and the session it elevates; every other row names a user and no address.
+ * and the session it elevates; a `refresh` row names a user and no address.
  *
  * Rotation is append-only: reuse detection (`rotateRefreshToken`,
  * session.service.ts) needs the revoked row to recognise a replay, and
@@ -118,7 +111,7 @@ export const userTokenModel = pgTable(
      * The session family for a `'refresh'` token, shared by every rotation, so
      * one write revokes a session's whole chain (`revokeAllForSession`). On
      * a `step_up_link` row, the session the link elevates, so a sign-out
-     * revokes a pending link with the chain. Null for the other purposes.
+     * revokes a pending link with the chain. Null on a `sign_in_link` row.
      */
     sessionId: varchar('session_id', { length: 36 }),
     /**
@@ -201,7 +194,7 @@ export const userTokenModel = pgTable(
     index('user_tokens_live_email_idx')
       .on(table.email, table.purpose)
       .where(sql`${table.email} is not null and ${table.revokedAt} is null`),
-    // Retention: explicitly revoked, never used (logout, reuse, password change).
+    // Retention: explicitly revoked, never used (logout, reuse, sign-out of other sessions).
     index('user_tokens_revoked_unconsumed_idx')
       .on(table.revokedAt)
       .where(sql`${table.revokedAt} is not null and ${table.consumedAt} is null`),
@@ -213,7 +206,7 @@ export const userTokenModel = pgTable(
     check('user_tokens_app_check', sql`${table.app} in (${sql.raw(APP_SQL_LIST)})`),
     check(
       'user_tokens_shape_check',
-      sql`(${table.purpose} in ('refresh', 'email_verification', 'password_reset') and ${table.userId} is not null and ${table.email} is null and ${table.app} is null and ${table.redirect} is null) or (${table.purpose} = 'sign_in_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null) or (${table.purpose} = 'step_up_link' and ${table.userId} is not null and ${table.sessionId} is not null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null)`
+      sql`(${table.purpose} = 'refresh' and ${table.userId} is not null and ${table.email} is null and ${table.app} is null and ${table.redirect} is null) or (${table.purpose} = 'sign_in_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null) or (${table.purpose} = 'step_up_link' and ${table.userId} is not null and ${table.sessionId} is not null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null)`
     ),
   ]
 )

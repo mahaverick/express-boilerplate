@@ -33,19 +33,21 @@ describe('escapeHtmlForEmail', () => {
 })
 
 describe('requireEmailVariables', () => {
-  const templateKey: EmailTemplateKey = 'password_reset'
+  const templateKey: EmailTemplateKey = 'sign_in_link'
 
   it('returns the object unchanged when every required name is a real string', () => {
-    const variables = { firstName: 'Ada', resetUrl: 'https://example.test/reset' }
-    expect(requireEmailVariables(variables, ['firstName', 'resetUrl'], templateKey)).toBe(variables)
+    const variables = { firstName: 'Ada', signInUrl: 'https://example.test/auth/link' }
+    expect(requireEmailVariables(variables, ['firstName', 'signInUrl'], templateKey)).toBe(
+      variables
+    )
   })
 
   it('throws, naming the variable, when a required value is present but undefined', () => {
     const variables = {
       firstName: undefined as unknown as string,
-      resetUrl: 'https://example.test/reset',
+      signInUrl: 'https://example.test/auth/link',
     }
-    expect(() => requireEmailVariables(variables, ['firstName', 'resetUrl'], templateKey)).toThrow(
+    expect(() => requireEmailVariables(variables, ['firstName', 'signInUrl'], templateKey)).toThrow(
       /firstName/
     )
   })
@@ -58,25 +60,25 @@ describe('requireEmailVariables', () => {
    * looks like it works.
    */
   it('throws, naming the variable, when a required key is absent from the object entirely', () => {
-    const variables = { resetUrl: 'https://example.test/reset' } as unknown as {
+    const variables = { signInUrl: 'https://example.test/auth/link' } as unknown as {
       firstName: string
-      resetUrl: string
+      signInUrl: string
     }
-    expect(() => requireEmailVariables(variables, ['firstName', 'resetUrl'], templateKey)).toThrow(
+    expect(() => requireEmailVariables(variables, ['firstName', 'signInUrl'], templateKey)).toThrow(
       /firstName/
     )
   })
 
   it('names the template key in the thrown message', () => {
     const variables = { firstName: undefined as unknown as string }
-    expect(() => requireEmailVariables(variables, ['firstName'], 'email_verification')).toThrow(
-      /email_verification/
+    expect(() => requireEmailVariables(variables, ['firstName'], 'step_up_link')).toThrow(
+      /step_up_link/
     )
   })
 
   it('reports the first missing name when more than one is missing', () => {
-    const variables = {} as unknown as { firstName: string; resetUrl: string }
-    expect(() => requireEmailVariables(variables, ['firstName', 'resetUrl'], templateKey)).toThrow(
+    const variables = {} as unknown as { firstName: string; signInUrl: string }
+    expect(() => requireEmailVariables(variables, ['firstName', 'signInUrl'], templateKey)).toThrow(
       /firstName/
     )
   })
@@ -94,9 +96,9 @@ describe('EmailTemplateKey', () => {
   it('a template key outside EMAIL_TEMPLATE_KEYS is a compile error', () => {
     const wrapper: { templateKey: EmailTemplateKey } = {
       // @ts-expect-error — EmailTemplateKey is closed to the literals in EMAIL_TEMPLATE_KEYS; a typo (hyphen instead of underscore) must fail to compile, not silently produce a key nothing ever renders under.
-      templateKey: 'password-reset',
+      templateKey: 'sign-in-link',
     }
     // A real assertion, not a throwaway — see tests/unit/database/models/user-token.model.test.ts's own comment on why the compile-time check needs one genuine read of the value.
-    expect(wrapper.templateKey).toBe('password-reset')
+    expect(wrapper.templateKey).toBe('sign-in-link')
   })
 })

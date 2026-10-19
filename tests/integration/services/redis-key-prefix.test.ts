@@ -20,6 +20,7 @@ import { workerRedisKeyPrefix } from '../../helpers/redis-prefix'
 import { isEventuallyTrue } from '../../helpers/redis-proxy'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { issueTestLink } from '../../helpers/sign-in'
 
 const scope = vi.hoisted(() => ({ workerPrefix: '', prefix: '' }))
 
@@ -47,16 +48,13 @@ const BARE_KEYSPACE = /^(?:bull|rl|denylist|sess):/
 const KEYSPACES = [
   'bull:email',
   'bull:notification',
-  'rl:register',
-  'rl:login',
-  'rl:login-ip',
-  'rl:login-account',
+  'rl:sign-in-link-request',
+  'rl:sign-in-link-verify',
   'rl:logout',
   'rl:google-oauth',
   'denylist:session',
   'sess',
 ] as const
-const PASSWORD = 'correct horse battery staple'
 const SETTLE_TIMEOUT_MS = 5000
 
 const app = createApp()
@@ -105,13 +103,9 @@ beforeAll(async () => {
     if (message.includes(notifiedUserId)) observed.channels.push(channel)
   })
 
-  const registered = await request(app)
-    .post('/api/v1/auth/register')
-    .send({ email, password: PASSWORD })
-  expect(registered.status).toBe(202)
-  await sql`update users set email_verified_at = now() where email = ${email}`
-
-  const login = await request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
+  const login = await request(app)
+    .post('/api/v1/auth/link/verify')
+    .send({ token: await issueTestLink(email) })
   expect(login.status).toBe(200)
   const { accessToken } = (login.body as { data: { accessToken: string } }).data
   const verified = verifyAccessToken(accessToken)
@@ -127,13 +121,18 @@ beforeAll(async () => {
   const logout = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
   expect(logout.status).toBe(200)
 
+  // After the sign-in: the request's follow-up mails a fresh link, which revokes the one verified above.
+  const requested = await request(app).post('/api/v1/auth/link/request').send({ email })
+  expect(requested.status).toBe(202)
+
   const oauthStart = await request(app).get('/api/v1/auth/google')
   expect(oauthStart.status).toBe(302)
 
   await getEmailQueue().add('redis-key-prefix-probe', { probe: true })
+  await getNotificationQueue().add('redis-key-prefix-probe', { probe: true })
   emitNotification(notifiedUserId, fakeNotification({ userId: notifiedUserId }))
 
-  // Registration enqueues fire-and-forget, and the publish is async: wait for both.
+  // The link request mails fire-and-forget, and the publish is async: wait for both.
   const hasSettled = await isEventuallyTrue(
     async () =>
       observed.channels.length > 0 && hasEveryKeyspace(await scanKeys(reader, `${scope.prefix}:*`)),

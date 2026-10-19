@@ -24,8 +24,8 @@ export function fakeNotification(overrides: Partial<Notification> = {}): Notific
   return {
     id: randomUUID(),
     userId: 'user-1',
-    type: 'verify_email',
-    title: 'Verify your email',
+    type: 'tenant_invitation',
+    title: 'You have an invitation',
     body: 'body',
     // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt/dedupeKey are `T | null` columns.
     metadata: null,

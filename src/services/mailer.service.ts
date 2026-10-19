@@ -13,11 +13,6 @@ import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
-  EMAIL_VERIFICATION_TEMPLATE_KEY,
-  renderEmailVerificationTemplate,
-  type EmailVerificationVariables,
-} from '@/templates/email/email-verification.template'
-import {
   MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY,
   renderMaintenanceModeChangedTemplate,
   type MaintenanceModeChangedVariables,
@@ -27,21 +22,6 @@ import {
   renderOnboardingReminderTemplate,
   type OnboardingReminderVariables,
 } from '@/templates/email/onboarding-reminder.template'
-import {
-  PASSWORD_CHANGED_TEMPLATE_KEY,
-  renderPasswordChangedTemplate,
-  type PasswordChangedVariables,
-} from '@/templates/email/password-changed.template'
-import {
-  PASSWORD_RESET_TEMPLATE_KEY,
-  renderPasswordResetTemplate,
-  type PasswordResetVariables,
-} from '@/templates/email/password-reset.template'
-import {
-  REGISTRATION_ATTEMPT_TEMPLATE_KEY,
-  renderRegistrationAttemptTemplate,
-  type RegistrationAttemptVariables,
-} from '@/templates/email/registration-attempt.template'
 import {
   renderSignInLinkTemplate,
   SIGN_IN_LINK_TEMPLATE_KEY,
@@ -79,26 +59,6 @@ const emailLogRepository = new EmailLogRepository()
  * subject. Keep caller-supplied `subject`/`text`/`html` out of this type.
  */
 export type MailMessage =
-  | {
-      to: string
-      templateKey: typeof EMAIL_VERIFICATION_TEMPLATE_KEY
-      variables: EmailVerificationVariables
-    }
-  | {
-      to: string
-      templateKey: typeof PASSWORD_RESET_TEMPLATE_KEY
-      variables: PasswordResetVariables
-    }
-  | {
-      to: string
-      templateKey: typeof REGISTRATION_ATTEMPT_TEMPLATE_KEY
-      variables: RegistrationAttemptVariables
-    }
-  | {
-      to: string
-      templateKey: typeof PASSWORD_CHANGED_TEMPLATE_KEY
-      variables: PasswordChangedVariables
-    }
   | {
       to: string
       templateKey: typeof TENANT_INVITATION_TEMPLATE_KEY
@@ -156,18 +116,6 @@ export interface TrackedDelivery {
  */
 export function renderForMessage(message: MailMessage): RenderedEmail {
   switch (message.templateKey) {
-    case EMAIL_VERIFICATION_TEMPLATE_KEY: {
-      return renderEmailVerificationTemplate(message.variables)
-    }
-    case PASSWORD_RESET_TEMPLATE_KEY: {
-      return renderPasswordResetTemplate(message.variables)
-    }
-    case REGISTRATION_ATTEMPT_TEMPLATE_KEY: {
-      return renderRegistrationAttemptTemplate(message.variables)
-    }
-    case PASSWORD_CHANGED_TEMPLATE_KEY: {
-      return renderPasswordChangedTemplate(message.variables)
-    }
     case TENANT_INVITATION_TEMPLATE_KEY: {
       return renderTenantInvitationTemplate(message.variables)
     }
@@ -199,8 +147,8 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
  * when there is no string `.code`.
  *
  * Reads only `.code`, never `.message` or `.response`: a rejecting SMTP server
- * can quote the refused body back, and the templates put a reset or
- * verification URL in that body. The code is not shape-checked here: the
+ * can quote the refused body back, and the templates put a sign-in or
+ * invitation URL in that body. The code is not shape-checked here: the
  * repository replaces a wrong-shaped one, and the `error_code` column's CHECK
  * backs that up.
  * @param error - Whatever the transport call rejected with.
@@ -294,7 +242,7 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * send, so a log-write failure after a successful send is never recorded as a
  * failed send. Response latency never waits on SMTP: every send runs from the
  * queue in email.worker.ts. When mail is down the user gets no email and no
- * error; every attempt is in `email_logs`, and resend-verification lets them retry.
+ * error; every attempt is in `email_logs`, and asking for a new link lets them retry.
  * @param message - The email to render and send.
  * @param delivery - The tracked message this attempt belongs to. Without it, nodemailer generates the Message-ID and the attempt row has no `message_id`.
  * @returns `'sent'` or `'failed'`, the attempt's status. Resolves once the send has been attempted and the outcome recorded, even if recording failed. `email.worker.ts` reads it to decide whether to retry.

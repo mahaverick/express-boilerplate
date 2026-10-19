@@ -39,14 +39,7 @@ import {
 } from '@/services/step-up.service'
 import { frontendUrl } from '@/services/verification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
-import {
-  changePasswordSchema,
-  forgotPasswordSchema,
-  loginSchema,
-  registerSchema,
-  resetPasswordSchema,
-  revokeOtherSessionsSchema,
-} from '@/validators/auth.validators'
+import { revokeOtherSessionsSchema } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'
 import {
   signInLinkRequestSchema,
@@ -144,12 +137,6 @@ async function refreshOrClearCookie(
   }
 }
 
-const REGISTER_RESPONSE_MESSAGE =
-  'If that address can be registered, a verification email has been sent.'
-
-const FORGOT_PASSWORD_RESPONSE_MESSAGE =
-  'If that address has an account, a password reset email has been sent.'
-
 const SIGN_IN_LINK_REQUEST_MESSAGE = 'Check your inbox for a sign-in link.'
 
 /**
@@ -189,55 +176,9 @@ const STEP_UP_GOOGLE_OPTIONS: StepUpAuthenticateOptions = {
 }
 
 /**
- * Handlers for `/api/v1/auth`, except email verification (`VerificationController`).
+ * Handlers for `/api/v1/auth`.
  */
 class AuthController extends BaseController {
-  /**
-   * `POST /auth/register`: register a new user with an email and password.
-   *
-   * A free and a taken address answer an identical 202 with `data: null`
-   * (a 201/409 split would be an enumeration oracle). The reply goes out
-   * BEFORE the follow-up work (the sign-up event and the mail), so the two
-   * branches do not differ by that work's cost.
-   */
-  register = this.handle(async (request, response) => {
-    const input = parseBody(registerSchema, request.body)
-    const sendFollowUpMail = await authService.register(input)
-
-    messageResponse(response, REGISTER_RESPONSE_MESSAGE, 202)
-    // Never rejects: the service logs its own failure.
-    void sendFollowUpMail()
-  })
-
-  /**
-   * `POST /auth/login`: log in with an email and password. See
-   * auth.service.ts for why every credential failure is one identical,
-   * equally costly 401. A refresh cookie the browser still presented has its
-   * session revoked once the new one is issued. `no-store`, as every token
-   * response (RFC 6749 §5.1).
-   */
-  login = this.handle(async (request, response) => {
-    response.set('Cache-Control', 'no-store')
-    const input = parseBody(loginSchema, request.body)
-    const session = await authService.login(input)
-    await revokePresentedSession(request, { emitSignedOut: false })
-
-    setRefreshTokenCookie(
-      request,
-      response,
-      session.refreshToken.raw,
-      session.refreshToken.expiresAt
-    )
-    successResponse(
-      response,
-      {
-        user: toProfileResponse(session.user, session.platformRole),
-        accessToken: session.accessToken,
-      },
-      'Login successful.'
-    )
-  })
-
   /**
    * `POST /auth/link/request`: ask for a sign-in link by email.
    *
@@ -260,7 +201,7 @@ class AuthController extends BaseController {
    * creating the account on the first click (`isNewUser`). Every link that
    * signs nobody in answers one 400 `LINK_INVALID`. A refresh cookie the
    * browser still presented has its session revoked once the new one is
-   * issued, as `login` does; the reply carries the redirect stored with the
+   * issued; the reply carries the redirect stored with the
    * link. `no-store`, as every token response (RFC 6749 §5.1).
    */
   verifySignInLink = this.handle(async (request, response) => {
@@ -309,7 +250,7 @@ class AuthController extends BaseController {
    * Inside the grace window a replay into a live session gets a sibling and a
    * fresh cookie, so a 401 racing a successful rotation of the same token
    * comes from a branch that also kills or refuses the fresh cookie's session.
-   * The one exception: a login or Google sign-in in another tab that lands
+   * The one exception: a link or Google sign-in in another tab that lands
    * while a dead-cookie refresh is in flight loses its own fresh cookie too,
    * since the clear is by name — that user just signs in again.
    * A current cookie sent with an empty value answers 401 and is cleared the
@@ -354,57 +295,6 @@ class AuthController extends BaseController {
     await revokePresentedSession(request)
     clearRefreshTokenCookie(request, response)
     messageResponse(response, 'Logged out.')
-  })
-
-  /**
-   * `POST /auth/forgot-password`: request a password-reset email.
-   *
-   * An identical 202 for every address. Unlike register, nothing is shared
-   * between branches to hide behind, so the reply goes out before the lookup
-   * starts and the rest is fire-and-forget. The handler is synchronous on
-   * purpose: nothing in it is awaited.
-   */
-  forgotPassword = this.handle((request, response) => {
-    const input = parseBody(forgotPasswordSchema, request.body)
-
-    messageResponse(response, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
-    // Never rejects: the service logs its own failure.
-    void authService.requestPasswordReset(input.email, input.app)
-  })
-
-  /**
-   * `POST /auth/reset-password`: reset a password with a token from the
-   * mailed link.
-   *
-   * A weak password gets `parseBody`'s field-level 400 before the token is
-   * looked at. That is safe here, unlike verify-email: the token is the only
-   * secret in play, so "too short" leaks nothing about it.
-   */
-  resetPassword = this.handle(async (request, response) => {
-    const input = parseBody(resetPasswordSchema, request.body)
-    await authService.resetPassword(input)
-
-    messageResponse(response, 'Password has been reset.')
-  })
-
-  /**
-   * `POST /auth/change-password`: change the authenticated caller's own
-   * password, behind `requireAuth`. The session making this request is spared
-   * (`request.sessionId`): only the chain its refresh cookie names, when the
-   * browser sent a live one (`readRefreshTokenCookie`, current name only), or
-   * else the whole session. A token without a session id spares nothing. See
-   * `changePassword` in auth.service.ts for the order and the failure design.
-   */
-  changePassword = this.handle(async (request, response) => {
-    const input = parseBody(changePasswordSchema, request.body)
-    await authService.changePassword(
-      authenticatedUserId(request),
-      request.sessionId,
-      input,
-      readRefreshTokenCookie(request)
-    )
-
-    messageResponse(response, 'Password has been changed.')
   })
 
   /**
@@ -505,18 +395,17 @@ class AuthController extends BaseController {
   })
 
   /**
-   * `GET /auth/providers`: which methods can sign this account in, and
-   * whether it has a password. Read-only: unlinking a method would need its own
+   * `GET /auth/providers`: which methods can sign this account in, as
+   * `{ providers }`. Every account has its `email` row, since an emailed link
+   * signs any account in. Read-only: unlinking a method would need its own
    * guard against removing the last way in.
    */
   getAuthProviders = this.handle(async (request, response) => {
-    const { providers, hasPassword } = await authService.getAuthProviders(
-      authenticatedUserId(request)
-    )
+    const providers = await authService.getAuthProviders(authenticatedUserId(request))
 
     successResponse(
       response,
-      { providers: toPublicAuthProviders(providers), hasPassword },
+      { providers: toPublicAuthProviders(providers) },
       'Auth providers retrieved.'
     )
   })
@@ -539,7 +428,7 @@ class AuthController extends BaseController {
    *
    * A refresh cookie the request carried (a Lax one from an earlier Google
    * sign-in; the cross-site hop withholds a Strict one) has its session
-   * revoked once the new one is issued, as `login` does.
+   * revoked once the new one is issued, as a link sign-in does.
    *
    * A success redirects to `/auth/callback` on the frontend that started the
    * sign-in, carrying the redirect the start stored (`redirect=`) and `new=1`

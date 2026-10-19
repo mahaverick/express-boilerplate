@@ -54,7 +54,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'email.resent': {
     reason: 'Customer never got the link',
     emailDomain: 'example.test',
-    templateKey: 'email_verification',
+    templateKey: 'sign_in_link',
   },
   'email.suppression_lifted': { reason: 'Mailbox fixed, ticket 812', emailDomain: 'example.test' },
   'onboarding.dismissed': {},

@@ -239,9 +239,6 @@ runs monthly, before 6am on the first day.
 Every bypass in `pnpm-workspace.yaml` has a line here, added in the same change
 that adds it. The file's own comments carry the detail.
 
-- **`allowBuilds.bcrypt`**: its install script runs `node-gyp-build`, which
-  loads the prebuilt native binding or compiles one via `node-gyp`. bcrypt is a
-  native addon and does not work without it.
 - **`allowBuilds.esbuild`**: its postinstall checks the host platform's native
   binary and downloads it when the optional per-platform package is missing.
 - **`allowBuilds.msgpackr-extract`**: a transitive dependency of `bullmq` (via

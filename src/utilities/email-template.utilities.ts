@@ -13,10 +13,6 @@ import type { SenderClass } from '@/constants/email.constants'
  * against that union, so a typo in a key is a compile error.
  */
 export const EMAIL_TEMPLATE_KEYS = [
-  'email_verification',
-  'password_reset',
-  'registration_attempt',
-  'password_changed',
   'tenant_invitation',
   'onboarding_reminder',
   'maintenance_mode_changed',
@@ -30,7 +26,13 @@ export const EMAIL_TEMPLATE_KEYS = [
  * The staff email list's `template` filter accepts them, so those rows stay
  * findable; a resend of one answers `template_unavailable`.
  */
-export const RETIRED_EMAIL_TEMPLATE_KEYS = ['account_setup'] as const
+export const RETIRED_EMAIL_TEMPLATE_KEYS = [
+  'email_verification',
+  'password_reset',
+  'registration_attempt',
+  'password_changed',
+  'account_setup',
+] as const
 
 /**
  * Which template rendered a message: the type of `MailMessage.templateKey`
@@ -44,7 +46,7 @@ export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number]
  * that produced them.
  *
  * Carries `templateKey` with the body, produced by the same call, so a
- * caller building `{ to, ...renderPasswordResetTemplate(vars) }` cannot send
+ * caller building `{ to, ...renderSignInLinkTemplate(vars) }` cannot send
  * one template's body while logging another's key in `email_logs`.
  */
 export interface RenderedEmail {
@@ -163,8 +165,9 @@ export type EmailTemplateMeta<V> = {
   previewVariables: readonly Exclude<keyof V, SecretKey<V>>[]
   /**
    * The flow a staff resend re-runs, or null when the template is never
-   * resent: a notice about an event that did not recur (a password change, a
-   * registration attempt, a maintenance change), or an onboarding reminder,
+   * resent: a notice about an event that did not recur (a maintenance
+   * change), a link only its requester can ask for again (a step-up
+   * confirmation), or an onboarding reminder,
    * which staff send afresh instead.
    */
   resendAction: ResendAction | null

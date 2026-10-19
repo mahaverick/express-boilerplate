@@ -9,26 +9,19 @@ import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
-import { hashPassword } from '@/utilities/password.utilities'
 import { makeStaff } from './platform-staff'
 
 const userRepository = new UserRepository()
 const trackedUserIds: string[] = []
 
 /**
- * The password every `hasPassword: true` test user has.
- */
-export const TEST_PASSWORD = 'correct-horse-battery-9'
-
-/**
  * How `createTrackedUser` builds its row. Defaults: a random address, no
- * names, no password, verified, active.
+ * names, verified, active.
  */
 export interface TestUserOptions {
   email?: string
   firstName?: string | null
   lastName?: string | null
-  hasPassword?: boolean
   verified?: boolean
   active?: boolean
 }
@@ -45,8 +38,6 @@ export async function createTrackedUser(options: TestUserOptions = {}): Promise<
     firstName: options.firstName ?? null,
     // eslint-disable-next-line unicorn/no-null -- as above
     lastName: options.lastName ?? null,
-    // eslint-disable-next-line unicorn/no-null -- a passwordless account
-    passwordHash: options.hasPassword === true ? await hashPassword(TEST_PASSWORD) : null,
     // eslint-disable-next-line unicorn/no-null -- an unverified account
     emailVerifiedAt: options.verified === false ? null : new Date(),
     active: options.active ?? true,

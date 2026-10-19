@@ -41,9 +41,9 @@ function mockJob(overrides: Partial<NotificationJobData> = {}): Job<Notification
     timestamp: 1_767_225_600_000,
     data: {
       userId: 'user-123',
-      type: 'verify_email',
-      title: 'Verify your email',
-      body: 'Click the link to verify your email address.',
+      type: 'maintenance_mode_changed',
+      title: 'Maintenance mode changed',
+      body: 'Customers can only read until maintenance ends.',
       ...overrides,
     },
   } as unknown as Job<NotificationJobData>
@@ -66,8 +66,8 @@ const EXPECTED_EMAIL_JOB_ID = 'notification-email-test-notification-job-1-176722
 const mockNotificationRow: Notification = {
   id: 'notification-1',
   userId: 'user-123',
-  type: 'verify_email',
-  title: 'Verify your email',
+  type: 'maintenance_mode_changed',
+  title: 'Maintenance mode changed',
   body: 'body',
   // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` database columns; see this const's own comment.
   metadata: null,
@@ -79,18 +79,21 @@ const mockNotificationRow: Notification = {
 }
 
 /**
- * A valid `email_verification` `MailMessage` to `to`. Every test that needs an
- * `email` payload on the job shares it, rather than repeating the
+ * A valid `maintenance_mode_changed` `MailMessage` to `to`. Every test that
+ * needs an `email` payload on the job shares it, rather than repeating the
  * discriminated union's full shape.
  */
-function emailVerificationMessage(to: string): MailMessage {
+function maintenanceMessage(to: string): MailMessage {
   return {
     to,
-    templateKey: 'email_verification',
+    templateKey: 'maintenance_mode_changed',
     variables: {
       firstName: 'Ada',
-      verificationUrl: 'https://example.com/verify?token=abc',
       appName: 'Test',
+      mode: 'read_only',
+      actorName: 'Grace',
+      reason: 'Database upgrade',
+      changedAt: '2026-10-06T10:42:00.000Z',
     },
   }
 }
@@ -132,9 +135,9 @@ describe('processNotificationJob', () => {
 
     expect(insertSpy).toHaveBeenCalledWith({
       userId: 'user-123',
-      type: 'verify_email',
-      title: 'Verify your email',
-      body: 'Click the link to verify your email address.',
+      type: 'maintenance_mode_changed',
+      title: 'Maintenance mode changed',
+      body: 'Customers can only read until maintenance ends.',
       dedupeKey: EXPECTED_DEDUPE_KEY,
     })
   })
@@ -163,20 +166,20 @@ describe('processNotificationJob', () => {
     channelEnabledSpy.mockResolvedValue(true)
     insertSpy.mockResolvedValue({
       ...mockNotificationRow,
-      metadata: { templateKey: 'email_verification' },
+      metadata: { templateKey: 'maintenance_mode_changed' },
     })
 
     await processNotificationJob(
       mockJob({
         metadata: {
-          templateKey: 'email_verification',
-          variables: { verificationUrl: 'https://example.test/verify?token=super-secret-token' },
+          templateKey: 'maintenance_mode_changed',
+          variables: { signInUrl: 'https://example.test/auth/link?token=super-secret-token' },
         },
       })
     )
 
     expect(insertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: { templateKey: 'email_verification' } })
+      expect.objectContaining({ metadata: { templateKey: 'maintenance_mode_changed' } })
     )
     const [insertedRow] = insertSpy.mock.calls[0] as [NewNotification]
     expect(insertedRow.metadata).not.toHaveProperty('variables')
@@ -195,7 +198,7 @@ describe('processNotificationJob', () => {
     insertSpy.mockResolvedValue(mockNotificationRow)
     vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
 
-    const email = emailVerificationMessage('user@example.com')
+    const email = maintenanceMessage('user@example.com')
 
     await processNotificationJob(mockJob({ email }))
 
@@ -208,7 +211,7 @@ describe('processNotificationJob', () => {
     channelEnabledSpy.mockResolvedValue(true)
     insertSpy.mockResolvedValue(mockNotificationRow)
     vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
-    const email = emailVerificationMessage('user@example.com')
+    const email = maintenanceMessage('user@example.com')
     const emailContext = { linkApp: 'apex' as const, resentFromId: 'message-0' }
 
     await processNotificationJob(mockJob({ email, emailContext }))
@@ -224,7 +227,7 @@ describe('processNotificationJob', () => {
     channelEnabledSpy.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
     insertSpy.mockResolvedValue(mockNotificationRow)
 
-    const email = emailVerificationMessage('user@example.com')
+    const email = maintenanceMessage('user@example.com')
 
     await processNotificationJob(mockJob({ email }))
 
@@ -251,7 +254,7 @@ describe('processNotificationJob', () => {
     channelEnabledSpy.mockResolvedValue(true)
     insertSpy.mockResolvedValue(mockNotificationRow)
     vi.mocked(emailJob.addEmailJob).mockRejectedValue(new Error('redis unavailable'))
-    const email = emailVerificationMessage('user@example.com')
+    const email = maintenanceMessage('user@example.com')
 
     await expect(processNotificationJob(mockJob({ email }))).rejects.toThrow('redis unavailable')
   })
@@ -273,7 +276,7 @@ describe('processNotificationJob', () => {
     insertSpy.mockResolvedValue(mockNotificationRow)
     vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
 
-    await processNotificationJob(mockJob({ email: emailVerificationMessage('user@example.com') }))
+    await processNotificationJob(mockJob({ email: maintenanceMessage('user@example.com') }))
 
     const options = vi.mocked(emailJob.addEmailJob).mock.calls[0]?.[2]
     expect(options?.jobId).not.toContain(':')
@@ -282,7 +285,7 @@ describe('processNotificationJob', () => {
   it('passes the email jobId when the in_app channel is disabled', async () => {
     channelEnabledSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
-    const email = emailVerificationMessage('user@example.com')
+    const email = maintenanceMessage('user@example.com')
 
     await processNotificationJob(mockJob({ email }))
 
@@ -294,7 +297,7 @@ describe('processNotificationJob', () => {
 
   it('rejects a job with no id before enqueueing an email', async () => {
     channelEnabledSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
-    const email = emailVerificationMessage('user@example.com')
+    const email = maintenanceMessage('user@example.com')
     const job = { ...mockJob({ email }), id: undefined } as unknown as Job<NotificationJobData>
 
     await expect(processNotificationJob(job)).rejects.toThrow('Notification job has no id')

@@ -87,7 +87,7 @@ export function canPlatformActorModifyTarget(
 
 /**
  * Whether a staff member holding `actorRole` may send account mail (a
- * set-password, reset or verification link) to a user whose platform role
+ * sign-in link) to a user whose platform role
  * is `targetRole`: the actor must be a platform admin or owner, and at least
  * the target's rank. A non-staff target (`null`) has no rank to meet.
  * `assertMayMail` (platform-user.service.ts) enforces it; the staff email

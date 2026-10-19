@@ -28,7 +28,7 @@ export interface TestMessage {
 
 /**
  * How `insertTestMessage` builds its row. Defaults: a random recipient
- * under the prefix, `email_verification`, transactional, `sent`, now.
+ * under the prefix, `sign_in_link`, transactional, `sent`, now.
  */
 export interface TestMessageOptions {
   recipient?: string
@@ -59,7 +59,7 @@ export async function insertTestMessage(
     insert into email_messages
       (id, recipient, template_key, user_id, tenant_id, sender_class, message_id_header, status, status_updated_at, created_at)
     values
-      (${row.id}, ${recipient}, ${options.templateKey ?? 'email_verification'}, ${options.userId ?? SQL_NULL},
+      (${row.id}, ${recipient}, ${options.templateKey ?? 'sign_in_link'}, ${options.userId ?? SQL_NULL},
        ${options.tenantId ?? SQL_NULL}, ${options.senderClass ?? 'transactional'}, ${header},
        ${options.status ?? 'sent'}, ${createdAt}::timestamptz, ${createdAt}::timestamptz)`
   return { id: row.id, recipient, header }

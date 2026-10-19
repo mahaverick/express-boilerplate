@@ -379,7 +379,6 @@ export default tseslint.config(
       // The naming patterns above govern src/ only.
       'check-file/filename-naming-convention': 'off',
       // Test fixtures are known values, not secrets, e.g. a deliberately wrong JWT secret.
-      'sonarjs/no-hardcoded-passwords': 'off',
       'sonarjs/hardcoded-secret-signatures': 'off',
       'no-restricted-properties': 'off',
       'no-restricted-imports': [

@@ -26,7 +26,7 @@ import {
 } from '@/utilities/list-page.utilities'
 
 /**
- * The actor's public identity, never `passwordHash`.
+ * The actor's public identity.
  */
 interface AuditActorRow {
   id: string
@@ -45,7 +45,7 @@ export interface AuditLogListRow {
 }
 
 /**
- * The actor columns an entry lists with, never `passwordHash`.
+ * The actor columns an entry lists with: an explicit projection, never the full row.
  */
 const actorColumns = {
   id: userModel.id,

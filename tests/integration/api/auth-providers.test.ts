@@ -1,9 +1,9 @@
 /**
  * @file GET /api/v1/auth/providers against the real per-worker Postgres
  * database. Requests sign a bearer token directly with `signAccessToken`
- * instead of logging in, as profile.test.ts does. The case this file exists
- * for is the Google-only user: an account with an 'email' provider row and no
- * password.
+ * instead of signing in, as profile.test.ts does. Every account has its
+ * 'email' row, since an emailed link signs any account in; a Google sign-up
+ * adds a 'google' row beside it.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -15,14 +15,11 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
-import { hashPassword } from '@/utilities/password.utilities'
 import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
-
-const PASSWORD = 'correct horse battery staple'
 
 /**
  * vitest types `expect.any(...)` as `any`; cast once and reused across the
@@ -47,7 +44,6 @@ interface ApiEnvelope<TData> {
  */
 interface ProvidersBody {
   providers: { provider: AuthProvider; linkedAt: string }[]
-  hasPassword: boolean
 }
 
 /**
@@ -72,20 +68,14 @@ function uniqueEmail(): string {
  * Create a user and link the given providers to it, tracking the row for
  * cleanup.
  * @param options - How to build the account.
- * @param options.withPassword - Whether `password_hash` is set; false models a federated-only account.
  * @param options.providers - The providers to link, in the order given.
  * @returns The created user's id and a bearer token for it.
  */
 async function seedUser(options: {
-  withPassword: boolean
   providers: AuthProvider[]
 }): Promise<{ userId: string; token: string }> {
   const email = uniqueEmail()
-  const passwordHash = options.withPassword ? await hashPassword(PASSWORD) : undefined
-  const created = await userRepository.create({
-    email,
-    ...(passwordHash && { passwordHash }),
-  })
+  const created = await userRepository.create({ email })
   createdIds.push(created.id)
 
   for (const provider of options.providers) {
@@ -128,52 +118,30 @@ afterEach(async () => {
 })
 
 describe('GET /api/v1/auth/providers', () => {
-  it('reports one email provider and a password for an email registration', async () => {
-    const { token } = await seedUser({ withPassword: true, providers: ['email'] })
+  it('answers providers only, with the email row for every account', async () => {
+    const { token } = await seedUser({ providers: ['email'] })
 
     const response = await getProviders(token)
 
     expect(response.status).toBe(200)
-    expect(envelopeOf<ProvidersBody>(response).data).toEqual({
-      providers: [{ provider: 'email', linkedAt: ANY_STRING }],
-      hasPassword: true,
-    })
+    const data = envelopeOf<ProvidersBody>(response).data
+    expect(Object.keys(data ?? {})).toEqual(['providers'])
+    expect(data?.providers).toEqual([{ provider: 'email', linkedAt: ANY_STRING }])
   })
 
-  /**
-   * A Google sign-up writes an 'email' row and a 'google' row in one
-   * transaction (`resolveGoogleUser`), so an 'email' provider says nothing
-   * about whether a password exists. An endpoint that inferred `hasPassword`
-   * from the provider list would report `true` for an account that cannot
-   * log in with a password. The endpoint therefore carries `hasPassword` as
-   * its own field, read from `users.password_hash`, and these assertions pin
-   * the two apart.
-   */
-  it('reports hasPassword false for a Google-only account, which still has an email provider row', async () => {
-    const { token } = await seedUser({ withPassword: false, providers: ['email', 'google'] })
+  it('reports both providers for an account that signed up with Google, which has an email row too', async () => {
+    const { token } = await seedUser({ providers: ['email', 'google'] })
 
     const response = await getProviders(token)
 
     expect(response.status).toBe(200)
     const body = envelopeOf<ProvidersBody>(response).data
-    expect(body?.hasPassword).toBe(false)
     expect(body?.providers.map((entry) => entry.provider)).toEqual(['email', 'google'])
-  })
-
-  it('reports both providers and a password for an account that linked Google to an email login', async () => {
-    const { token } = await seedUser({ withPassword: true, providers: ['email', 'google'] })
-
-    const response = await getProviders(token)
-
-    expect(response.status).toBe(200)
-    const body = envelopeOf<ProvidersBody>(response).data
-    expect(body?.hasPassword).toBe(true)
-    expect(body?.providers).toHaveLength(2)
   })
 
   it('never exposes providerId, for either provider', async () => {
     // Asserted against the raw body text rather than the parsed shape, so a nested or renamed leak is caught too.
-    const { userId } = await seedUser({ withPassword: true, providers: ['email', 'google'] })
+    const { userId } = await seedUser({ providers: ['email', 'google'] })
     const rows = await authProviderRepository.findByUser(userId)
     const user = await userRepository.findById(userId)
     if (!user) throw new Error('providerId test: user vanished')
@@ -189,10 +157,7 @@ describe('GET /api/v1/auth/providers', () => {
 
   it('orders providers oldest first, even when that is not the order they were inserted in', async () => {
     // Backdating the google row makes insertion order and createdAt order disagree, so only an endpoint that sorts can answer ['google', 'email'].
-    const { userId, token } = await seedUser({
-      withPassword: true,
-      providers: ['email', 'google'],
-    })
+    const { userId, token } = await seedUser({ providers: ['email', 'google'] })
     await sql`
       update auth_providers set created_at = now() - interval '1 day'
       where user_id = ${userId} and provider = 'google'

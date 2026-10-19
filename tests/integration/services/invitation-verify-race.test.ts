@@ -194,12 +194,12 @@ describe('invitation verify races', () => {
     const realCreate = UserRepository.prototype.create
     /**
      * Stands in for `UserRepository.create`: just before the click's insert, a
-     * registration on another connection commits an unverified account for the address.
+     * write on another connection commits an unverified account for the address.
      */
     const racingCreate: typeof realCreate = async function (this: UserRepository, ...arguments_) {
       const [values] = arguments_
       if (seeded.id === undefined && values.email === email) {
-        const squatter = await realCreate.call(this, { email, passwordHash: 'not-a-real-hash' })
+        const squatter = await realCreate.call(this, { email })
         seeded.id = squatter.id
       }
       return realCreate.apply(this, arguments_)

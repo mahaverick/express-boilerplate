@@ -133,8 +133,8 @@ class TenantController extends BaseController {
 
   /**
    * `GET /tenants/:slug/members`: one page of a tenant's members, each with
-   * their safe user info (`UserMembershipRepository.listPageByTenant` never selects
-   * `passwordHash`). Anyone `resolveTenant` admits may call this. Each row is
+   * their safe user info (`UserMembershipRepository.listPageByTenant` selects
+   * an explicit projection). Anyone `resolveTenant` admits may call this. Each row is
    * `{ membership, user: { id, email, firstName, lastName } }`, and a
    * soft-deleted user is not listed. On the platform tenant only, `user`
    * also carries `active`, false for a deactivated account: staff already

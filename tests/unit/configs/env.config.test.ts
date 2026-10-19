@@ -164,32 +164,6 @@ describe('parseEnv', () => {
     )
   })
 
-  it('defaults EMAIL_VERIFICATION_TTL to 24h', () => {
-    expect(parseEnv(valid).EMAIL_VERIFICATION_TTL).toBe('24h')
-  })
-
-  it('rejects an EMAIL_VERIFICATION_TTL that ms() cannot parse', () => {
-    expect(() => parseEnv({ ...valid, EMAIL_VERIFICATION_TTL: 'soon' })).toThrow(
-      /EMAIL_VERIFICATION_TTL/
-    )
-  })
-
-  it('defaults PASSWORD_RESET_TTL to 1h', () => {
-    expect(parseEnv(valid).PASSWORD_RESET_TTL).toBe('1h')
-  })
-
-  it('rejects a PASSWORD_RESET_TTL that ms() cannot parse', () => {
-    expect(() => parseEnv({ ...valid, PASSWORD_RESET_TTL: 'soon' })).toThrow(/PASSWORD_RESET_TTL/)
-  })
-
-  it('defaults ACCOUNT_SETUP_TTL to 24h', () => {
-    expect(parseEnv(valid).ACCOUNT_SETUP_TTL).toBe('24h')
-  })
-
-  it('rejects an ACCOUNT_SETUP_TTL that ms() cannot parse', () => {
-    expect(() => parseEnv({ ...valid, ACCOUNT_SETUP_TTL: 'soon' })).toThrow(/ACCOUNT_SETUP_TTL/)
-  })
-
   it('defaults INVITATION_TTL to 3d', () => {
     expect(parseEnv(valid).INVITATION_TTL).toBe('3d')
   })

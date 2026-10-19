@@ -4,7 +4,7 @@
  * tests/integration/api/profile.test.ts: every user created here is deleted in afterEach, and
  * notifications and notification_preferences cascade off that delete (ON DELETE CASCADE,
  * notification.model.ts), so nothing else needs explicit cleanup. Authenticated requests sign a
- * token directly with `signAccessToken` instead of going through POST /api/v1/auth/login, since
+ * token directly with `signAccessToken` instead of signing in by a link, since
  * these tests are about what happens after authentication.
  */
 
@@ -95,18 +95,18 @@ function uniqueEmail(): string {
 }
 
 /**
- * Inserts one `verify_email` notification through the repository, bypassing the API: these tests
+ * Inserts one `tenant_invitation` notification through the repository, bypassing the API: these tests
  * read and mutate notifications that already exist.
  */
 async function seedNotification(
   userId: string,
-  title = 'Verify your email'
+  title = 'You have an invitation'
 ): Promise<Notification> {
   return notificationRepository.create({
     userId,
-    type: 'verify_email',
+    type: 'tenant_invitation',
     title,
-    body: 'Click the link to verify your email address.',
+    body: 'Open the invitation to join the workspace.',
   })
 }
 
@@ -117,9 +117,9 @@ async function seedNotification(
 async function seedDedupedNotification(userId: string): Promise<Notification> {
   const row = await notificationRepository.createOnce({
     userId,
-    type: 'verify_email',
-    title: 'Verify your email',
-    body: 'Click the link to verify your email address.',
+    type: 'tenant_invitation',
+    title: 'You have an invitation',
+    body: 'Open the invitation to join the workspace.',
     dedupeKey: `notification-job-${randomUUID()}-1`,
   })
   if (row === undefined) throw new Error('seed collided on a random dedupe key')
@@ -583,13 +583,13 @@ describe('/api/v1/notifications', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({
           preferences: [
-            { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
+            { notificationType: 'tenant_invitation', emailEnabled: true, inAppEnabled: false },
           ],
         })
 
       expect(response.status).toBe(200)
       expect(envelopeOf<PreferencesBody>(response).data?.preferences[0]).toMatchObject({
-        notificationType: 'password_changed',
+        notificationType: 'tenant_invitation',
         emailEnabled: true,
         inAppEnabled: false,
       })
@@ -597,8 +597,8 @@ describe('/api/v1/notifications', () => {
         .get('/api/v1/notifications/preferences')
         .set('Authorization', `Bearer ${token}`)
       const matrix = envelopeOf<PreferencesBody>(after).data?.preferences ?? []
-      expect(matrix.find((item) => item.notificationType === 'password_changed')).toEqual({
-        notificationType: 'password_changed',
+      expect(matrix.find((item) => item.notificationType === 'tenant_invitation')).toEqual({
+        notificationType: 'tenant_invitation',
         emailEnabled: true,
         inAppEnabled: false,
       })
@@ -608,7 +608,7 @@ describe('/api/v1/notifications', () => {
     it('turns the in-app channel back on', async () => {
       const { token } = await createAuthenticatedUser()
       /**
-       * PUT the in-app toggle for `verify_email`.
+       * PUT the in-app toggle for `tenant_invitation`.
        * @param isInApp - The in-app value to store.
        */
       const put = (isInApp: boolean) =>
@@ -617,7 +617,7 @@ describe('/api/v1/notifications', () => {
           .set('Authorization', `Bearer ${token}`)
           .send({
             preferences: [
-              { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: isInApp },
+              { notificationType: 'tenant_invitation', emailEnabled: true, inAppEnabled: isInApp },
             ],
           })
 
@@ -629,9 +629,9 @@ describe('/api/v1/notifications', () => {
         .get('/api/v1/notifications/preferences')
         .set('Authorization', `Bearer ${token}`)
       const matrix = envelopeOf<PreferencesBody>(after).data?.preferences ?? []
-      expect(matrix.find((item) => item.notificationType === 'verify_email')?.inAppEnabled).toBe(
-        true
-      )
+      expect(
+        matrix.find((item) => item.notificationType === 'tenant_invitation')?.inAppEnabled
+      ).toBe(true)
     })
 
     it('lets platform staff switch a staff-only type in-app off', async () => {
@@ -675,7 +675,7 @@ describe('/api/v1/notifications', () => {
     )
 
     it('stores nothing from a crafted body: valid entries beside an email-off one, a repeated type, extra keys', async () => {
-      const { user, token } = await createAuthenticatedUser()
+      const { user, token } = await createTrackedStaff('admin')
       /**
        * PUT a raw preferences array.
        * @param preferences - The array to send.
@@ -687,16 +687,16 @@ describe('/api/v1/notifications', () => {
           .send({ preferences })
 
       const mixed = await attempt([
-        { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: false },
-        { notificationType: 'password_changed', emailEnabled: false, inAppEnabled: true },
+        { notificationType: 'tenant_invitation', emailEnabled: true, inAppEnabled: false },
+        { notificationType: 'maintenance_mode_changed', emailEnabled: false, inAppEnabled: true },
       ])
       const repeated = await attempt([
-        { notificationType: 'verify_email', emailEnabled: true, inAppEnabled: true },
-        { notificationType: 'verify_email', emailEnabled: false, inAppEnabled: true },
+        { notificationType: 'tenant_invitation', emailEnabled: true, inAppEnabled: true },
+        { notificationType: 'tenant_invitation', emailEnabled: false, inAppEnabled: true },
       ])
       const extra = await attempt([
         {
-          notificationType: 'verify_email',
+          notificationType: 'tenant_invitation',
           emailEnabled: true,
           inAppEnabled: false,
           email_enabled: false,
@@ -744,6 +744,25 @@ describe('/api/v1/notifications', () => {
       expect(response.status).toBe(400)
     })
 
+    it.each(['verify_email', 'password_reset_requested', 'password_changed'])(
+      'rejects %s as an unknown notification type',
+      async (type) => {
+        const { user, token } = await createAuthenticatedUser()
+
+        const response = await request(app)
+          .put('/api/v1/notifications/preferences')
+          .set('Authorization', `Bearer ${token}`)
+          .send({
+            preferences: [{ notificationType: type, emailEnabled: true, inAppEnabled: false }],
+          })
+
+        expect(response.status).toBe(400)
+        expect(response.body).toMatchObject({ message: 'Validation failed' })
+        const rows = await sql`select 1 from notification_preferences where user_id = ${user.id}`
+        expect(rows).toHaveLength(0)
+      }
+    )
+
     it('rejects an unknown notification type', async () => {
       const { token } = await createAuthenticatedUser()
 
@@ -765,7 +784,7 @@ describe('/api/v1/notifications', () => {
       const response = await request(app)
         .put('/api/v1/notifications/preferences')
         .set('Authorization', `Bearer ${token}`)
-        .send({ preferences: [{ notificationType: 'verify_email' }] })
+        .send({ preferences: [{ notificationType: 'tenant_invitation' }] })
 
       expect(response.status).toBe(400)
     })

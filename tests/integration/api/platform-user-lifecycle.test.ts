@@ -19,10 +19,9 @@ import {
   createTrackedUser,
   deleteTrackedUsers,
   staleAuthTokenFor,
-  TEST_PASSWORD,
 } from '../../helpers/platform-users'
-import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { signInByLink } from '../../helpers/sign-in'
 
 /**
  * The response envelope, narrowed to the fields these tests read.
@@ -61,20 +60,11 @@ function remove(token: string, userId: string, body?: object): Promise<Response>
 }
 
 /**
- * Sign `user` in through the real endpoint: a live session with a refresh cookie.
+ * Sign `user` in through the real endpoint, by a sign-in link: a live session with a refresh cookie.
  */
 async function signIn(user: User): Promise<{ accessToken: string; refreshCookie: string }> {
-  const response = await request(app)
-    .post('/api/v1/auth/login')
-    .send({ email: user.email, password: TEST_PASSWORD })
-  if (response.status !== 200) throw new Error(`login failed: ${response.status}`)
-  const accessToken = (response.body as ApiEnvelope<{ accessToken: string }>).data?.accessToken
-  const cookieName = testRefreshCookie().name
-  const line = (response.headers['set-cookie'] as unknown as string[]).find((cookie) =>
-    cookie.startsWith(`${cookieName}=`)
-  )
-  if (!accessToken || !line) throw new Error('login returned no session')
-  return { accessToken, refreshCookie: line.split(';', 1)[0] as string }
+  const { accessToken, refreshCookie } = await signInByLink(user.email)
+  return { accessToken, refreshCookie }
 }
 
 /**
@@ -167,7 +157,7 @@ afterAll(async () => {
 describe('POST /api/v1/platform/users/:id/deactivate', () => {
   it('deactivates, ends every live session at once, revokes the invitations they sent and audits the reason', async () => {
     const { user: admin, token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true })
+    const target = await createTrackedUser()
     const session = await signIn(target)
     const sent = await pendingInvitationFrom(target.id)
 
@@ -193,7 +183,7 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
 
   it('keeps old sessions dead after a reactivation', async () => {
     const { token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true })
+    const target = await createTrackedUser()
     const session = await signIn(target)
 
     await action(token, target.id, 'deactivate')
@@ -255,7 +245,6 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
       const owner = await createTrackedStaff('owner')
       const otherAdmin = await createTrackedStaff('admin')
       const otherOwner = await createTrackedStaff('owner', {
-        hasPassword: true,
         active: verb !== 'reactivate',
       })
       /**
@@ -297,7 +286,7 @@ describe('POST /api/v1/platform/users/:id/reactivate', () => {
 describe('POST /api/v1/platform/users/:id/sign-out', () => {
   it('ends every session of an active user and audits it', async () => {
     const { token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true })
+    const target = await createTrackedUser()
     const first = await signIn(target)
     const second = await signIn(target)
 
@@ -327,7 +316,7 @@ describe('POST /api/v1/platform/users/:id/sign-out', () => {
 describe('DELETE /api/v1/platform/users/:id', () => {
   it('soft-deletes, ends every session, frees the address fully and audits the reason', async () => {
     const { user: admin, token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true })
+    const target = await createTrackedUser()
     const session = await signIn(target)
     await sql`
       insert into auth_providers (user_id, provider, provider_id)

@@ -184,14 +184,15 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    *
    * The check and the write are one statement, so Postgres picks the single
    * winner; a read-then-write would let two concurrent presentations both see
-   * `revokedAt IS NULL`, defeating reuse detection or double-spending a
-   * verification or reset token. `purpose` is in the same predicate, so a
+   * `revokedAt IS NULL`, defeating reuse detection or double-spending an
+   * emailed link. `purpose` is in the same predicate, so a
    * token of one purpose can never be claimed as another.
    *
    * It does not check `expiresAt`, and claims an expired row: folding expiry
    * in would make an aged-out refresh token look like a replay and kill its
    * session. Every caller checks `expiresAt` on the returned row
-   * (`rotateRefreshToken`, `claimToken` in session.service.ts), or the token
+   * (`rotateRefreshToken` in session.service.ts, `claimLinkToken` in
+   * link-token.service.ts), or the token
    * would be redeemable forever.
    *
    * `consumedAt` is set only here, so it tells a row spent through this path
@@ -257,7 +258,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Whether the chain of a presented, already-consumed token was killed after
    * it was consumed: a row of its session revoked without being consumed
-   * (logout, reuse, reset, an account claim, a staff revoke) at or after the
+   * (logout, reuse, an account claim, a staff revoke) at or after the
    * presented row's own `consumed_at`.
    *
    * The bulk revokers stamp `killStamp()`, the moment each row is written.
@@ -265,7 +266,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * committed, so its stamp is never earlier than that claim's
    * `consumed_at`, however early the kill's transaction began. A marker
    * older than the consumption is a revoke that spared this chain: a sibling
-   * ended by a password change or sign-out of other sessions
+   * ended by a sign-out of other sessions
    * (`revokeAllForUserExceptToken`). Compared on Postgres's own timestamps,
    * by the presented row's hash, so no client clock or JavaScript rounding
    * enters. Only `'refresh'` rows count as markers: a `step_up_link` shares
@@ -330,24 +331,23 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Revoke every still-live token belonging to a user, across every
    * session, and report each revoked session id so session.service.ts can
    * deny its access tokens. Used where every session must end at once —
-   * e.g. a password reset. Its returned ids are what let a reset end an
+   * e.g. an account claim. Its returned ids are what let a claim end an
    * already-issued access token immediately. A caller that runs this inside
    * its own transaction must deny the returned ids only after that
    * transaction commits.
    *
-   * This method has no purpose predicate — it deliberately revokes
-   * `password_reset`, `email_verification`, and every other purpose too,
-   * not just `'refresh'` rows. A `'refresh'` row carries its session id,
-   * and so does a `'step_up_link'` row (the session it elevates, which is one
-   * of this user's and is ending too), so both contribute it; a row with no
-   * session (verification, reset) contributes `sessionId: null` and is
-   * filtered out of the returned ids. An entire rotation chain shares one
-   * session id, so the ids are deduplicated.
+   * This method has no purpose predicate — it deliberately revokes every
+   * purpose a user's rows carry, not just `'refresh'` rows. A `'refresh'`
+   * row carries its session id, and so does a `'step_up_link'` row (the
+   * session it elevates, which is one of this user's and is ending too), so
+   * both contribute it; a row with no session would contribute
+   * `sessionId: null` and is filtered out of the returned ids. An entire
+   * rotation chain shares one session id, so the ids are deduplicated.
    *
    * A session mid-rotation when this runs (old row claimed, next row not yet
    * committed) survives it: the next row is not in this statement's snapshot.
    * Lock the user row FOR NO KEY UPDATE first (`UserRepository.lockById`),
-   * as password writes and the Google account claim do before their
+   * as the account claims do before their
    * in-transaction revoke. Rotation holds it FOR SHARE from before its claim
    * until its next row commits, so this statement then starts after that
    * commit.
@@ -382,14 +382,13 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Revoke every still-live token belonging to a user EXCEPT the ones
    * sharing one given session id, and report each revoked session id so
    * session.service.ts can deny it (after commit, when a caller runs this
-   * inside its own transaction). Used by password change:
-   * every OTHER session must end at once, while the session presenting the
-   * request that triggered the change keeps working uninterrupted.
+   * inside its own transaction). Used by signing out other sessions when the
+   * caller's chain is unknown: every OTHER session must end at once, while
+   * the session presenting the request keeps working uninterrupted.
    *
    * The spared-session predicate is `session_id IS DISTINCT FROM $2`, never
-   * `!=`: `!=` is NULL for a row with no session (verification, reset: its
-   * `session_id` is NULL), so those tokens would survive a password change.
-   * `IS DISTINCT FROM` revokes them, as `revokeAllForUser` does. A
+   * `!=`: `!=` is NULL for a row with no session, so such a row would
+   * survive. `IS DISTINCT FROM` revokes it, as `revokeAllForUser` does. A
    * `step_up_link` of the spared session shares its id, so it is spared with
    * it.
    *
@@ -431,8 +430,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Revoke every still-live token belonging to a user EXCEPT one row: the
    * caller's own refresh token, identified by the cookie it presented. Every
    * other row goes, every purpose, including any other live row in the
-   * caller's own session (a sibling a grace-window replay minted). Used by a
-   * password change and by signing out other sessions when the caller's
+   * caller's own session (a sibling a grace-window replay minted). Used by
+   * signing out other sessions when the caller's
    * chain is known; `revokeAllForUserExceptSession` is the fallback when it
    * is not.
    *
@@ -511,35 +510,6 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     return rows
       .map((row) => row.sessionId)
       .filter((liveSessionId): liveSessionId is string => liveSessionId !== null)
-  }
-
-  /**
-   * Revoke every still-live token a user holds for one purpose.
-   * `revokeAllForUser` matches on `userId` alone, so clearing stale
-   * verification links with it would also log the user out of every device.
-   * Locks its rows in id order (`lockedIds`), whatever the plan or the
-   * physical row layout.
-   * @param userId - The user whose tokens should be revoked.
-   * @param purpose - The only purpose to revoke; every other purpose is untouched.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once every matching row is revoked.
-   */
-  async revokeAllForUserAndPurpose(
-    userId: string,
-    purpose: TokenPurpose,
-    executor: DbExecutor = db
-  ): Promise<void> {
-    const locked = this.lockedIds(
-      this.scope(
-        sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
-      ),
-      executor
-    )
-    await executor
-      .update(userTokenModel)
-      // Stamped at the moment of the write, never now(): see killStamp.
-      .set(this.touched({ revokedAt: killStamp() }))
-      .where(inArray(userTokenModel.id, locked))
   }
 
   /**

@@ -314,7 +314,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const profile = googleProfile({ emailVerified: true })
         const email = profile.emails?.[0]?.value
         if (!email) throw new Error('test fixture has no email')
-        const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+        const existing = await userRepository.create({ email })
         createdIds.push(existing.id)
         await userRepository.update(existing.id, { active: false })
         passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(profile))
@@ -449,7 +449,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       async (change) => {
         const { UserRepository: Users } = await import('@/repositories/user.repository')
         const email = uniqueEmail()
-        const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+        const existing = await userRepository.create({ email })
         createdIds.push(existing.id)
         // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
         const realLock = Users.prototype.lockById
@@ -494,7 +494,6 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       const user = await signInWithGoogle(profile)
 
       expect(user.email.toLowerCase()).toBe(email.toLowerCase())
-      expect(user.passwordHash).toBeNull()
       expect(user.emailVerifiedAt).not.toBeNull()
 
       const providers = await authProviderRepository.findByUser(user.id)
@@ -533,7 +532,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     it('links a google provider to an existing user when Google has verified the matching email', async () => {
       const email = uniqueEmail()
-      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
 
       const profile = googleProfile({ email, emailVerified: true })
@@ -547,9 +546,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(providers.map((provider) => provider.provider)).toEqual(['google'])
     })
 
-    it('takes over an unverified account on a verified link: clears the password, verifies the email, revokes its sessions', async () => {
+    it('takes over an unverified account on a verified link: verifies the email, revokes its sessions', async () => {
       const email = uniqueEmail()
-      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
       expect(existing.emailVerifiedAt).toBeNull()
       const squatterSession = await issueRefreshToken(existing.id, randomUUID())
@@ -564,10 +563,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(user.id).toBe(existing.id)
       // The claim's own write verified the row, so it emits email_verified once.
       expect(verifiedEvents.filter((userId) => userId === existing.id)).toHaveLength(1)
-      expect(user.passwordHash).toBeNull()
       expect(user.emailVerifiedAt).toBeInstanceOf(Date)
       const reread = await userRepository.findById(existing.id)
-      expect(reread?.passwordHash).toBeNull()
       expect(reread?.emailVerifiedAt).toBeInstanceOf(Date)
       const link = await authProviderRepository.findByProviderAndId('google', profile.id)
       expect(link?.userId).toBe(existing.id)
@@ -581,7 +578,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     it("drops a squatter's own pre-existing Google link when a different, verified identity claims the account", async () => {
       // Seeded directly, because no API path creates it: a squatter's Google row on a never-verified account the real owner now claims.
       const email = uniqueEmail()
-      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
       const squatterGoogleId = randomUUID()
       await authProviderRepository.create({
@@ -605,7 +602,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     it('never moves an existing, earlier emailVerifiedAt timestamp when linking', async () => {
       const email = uniqueEmail()
-      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
       await sql`
         update users set email_verified_at = now() - interval '30 days'
@@ -626,10 +623,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         await import('@/services/maintenance-mode/maintenance-mode-store.service')
       expect(getMaintenanceMode().mode).toBe('off')
       const { UserRepository: Users } = await import('@/repositories/user.repository')
-      const registered = await userRepository.create({
-        email: uniqueEmail(),
-        passwordHash: 'not-a-real-hash',
-      })
+      const registered = await userRepository.create({ email: uniqueEmail() })
       createdIds.push(registered.id)
       const profiles = {
         registered: googleProfile({ email: registered.email, emailVerified: false }),
@@ -686,7 +680,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     it('rejects linking an unverified Google email to an existing user (account-takeover guard)', async () => {
       const email = uniqueEmail()
-      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
 
       const profile = googleProfile({ email, emailVerified: false })
@@ -739,20 +733,19 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       ).toEqual(['email', 'google'])
     })
 
-    it("keeps a deleted user's Google identity off the account that re-registers the address", async () => {
+    it("keeps a deleted user's Google identity off the account a sign-in link creates for the address", async () => {
       const email = uniqueEmail()
       const profile = googleProfile({ email, emailVerified: true })
       const deleted = await signInWithGoogle(profile)
       await userRepository.softDelete(deleted.id)
 
-      const registration = await request(app)
-        .post('/api/v1/auth/register')
-        .send({ email, password: 'correct horse battery staple' })
+      // Imported here, not at the top: the helper loads the app, which must load after the Google env stubs.
+      const { signInByLink } = await import('../../helpers/sign-in')
+      const { userId } = await signInByLink(email)
+      createdIds.push(userId)
       const fresh = await userRepository.findByEmail(email)
-      if (fresh) createdIds.push(fresh.id)
 
-      expect(registration.status).toBe(202)
-      expect(fresh?.id).toBeDefined()
+      expect(fresh?.id).toBe(userId)
       expect(fresh?.id).not.toBe(deleted.id)
       await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
         statusCode: 401,
@@ -779,7 +772,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     it('lowercases the Google email before matching it against an existing user', async () => {
       const email = uniqueEmail()
-      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
 
       const profile = googleProfile({ email: email.toUpperCase(), emailVerified: true })

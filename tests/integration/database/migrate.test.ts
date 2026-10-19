@@ -13,7 +13,8 @@ describe('migrations', () => {
       where table_name = 'users'
     `
     const columns = rows.map((r) => r.column_name as string)
-    expect(columns).toEqual(expect.arrayContaining(['id', 'email', 'password_hash', 'created_at']))
+    expect(columns).toEqual(expect.arrayContaining(['id', 'email', 'created_at']))
+    expect(columns).not.toContain('password_hash')
   })
 
   it('creates the user_tokens table', async () => {

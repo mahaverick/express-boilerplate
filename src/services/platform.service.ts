@@ -153,7 +153,7 @@ class GrantAccountUnverifiedError extends HttpError {
  *   its commit;
  * - an unverified account is claimed first, as a sign-in link claims it
  *   (`claimNeverVerifiedAccount` with `clearSquatterCredentials`): a
- *   squatter's password and federated links go, every session is revoked,
+ *   squatter's federated links go, every session is revoked,
  *   the address is verified and `email_verified` is emitted. The claim
  *   commits on its own, before the grant, so the grant locks the account's
  *   row and refuses it while it is unverified: the role never reaches an

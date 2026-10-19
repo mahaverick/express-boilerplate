@@ -551,7 +551,6 @@ describe('POST /auth/link/verify', () => {
     const user = await createTrackedUser({
       email: uniqueEmail('never-verified'),
       verified: false,
-      hasPassword: true,
     })
     await issueRefreshToken(user.id, randomUUID())
     await authProviderRepository.create({
@@ -574,8 +573,7 @@ describe('POST /auth/link/verify', () => {
     expect(await refreshRows(user.id)).toEqual([{ revoked: true }, { revoked: false }])
     const claimed = await userRepository.findById(user.id)
     expect(claimed?.emailVerifiedAt).toBeInstanceOf(Date)
-    // A squatter's password and federated links on the address go once the mailbox is proven.
-    expect(claimed?.passwordHash).toBeNull()
+    // A squatter's federated links on the address go once the mailbox is proven.
     const providers = await authProviderRepository.findByUser(user.id)
     expect(providers.map((provider) => provider.provider)).toEqual(['email'])
     expect(eventsFor(user.id).filter((event) => event.type === 'email_verified')).toHaveLength(1)
@@ -666,20 +664,20 @@ describe('POST /auth/link/verify', () => {
     expect(await refreshRows(user.id)).toEqual([{ revoked: false }])
   })
 
-  it('claims a never-verified account registered while the click was creating one', async () => {
+  it('claims a never-verified account created while the click was creating one', async () => {
     const email = uniqueEmail('register-race')
     const token = await issueTestLink(email)
     const seeded: { id?: string } = {}
     // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realCreate = UserRepository.prototype.create
     /**
-     * Stands in for `UserRepository.create`: just before the click's insert, a
-     * registration commits an unverified password account for the address, with a session.
+     * Stands in for `UserRepository.create`: just before the click's insert,
+     * another write commits an unverified account for the address, with a session.
      */
     const racingCreate: typeof realCreate = async function (this: UserRepository, ...arguments_) {
       const [values] = arguments_
       if (seeded.id === undefined && values.email === email) {
-        const squatter = await realCreate.call(this, { email, passwordHash: 'not-a-real-hash' })
+        const squatter = await realCreate.call(this, { email })
         seeded.id = squatter.id
         await issueRefreshToken(squatter.id, randomUUID())
       }
@@ -696,7 +694,6 @@ describe('POST /auth/link/verify', () => {
     expect(data.isNewUser).toBe(false)
     expect(data.user.id).toBe(seeded.id)
     const claimed = await userRepository.findById(seeded.id ?? '')
-    expect(claimed?.passwordHash).toBeNull()
     expect(claimed?.emailVerifiedAt).toBeInstanceOf(Date)
     expect(await refreshRows(seeded.id ?? '')).toEqual([{ revoked: true }, { revoked: false }])
   })

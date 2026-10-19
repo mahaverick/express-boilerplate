@@ -262,7 +262,7 @@ async function insertNotification(
 ): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
     insert into notifications (user_id, type, title, body, read_at, created_at)
-    values (${userId}, 'verify_email', 'Title', 'Body', ${timestampOrNull(readAt)}, ${createdAt}::timestamptz)
+    values (${userId}, 'tenant_invitation', 'Title', 'Body', ${timestampOrNull(readAt)}, ${createdAt}::timestamptz)
     returning id
   `
   if (!row) throw new Error('notification insert returned no row')

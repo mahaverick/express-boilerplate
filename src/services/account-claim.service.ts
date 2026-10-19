@@ -4,7 +4,7 @@
  * over a never-verified account that holds the address
  * (`claimNeverVerifiedAccount`), which a sign-in link, an invitation link and
  * a verified Google identity all do. A link's claim also clears the
- * squatter's credentials (`clearSquatterCredentials`). `markEmailVerified`
+ * squatter's federated links (`clearSquatterCredentials`). `markEmailVerified`
  * stays the only writer of `email_verified_at`.
  */
 import type { User } from '@/database/models/user.model'
@@ -46,7 +46,7 @@ export function isClaimedAccountGone(error: unknown): boolean {
  * Create a verified account for an address whose mailbox was just proven:
  * the user row, the release of the address's `email` row from any
  * soft-deleted account, the new account's `email` row, and the
- * verification, in the caller's transaction. No password, no name. The
+ * verification, in the caller's transaction. No name. The
  * caller emits `email_verified` once its transaction commits.
  * @param email - The address, stored lowercased.
  * @param tx - The creating transaction.
@@ -55,14 +55,7 @@ export function isClaimedAccountGone(error: unknown): boolean {
  */
 export async function createLinkedAccount(email: string, tx: DbTransaction): Promise<User> {
   const address = email.toLowerCase()
-  const user = await userRepository.create(
-    {
-      email: address,
-      // eslint-disable-next-line unicorn/no-null -- an account a link created has no password (user.model.ts)
-      passwordHash: null,
-    },
-    tx
-  )
+  const user = await userRepository.create({ email: address }, tx)
   // A soft-deleted account may still hold this address's 'email' row; release it for the new account.
   await authProviderRepository.releaseEmailOfDeletedUsers(address, tx)
   await authProviderRepository.create(
@@ -88,7 +81,7 @@ export function isAddressTaken(error: unknown): boolean {
 /**
  * A proven mailbox takes over the never-verified account that holds its
  * address: whatever `inLock` writes (the caller's clean-up of a squatter's
- * credentials, and its own link), the verification, and every session
+ * federated links, and its own link), the verification, and every session
  * revoked.
  *
  * Precondition: the caller has proven the mailbox and checked, before any
@@ -98,7 +91,7 @@ export function isAddressTaken(error: unknown): boolean {
  * is returned as it is, with nothing revoked, written or emitted.
  *
  * Sessions are revoked first, in a committed transaction of their own under
- * the user row lock (as `revokeAllSessions` does), so every refresh token
+ * the user row lock, so every refresh token
  * that existed, and the successor of a rotation that was in flight, is
  * already revoked if the claim fails. The claim's transaction locks the user
  * row, runs `inLock`, verifies and revokes again under the same lock: a session
@@ -148,16 +141,14 @@ export async function claimNeverVerifiedAccount(
 
 /**
  * The writes a link makes on a never-verified account it claims, in the
- * claim's locked transaction: a squatter who registered the address first
- * loses their password and any federated link, since the click proves the
- * mailbox is someone else's.
+ * claim's locked transaction: a squatter who linked a federated identity to
+ * the address first loses it, since the click proves the mailbox is someone
+ * else's.
  * @param userId - The never-verified account.
  * @returns The callback for `claimNeverVerifiedAccount`.
  */
 export function clearSquatterCredentials(userId: string): (tx: DbTransaction) => Promise<void> {
   return async (tx) => {
     await authProviderRepository.deleteFederatedForUser(userId, tx)
-    // eslint-disable-next-line unicorn/no-null -- a null hash is the password-less state (user.model.ts)
-    await userRepository.update(userId, { passwordHash: null }, {}, tx)
   }
 }

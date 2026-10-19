@@ -209,7 +209,6 @@ describe('Google sign-in in full', () => {
     const user = await createTrackedUser({
       email: googleEmail(),
       verified: false,
-      hasPassword: true,
     })
     await issueRefreshToken(user.id, randomUUID())
     await enterFull()
@@ -218,10 +217,9 @@ describe('Google sign-in in full', () => {
       MaintenanceModeError
     )
 
-    const [row] = await sql<{ hasPassword: boolean; isUnverified: boolean }[]>`
-      select password_hash is not null as "hasPassword", email_verified_at is null as "isUnverified"
-      from users where id = ${user.id}`
-    expect(row).toEqual({ hasPassword: true, isUnverified: true })
+    const [row] = await sql<{ isUnverified: boolean }[]>`
+      select email_verified_at is null as "isUnverified" from users where id = ${user.id}`
+    expect(row).toEqual({ isUnverified: true })
     expect(await googleLinks({ userId: user.id })).toBe(0)
     const [tokens] = await sql<{ live: number }[]>`
       select count(*)::int as live from user_tokens

@@ -22,11 +22,11 @@ import {
   createTrackedStaff,
   createTrackedUser,
   deleteTrackedUsers,
-  TEST_PASSWORD,
   tokenFor,
 } from '../../helpers/platform-users'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { issueTestLink } from '../../helpers/sign-in'
 
 const app = createApp()
 
@@ -59,8 +59,7 @@ describe('security headers', () => {
     },
     {
       description: 'are set on a 415 rejection from the auth routes',
-      makeRequest: () =>
-        request(app).post('/api/v1/auth/login').type('form').send('email=a@example.com&password=x'),
+      makeRequest: () => request(app).post('/api/v1/auth/link/verify').type('form').send('token=x'),
       expectedStatus: 415,
     },
     {
@@ -72,7 +71,7 @@ describe('security headers', () => {
       description: 'are set on a CORS preflight',
       makeRequest: () =>
         request(app)
-          .options('/api/v1/auth/login')
+          .options('/api/v1/auth/link/verify')
           .set('Origin', process.env.WEB_URL ?? 'http://localhost:5173')
           .set('Access-Control-Request-Method', 'POST'),
       expectedStatus: 204,
@@ -206,12 +205,12 @@ describe('Cache-Control', () => {
     expect(response.headers['cache-control']).toBe('no-store')
   })
 
-  it('is no-store on the login and refresh responses that carry an access token', async () => {
-    const user = await createTrackedUser({ hasPassword: true })
+  it('is no-store on the sign-in and refresh responses that carry an access token', async () => {
+    const user = await createTrackedUser()
 
     const loggedIn = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email: user.email, password: TEST_PASSWORD })
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(user.email) })
     expect(loggedIn.status).toBe(200)
     expect(loggedIn.headers['cache-control']).toBe('no-store')
 

@@ -109,7 +109,16 @@ describe('addEmailJob', () => {
   it("builds a token-free template's Message-ID on the general sender's domain", async () => {
     const to = uniqueRecipient()
     const job = await addEmailJob(
-      { to, templateKey: 'password_changed', variables: { firstName: 'Ada', appName: 'Test' } },
+      {
+        to,
+        templateKey: 'onboarding_reminder',
+        variables: {
+          tenantName: 'Acme',
+          appName: 'Test',
+          nextStep: 'Invite a teammate',
+          overviewLink: 'https://example.test/tenants/acme',
+        },
+      },
       'user-1'
     )
     const row = await rowFor(job.data.messageId)
