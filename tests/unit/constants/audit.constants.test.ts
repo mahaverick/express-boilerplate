@@ -217,6 +217,9 @@ describe('AUDIT_ACTIONS', () => {
     ).toBe(false)
     expect(
       AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'link' }).success
+    ).toBe(true)
+    expect(
+      AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'password' }).success
     ).toBe(false)
   })
 

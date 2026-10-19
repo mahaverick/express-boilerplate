@@ -22,6 +22,7 @@ import { getEnv } from '@/configs/env.config'
 import { configurePassport } from '@/configs/passport.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { verifyAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -527,6 +528,10 @@ describe('GET /api/v1/auth/google/callback after a step-up start', () => {
     ['an audience list', (sub) => ({ ...freshClaims(sub), aud: [CLIENT_ID] })],
     ['another issuer', (sub) => ({ ...freshClaims(sub), iss: 'https://evil.example' })],
     [
+      'an expired ID token',
+      (sub) => ({ ...freshClaims(sub), exp: Math.floor(Date.now() / 1000) - 10 }),
+    ],
+    [
       'a token sub that is not the profile id',
       (sub) => ({ ...freshClaims(sub), sub: `${sub}-other` }),
     ],
@@ -547,6 +552,30 @@ describe('GET /api/v1/auth/google/callback after a step-up start', () => {
     expect(await stepUpAudits(session.userId)).toEqual([
       { action: 'auth.step_up_refused', metadata: { method: 'google' } },
     ])
+  })
+
+  it.each<[string, (sub: string) => FakeIdTokenClaims]>([
+    ['audience', (sub) => ({ ...freshClaims(sub), aud: [CLIENT_ID] })],
+    [
+      'id_token_expired',
+      (sub) => ({ ...freshClaims(sub), exp: Math.floor(Date.now() / 1000) - 10 }),
+    ],
+    ['auth_time_missing', (sub) => ({ ...freshClaims(sub), auth_time: undefined })],
+  ])('logs the refusal reason %s for the operator', async (reason, claimsFor) => {
+    const warn = vi.spyOn(logger, 'warn')
+    const session = await signedInStaff()
+
+    await completeStepUp(
+      session,
+      profileFor(session.googleSub, session.email),
+      claimsFor(session.googleSub)
+    )
+
+    expect(warn).toHaveBeenCalledWith('Google step-up refused (step_up_refused)', {
+      reason,
+      userId: session.userId,
+    })
+    warn.mockRestore()
   })
 
   it('accepts an auth_time within the clock skew before the start', async () => {
@@ -648,12 +677,18 @@ describe('GET /api/v1/auth/google/callback after a step-up start', () => {
     const start = await startStepUp(session)
     expect(start.status).toBe(204)
     await sql`delete from user_memberships where user_id = ${session.userId}`
+    await ageSession(session.sid)
+    const timesBefore = await refreshAuthenticatedTimes(session.sid)
     googleAnswersAsLinked(session)
 
     const response = await session.browser.get('/api/v1/auth/google/callback')
 
     expect(response.headers.location).toBe(STEP_UP_FAILED)
     expect(didSetRefreshCookie(response)).toBe(false)
+    expect(await refreshAuthenticatedTimes(session.sid)).toEqual(timesBefore)
+    expect(await stepUpAudits(session.userId)).toEqual([
+      { action: 'auth.step_up_refused', metadata: { method: 'google' } },
+    ])
   })
 
   it('never reads a tampered step-up intent as a sign-in', async () => {

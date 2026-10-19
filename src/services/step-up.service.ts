@@ -195,22 +195,40 @@ export async function requestStepUpLink(
 }
 
 /**
- * Confirm a step-up link for the calling session: spend it, move the
- * session's `authenticated_at` to now and audit `auth.step_up_confirmed`
- * in one transaction, and sign a new access token carrying the time. The
- * refresh token is untouched: the session is the same.
+ * A link step-up refused because the caller is no longer staff: thrown
+ * inside the confirm's transaction so the claim rolls back and the link
+ * stays unspent.
+ */
+class LinkStepUpRefused extends Error {
+  constructor() {
+    super('Link step-up refused: not_staff')
+    this.name = 'LinkStepUpRefused'
+  }
+}
+
+/**
+ * Confirm a step-up link for the calling session, in one transaction: lock
+ * the user row, spend the link, re-check that the caller is still staff,
+ * move the session's `authenticated_at` to now and audit
+ * `auth.step_up_confirmed`; then sign a new access token carrying the time.
+ * The refresh token is untouched: the session is the same.
  *
  * The claim matches only the user and session the link was issued for, so
  * a link presented by another session, the same user's included, answers
  * `LINK_INVALID` and stays live for its own session. Every dead link (used,
  * expired, revoked with its session, unknown) answers the same 400, never a
- * 401: the clients sign out on a 401. A refusal writes no audit entry: it is
- * not attributable beyond the bearer, and the limiter bounds it.
+ * 401: the clients sign out on a 401; such a refusal writes no audit entry,
+ * since it is not attributable beyond the bearer and the limiter bounds it.
+ * Because the claim shares the transaction, a confirm that fails after it
+ * (the caller no longer staff, the session ended, a database fault) rolls
+ * the claim back and leaves the link usable. A caller who lost the platform
+ * role since the route's gate is refused with the gate's own 404, audited
+ * `auth.step_up_refused` in a transaction of its own.
  * @param userId - The authenticated caller.
  * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
  * @param raw - The raw token from the link.
  * @returns A new access token for the same session.
- * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid`, an account gone or inactive, or a session that has ended; 400 `LINK_INVALID` for a link this session cannot use.
+ * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid`, an account gone or inactive, or a session that has ended; 400 `LINK_INVALID` for a link this session cannot use; 404 for a caller no longer staff.
  */
 export async function confirmStepUpLink(
   userId: string,
@@ -219,18 +237,33 @@ export async function confirmStepUpLink(
 ): Promise<{ accessToken: string }> {
   if (sessionId === undefined) throw sessionEnded()
   const user = await activeAccount(userId)
-  const claimed = await claimLinkToken(raw, 'step_up', { userId, sessionId })
-  if (!claimed) throw new HttpError(LINK_INVALID_MESSAGE, 400, LINK_INVALID_CODE)
-  const authenticatedAt = await withTransaction(async (tx) => {
-    const at = await markSessionReauthenticated(userId, sessionId, tx)
-    await recordStepUp(
-      userId,
-      { action: 'auth.step_up_confirmed', metadata: { method: 'link' } },
-      tx
-    )
-    return at
-  })
-  return { accessToken: signAccessToken(user, sessionId, authenticatedAt) }
+  try {
+    const outcome = await withTransaction(async (tx): Promise<Date | 'link_invalid'> => {
+      // The user row first, as every step-up takes it (ARCHITECTURE.md, lock order), then the link row the claim writes.
+      await userRepository.lockById(userId, 'no key update', tx)
+      const claimed = await claimLinkToken(raw, 'step_up', { userId, sessionId }, tx)
+      // Commits: a dead link stays spent, so one presentation is one attempt.
+      if (!claimed) return 'link_invalid'
+      if ((await getPlatformMembership(userId, tx)) === null) throw new LinkStepUpRefused()
+      const at = await markSessionReauthenticated(userId, sessionId, tx)
+      await recordStepUp(
+        userId,
+        { action: 'auth.step_up_confirmed', metadata: { method: 'link' } },
+        tx
+      )
+      return at
+    })
+    if (outcome === 'link_invalid') {
+      throw new HttpError(LINK_INVALID_MESSAGE, 400, LINK_INVALID_CODE)
+    }
+    return { accessToken: signAccessToken(user, sessionId, outcome) }
+  } catch (error) {
+    if (!(error instanceof LinkStepUpRefused)) throw error
+    logger.warn('Link step-up refused (step_up_refused)', { reason: 'not_staff', userId })
+    await recordRefusal(userId, 'link')
+    // The answer a caller without a platform role gets on every staff route.
+    throw new HttpError('Not found', 404)
+  }
 }
 
 /**
@@ -277,6 +310,7 @@ type GoogleRefusal =
   | 'id_token_malformed'
   | 'issuer'
   | 'audience'
+  | 'id_token_expired'
   | 'token_sub_mismatch'
   | 'auth_time_missing'
   | 'auth_time_stale'
@@ -319,7 +353,11 @@ function checkedClaims(
     throw new GoogleStepUpRefused('id_token_malformed')
   }
   if (!GOOGLE_ISSUERS.has(claims.iss)) throw new GoogleStepUpRefused('issuer')
-  if (claims.aud !== getEnv().GOOGLE_CLIENT_ID) throw new GoogleStepUpRefused('audience')
+  // A list is refused too: Google issues one audience, and a list would need an `azp` check this does not make.
+  if (typeof claims.aud !== 'string' || claims.aud !== getEnv().GOOGLE_CLIENT_ID) {
+    throw new GoogleStepUpRefused('audience')
+  }
+  if (claims.exp * MS_PER_SECOND <= Date.now()) throw new GoogleStepUpRefused('id_token_expired')
   if (claims.sub !== profile.id) throw new GoogleStepUpRefused('token_sub_mismatch')
   if (claims.auth_time === undefined) throw new GoogleStepUpRefused('auth_time_missing')
   const earliest = Math.floor(intent.startedAt / MS_PER_SECOND) - AUTH_TIME_SKEW_SECONDS
@@ -328,18 +366,19 @@ function checkedClaims(
 }
 
 /**
- * Audit a refused Google step-up in a transaction of its own, since the
- * refusal writes nothing else. Never rejects: a failed write (an account
- * since deleted, say) is logged, and the refusal stands either way.
- * @param userId - The staff member the intent names.
+ * Audit a refused step-up in a transaction of its own, since the refusal
+ * writes nothing else. Never rejects: a failed write (an account since
+ * deleted, say) is logged, and the refusal stands either way.
+ * @param userId - The staff member the refusal is about.
+ * @param method - The way in that was refused.
  */
-async function recordRefusal(userId: string): Promise<void> {
+async function recordRefusal(userId: string, method: 'link' | 'google'): Promise<void> {
   try {
     await withTransaction((tx) =>
-      recordStepUp(userId, { action: 'auth.step_up_refused', metadata: { method: 'google' } }, tx)
+      recordStepUp(userId, { action: 'auth.step_up_refused', metadata: { method } }, tx)
     )
   } catch (error) {
-    logger.error('Recording a refused Google step-up failed', { error: redactedForLog(error) })
+    logger.error('Recording a refused step-up failed', { error: redactedForLog(error) })
   }
 }
 
@@ -391,7 +430,7 @@ export async function confirmGoogleStepUp(
   } catch (error) {
     if (!(error instanceof GoogleStepUpRefused)) throw error
     logger.warn('Google step-up refused (step_up_refused)', { reason: error.reason, userId })
-    await recordRefusal(userId)
+    await recordRefusal(userId, 'google')
     throw new HttpError('Google step-up failed', 400, 'step_up_failed')
   }
 }

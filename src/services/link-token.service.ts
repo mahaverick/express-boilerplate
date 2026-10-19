@@ -18,7 +18,7 @@ import {
   type LinkTokenBinding,
   type LiveLinkMatch,
 } from '@/repositories/user-token.repository'
-import { db, withTransaction } from '@/services/database.service'
+import { db, withTransaction, type DbExecutor } from '@/services/database.service'
 import { hashToken } from '@/services/session.service'
 import { frontendUrl } from '@/services/verification.service'
 
@@ -108,19 +108,21 @@ export async function issueLinkToken(
  * @param raw - The raw token presented.
  * @param intent - The intent it must have been issued for.
  * @param bound - For a `step_up` link: the user and session presenting it, required; another session neither matches nor spends it.
+ * @param executor - Where to run the claim: a caller's transaction, so a refusal decided after it rolls the claim back; the pool when omitted.
  * @returns The claimed row, or undefined when the link is unknown, of another intent or session, already used or revoked, or expired, or a step-up link presented without a binding.
  */
 export async function claimLinkToken(
   raw: string,
   intent: LinkTokenIntent,
-  bound?: LinkTokenBinding
+  bound?: LinkTokenBinding,
+  executor: DbExecutor = db
 ): Promise<UserToken | undefined> {
   // A step-up link is only ever honoured for the session it elevates.
   if (intent === 'step_up' && bound === undefined) return undefined
   const claimed = await userTokenRepository.claimOnce(
     hashToken(raw),
     LINK_TOKEN_PURPOSES[intent],
-    db,
+    executor,
     bound
   )
   if (!claimed) return undefined

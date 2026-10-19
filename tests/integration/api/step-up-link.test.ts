@@ -21,6 +21,7 @@ import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { verifyAccessToken } from '@/services/session.service'
+import { confirmStepUpLink } from '@/services/step-up.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
@@ -451,6 +452,45 @@ describe('POST /api/v1/auth/step-up/link/verify', () => {
     expect(response.status).toBe(401)
     expect((response.body as { code?: string }).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
     expect(await linkRows(session.userId)).toMatchObject([{ consumed: false }])
+  })
+
+  it('refuses a caller no longer staff at confirm time, leaving the link unspent', async () => {
+    const session = await signIn(await createStaff())
+    await ageSession(session.sid)
+    const linkToken = await issueLink(session)
+    const timesBefore = await refreshAuthenticatedTimes(session.sid)
+    await sql`delete from user_memberships where user_id = ${session.userId}`
+
+    // The service directly: over HTTP the route's role gate answers first, so this is the demotion that lands after the gate.
+    await expect(confirmStepUpLink(session.userId, session.sid, linkToken)).rejects.toMatchObject({
+      statusCode: 404,
+    })
+
+    expect(await refreshAuthenticatedTimes(session.sid)).toEqual(timesBefore)
+    expect(await linkRows(session.userId)).toMatchObject([{ consumed: false, revoked: false }])
+    expect(await stepUpAudits(session.userId)).toMatchObject([
+      { action: 'auth.step_up_refused', metadata: { method: 'link' } },
+    ])
+    await makeStaff(session.userId, 'viewer')
+    const restored = await verifyLink(session.token, linkToken)
+    expect(restored.status).toBe(200)
+  })
+
+  it('rolls the claim back when the session ended before the confirm', async () => {
+    const session = await signIn(await createStaff())
+    const linkToken = await issueLink(session)
+    await sql`
+      update user_tokens set revoked_at = now()
+      where session_id = ${session.sid} and purpose = 'refresh'
+    `
+
+    await expect(confirmStepUpLink(session.userId, session.sid, linkToken)).rejects.toMatchObject({
+      statusCode: 401,
+      code: ACCESS_TOKEN_EXPIRED_CODE,
+    })
+
+    expect(await linkRows(session.userId)).toMatchObject([{ consumed: false, revoked: false }])
+    expect(await stepUpAudits(session.userId)).toEqual([])
   })
 
   it('answers 401 with no bearer', async () => {

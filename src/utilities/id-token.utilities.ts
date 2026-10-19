@@ -9,23 +9,28 @@ import { z } from 'zod'
 
 /**
  * The ID token claims step-up reads. `auth_time` is optional in the token;
- * its absence is the caller's to judge.
+ * its absence is the caller's to judge. `aud` may be a list, which OIDC
+ * allows; whether one is acceptable is the caller's to judge too.
  */
 export interface IdTokenClaims {
   iss: string
-  aud: string
+  aud: string | string[]
   sub: string
   exp: number
   auth_time?: number
 }
 
 /**
- * The payload's shape: unknown claims pass through unread, and an audience
- * list is refused, since Google issues a single audience.
+ * An audience list, which OIDC allows alongside a single audience.
+ */
+const AUDIENCE_LIST = z.array(z.string())
+
+/**
+ * The payload's shape: unknown claims pass through unread.
  */
 const ID_TOKEN_CLAIMS_SCHEMA = z.object({
   iss: z.string(),
-  aud: z.string(),
+  aud: z.union([z.string(), AUDIENCE_LIST]),
   sub: z.string().min(1),
   exp: z.number(),
   auth_time: z.number().optional(),

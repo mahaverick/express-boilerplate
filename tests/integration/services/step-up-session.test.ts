@@ -23,6 +23,7 @@ import {
 import { confirmStepUpLink } from '@/services/step-up.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { makeStaff } from '../../helpers/platform-staff'
 
 const userRepository = new UserRepository()
 
@@ -79,6 +80,15 @@ describe('session authentication time', () => {
   })
 
   /**
+   * Create a staff user, who may confirm a step-up link, tracked for cleanup; resolves with its id.
+   */
+  async function createStaffUser(): Promise<string> {
+    const userId = await createUser()
+    await makeStaff(userId, 'viewer')
+    return userId
+  }
+
+  /**
    * Create a user for a test and track it for the `afterEach` cleanup; resolves with its id.
    */
   async function createUser(): Promise<string> {
@@ -128,7 +138,7 @@ describe('session authentication time', () => {
   })
 
   it('a confirmed step-up link moves authenticated_at on every refresh row of its session, live and rotated away', async () => {
-    const userId = await createUser()
+    const userId = await createStaffUser()
     const sessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
     const rotated = await rotateRefreshToken(issued.raw)
@@ -149,7 +159,7 @@ describe('session authentication time', () => {
   })
 
   it('a confirmed step-up link leaves its own row and the user’s other sessions alone', async () => {
-    const userId = await createUser()
+    const userId = await createStaffUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
     await issueRefreshToken(userId, sessionId)
@@ -171,7 +181,7 @@ describe('session authentication time', () => {
   })
 
   it('a step-up link confirmed by another session of its user moves nothing', async () => {
-    const userId = await createUser()
+    const userId = await createStaffUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
     await issueRefreshToken(userId, sessionId)

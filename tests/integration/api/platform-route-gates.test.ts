@@ -706,7 +706,8 @@ describe('/api/v1/platform route gates', () => {
       variant: RequestVariant
     ): Promise<{ route: Response; sibling: Response }> {
       const route = await send(STAFF_PATH, token, variant)
-      const sibling = await send(`/api/v1/auth/step-up/${randomUUID()}`, token, variant)
+      // A truly unknown auth path, outside /step-up: it never meets refusePlatformOptions, so an OPTIONS comparison can fail.
+      const sibling = await send(`/api/v1/auth/${randomUUID()}`, token, variant)
       return { route, sibling }
     }
 

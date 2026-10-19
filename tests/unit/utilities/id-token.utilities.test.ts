@@ -39,6 +39,12 @@ describe('decodeIdTokenClaims', () => {
     expect(decodeIdTokenClaims(token)).toEqual(withoutAuthTime)
   })
 
+  it('decodes an audience list as a list, for the caller to judge', () => {
+    const token = tokenWithPayload(JSON.stringify({ ...CLAIMS, aud: ['client-id', 'other'] }))
+
+    expect(decodeIdTokenClaims(token).aud).toEqual(['client-id', 'other'])
+  })
+
   it.each([
     ['no dots', 'abc'],
     ['two parts', 'a.b'],
@@ -55,7 +61,6 @@ describe('decodeIdTokenClaims', () => {
   it.each([
     ['a JSON array', '[]'],
     ['a missing sub', JSON.stringify({ ...CLAIMS, sub: undefined })],
-    ['an audience list', JSON.stringify({ ...CLAIMS, aud: ['client-id'] })],
     ['a string auth_time', JSON.stringify({ ...CLAIMS, auth_time: '1900000000' })],
   ])('throws on a payload without the claims step-up reads: %s', (_label, payload) => {
     expect(() => decodeIdTokenClaims(tokenWithPayload(payload))).toThrow()
