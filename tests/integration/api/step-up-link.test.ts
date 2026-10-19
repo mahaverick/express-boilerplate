@@ -431,8 +431,10 @@ describe('POST /api/v1/auth/step-up/link/verify', () => {
 
     expect(logout.status).toBe(200)
     expect(await linkRows(session.userId)).toMatchObject([{ revoked: true, consumed: false }])
+    // The sign-out denies the session's access tokens too, so requireAuth refuses before the link is read.
     const response = await verifyLink(session.token, linkToken)
-    expect([400, 401]).toContain(response.status)
+    expect(response.status).toBe(401)
+    expect(await linkRows(session.userId)).toMatchObject([{ revoked: true, consumed: false }])
     expect(await stepUpAudits(session.userId)).toEqual([])
   })
 
