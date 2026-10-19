@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.1.0](https://github.com/mahaverick/express-boilerplate/compare/v6.0.0...v6.1.0) (2026-10-19)
+
+
+### Features
+
+* **platform:** filter staff users by whether they have signed in ([#127](https://github.com/mahaverick/express-boilerplate/issues/127)) ([bc9081a](https://github.com/mahaverick/express-boilerplate/commit/bc9081aa0d65885aa5601e57dca10721968f98e1))
+
 ## [6.0.0](https://github.com/mahaverick/express-boilerplate/compare/v5.0.0...v6.0.0) (2026-10-19)
 
 
