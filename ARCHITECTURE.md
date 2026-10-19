@@ -707,31 +707,35 @@ are under "Two senders" in [README.md](README.md#email-tracking).
 
 ### Queues and Workers
 
-Four BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
-returns every one, and is what maintenance mode pauses;
+Five BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
+returns every one, and is what the staff status lists;
 `tests/integration/services/queue-registry.test.ts` fails when a queue is
-missing from it.
+missing from it. `getPausableQueues()` is that list without `auth-email`, and
+is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
+picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                    | Worker concurrency   | Job options                                                        |
-| -------------- | -------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `email`        | One tracked email per job (`addEmailJob`)                                  | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
-| `maintenance`  | The retention purge                                                        | 1                    | 3 attempts, backoff from 60 s                                      |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
+| Queue          | Carries                                                                                       | Worker concurrency   | Job options                                                        |
+| -------------- | --------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `email`        | One tracked email per job (`addEmailJob`)                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome` and `tenant_invitation`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
+| `maintenance`  | The retention purge                                                                           | 1                    | 3 attempts, backoff from 60 s                                      |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
-`UnrecoverableError`) to error tracking. The email, notification and maintenance
-handlers then log a retryable attempt at `warn`; on the final one
-`recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
+`UnrecoverableError`) to error tracking. The email, auth-email, notification
+and maintenance handlers then log a retryable attempt at `warn`; on the final
+one `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
 payload, marks an email's message `failed`, and logs `job failed permanently`
 once. What a job payload may hold, and for how long, is in
 [SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a
 `warn`: a failed tick loses nothing. No handler rejects, since an unhandled
 rejection exits the process.
 
-`startWorkers()` starts the email, notification and maintenance Workers, and
-the analytics Worker when analytics or PostHog's private API is configured.
+`startWorkers()` starts the email, auth-email, notification and maintenance
+Workers, and the analytics Worker when analytics or PostHog's private API is
+configured.
 `WORKER_ENABLED` (default `true`) runs them in the API process. To split them,
 set it to `false` on API-only pods and `true` on a worker deployment that
 shares the Redis queues; the schedules below then run only on the worker
@@ -1088,7 +1092,8 @@ scrubbed with the error tracker's `scrubText` first.
 A platform owner puts the product into maintenance from Apex, without a
 deploy: `read_only` refuses customer writes with 503 `READ_ONLY_MODE`, and
 `full` refuses every route not on its let-through list with 503
-`MAINTENANCE_MODE`, refuses a non-staff sign-in, and pauses every queue. The
+`MAINTENANCE_MODE`, refuses a non-staff sign-in, and pauses every queue but
+`auth-email`. The
 let-through list, and the controls on changing the mode, are in
 [SECURITY.md](SECURITY.md#maintenance-mode); the operator steps in
 [README.md](README.md#maintenance-mode).
@@ -1126,10 +1131,13 @@ let-through list, and the controls on changing the mode, are in
   and `Retry-After`. Clients detect maintenance by the 503 and its `code`,
   never by a bare 502 or 503.
 - **Queues** (`maintenance-mode-queues.service.ts`). `full` pauses every queue
-  in `getAllQueues()` with BullMQ's queue-wide `pause()`, a flag in Redis that
-  every replica's Workers obey: running jobs finish, waiting ones stay. Every
-  replica reconciles on every reload, which repairs a crash between the commit
-  and the pause and a Redis outage. A reload pauses only once the mode has been
+  in `getPausableQueues()` with BullMQ's queue-wide `pause()`. That is every
+  queue but `auth-email`, which carries the sign-in, step-up, welcome and
+  invitation mail (`AUTH_EMAIL_TEMPLATE_KEYS`, `src/jobs/email.job.ts`), so
+  staff can still sign in to switch maintenance off. The pause is a flag in
+  Redis that every replica's Workers obey: running jobs finish, waiting ones
+  stay. Every replica reconciles on every reload, which repairs a crash
+  between the commit and the pause and a Redis outage. A reload pauses only once the mode has been
   `full` for `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s), so the change's notices
   go out first, and resumes in any other mode after removing the duplicate
   scheduler runs gathered while paused (`dedupeSchedulerJobs`): each Worker

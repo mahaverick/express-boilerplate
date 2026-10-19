@@ -18,25 +18,31 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { updatePreferences } from '@/services/notification.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForJobSettled, waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
- * The email queue's jobs in the waiting, active, completed, delayed and prioritized states,
- * typed as `EmailJobData`: `getEmailQueue()` returns a bare `Queue`, so `getJobs()` would
+ * The jobs of both email queues (email and auth-email: the paired email goes on its
+ * template's queue) in the waiting, active, completed, delayed and prioritized states,
+ * typed as `EmailJobData`: the queue getters return a bare `Queue`, so `getJobs()` would
  * otherwise give `Job<any>[]`.
  */
 async function emailQueueJobs(): Promise<Job<EmailJobData>[]> {
   // 'prioritized', not just 'waiting': every email job carries an explicit priority (JobPriority.high), which BullMQ routes into its own list rather than "waiting" until a worker pulls it.
-  return getEmailQueue().getJobs([
-    'waiting',
-    'active',
-    'completed',
-    'delayed',
-    'prioritized',
-  ]) as Promise<Job<EmailJobData>[]>
+  const states = ['waiting', 'active', 'completed', 'delayed', 'prioritized'] as const
+  const lists = await Promise.all(
+    [getEmailQueue(), getAuthEmailQueue()].map(
+      (queue) => queue.getJobs([...states]) as Promise<Job<EmailJobData>[]>
+    )
+  )
+  return lists.flat()
 }
 
 const notificationRepository = new NotificationRepository()
@@ -63,6 +69,7 @@ describe('notification.worker', () => {
     await worker.close()
     await getNotificationQueue().obliterate({ force: true })
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await closeQueue()
   })
 

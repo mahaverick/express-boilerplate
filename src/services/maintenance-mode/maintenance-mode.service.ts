@@ -51,6 +51,7 @@ import {
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
+import { isPausableQueueName } from '@/services/queue.service'
 import { withStatusTimeout } from '@/services/status-read.service'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY } from '@/templates/email/maintenance-mode-changed.template'
 import type { Actor } from '@/types/actor'
@@ -58,6 +59,7 @@ import type {
   MaintenanceModeStatus,
   PlatformMaintenanceModeView,
   PublicMaintenanceStatus,
+  QueuePauseState,
 } from '@/types/maintenance-mode'
 import type { ChangeMaintenanceModeBody } from '@/validators/maintenance-mode.validators'
 import { emailJobIdFor } from '@/workers/notification.worker'
@@ -131,6 +133,17 @@ export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
 }
 
 /**
+ * Whether every queue full maintenance pauses answered and is paused;
+ * `auth-email`, which it never pauses, is left out.
+ * @param queues - Each queue's pause state.
+ * @returns True when at least one pausable queue is listed and all of them are paused.
+ */
+function areQueuesPaused(queues: readonly QueuePauseState[]): boolean {
+  const pausable = queues.filter((queue) => isPausableQueueName(queue.name))
+  return pausable.length > 0 && pausable.every((queue) => queue.paused === true)
+}
+
+/**
  * The maintenance section of the staff system status, as this replica sees
  * it: the mode, when it began and when it last changed (also while off),
  * whether it is known, each queue's pause state, whether the last change's
@@ -149,7 +162,7 @@ export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus>
     since: snapshot.since,
     changedAt: snapshot.changedAt,
     known: snapshot.known,
-    queuesPaused: queues.length > 0 && queues.every((queue) => queue.paused === true),
+    queuesPaused: areQueuesPaused(queues),
     queues,
     noticesPending,
     lastReloadError: getMaintenanceModeReloadError(),

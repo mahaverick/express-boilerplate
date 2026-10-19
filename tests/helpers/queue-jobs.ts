@@ -7,8 +7,8 @@
 import { randomUUID } from 'node:crypto'
 import { Job, type Queue, type Worker } from 'bullmq'
 import { expect, type MockInstance } from 'vitest'
-import type { EmailJobData } from '@/jobs/email.job'
-import { addJob, getEmailQueue } from '@/services/queue.service'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
+import { addJob } from '@/services/queue.service'
 import {
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
@@ -106,7 +106,7 @@ function acceptTokenOf(data: EmailJobData): string {
 }
 
 /**
- * An invitation email as it sits on the email queue.
+ * An invitation email as it sits on its queue.
  */
 export interface QueuedInvitationEmail {
   /**
@@ -124,7 +124,7 @@ export interface QueuedInvitationEmail {
 }
 
 /**
- * Poll the email queue for an invitation email to `to` whose token is not one already seen.
+ * Poll the invitation template's queue (auth-email) for an invitation email to `to` whose token is not one already seen.
  * @param to - The recipient address.
  * @param excludedTokens - Tokens from earlier emails to skip (e.g. before a resend).
  * @returns The queued email.
@@ -134,7 +134,7 @@ export async function waitForInvitationEmail(
   excludedTokens: readonly string[] = []
 ): Promise<QueuedInvitationEmail> {
   const { data } = await waitForJob<EmailJobData>(
-    getEmailQueue(),
+    emailQueueFor(TENANT_INVITATION_TEMPLATE_KEY),
     (candidate) =>
       candidate.to === to &&
       candidate.templateKey === TENANT_INVITATION_TEMPLATE_KEY &&

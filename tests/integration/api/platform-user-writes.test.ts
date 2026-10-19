@@ -8,13 +8,19 @@ import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
-import type { EmailJobData } from '@/jobs/email.job'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { frontendUrl } from '@/services/verification.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import { requireDurationMs } from '@/utilities/duration.utilities'
+import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
@@ -87,9 +93,9 @@ async function auditRows(
 /**
  * Waits for the mail of one template queued for `to`, since mail is asserted on the queue.
  */
-function mailFor(to: string, templateKey: string) {
+function mailFor(to: string, templateKey: EmailTemplateKey) {
   return waitForJob<EmailJobData>(
-    getEmailQueue(),
+    emailQueueFor(templateKey),
     (data) => data.to === to.toLowerCase() && data.templateKey === templateKey
   )
 }
@@ -137,6 +143,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })

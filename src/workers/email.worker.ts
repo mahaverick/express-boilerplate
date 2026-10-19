@@ -1,6 +1,7 @@
 /**
- * @file The BullMQ Worker for the "email" queue defined in email.job.ts. Each
- * job sends one tracked email: it checks the suppression list first, and
+ * @file The BullMQ Workers for the "email" and "auth-email" queues
+ * (`emailQueueFor`, email.job.ts). Both run `processEmailJob`. Each job sends
+ * one tracked email: it checks the suppression list first, and
  * moves the job's `email_messages` row as the send goes.
  */
 import { Worker, type Job } from 'bullmq'
@@ -120,14 +121,21 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
 }
 
 /**
- * Start the Worker for the email queue, sending up to `WORKER_CONCURRENCY`
+ * The queues an email Worker can consume.
+ */
+export type EmailQueueName = 'email' | 'auth-email'
+
+/**
+ * Start a Worker for one email queue, sending up to `WORKER_CONCURRENCY`
  * jobs at once. The 'failed' handler never rejects: a retryable failure logs a
- * warning, and the last attempt calls `recordPermanentFailure`.
+ * warning, and the last attempt calls `recordPermanentFailure`. Both report
+ * under the Worker's queue name.
+ * @param queueName - The queue to consume; `email` unless given.
  * @returns The running Worker instance (for graceful shutdown).
  */
-export function startEmailWorker(): Worker<EmailJobData> {
+export function startEmailWorker(queueName: EmailQueueName = 'email'): Worker<EmailJobData> {
   const env = getEnv()
-  const worker = new Worker<EmailJobData>('email', processEmailJob, {
+  const worker = new Worker<EmailJobData>(queueName, processEmailJob, {
     connection: getQueueConnection(),
     prefix: redisKey('bull'),
     concurrency: env.WORKER_CONCURRENCY,
@@ -136,27 +144,29 @@ export function startEmailWorker(): Worker<EmailJobData> {
 
   worker.on('completed', (job) => {
     logger.info('Email job completed', {
+      queue: queueName,
       jobId: job.id,
       templateKey: job.data.templateKey,
     })
   })
 
   worker.on('failed', (job, error) => {
-    const errorId = reportFinalJobFailure('email', job, error)
+    const errorId = reportFinalJobFailure(queueName, job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       logger.warn('Email job failed', {
         jobId: job?.id,
+        queue: queueName,
         templateKey: job?.data.templateKey,
         attempt: job?.attemptsMade,
         error,
       })
       return
     }
-    void recordPermanentFailure('email', job, error, errorId)
+    void recordPermanentFailure(queueName, job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {
-    logger.error('Email worker error', { error })
+    logger.error('Email worker error', { queue: queueName, error })
   })
 
   return worker

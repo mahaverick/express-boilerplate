@@ -47,9 +47,9 @@ function withoutRequestId(body: unknown): unknown {
  */
 async function queuedSignInLink(to: string): Promise<string> {
   const { waitForJob } = await import('../../helpers/queue-jobs')
-  const { getEmailQueue } = await import('@/services/queue.service')
+  const { emailQueueFor } = await import('@/jobs/email.job')
   const job = await waitForJob<EmailJobData>(
-    getEmailQueue(),
+    emailQueueFor('sign_in_link'),
     (data) => data.to === to && data.templateKey === 'sign_in_link'
   )
   const link: unknown = Reflect.get(job.data.variables, 'signInUrl')

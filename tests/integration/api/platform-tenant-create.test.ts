@@ -12,13 +12,20 @@ import {
   type MembershipRole,
 } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
+import { emailQueueFor } from '@/jobs/email.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { reissueOwnerInvitation } from '@/services/platform-tenant.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { signAccessToken } from '@/services/session.service'
+import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
@@ -47,6 +54,7 @@ const userRepository = new UserRepository()
 // The owner invitations this file queues must not linger under the worker's key prefix for the next file.
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -488,7 +496,7 @@ describe('staff-created tenants', () => {
 
       let response: Response | undefined
       await withMutatedMethod(
-        getEmailQueue(),
+        emailQueueFor(TENANT_INVITATION_TEMPLATE_KEY),
         'add',
         (): Promise<never> => Promise.reject(new Error('queue unavailable')),
         async () => {

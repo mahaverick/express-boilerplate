@@ -36,7 +36,12 @@ import {
   offNotification,
   onNotification,
 } from '@/services/notification-emitter.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { denySession, isSessionDenied } from '@/services/session-denylist.service'
 import {
@@ -335,6 +340,7 @@ describe('GET /api/v1/notifications/stream', () => {
     await closeNotificationSubscriber()
     // The invitation test's jobs: its Worker is closed by then, and nothing consumes the email.
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await getNotificationQueue().obliterate({ force: true })
     await closeQueue()
   })

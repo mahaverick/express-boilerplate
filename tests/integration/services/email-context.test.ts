@@ -11,13 +11,18 @@ import type { Job } from 'bullmq'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
-import type { EmailJobData } from '@/jobs/email.job'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { sendSignInLinkByStaff } from '@/services/platform-user.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { invite, listPending, resend } from '@/services/tenant-invitation.service'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { processNotificationJob } from '@/workers/notification.worker'
@@ -58,6 +63,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -103,7 +109,7 @@ async function emailJobTo(
   templateKey: EmailJobData['templateKey']
 ): Promise<Job<EmailJobData>> {
   return waitForJob<EmailJobData>(
-    getEmailQueue(),
+    emailQueueFor(templateKey),
     (data) => data.to === to && data.templateKey === templateKey
   )
 }
@@ -142,7 +148,7 @@ describe('invitation mail', () => {
     })
 
     const second = await waitForJob<EmailJobData>(
-      getEmailQueue(),
+      emailQueueFor('tenant_invitation'),
       (data) => data.to === email && data.messageId !== first.data.messageId
     )
     expect(await rowOf(second)).toMatchObject({

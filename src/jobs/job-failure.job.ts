@@ -14,6 +14,11 @@ import { logger } from '@/services/logger.service'
 const REDACTED = '[redacted]'
 
 /**
+ * The queues whose jobs each carry an `email_messages` row to mark `failed`.
+ */
+const EMAIL_QUEUE_NAMES: ReadonlySet<string> = new Set(['email', 'auth-email'])
+
+/**
  * Keys whose values are scrubbed: verificationUrl, resetUrl and acceptUrl
  * carry a raw token in their query string.
  */
@@ -187,7 +192,7 @@ async function markEmailMessageFailed(queue: string, job: Job): Promise<void> {
  * Scrub a job that will not be retried, mark an email job's message
  * `failed`, then log its failure once.
  * Never rejects: it runs from a Worker's 'failed' listener, where a rejection would be unhandled.
- * @param queue - The queue's name; `'email'` marks the job's message.
+ * @param queue - The queue's name; `'email'` and `'auth-email'` mark the job's message.
  * @param job - The job that will not be retried.
  * @param error - What its last attempt threw.
  * @param errorId - The failure's error-tracking report id, put on the log line.
@@ -209,6 +214,6 @@ export async function recordPermanentFailure(
       error: scrubError,
     })
   }
-  if (queue === 'email') await markEmailMessageFailed(queue, job)
+  if (EMAIL_QUEUE_NAMES.has(queue)) await markEmailMessageFailed(queue, job)
   logPermanentFailure(queue, job, error, errorId)
 }

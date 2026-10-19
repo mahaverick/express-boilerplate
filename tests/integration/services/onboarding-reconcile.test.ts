@@ -20,7 +20,12 @@ import {
   getTenantOnboardingDetail,
   reconcileOnboarding,
 } from '@/services/platform-onboarding.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { hashToken } from '@/services/session.service'
 import { accept, createOwnerInvitation, invite } from '@/services/tenant-invitation.service'
 import { updateSettings } from '@/services/tenant.service'
@@ -143,6 +148,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })

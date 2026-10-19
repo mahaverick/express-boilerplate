@@ -21,7 +21,12 @@ import { resetDomainEventSubscribers } from '@/services/domain-events.service'
 import { getEmailWebhookAdapter, processEmailWebhook } from '@/services/email-webhook.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { registerOnboardingSubscribers } from '@/services/onboarding.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { revokeRefreshToken } from '@/services/session.service'
 import { verifySignInLink } from '@/services/sign-in-link.service'
 import { createInvitationRow } from '../../helpers/analytics-invitation'
@@ -83,6 +88,7 @@ afterAll(async () => {
   registerOnboardingSubscribers()
   registerAnalyticsSubscribers()
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })

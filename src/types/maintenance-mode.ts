@@ -65,7 +65,8 @@ export interface MaintenanceModeStatus {
    */
   known: boolean
   /**
-   * True only when every queue answered and is paused.
+   * True only when every queue full maintenance pauses answered and is
+   * paused; `auth-email`, which it never pauses, is left out.
    */
   queuesPaused: boolean
   queues: QueuePauseState[]

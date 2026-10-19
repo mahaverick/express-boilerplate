@@ -43,7 +43,8 @@ const { AnalyticsOutboxRepository } = await import('@/repositories/analytics-out
 const { UserRepository } = await import('@/repositories/user.repository')
 const { drainAnalyticsOutbox } = await import('@/services/analytics/analytics-drain.service')
 const { sql } = await import('@/services/database.service')
-const { closeQueue, getEmailQueue, getNotificationQueue } = await import('@/services/queue.service')
+const { closeQueue, getAuthEmailQueue, getEmailQueue, getNotificationQueue } =
+  await import('@/services/queue.service')
 const { truncateAuditLogs } = await import('../../helpers/audit-log')
 const { deleteTrackingRows, insertTestMessage, signedFakeBody } =
   await import('../../helpers/email-tracking')
@@ -211,6 +212,7 @@ afterAll(async () => {
   if (state.tenantIds.length > 0) await sql`delete from tenants where id = any(${state.tenantIds})`
   if (state.userIds.length > 0) await sql`delete from users where id = any(${state.userIds})`
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
   await state.posthog?.close()

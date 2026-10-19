@@ -490,26 +490,29 @@ let-through list and the controls on changing it are in
 Runbook:
 
 1. **Confirm staff access before `full`.** In `full` only staff can sign in,
-   and nobody can reset a password, so make sure whoever will switch it off can
-   sign in to Apex with a password or Google.
-2. **Use `read_only` for data fixes where reads are safe.** Customers keep
+   so make sure whoever will switch it off can request a sign-in link on Apex,
+   or use Google; auth mail is never paused.
+2. **Expect invitations to wait.** In `full`, `/invitations/verify` answers 503
+   `MAINTENANCE_MODE` for everyone, staff invitees included. An invitee joins
+   after maintenance ends, with the same link while it is unexpired.
+3. **Use `read_only` for data fixes where reads are safe.** Customers keep
    reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
-3. **Before database work, check "0 running" on every queue** on the
-   Maintenance page. `full` pauses every queue, but jobs already running
-   finish first.
-4. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
+4. **Before database work, check "0 running" on every queue** on the
+   Maintenance page. `full` pauses every queue but `auth-email`, which carries
+   sign-in, step-up and invitation mail. Jobs already running finish first.
+5. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
    working and writing during maintenance.
-5. **Switch off from Apex.** Leaving `full` resumes every queue; notices that
+6. **Switch off from Apex.** Leaving `full` resumes every queue; notices that
    were still queued go out then.
-6. **Restart every replica after restoring the database during maintenance.**
+7. **Restart every replica after restoring the database during maintenance.**
    A replica ignores a row whose version is not above the one it holds, so a
    restore to an earlier version leaves each replica on the old mode until it
    restarts.
-7. **Keep the clocks in sync (NTP) on the database and every replica.** The 10 s
+8. **Keep the clocks in sync (NTP) on the database and every replica.** The 10 s
    pause grace and the notice wait are measured from the time the database
    stamps on the change, on each replica's own clock, so skew shifts when the
    queues pause.
-8. **Failed notice jobs keep personal data.** A notice job that fails keeps the
+9. **Failed notice jobs keep personal data.** A notice job that fails keeps the
    actor's name and the reason in its Redis job data until it is removed; the
    windows are in [SECURITY.md](SECURITY.md#mail-at-rest).
 

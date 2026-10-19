@@ -18,7 +18,7 @@ import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE, LINK_INVALID_CODE } from '@/constants/auth.constants'
 import { addEmailJob } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { verifyAccessToken } from '@/services/session.service'
 import { confirmStepUpLink } from '@/services/step-up.service'
@@ -37,6 +37,7 @@ const app = createApp()
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await closeQueue()
 })
 

@@ -106,7 +106,12 @@ export function startWorkers(): SupervisedWorkers {
     supervisor.generation = generation
     try {
       generation.connection = getQueueConnection()
-      const starters = [startEmailWorker, startNotificationWorker, startMaintenanceWorker]
+      const starters = [
+        () => startEmailWorker('email'),
+        () => startEmailWorker('auth-email'),
+        startNotificationWorker,
+        startMaintenanceWorker,
+      ]
       if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
         starters.push(startAnalyticsWorker)
       }

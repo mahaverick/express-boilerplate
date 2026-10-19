@@ -19,7 +19,7 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { db, sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
 import { requestSignInLink } from '@/services/sign-in-link.service'
@@ -40,14 +40,15 @@ const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
 
 /**
- * The invitation mail is queued here, so the file runs its own email Worker
- * and empties the queue afterwards; `createApp()` starts none.
+ * The invitation mail is queued here, so the file runs its own auth-email
+ * Worker and empties the queues afterwards; `createApp()` starts none.
  */
-const worker: Worker<EmailJobData> = startEmailWorker()
+const worker: Worker<EmailJobData> = startEmailWorker('auth-email')
 
 afterAll(async () => {
   await worker.close()
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await closeQueue()
 })
 

@@ -12,7 +12,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
 import { emitNotification } from '@/services/notification-emitter.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { createRedisClient } from '@/services/redis.service'
 import { verifyAccessToken } from '@/services/session.service'
 import { fakeNotification } from '../../helpers/notification-subscriber'
@@ -144,6 +149,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
   await sql`delete from users where email = ${email}`

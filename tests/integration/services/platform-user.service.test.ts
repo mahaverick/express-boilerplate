@@ -5,9 +5,8 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as envConfig from '@/configs/env.config'
-import type { EmailJobData } from '@/jobs/email.job'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
-import { getEmailQueue } from '@/services/queue.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedModule } from '../../helpers/mutate'
@@ -106,7 +105,7 @@ describe('platform-user.service link origins', () => {
      */
     const originOfLink = async (to: string): Promise<string> => {
       const job = await waitForJob<EmailJobData>(
-        getEmailQueue(),
+        emailQueueFor(SIGN_IN_LINK_TEMPLATE_KEY),
         (data) => data.to === to && data.templateKey === SIGN_IN_LINK_TEMPLATE_KEY
       )
       return new URL((job.data.variables as { signInUrl: string }).signInUrl).origin

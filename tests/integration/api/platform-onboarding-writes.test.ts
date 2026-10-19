@@ -17,7 +17,7 @@ import { onboardingStepByKey } from '@/constants/onboarding.constants'
 import type { EmailJobData } from '@/jobs/email.job'
 import { PlatformOnboardingRepository } from '@/repositories/platform-onboarding.repository'
 import { sql, type DbTransaction } from '@/services/database.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -170,6 +170,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await closeQueue()
 })
 

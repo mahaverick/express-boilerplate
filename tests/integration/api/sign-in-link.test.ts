@@ -25,7 +25,7 @@ import { sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { addressDigest } from '@/services/mail-cooldown.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, issueRefreshToken } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
@@ -54,13 +54,14 @@ const { name: REFRESH_COOKIE_NAME } = testRefreshCookie()
 
 /**
  * The mail is asserted on in Mailpit by two tests, so the file runs its own
- * email Worker; `createApp()` starts none.
+ * auth-email Worker (sign-in links go on that queue); `createApp()` starts none.
  */
-const worker: Worker<EmailJobData> = startEmailWorker()
+const worker: Worker<EmailJobData> = startEmailWorker('auth-email')
 
 afterAll(async () => {
   await worker.close()
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await closeQueue()
 })
 

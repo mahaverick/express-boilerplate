@@ -13,11 +13,16 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
-import type { EmailJobData } from '@/jobs/email.job'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
@@ -230,6 +235,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -260,7 +266,7 @@ describe('POST /platform/emails/:id/resend: sign-in link messages', () => {
       )
       expect(created?.template_key).toBe(SIGN_IN_LINK_TEMPLATE_KEY)
       const job = await waitForJob<EmailJobData>(
-        getEmailQueue(),
+        emailQueueFor(SIGN_IN_LINK_TEMPLATE_KEY),
         (data) => data.to === user.email && data.templateKey === SIGN_IN_LINK_TEMPLATE_KEY
       )
       expect((job.data.variables as { reason: string }).reason).toBe('staff')
@@ -366,7 +372,7 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
     )
     // Neither the job nor the stored message carries the reason: it stays in the audit entry.
     const job = await waitForJob<EmailJobData>(
-      getEmailQueue(),
+      emailQueueFor(TENANT_INVITATION_TEMPLATE_KEY),
       (data) => data.to === message.recipient && data.templateKey === TENANT_INVITATION_TEMPLATE_KEY
     )
     expect(JSON.stringify(job.data)).not.toContain(REASON)

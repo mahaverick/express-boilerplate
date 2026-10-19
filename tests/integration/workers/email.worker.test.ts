@@ -26,7 +26,7 @@ import { EmailSuppressionRepository } from '@/repositories/email-suppression.rep
 import { sql } from '@/services/database.service'
 import { createQueuedMessage } from '@/services/email-message.service'
 import { logger } from '@/services/logger.service'
-import { addJob, closeQueue, getEmailQueue } from '@/services/queue.service'
+import { addJob, closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { processEmailJob, startEmailWorker } from '@/workers/email.worker'
 import {
   assertNoMailpitMessage,
@@ -95,6 +95,8 @@ const originalUpdateData = jobPrototype.updateData
 
 describe('email.worker', () => {
   const worker = startEmailWorker()
+  // step_up_link is an auth template, so its jobs run on the auth-email queue.
+  const authWorker = startEmailWorker('auth-email')
   const createdLogIds: string[] = []
   const createdRecipients: string[] = []
 
@@ -107,8 +109,10 @@ describe('email.worker', () => {
     await sql`delete from email_suppressions where address = any(${createdRecipients})`
     // worker.close() first drains the current job; closeQueue()'s connection.quit() is what actually closes the socket, since BullMQ skips quitting a connection it was handed pre-built.
     await worker.close()
+    await authWorker.close()
     // Left-over jobs from this run would otherwise sit under this worker's prefix and be picked up by the very next run's worker on start.
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await closeQueue()
   })
 
@@ -118,7 +122,9 @@ describe('email.worker', () => {
     const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-happy-path')
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
 
     const messages = await findMailpitMessages(recipient)
     expect(messages).toHaveLength(1)
@@ -173,7 +179,9 @@ describe('email.worker', () => {
     const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-suppressed')
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
     const tracked = await emailMessageRepository.findById(job.data.messageId ?? '')
     expect(tracked?.status).toBe('suppressed')
     await expect(emailLogRepository.findByRecipient(recipient)).resolves.toEqual([])
@@ -284,10 +292,12 @@ describe('email.worker', () => {
         })
         if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-        await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('failed')
+        await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+          'failed'
+        )
 
         // The load-bearing assertion: what BullMQ itself persisted to Redis as failedReason, not merely the Error thrown in-process.
-        const failedJob = await getEmailQueue().getJob(job.id)
+        const failedJob = await getAuthEmailQueue().getJob(job.id)
         expect(failedJob?.failedReason).toBeDefined()
         expect(failedJob?.failedReason).not.toContain(recipient)
         expect(failedJob?.failedReason).toContain(job.id)
@@ -319,9 +329,11 @@ describe('email.worker', () => {
         })
         if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-        await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('failed')
+        await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+          'failed'
+        )
 
-        const failedJob = await getEmailQueue().getJob(job.id)
+        const failedJob = await getAuthEmailQueue().getJob(job.id)
         expect(failedJob?.failedReason).toContain(job.id)
         expect(failedJob?.failedReason).not.toContain(recipient)
         expect(JSON.stringify(failedJob?.stacktrace)).not.toContain(recipient)
@@ -375,7 +387,7 @@ describe('email.worker', () => {
               10_000
             )
 
-            const stored = await getEmailQueue().getJob(jobId)
+            const stored = await getAuthEmailQueue().getJob(jobId)
             expect(stored?.attemptsMade).toBe(2)
             expect(stored?.data).toMatchObject({
               to: '[redacted]',
@@ -395,7 +407,7 @@ describe('email.worker', () => {
             expect(loggerError).toHaveBeenCalledWith(
               'job failed permanently',
               expect.objectContaining({
-                queue: 'email',
+                queue: 'auth-email',
                 jobId,
                 name: 'step_up_link',
                 template: 'step_up_link',
@@ -454,7 +466,7 @@ describe('email.worker', () => {
             10_000
           )
 
-          const stored = await getEmailQueue().getJob(jobId)
+          const stored = await getAuthEmailQueue().getJob(jobId)
           expect(stored?.data).toMatchObject({
             to: '[redacted]',
             cc: '[redacted]',
@@ -487,7 +499,11 @@ describe('email.worker', () => {
     try {
       const syntheticError = new Error('synthetic worker error')
       worker.emit('error', syntheticError)
-      expect(loggerErrorSpy).toHaveBeenCalledWith('Email worker error', { error: syntheticError })
+      authWorker.emit('error', syntheticError)
+      expect(loggerErrorSpy.mock.calls).toEqual([
+        ['Email worker error', { queue: 'email', error: syntheticError }],
+        ['Email worker error', { queue: 'auth-email', error: syntheticError }],
+      ])
     } finally {
       loggerErrorSpy.mockRestore()
     }

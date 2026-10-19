@@ -1,6 +1,6 @@
 /**
  * @file Queue pause and resume against real BullMQ under this worker's
- * prefix: reconciliation pauses every registry queue for an old `full`,
+ * prefix: reconciliation pauses every registry queue but `auth-email` for an old `full`,
  * heals a queue a missed pause left running, leaves paused queues alone
  * inside the grace, resumes on leaving `full`, and survives one queue
  * failing; the per-queue states and the status section; and
@@ -54,7 +54,7 @@ function snapshot(mode: 'off' | 'read_only' | 'full', ageMs: number): Maintenanc
 }
 
 /**
- * Reads each registry queue's pause flag, keyed by queue name.
+ * Reads each registry queue's pause flag, keyed by queue name: auth-email included, which full never pauses.
  */
 async function pauseFlags(): Promise<Record<string, boolean>> {
   const entries = await Promise.all(
@@ -63,8 +63,20 @@ async function pauseFlags(): Promise<Record<string, boolean>> {
   return Object.fromEntries(entries)
 }
 
-const ALL_PAUSED = { email: true, notification: true, maintenance: true, analytics: true }
-const NONE_PAUSED = { email: false, notification: false, maintenance: false, analytics: false }
+const ALL_PAUSED = {
+  email: true,
+  'auth-email': false,
+  notification: true,
+  maintenance: true,
+  analytics: true,
+}
+const NONE_PAUSED = {
+  email: false,
+  'auth-email': false,
+  notification: false,
+  maintenance: false,
+  analytics: false,
+}
 
 beforeEach(async () => {
   await setAllQueuesPaused(false)
@@ -265,6 +277,7 @@ describe('queue pause states', () => {
 
     expect(states).toEqual([
       { name: 'email', paused: true, active: 0 },
+      { name: 'auth-email', paused: false, active: 0 },
       { name: 'notification', paused: true, active: 0 },
       { name: 'maintenance', paused: true, active: 0 },
       { name: 'analytics', paused: true, active: 0 },
@@ -281,7 +294,7 @@ describe('queue pause states', () => {
     expect(states[0]).toEqual({ name: 'email', paused: false, active: NONE })
   })
 
-  it('builds the status section from the store, the queues and the reload state', async () => {
+  it('builds the status section from the store, the queues and the reload state, counting auth-email out of queuesPaused', async () => {
     const changedAt = new Date('2026-10-06T10:42:00.000Z')
     await storeMaintenanceMode('full', { changedAt })
     await reloadMaintenanceMode()
@@ -297,7 +310,12 @@ describe('queue pause states', () => {
       noticesPending: false,
       lastReloadError: NONE,
     })
-    expect(status.queues).toHaveLength(4)
+    expect(status.queues).toHaveLength(5)
+    expect(status.queues.find((queue) => queue.name === 'auth-email')).toEqual({
+      name: 'auth-email',
+      paused: false,
+      active: 0,
+    })
   })
 })
 

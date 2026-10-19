@@ -342,9 +342,12 @@ points at the code or doc that holds the detail. How things work is in
   the value as an argument instead, as `startServer(port)` takes the port.
 - **An integration test that asserts mail delivery starts its own
   `startEmailWorker()`** (and `startNotificationWorker()` for verification
-  mail): `createApp()` starts no worker. In `afterAll`, close it before
-  `obliterate` and `closeQueue()`. `tests/integration/api/auth.test.ts` shows
-  both.
+  mail): `createApp()` starts no worker. Auth mail (`AUTH_EMAIL_TEMPLATE_KEYS`,
+  `src/jobs/email.job.ts`) runs on the `auth-email` queue, so a test of it
+  starts `startEmailWorker('auth-email')` and reads jobs from
+  `emailQueueFor(templateKey)`. In `afterAll`, close it before `obliterate`
+  (both email queues) and `closeQueue()`. `tests/integration/api/sign-in-link.test.ts`
+  shows both.
 - **A test that reads data `recordPermanentFailure` scrubbed waits for its log
   line** (`waitForLoggedCall`, `tests/helpers/queue-jobs.ts`), not the
   `failed` event.
