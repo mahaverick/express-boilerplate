@@ -9,15 +9,16 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv } from '@/configs/env.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
-import { authenticatedUserId, oauthAppOf } from '@/controllers/helpers.controller'
 import {
+  authenticatedUserId,
   clearHostOnlyPlainRefreshCookie,
   currentRefreshCookie,
+  oauthAppOf,
   readRefreshTokenCookie,
   refreshCookieOptions,
   revokePresentedSession,
   setRefreshTokenCookie,
-} from '@/controllers/session-cookie.controller'
+} from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'

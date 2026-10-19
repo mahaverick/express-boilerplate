@@ -210,7 +210,7 @@ Every form is `HttpOnly`, and `Secure` when `isCookieSecure` says so
 - **The newest cookie wins.** Within one name the API reads the last value
   sent, the most recently created one, so a stale cookie from an older
   `COOKIE_DOMAIN` never reaches reuse detection (`readCookie`,
-  `src/controllers/session-cookie.controller.ts`). After `COOKIE_DOMAIN` is reverted to
+  `src/controllers/helpers.controller.ts`). After `COOKIE_DOMAIN` is reverted to
   an earlier value the browser keeps the overwritten cookie's original creation
   time, so the other scope's cookie reads as newer and refresh fails until the
   user signs in again or the cookie expires (`REFRESH_TOKEN_TTL`).

@@ -5,11 +5,11 @@
  * tells a caller nothing the lookup would not.
  */
 import { BaseController } from '@/controllers/base.controller'
-import { authenticatedUserId } from '@/controllers/helpers.controller'
 import {
+  authenticatedUserId,
   revokePresentedSession,
   setRefreshTokenCookie,
-} from '@/controllers/session-cookie.controller'
+} from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import {
