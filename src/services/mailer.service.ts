@@ -48,6 +48,11 @@ import {
   type RegistrationAttemptVariables,
 } from '@/templates/email/registration-attempt.template'
 import {
+  renderSignInLinkTemplate,
+  SIGN_IN_LINK_TEMPLATE_KEY,
+  type SignInLinkVariables,
+} from '@/templates/email/sign-in-link.template'
+import {
   renderTenantInvitationTemplate,
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
@@ -109,6 +114,11 @@ export type MailMessage =
       templateKey: typeof MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY
       variables: MaintenanceModeChangedVariables
     }
+  | {
+      to: string
+      templateKey: typeof SIGN_IN_LINK_TEMPLATE_KEY
+      variables: SignInLinkVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -159,6 +169,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY: {
       return renderMaintenanceModeChangedTemplate(message.variables)
+    }
+    case SIGN_IN_LINK_TEMPLATE_KEY: {
+      return renderSignInLinkTemplate(message.variables)
     }
     default: {
       throw new Error(

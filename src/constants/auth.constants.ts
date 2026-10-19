@@ -181,3 +181,17 @@ export const REAUTH_REQUIRED_CODE = 'REAUTH_REQUIRED'
  * (`requireRecentAuth`): 10 minutes, in milliseconds.
  */
 export const STEP_UP_MAX_AGE_MS = 10 * 60 * 1000
+
+/**
+ * Machine-readable code for a sign-in link that cannot sign anyone in:
+ * unknown, already used, revoked, expired, malformed, or for an account that
+ * is inactive or (on Apex) not staff. One code and one message for every
+ * case, so the answer tells nothing about which. The status is 400, never
+ * 401: the clients sign out on a 401.
+ */
+export const LINK_INVALID_CODE = 'LINK_INVALID'
+
+/**
+ * The message `LINK_INVALID_CODE` is answered with.
+ */
+export const LINK_INVALID_MESSAGE = 'This link has expired or was already used.'

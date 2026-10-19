@@ -23,6 +23,7 @@ import * as authService from '@/services/auth.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
 import { revokeOtherSessions, revokeRefreshToken } from '@/services/session.service'
+import { requestSignInLink, verifySignInLink } from '@/services/sign-in-link.service'
 import { frontendUrl } from '@/services/verification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
@@ -35,6 +36,10 @@ import {
   revokeOtherSessionsSchema,
 } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'
+import {
+  signInLinkRequestSchema,
+  signInLinkVerifySchema,
+} from '@/validators/sign-in-link.validators'
 
 /**
  * A URL without any trailing slashes, so `${base}/path` never doubles one.
@@ -290,6 +295,8 @@ const REGISTER_RESPONSE_MESSAGE =
 const FORGOT_PASSWORD_RESPONSE_MESSAGE =
   'If that address has an account, a password reset email has been sent.'
 
+const SIGN_IN_LINK_REQUEST_MESSAGE = 'Check your inbox for a sign-in link.'
+
 /**
  * Handlers for `/api/v1/auth`, except email verification (`VerificationController`).
  */
@@ -337,6 +344,55 @@ class AuthController extends BaseController {
         accessToken: session.accessToken,
       },
       'Login successful.'
+    )
+  })
+
+  /**
+   * `POST /auth/link/request`: ask for a sign-in link by email.
+   *
+   * One identical 202 with `data: null` for every address, new, existing or
+   * deactivated. The handler is synchronous on purpose: the reply goes out
+   * before the lookup, the cooldown or the mail, so no branch differs by
+   * their cost, and the follow-up runs after it.
+   */
+  requestSignInLink = this.handle((request, response) => {
+    const input = parseBody(signInLinkRequestSchema, request.body)
+    const followUp = requestSignInLink(input)
+
+    messageResponse(response, SIGN_IN_LINK_REQUEST_MESSAGE, 202)
+    // Never rejects: the service logs its own failure.
+    void followUp()
+  })
+
+  /**
+   * `POST /auth/link/verify`: sign in with the token from a mailed link,
+   * creating the account on the first click (`isNewUser`). Every link that
+   * signs nobody in answers one 400 `LINK_INVALID`. A refresh cookie the
+   * browser still presented has its session revoked once the new one is
+   * issued, as `login` does; the reply carries the redirect stored with the
+   * link. `no-store`, as every token response (RFC 6749 §5.1).
+   */
+  verifySignInLink = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    const input = parseBody(signInLinkVerifySchema, request.body)
+    const session = await verifySignInLink(input.token)
+    await revokePresentedSession(request, { emitSignedOut: false })
+
+    setRefreshTokenCookie(
+      request,
+      response,
+      session.refreshToken.raw,
+      session.refreshToken.expiresAt
+    )
+    successResponse(
+      response,
+      {
+        user: toProfileResponse(session.user, session.platformRole),
+        accessToken: session.accessToken,
+        isNewUser: session.isNewUser,
+        redirect: session.redirect,
+      },
+      'Signed in.'
     )
   })
 

@@ -35,7 +35,12 @@ import { sendPasswordResetMail } from '@/services/auth.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
-import { denySessionsAfterCommit, issueToken, revokeSessionRows } from '@/services/session.service'
+import {
+  denySessionsAfterCommit,
+  issueToken,
+  revokeSessionRows,
+  revokeSignInLinksOf,
+} from '@/services/session.service'
 import {
   buildPasswordResetUrl,
   frontendUrl,
@@ -564,8 +569,9 @@ function refuseSelf(actor: Actor, userId: string, message: string): void {
 }
 
 /**
- * Deactivate a user: `active = false`, every token row revoked and every
- * pending invitation they sent revoked in the same transaction, the revoked
+ * Deactivate a user: `active = false`, every token row, every live sign-in
+ * link mailed to their address and every pending invitation they sent
+ * revoked in the same transaction, the revoked
  * sessions denied after commit. A racing login either committed first and
  * loses its session here, or waits on the user row lock (its FOR SHARE
  * re-read conflicts with this FOR NO KEY UPDATE) and sees the inactive account.
@@ -591,6 +597,7 @@ export async function deactivateUser(
     )
     await userRepository.update(target.id, { active: false }, {}, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    await revokeSignInLinksOf(target.email, tx)
     // Invitations they sent would still admit people on their authority.
     await revokeInvitationsSentBy(actor, target.id, tx)
     await record(
@@ -643,7 +650,8 @@ export async function reactivateUser(
 }
 
 /**
- * End every session a user has, everywhere.
+ * End every session a user has, everywhere, and revoke the live sign-in
+ * links mailed to their address, which would start a new one.
  * @param actor - The signed-in staff admin.
  * @param userId - The user.
  * @param reason - Why, for the audit log.
@@ -655,6 +663,7 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
   const revoked = await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    await revokeSignInLinksOf(target.email, tx)
     await record(
       {
         action: 'user.signed_out',

@@ -387,6 +387,19 @@ function maskedLink(build: (rawToken: string, webUrl: string) => string, origin:
 }
 
 /**
+ * The sign-in page a sign-in link opens, carrying `rawToken`: the shape of
+ * `buildSignInLinkUrl`'s link without the address, which a preview never
+ * shows.
+ * @param rawToken - The token text, empty for a preview's masked link.
+ * @param origin - The frontend origin the real link pointed at.
+ * @returns The URL.
+ */
+function signInPageUrl(rawToken: string, origin: string): string {
+  const base = new URL('auth/link', origin.endsWith('/') ? origin : `${origin}/`)
+  return `${base.href}?token=${rawToken}`
+}
+
+/**
  * The mail a preview renders, and whether a stored preview variable was
  * missing (a message migrated from an old send attempt, whose variables are
  * `{}`, or one written with empty variables) and read as the mask. The
@@ -494,6 +507,19 @@ export function buildPreviewMessage(
             actorName: MAINTENANCE_ACTOR_PLACEHOLDER,
             reason: MAINTENANCE_REASON_PLACEHOLDER,
             changedAt: fill('changedAt'),
+          },
+        }
+      }
+      case 'sign_in_link': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            signInUrl: maskedLink(signInPageUrl, origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
+            reason: fill('reason') === 'staff' ? 'staff' : 'self',
           },
         }
       }

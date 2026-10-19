@@ -40,7 +40,9 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * `/refresh` and `/logout`, which the refresh cookie authenticates and which
  * take no body, also refuse a disallowed `Origin` (origin.middleware.ts): a
  * same-site sibling page could otherwise send them a body-less POST with the
- * cookie attached. `/change-password` and `/sessions/revoke-others` read the
+ * cookie attached. `/link/verify` refuses one too: it sets the refresh
+ * cookie and revokes the session the presented one names, so another page
+ * must not be able to sign the browser in to an account of its choosing. `/change-password` and `/sessions/revoke-others` read the
  * cookie too, but only to narrow what they spare; they authenticate with the
  * bearer token, which a browser never attaches on its own, so no other page
  * can make it send one and they need no Origin check.
@@ -91,6 +93,19 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.resendVerificationIp),
     createRateLimiter(RATE_LIMITS.resendVerificationEmail),
     verificationController.resendVerification
+  )
+  // Per-IP only: a per-address limit would let anyone deny the owner; the follow-up's cooldown and daily budget bound one inbox.
+  router.post(
+    '/link/request',
+    createRateLimiter(RATE_LIMITS.signInLinkRequest),
+    authController.requestSignInLink
+  )
+  // A sign-in sets the refresh cookie: the Origin check runs before the limiter, as on /refresh, so a refused page spends no budget.
+  router.post(
+    '/link/verify',
+    requireAllowedOriginWhenPresent,
+    createRateLimiter(RATE_LIMITS.signInLinkVerify),
+    authController.verifySignInLink
   )
   // Per-IP only: a per-address limit would let anyone deny the owner; the service's mail cooldown bounds one inbox.
   router.post(

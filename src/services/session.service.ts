@@ -639,6 +639,21 @@ export async function revokeSessionRows(
 }
 
 /**
+ * Revoke the live sign-in links mailed to a user's address, in the caller's
+ * transaction. A `sign_in_link` row names the address, not the user, so the
+ * user-wide revocations (`revokeSessionRows`) never reach it; every path
+ * that ends a user's sessions to cut their access (a sign-out of the other
+ * sessions, a staff sign-out, a deactivation) calls this beside them, or a
+ * link already in the inbox would mint a new session.
+ * @param email - The user's address.
+ * @param tx - The revoking transaction, holding the user row lock.
+ * @returns Resolves once the links are revoked.
+ */
+export async function revokeSignInLinksOf(email: string, tx: DbTransaction): Promise<void> {
+  await userTokenRepository.revokeLiveFor({ email, intent: 'sign_in' }, tx)
+}
+
+/**
  * Deny the sessions a committed revocation revoked: a password change or
  * reset, a Google account claim, a sign-out of other sessions, or a staff
  * deactivation, sign-out or deletion. Never rejects, because the revocation
@@ -675,8 +690,8 @@ function absoluteLifetimeCutoff(): Date {
 
 /**
  * Sign a user out of every session but the one making the request: revoke
- * their other sessions' token rows (and any reset or verification token)
- * under the user row lock, then deny each revoked session's access tokens
+ * their other sessions' token rows (and any reset or verification token) and
+ * the live sign-in links mailed to their address under the user row lock, then deny each revoked session's access tokens
  * after commit, which also ends that session's notification stream at its
  * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  *
@@ -716,6 +731,7 @@ export async function revokeOtherSessions(
       { exceptSessionId: sessionId, presentedRefreshToken },
       tx
     )
+    await revokeSignInLinksOf(locked.email, tx)
     return { revoked: revokedSessionIds, live: new Set(liveSessionIds) }
   })
   await denySessionsAfterCommit(userId, revoked)

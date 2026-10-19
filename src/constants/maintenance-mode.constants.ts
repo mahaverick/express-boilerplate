@@ -220,6 +220,9 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('POST', '/api/v1/auth/login'),
   letThrough('GET', '/api/v1/auth/google'),
   letThrough('GET', '/api/v1/auth/google/callback'),
+  // The link routes decide in the service: a request for a non-staff address in `full` mails nothing, and verify peeks before it claims.
+  letThrough('POST', '/api/v1/auth/link/request'),
+  letThrough('POST', '/api/v1/auth/link/verify'),
   // Session upkeep and sign-in methods: let through in both modes.
   letThrough('POST', '/api/v1/auth/refresh'),
   letThrough('POST', '/api/v1/auth/logout'),

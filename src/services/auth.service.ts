@@ -218,12 +218,13 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
 }
 
 /**
- * The signed-in user's platform role, for the login response only. A failed
- * read answers null: the credentials passed, and the next /profile corrects it.
+ * The signed-in user's platform role, for a sign-in response only (a
+ * password login or a sign-in link). A failed read answers null: the
+ * sign-in passed, and the next /profile corrects it.
  * @param userId - The user who just signed in.
  * @returns Their platform role, or null.
  */
-async function platformRoleForLogin(userId: string): Promise<MembershipRole | null> {
+export async function platformRoleForLogin(userId: string): Promise<MembershipRole | null> {
   try {
     return await getPlatformMembership(userId)
   } catch (error) {

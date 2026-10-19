@@ -9,18 +9,13 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { autoJoinSafely } from '@/services/platform.service'
-import {
-  denySessionsAfterCommit,
-  issueRefreshToken,
-  revokeAllSessions,
-  revokeSessionRows,
-  type IssuedRefreshToken,
-} from '@/services/session.service'
+import { issueRefreshToken, type IssuedRefreshToken } from '@/services/session.service'
 import { markEmailVerified } from '@/services/verification.service'
 
 const userRepository = new UserRepository()
@@ -75,51 +70,31 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
 }
 
 /**
- * A verified Google identity takes over a never-verified account: a
- * squatter's password and any OTHER Google link are removed, the email is
- * marked verified, and every session revoked.
+ * A verified Google identity takes over a never-verified account
+ * (`claimNeverVerifiedAccount`): inside its locked transaction, a squatter's
+ * password and any OTHER Google link are removed and this identity is
+ * linked; the email is then marked verified and every session revoked.
  *
  * Precondition: the caller has checked that Google verified the profile's
  * email, that it matches this account's address, and that the account's email
  * was never verified (checked before the lock). Nothing here checks any of it.
- *
- * Sessions are revoked first, in a committed transaction of their own under
- * the user row lock (`revokeAllSessions`), so every refresh token that
- * existed, and the successor of a rotation that was in flight, is already
- * revoked if the claim fails. The claim's transaction revokes again under
- * the same lock: a session created between the two either commits before
- * the lock and is revoked there, or waits and finds its token revoked. The
- * revoked sessions' access tokens are denied after the commit, best effort
- * (`denySessionsAfterCommit`), so they can stay valid for up to
- * `ACCESS_TOKEN_TTL` when Redis refuses.
  * @param userId - The unverified account's id.
  * @param googleId - Google's stable profile id of the claiming identity.
  * @returns The account, now verified, federated-only and linked.
  * @throws {HttpError} 500 when the account vanished mid-claim.
  */
-export async function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
-  await revokeAllSessions(userId)
-
-  const { claimed, revokedSessionIds } = await withTransaction(async (tx) => {
-    await userRepository.lockById(userId, 'no key update', tx)
-
+export function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
+  return claimNeverVerifiedAccount(userId, async (tx) => {
     // Cleared first, or resolveGoogleUser's first lookup would still resolve that other Google id here.
     await authProviderRepository.deleteGoogleLinksExcept(userId, googleId, tx)
     await authProviderRepository.createIfAbsent(
       { userId, provider: 'google', providerId: googleId },
       tx
     )
-
-    // The caller checked that Google verified this address (see the precondition above).
-    await markEmailVerified(userId, tx)
-
     // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
     const updated = await userRepository.update(userId, { passwordHash: null }, {}, tx)
     if (!updated) throw new HttpError('Update returned no row', 500)
-    return { claimed: updated, revokedSessionIds: await revokeSessionRows(userId, {}, tx) }
   })
-  await denySessionsAfterCommit(userId, revokedSessionIds)
-  return claimed
 }
 
 /**

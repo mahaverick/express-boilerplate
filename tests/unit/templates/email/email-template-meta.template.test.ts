@@ -52,6 +52,13 @@ const SAMPLE_VARIABLES: {
     reason: 'Database upgrade',
     changedAt: '2026-10-06T10:42:00.000Z',
   },
+  sign_in_link: {
+    firstName: 'Ada',
+    signInUrl: 'https://x.test/auth/link?token=t&email=a%40x.test',
+    expiresInMinutes: '15',
+    appName: 'App',
+    reason: 'self',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -104,6 +111,12 @@ describe('EMAIL_TEMPLATE_META', () => {
       maintenance_mode_changed: {
         senderClass: 'general',
         previewVariables: ['firstName', 'appName', 'mode', 'changedAt'],
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
+      },
+      sign_in_link: {
+        senderClass: 'transactional',
+        previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },

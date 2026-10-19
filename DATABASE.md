@@ -137,7 +137,11 @@ at most one of each stays live. The claim is `claimOnce`, which checks no
 expiry; the caller judges `expires_at` on the claimed row, so an expired link is
 spent by its one presentation. A `sign_in_link` row has no user, so a user
 purge deletes the purged address's links itself (`deleteForEmail`), up to the
-deletion and only while no live account holds the address. The retention rule
+deletion and only while no live account holds the address, and the user-wide
+revocations never reach one: a sign-out of the other sessions, a staff
+sign-out and a deactivation revoke the address's live links in their own
+transaction (`revokeSignInLinksOf`), and a verify re-checks the account under
+its row lock. The retention rule
 below covers link rows as it covers the rest.
 
 Rotation is append-only, because reuse detection needs the old row to

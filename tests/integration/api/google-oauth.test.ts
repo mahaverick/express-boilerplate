@@ -17,6 +17,7 @@ import type { User } from '@/database/models/user.model'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
+import type { subscribeDomainEvent as SubscribeDomainEventType } from '@/services/domain-events.service'
 import type { completeGoogleSignIn as CompleteGoogleSignInType } from '@/services/google-auth.service'
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -126,6 +127,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   let authProviderRepository: InstanceType<typeof AuthProviderRepositoryClass>
   let sql: typeof SqlType
   let issueRefreshToken: typeof IssueRefreshTokenType
+  let subscribeDomainEvent: typeof SubscribeDomainEventType
 
   /**
    * Every runtime import happens here, after the `vi.stubEnv` calls. `@/app` reaches
@@ -154,6 +156,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     const sessionService = await import('@/services/session.service')
     issueRefreshToken = sessionService.issueRefreshToken
+
+    const domainEvents = await import('@/services/domain-events.service')
+    subscribeDomainEvent = domainEvents.subscribeDomainEvent
   })
 
   /**
@@ -456,11 +461,17 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       createdIds.push(existing.id)
       expect(existing.emailVerifiedAt).toBeNull()
       const squatterSession = await issueRefreshToken(existing.id, randomUUID())
+      const verifiedEvents: string[] = []
+      subscribeDomainEvent('email_verified', (event) => {
+        verifiedEvents.push(event.userId)
+      })
 
       const profile = googleProfile({ email, emailVerified: true })
       const user = await signInWithGoogle(profile)
 
       expect(user.id).toBe(existing.id)
+      // The claim's own write verified the row, so it emits email_verified once.
+      expect(verifiedEvents.filter((userId) => userId === existing.id)).toHaveLength(1)
       expect(user.passwordHash).toBeNull()
       expect(user.emailVerifiedAt).toBeInstanceOf(Date)
       const reread = await userRepository.findById(existing.id)

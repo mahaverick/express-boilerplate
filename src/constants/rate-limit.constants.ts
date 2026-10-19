@@ -53,7 +53,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 30 limiters in `RATE_LIMITS`.
+ * The names of the 32 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'register'
@@ -86,6 +86,8 @@ export type RateLimitName =
   | 'maintenanceStatus'
   | 'maintenanceModeChange'
   | 'revokeOtherSessions'
+  | 'signInLinkRequest'
+  | 'signInLinkVerify'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -589,6 +591,32 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60 * 60 * 1000,
     limit: 10,
     keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 10 per 15 minutes per IP for `POST /auth/link/request`. Per IP only: a
+   * per-address limit would let anyone deny the owner their link. One inbox
+   * is bounded by the mail cooldown (`SIGN_IN_LINK_MAIL_COOLDOWN`) and the
+   * daily ceiling (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), which the
+   * follow-up checks after the reply.
+   */
+  signInLinkRequest: {
+    name: 'sign-in-link-request',
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    keyBy: 'ip',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 20 per 15 minutes per IP for `POST /auth/link/verify`. The token is
+   * single-use and carries 256 bits, so this bounds a client working through
+   * dead links or malformed attempts, not guessing.
+   */
+  signInLinkVerify: {
+    name: 'sign-in-link-verify',
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    keyBy: 'ip',
     message: RATE_LIMITED_MESSAGE,
   },
 }
