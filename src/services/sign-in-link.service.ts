@@ -24,6 +24,7 @@ import {
   clearSquatterCredentials,
   createLinkedAccount,
   isAddressTaken,
+  isClaimedAccountGone,
 } from '@/services/account-claim.service'
 import { platformRoleForLogin } from '@/services/auth.service'
 import { withTransaction } from '@/services/database.service'
@@ -285,13 +286,29 @@ async function resolveLinkAccount(row: {
     throw linkInvalid()
   }
   if (existing.emailVerifiedAt === null) {
-    const claimed = await claimNeverVerifiedAccount(
-      existing.id,
-      clearSquatterCredentials(existing.id)
-    )
-    return { user: claimed, isNew: false }
+    return { user: await claimForLink(existing.id), isNew: false }
   }
   return { user: existing, isNew: false }
+}
+
+/**
+ * Claim a never-verified account for a link, with the squatter's credentials
+ * cleared. An account deleted or deactivated since the lookup is the generic
+ * invalid link, never the claim's 500 or a session.
+ * @param userId - The never-verified account.
+ * @returns The claimed account, active.
+ * @throws {HttpError} 400 `LINK_INVALID` when the account is gone or inactive.
+ */
+async function claimForLink(userId: string): Promise<User> {
+  let claimed: User
+  try {
+    claimed = await claimNeverVerifiedAccount(userId, clearSquatterCredentials(userId))
+  } catch (error) {
+    if (isClaimedAccountGone(error)) throw linkInvalid()
+    throw error
+  }
+  if (!claimed.active) throw linkInvalid()
+  return claimed
 }
 
 /**

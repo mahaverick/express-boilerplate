@@ -10,6 +10,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import { RATE_LIMITED_CODE } from '@/constants/rate-limit.constants'
 import {
   INVITATION_TOKEN_BYTES,
@@ -20,6 +21,7 @@ import type { TenantInvitation } from '@/database/models/tenant-invitation.model
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { canActorGrantRole } from '@/policies/tenant.policy'
@@ -35,6 +37,7 @@ import {
   clearSquatterCredentials,
   createLinkedAccount,
   isAddressTaken,
+  isClaimedAccountGone,
 } from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
@@ -42,6 +45,8 @@ import { db, type DbExecutor, type DbTransaction } from '@/services/database.ser
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
+import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import {
   hashToken,
   issueRefreshToken,
@@ -881,21 +886,45 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
 }
 
 /**
+ * Refuse a join the maintenance mode forbids: joining is a write, so both
+ * `read_only` and `full` refuse it, for staff too (the route has no staff
+ * pass). The route's gate refused it already; this catches a mode that
+ * changed since, before anything is written.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+function assertJoinAllowedByMode(): void {
+  const snapshot = getMaintenanceMode()
+  if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
+  if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+}
+
+/**
  * The existing account an invitation link signs in, settled before the
  * verify's transaction: none when the address has no account; refused when
- * the account is inactive; claimed when it was never verified, as a sign-in
- * link claims one (the click proves the mailbox, so a squatter's sessions
- * and credentials go).
+ * the account is inactive or `assertSignInAllowed` refuses it, both before
+ * anything is written; claimed when it was never verified, as a sign-in link
+ * claims one (the click proves the mailbox, so a squatter's sessions and
+ * credentials go). An account deleted or deactivated during the claim is the
+ * generic invalid link, never the claim's 500.
  * @param email - The invitation's stored (lowercased) address.
  * @returns The account, or undefined when the click should create one.
- * @throws {HttpError} 404 `invitation_invalid` for an inactive account.
+ * @throws {HttpError} 404 `invitation_invalid` for an inactive or vanished account.
+ * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
  */
 async function invitedAccount(email: string): Promise<User | undefined> {
   const existing = await userRepository.findByEmail(email)
-  if (!existing) return undefined
-  if (!existing.active) throw invitationInvalid()
-  if (existing.emailVerifiedAt !== null) return existing
-  return claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
+  if (existing && !existing.active) throw invitationInvalid()
+  await assertSignInAllowed(existing?.id)
+  if (existing?.emailVerifiedAt !== null) return existing
+  let claimed: User
+  try {
+    claimed = await claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
+  } catch (error) {
+    if (isClaimedAccountGone(error)) throw invitationInvalid()
+    throw error
+  }
+  if (!claimed.active) throw invitationInvalid()
+  return claimed
 }
 
 /**
@@ -940,9 +969,12 @@ async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<Use
  * join them. The link is single-use: once accepted it signs nobody in, the
  * invitee included (a signed-in invitee gets `alreadyMember` from `accept`).
  *
- * Order: the link is looked up first, outside any transaction, so a used,
- * expired, revoked, suspended-tenant or archived-tenant link touches no
- * account; the address's account is resolved (`invitedAccount`); then one
+ * Order, as `verifySignInLink` checks: the link is looked up first, outside
+ * any transaction, so a used, expired, revoked, suspended-tenant or
+ * archived-tenant link touches no account; the maintenance mode is
+ * re-checked (`assertJoinAllowedByMode`); the address's account is resolved
+ * and passed through `assertSignInAllowed` (`invitedAccount`); the mode is
+ * checked once more; then one
  * transaction creates the account or locks it, claims the invitation, adds
  * the membership (an existing one keeps its role), audits
  * `invitation.accepted` and issues the session. A claim that loses (the link
@@ -953,12 +985,16 @@ async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<Use
  * @param rawToken - The raw token from the link.
  * @returns The session, and the tenant and role it joined with.
  * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` when a mode began after the route's gate.
  */
 export async function verifyInvitation(rawToken: string): Promise<InvitationSession> {
   const tokenHash = hashToken(rawToken)
   const valid = await invitationRepository.findValidByTokenHash(tokenHash)
   if (!valid) throw invitationInvalid()
+  assertJoinAllowedByMode()
   const account = await invitedAccount(valid.invitation.email)
+  // Again after the claim's own transactions, so a mode that began meanwhile writes no join.
+  assertJoinAllowedByMode()
   const isNewUser = account === undefined
 
   const sessionId = randomUUID()

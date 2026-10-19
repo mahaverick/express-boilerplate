@@ -679,6 +679,45 @@ describe('POST /auth/link/verify', () => {
     expect(await refreshRows(seeded.id ?? '')).toEqual([{ revoked: true }, { revoked: false }])
   })
 
+  it.each(['deleted', 'deactivated'] as const)(
+    'answers LINK_INVALID with no session when the never-verified account is %s during its claim',
+    async (change) => {
+      const user = await createTrackedUser({
+        email: uniqueEmail(`claim-${change}`),
+        verified: false,
+      })
+      const token = await issueTestLink(user.email)
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+      const realLock = UserRepository.prototype.lockById
+      const changed = { done: false }
+      /**
+       * Stands in for `UserRepository.lockById`: just before the claim's first
+       * lock, a delete or a deactivation commits on another connection.
+       */
+      const changingLock: typeof realLock = async function (this: UserRepository, ...arguments_) {
+        const [id, mode] = arguments_
+        if (mode === 'no key update' && id === user.id && !changed.done) {
+          changed.done = true
+          await (change === 'deleted'
+            ? sql`update users set deleted_at = now() where id = ${user.id}`
+            : sql`update users set active = false where id = ${user.id}`)
+        }
+        return realLock.apply(this, arguments_)
+      }
+
+      let response: Response | undefined
+      await withMutatedMethod(UserRepository.prototype, 'lockById', changingLock, async () => {
+        response = await postVerify(token)
+      })
+
+      expect(response?.status).toBe(400)
+      expect(response?.body).toMatchObject({ code: LINK_INVALID_CODE })
+      const cookies = (response?.headers['set-cookie'] as unknown as string[] | undefined) ?? []
+      expect(cookies.some((line) => line.startsWith(`${REFRESH_COOKIE_NAME}=`))).toBe(false)
+      expect(await refreshRows(user.id)).toEqual([])
+    }
+  )
+
   it('creates no account when full maintenance begins between the peek and the claim', async () => {
     const email = uniqueEmail('flip-full')
     const token = await issueTestLink(email)

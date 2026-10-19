@@ -20,6 +20,29 @@ const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
 
 /**
+ * The 500 a claim answers when the account it locks is gone (deleted since
+ * the caller's lookup). A link verify maps it to its own generic invalid
+ * answer (`isClaimedAccountGone`); every other caller sees the plain 500.
+ */
+class ClaimedAccountGoneError extends HttpError {
+  /**
+   * The 500 with the claim's fixed message.
+   */
+  constructor() {
+    super('Claimed user not found', 500)
+  }
+}
+
+/**
+ * Whether a claim failed because the account it was claiming is gone.
+ * @param error - The error `claimNeverVerifiedAccount` threw.
+ * @returns True for `ClaimedAccountGoneError`.
+ */
+export function isClaimedAccountGone(error: unknown): boolean {
+  return error instanceof ClaimedAccountGoneError
+}
+
+/**
  * Create a verified account for an address whose mailbox was just proven:
  * the user row, the release of the address's `email` row from any
  * soft-deleted account, the new account's `email` row, and the
@@ -88,7 +111,7 @@ export function isAddressTaken(error: unknown): boolean {
  * @param userId - The never-verified account's id.
  * @param inLock - Writes to make in the claim's transaction, after the lock and before the verification.
  * @returns The account as the claim's transaction left it.
- * @throws {HttpError} 500 when the account vanished mid-claim.
+ * @throws {HttpError} 500 when the account vanished mid-claim (`isClaimedAccountGone`).
  */
 export async function claimNeverVerifiedAccount(
   userId: string,
@@ -96,7 +119,7 @@ export async function claimNeverVerifiedAccount(
 ): Promise<User> {
   const firstPass = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(userId, 'no key update', tx)
-    if (!locked) throw new HttpError('Claimed user not found', 500)
+    if (!locked) throw new ClaimedAccountGoneError()
     if (locked.emailVerifiedAt !== null) return { verified: locked }
     return { sessionIds: await revokeSessionRows(userId, {}, tx) }
   })
@@ -105,7 +128,7 @@ export async function claimNeverVerifiedAccount(
 
   const { claimed, verifiedNow, revokedSessionIds } = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(userId, 'no key update', tx)
-    if (!locked) throw new HttpError('Claimed user not found', 500)
+    if (!locked) throw new ClaimedAccountGoneError()
     if (locked.emailVerifiedAt !== null) {
       return { claimed: locked, verifiedNow: false, revokedSessionIds: [] }
     }
@@ -113,7 +136,7 @@ export async function claimNeverVerifiedAccount(
     const verified = await markEmailVerified(userId, tx)
     const sessionIds = await revokeSessionRows(userId, {}, tx)
     const row = await userRepository.findById(userId, {}, tx)
-    if (!row) throw new HttpError('Claimed user not found', 500)
+    if (!row) throw new ClaimedAccountGoneError()
     return { claimed: row, verifiedNow: verified !== undefined, revokedSessionIds: sessionIds }
   })
   await denySessionsAfterCommit(userId, revokedSessionIds)

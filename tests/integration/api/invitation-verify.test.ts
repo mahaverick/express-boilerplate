@@ -528,6 +528,27 @@ describe('POST /api/v1/invitations/verify', () => {
     expect(await refreshRows(earlier.userId)).toEqual([{ revoked: true }, { revoked: false }])
   })
 
+  it('signs in the invitee, not the signed-in user, and revokes the session they presented', async () => {
+    const { tenant, owner } = await createTenant()
+    const signedIn = await signInByLink(uniqueEmail('someone-else'))
+    const invitee = await createTrackedUser({ email: uniqueEmail('invitee-b') })
+    const { rawToken } = await seedInvitation(tenant, owner, invitee.email)
+
+    const response = await request(app)
+      .post('/api/v1/invitations/verify')
+      .set('Cookie', signedIn.refreshCookie)
+      .set('Authorization', `Bearer ${signedIn.accessToken}`)
+      .send({ token: rawToken })
+
+    expect(response.status).toBe(200)
+    expect(verifyData(response).user.id).toBe(invitee.id)
+    expect(await refreshRows(signedIn.userId)).toEqual([{ revoked: true }])
+    expect(await refreshRows(invitee.id)).toEqual([{ revoked: false }])
+    expect(
+      await userMembershipRepository.findByUserAndTenant(signedIn.userId, tenant.id)
+    ).toBeUndefined()
+  })
+
   it('refuses a disallowed Origin', async () => {
     const { tenant, owner } = await createTenant()
     const { rawToken, invitationId } = await seedInvitation(tenant, owner, uniqueEmail('origin'))
