@@ -334,8 +334,12 @@ deactivation or a deletion commits.
   holds the same lock while it claims.
 - A staff deactivation, sign-out or deletion locks the user row
   `FOR NO KEY UPDATE` (`lockStaffPair`, `src/services/platform-user.service.ts`),
-  writes, and revokes the sessions and the address's live sign-in links in one
-  transaction, then denies the revoked sessions after commit.
+  writes and revokes the sessions in one transaction, then denies the revoked
+  sessions after commit. A deactivation and a sign-out also revoke the
+  address's live sign-in links there. A deletion leaves them: a later click
+  re-proves the mailbox and creates a fresh account for its owner
+  ([Account creation on click](#account-creation-on-click)), never the deleted
+  one, and a user purge deletes them (`deleteForEmail`).
 - So either the sign-in commits first and the deactivation revokes its
   session, or it waits for the lock and finds the account inactive.
 - A write that makes the user a tenant owner or staff takes the same

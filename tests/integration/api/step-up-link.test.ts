@@ -282,7 +282,7 @@ describe('POST /api/v1/auth/step-up/link/request', () => {
     expect(retryAfter).toBeLessThanOrEqual(cooldownSeconds)
     // The default 1m cooldown just began, so the wait reads in whole seconds or as 1 minute.
     expect((response.body as { message?: string }).message).toMatch(
-      /^Check your inbox for the link we just sent\. You can ask for another in (\d+ seconds|1 minute)\.$/
+      /^Check your inbox for the link we sent\. You can ask for another in (\d+ seconds|1 minute)\.$/
     )
     expect(await linkRows(session.userId)).toHaveLength(1)
   })

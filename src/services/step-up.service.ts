@@ -162,7 +162,7 @@ export async function requestStepUpLink(
   if (!claim.claimed) {
     const retryAfterSeconds = Math.max(1, Math.ceil(claim.retryAfterMs / MS_PER_SECOND))
     throw new HttpError(
-      `Check your inbox for the link we just sent. You can ask for another in ${formatWait(retryAfterSeconds)}.`,
+      `Check your inbox for the link we sent. You can ask for another in ${formatWait(retryAfterSeconds)}.`,
       429,
       STEP_UP_LINK_COOLDOWN_CODE,
       undefined,

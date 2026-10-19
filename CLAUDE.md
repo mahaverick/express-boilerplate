@@ -28,9 +28,10 @@ points at the code or doc that holds the detail. How things work is in
 - **`sign_in_link` rows never carry a user id.** The click looks the account up
   by address, which is what gives a soft-deleted user's address a fresh
   account (`user_tokens_shape_check` enforces it). A user-wide revocation
-  therefore misses them, so a path that revokes all of a user's sessions also
-  calls `revokeSignInLinksOf` (`src/services/session.service.ts`) in its
-  transaction.
+  therefore misses them, so revoke-others, a staff sign-out and a deactivation
+  also call `revokeSignInLinksOf` (`src/services/session.service.ts`) in their
+  transaction. A deletion deliberately does not: a later click creates a fresh
+  account for the same mailbox owner.
 - **A dead link answers 400 `LINK_INVALID`, never 401** (sign-in and step-up
   verify): clients sign out on a 401. Keep one body for every dead link, and
   keep every check that refuses before the claim on a read-only peek, so the
