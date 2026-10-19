@@ -41,6 +41,12 @@ describe('platformEmailListSchema', () => {
     })
   })
 
+  it('accepts a retired template key beside a live one, so old messages stay findable', () => {
+    expect(
+      platformEmailListSchema.parse({ template: 'account_setup,welcome' }).filters.template
+    ).toEqual(['account_setup', 'welcome'])
+  })
+
   it('accepts a one-day range (to is inclusive)', () => {
     expect(
       platformEmailListSchema.safeParse({ from: '2026-09-30', to: '2026-09-30' }).success
@@ -63,7 +69,7 @@ describe('platformEmailListSchema', () => {
   it.each([
     [{ status: 'opened' }],
     [{ status: 'sent,opened' }],
-    [{ template: 'welcome' }],
+    [{ template: 'not_a_template' }],
     [{ tenant: 'not-a-uuid' }],
     [{ user: '42' }],
     [{ from: '2026-9-1' }],

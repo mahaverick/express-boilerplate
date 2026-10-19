@@ -12,6 +12,7 @@ import {
   addJob,
   closeQueue,
   getAnalyticsQueue,
+  getAuthEmailQueue,
   getEmailQueue,
   getQueueConnection,
   isQueueReachable,
@@ -74,6 +75,7 @@ describe('queue.service', () => {
      * and process it as a real enqueue.
      */
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await closeQueue()
     expect(await isQueueReachable()).toBe(false)
   })

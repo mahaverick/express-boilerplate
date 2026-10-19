@@ -2,10 +2,10 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 30 literal strings, in order; (2) every entry's
+ * stays exactly the 24 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
- * (3) the five key-derivation functions produce byte-identical output
+ * (3) the four key-derivation functions produce byte-identical output
  * for a fixed input, so a caller mid-window (Redis already holding
  * counts keyed by the previous output) is not silently split onto a new
  * bucket.
@@ -23,28 +23,17 @@ import {
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
-  'register',
-  'login',
-  'login-ip',
-  'login-account',
   'refresh',
   'logout',
-  'verify-email',
-  'resend-verification-ip',
-  'resend-verification-email',
-  'forgot-password-ip',
-  'reset-password',
   'google-oauth',
   'google-oauth-callback',
   'create-tenant',
   'invite-tenant-member',
-  'change-password',
   'invitation-preview',
   'invitation-accept',
   'platform-search',
   'authenticated-write',
   'platform-write',
-  'reauthenticate',
   'email-webhook',
   'email-webhook-rejected',
   'analytics-proxy',
@@ -53,6 +42,11 @@ const EXPECTED_NAMES_IN_ORDER = [
   'maintenance-status',
   'maintenance-mode-change',
   'revoke-other-sessions',
+  'sign-in-link-request',
+  'sign-in-link-verify',
+  'invitation-verify',
+  'step-up-link',
+  'step-up-google',
 ]
 
 /**
@@ -69,35 +63,8 @@ const EXPECTED_RATE_LIMITS: {
   limit: number
   keyBy: 'ip' | 'user' | 'email' | 'function'
 }[] = [
-  { key: 'register', name: 'register', windowMs: 3_600_000, limit: 100, keyBy: 'ip' },
-  { key: 'login', name: 'login', windowMs: 900_000, limit: 5, keyBy: 'function' },
-  { key: 'loginIp', name: 'login-ip', windowMs: 900_000, limit: 100, keyBy: 'ip' },
-  { key: 'loginAccount', name: 'login-account', windowMs: 3_600_000, limit: 100, keyBy: 'email' },
   { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   { key: 'logout', name: 'logout', windowMs: 300_000, limit: 300, keyBy: 'ip' },
-  { key: 'verifyEmail', name: 'verify-email', windowMs: 900_000, limit: 30, keyBy: 'ip' },
-  {
-    key: 'resendVerificationIp',
-    name: 'resend-verification-ip',
-    windowMs: 3_600_000,
-    limit: 5,
-    keyBy: 'ip',
-  },
-  {
-    key: 'resendVerificationEmail',
-    name: 'resend-verification-email',
-    windowMs: 3_600_000,
-    limit: 20,
-    keyBy: 'email',
-  },
-  {
-    key: 'forgotPasswordIp',
-    name: 'forgot-password-ip',
-    windowMs: 3_600_000,
-    limit: 5,
-    keyBy: 'ip',
-  },
-  { key: 'resetPassword', name: 'reset-password', windowMs: 900_000, limit: 10, keyBy: 'ip' },
   { key: 'googleOAuth', name: 'google-oauth', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   {
     key: 'googleOAuthCallback',
@@ -114,7 +81,6 @@ const EXPECTED_RATE_LIMITS: {
     limit: 30,
     keyBy: 'user',
   },
-  { key: 'changePassword', name: 'change-password', windowMs: 900_000, limit: 5, keyBy: 'user' },
   {
     key: 'invitationPreview',
     name: 'invitation-preview',
@@ -138,13 +104,6 @@ const EXPECTED_RATE_LIMITS: {
     keyBy: 'user',
   },
   { key: 'platformWrite', name: 'platform-write', windowMs: 60_000, limit: 30, keyBy: 'user' },
-  {
-    key: 'reauthenticate',
-    name: 'reauthenticate',
-    windowMs: 900_000,
-    limit: 5,
-    keyBy: 'user',
-  },
   {
     key: 'emailWebhook',
     name: 'email-webhook',
@@ -189,6 +148,29 @@ const EXPECTED_RATE_LIMITS: {
     limit: 10,
     keyBy: 'user',
   },
+  {
+    key: 'signInLinkRequest',
+    name: 'sign-in-link-request',
+    windowMs: 900_000,
+    limit: 10,
+    keyBy: 'ip',
+  },
+  {
+    key: 'signInLinkVerify',
+    name: 'sign-in-link-verify',
+    windowMs: 900_000,
+    limit: 20,
+    keyBy: 'ip',
+  },
+  {
+    key: 'invitationVerify',
+    name: 'invitation-verify',
+    windowMs: 900_000,
+    limit: 20,
+    keyBy: 'ip',
+  },
+  { key: 'stepUpLink', name: 'step-up-link', windowMs: 900_000, limit: 10, keyBy: 'user' },
+  { key: 'stepUpGoogle', name: 'step-up-google', windowMs: 900_000, limit: 10, keyBy: 'user' },
 ]
 
 describe('RATE_LIMITS key stability', () => {
@@ -211,28 +193,6 @@ describe('RATE_LIMITS key stability', () => {
       expect(typeof actual.keyBy === 'function' ? 'function' : actual.keyBy).toBe(keyBy)
     }
   )
-
-  it('counts only well-formed, refused attempts against loginAccount', () => {
-    const spec = RATE_LIMITS.loginAccount
-    expect(spec.counts).toBe('rejected')
-    const wellFormed = { body: { email: 'owner@example.com', password: 'x' } } as unknown as Request
-    const noPassword = { body: { email: 'owner@example.com' } } as unknown as Request
-    const noBody = {} as unknown as Request
-    expect(spec.skip?.(wellFormed)).toBe(false)
-    expect(spec.skip?.(noPassword)).toBe(true)
-    expect(spec.skip?.(noBody)).toBe(true)
-  })
-
-  it('derives the composite key for login: ip + ":" + the hashed normalised email', () => {
-    const request = {
-      ip: '203.0.113.5',
-      body: { email: 'Victim@Example.com' },
-    } as unknown as Request
-    const keyBy = RATE_LIMITS.login.keyBy
-    if (typeof keyBy !== 'function') throw new Error('login.keyBy must be a function')
-    expect(keyBy(request)).toBe(`203.0.113.5:${hashRateLimitIdentity('victim@example.com')}`)
-    expect(keyBy(request)).not.toContain('example.com')
-  })
 
   it('derives the email-only key from the normalised submitted email, hashed, ip ignored', () => {
     const request = { body: { email: 'Victim@Example.com' } } as unknown as Request

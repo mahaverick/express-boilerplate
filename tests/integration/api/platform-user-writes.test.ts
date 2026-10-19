@@ -1,18 +1,26 @@
 /**
- * @file Staff creating and editing users, and the set-password and
- * verification mails. Mail is asserted on the queue, never delivered.
+ * @file Staff creating and editing users, the welcome mail a created user
+ * gets, and the staff-sent sign-in link. Mail is asserted on the queue,
+ * never delivered.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
-import type { EmailJobData } from '@/jobs/email.job'
-import type { NotificationJobData } from '@/jobs/notification.job'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { ACCOUNT_SETUP_TEMPLATE_KEY } from '@/templates/email/account-setup.template'
-import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
+import { frontendUrl } from '@/services/frontend-links.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
+import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
+import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
+import { requireDurationMs } from '@/utilities/duration.utilities'
+import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
@@ -33,7 +41,12 @@ interface ApiEnvelope<TData> {
 }
 
 const app = createApp()
-const HOUR_MS = 60 * 60 * 1000
+
+/**
+ * Every address a test mailed a sign-in link to: those rows carry no user,
+ * so deleting the user leaves them, and `afterEach` deletes them by address.
+ */
+const usedEmails: string[] = []
 
 /**
  * The envelope's `data`, failing the test with the status when the response carries none.
@@ -78,30 +91,68 @@ async function auditRows(
 }
 
 /**
- * Waits for the account-setup mail queued for `to`, since mail is asserted on the queue.
+ * Waits for the mail of one template queued for `to`, since mail is asserted on the queue.
  */
-function setupMailFor(to: string) {
+function mailFor(to: string, templateKey: EmailTemplateKey) {
   return waitForJob<EmailJobData>(
-    getEmailQueue(),
-    (data) => data.to === to && data.templateKey === ACCOUNT_SETUP_TEMPLATE_KEY
+    emailQueueFor(templateKey),
+    (data) => data.to === to.toLowerCase() && data.templateKey === templateKey
   )
+}
+
+/**
+ * The sign-in link rows of one address, oldest first.
+ */
+async function linkRows(email: string): Promise<
+  {
+    userId: string | null
+    app: string
+    revoked: boolean
+    createdAt: Date
+    expiresAt: Date
+  }[]
+> {
+  return sql<
+    { userId: string | null; app: string; revoked: boolean; createdAt: Date; expiresAt: Date }[]
+  >`
+    select user_id as "userId", app, revoked_at is not null as revoked,
+      created_at as "createdAt", expires_at as "expiresAt"
+    from user_tokens
+    where email = ${email.toLowerCase()} and purpose = 'sign_in_link'
+    order by created_at, id
+  `
+}
+
+/**
+ * The frontend recorded on the message row of a queued mail.
+ */
+async function linkAppOf(data: EmailJobData): Promise<string | undefined> {
+  const [row] = await sql<{ linkApp: string }[]>`
+    select link_app as "linkApp" from email_messages where id = ${data.messageId ?? ''}
+  `
+  return row?.linkApp
 }
 
 afterEach(async () => {
   await truncateAuditLogs()
   await deleteTrackedUsers()
+  if (usedEmails.length === 0) return
+  await sql`delete from user_tokens where email = any(${usedEmails.map((email) => email.toLowerCase())})`
+  usedEmails.length = 0
 })
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
 
 describe('POST /api/v1/platform/users', () => {
-  it('creates a passwordless, unverified user, mails a 24h set-password link and audits it', async () => {
+  it('sends a welcome mail with a sign-in link when staff create a user', async () => {
     const { token } = await createTrackedStaff('admin')
     const email = `new-${randomUUID()}@example.test`
+    usedEmails.push(email)
 
     const response = await post(token, '', { email, firstName: 'Grace' })
 
@@ -111,28 +162,30 @@ describe('POST /api/v1/platform/users', () => {
       emailSent: boolean
     }>(response)
     expect(body.emailSent).toBe(true)
-    // eslint-disable-next-line unicorn/no-null -- JSON null: not verified yet
+    // eslint-disable-next-line unicorn/no-null -- JSON null: verified by the first click
     expect(body.user).toMatchObject({ email, active: true, emailVerifiedAt: null })
     const userId = body.user.id
 
-    const [stored] = await sql`select password_hash from users where id = ${userId}`
-    expect(stored?.password_hash).toBeNull()
     const providers = await sql`select provider from auth_providers where user_id = ${userId}`
     expect(providers).toEqual([{ provider: 'email' }])
 
-    const [setupToken] = await sql`
-      select expires_at, created_at from user_tokens
-      where user_id = ${userId} and purpose = 'password_reset' and revoked_at is null`
-    const ttl =
-      new Date(setupToken?.expires_at as string).getTime() -
-      new Date(setupToken?.created_at as string).getTime()
-    expect(Math.abs(ttl - 24 * HOUR_MS)).toBeLessThan(60_000)
+    const links = await linkRows(email)
+    expect(links).toHaveLength(1)
+    // eslint-disable-next-line unicorn/no-null -- a sign_in_link row is keyed by address, never a user
+    expect(links[0]).toMatchObject({ userId: null, app: 'web', revoked: false })
+    const expiresAt = new Date(links[0]?.expiresAt ?? 0)
+    const createdAt = new Date(links[0]?.createdAt ?? 0)
+    const ttlMs = requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+    expect(Math.abs(expiresAt.getTime() - createdAt.getTime() - ttlMs)).toBeLessThan(60_000)
 
-    const job = await setupMailFor(email)
-    const variables = job.data.variables as { setupUrl: string; firstName: string }
+    const job = await mailFor(email, WELCOME_TEMPLATE_KEY)
+    const variables = job.data.variables as { signInUrl: string; firstName: string }
     expect(variables.firstName).toBe('Grace')
-    expect(new URL(variables.setupUrl).origin).toBe(new URL(getEnv().WEB_URL).origin)
-    expect(new URL(variables.setupUrl).pathname).toBe('/reset-password')
+    const signInUrl = new URL(variables.signInUrl)
+    expect(signInUrl.origin).toBe(new URL(getEnv().WEB_URL).origin)
+    expect(signInUrl.pathname).toBe('/auth/link')
+    expect(signInUrl.searchParams.get('email')).toBe(email)
+    expect(await linkAppOf(job.data)).toBe('web')
 
     const platform = await platformTenant()
     expect(await auditRows(userId)).toEqual([
@@ -142,29 +195,28 @@ describe('POST /api/v1/platform/users', () => {
     await sql`delete from users where id = ${userId}`
   })
 
-  it('redeeming the set-password link stores the password and verifies the address', async () => {
+  it('signs the new user in and verifies the address when they click the welcome link', async () => {
     const { token } = await createTrackedStaff('admin')
-    const email = `redeem-${randomUUID()}@example.test`
+    const email = `welcome-click-${randomUUID()}@example.test`
+    usedEmails.push(email)
     const created = await post(token, '', { email })
     const userId = dataOf<{ user: { id: string } }>(created).user.id
-    const job = await setupMailFor(email)
-    const setupUrl = new URL((job.data.variables as { setupUrl: string }).setupUrl)
-    const rawToken = setupUrl.searchParams.get('token') ?? ''
+    const job = await mailFor(email, WELCOME_TEMPLATE_KEY)
+    const signInUrl = new URL((job.data.variables as { signInUrl: string }).signInUrl)
 
-    const reset = await request(app)
-      .post('/api/v1/auth/reset-password')
-      .send({ token: rawToken, password: 'a brand new secret passphrase' })
+    const verify = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token: signInUrl.searchParams.get('token') ?? '' })
 
-    expect(reset.status).toBe(200)
-    const [row] = await sql<{ verified: Date | null; hash: string | null }[]>`
-      select email_verified_at as verified, password_hash as hash from users where id = ${userId}
-    `
-    expect(row?.verified).not.toBeNull()
-    expect(row?.hash).not.toBeNull()
-    const login = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email, password: 'a brand new secret passphrase' })
-    expect(login.status).toBe(200)
+    expect(verify.status).toBe(200)
+    expect(dataOf<{ accessToken: string; user: { id: string } }>(verify)).toMatchObject({
+      accessToken: expect.any(String) as unknown,
+      user: { id: userId },
+    })
+    expect(verify.headers['set-cookie']).toBeDefined()
+    const [row] = await sql<{ verified: boolean }[]>`
+      select email_verified_at is not null as verified from users where id = ${userId}`
+    expect(row?.verified).toBe(true)
     await truncateAuditLogs()
     await sql`delete from users where id = ${userId}`
   })
@@ -204,7 +256,7 @@ describe('POST /api/v1/platform/users', () => {
 
     const response = await post(viewer.token, '', { email })
     expect(response.status).toBe(404)
-    const response2 = await post(admin.token, '', { email, password: 'chosen-by-staff' })
+    const response2 = await post(admin.token, '', { email, active: false })
     expect(response2.status).toBe(400)
     // The server picks the link's frontend: a new user holds no platform role, so it is the web app.
     const response3 = await post(admin.token, '', { email, app: 'apex' })
@@ -238,6 +290,9 @@ describe('PATCH /api/v1/platform/users/:id', () => {
     const response = await patch(token, user.id, { firstName: 'Changed' })
 
     expect(response.status).toBe(403)
+    expect((response.body as { message?: string }).message).toBe(
+      "You can't edit your own account here. Ask another platform admin."
+    )
     const [row] = await sql`select first_name from users where id = ${user.id}`
     expect(row?.first_name).toBe('Self')
     expect(await auditRows(user.id)).toEqual([])
@@ -281,117 +336,122 @@ describe('PATCH /api/v1/platform/users/:id', () => {
   })
 })
 
-describe('POST /api/v1/platform/users/:id/password-setup', () => {
-  it('sends a set-password mail to a passwordless user and revokes the earlier link', async () => {
+describe('POST /api/v1/platform/users/:id/sign-in-link', () => {
+  it('mails a web sign-in link to a customer and audits user.sign_in_link_sent { app: web }', async () => {
     const { token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ verified: false })
+    const target = await createTrackedUser({ firstName: 'Ada' })
+    usedEmails.push(target.email)
 
-    const response = await post(token, `/${target.id}/password-setup`)
-    expect(response.status).toBe(200)
-    const firstJob = await setupMailFor(target.email)
-    const response2 = await post(token, `/${target.id}/password-setup`)
-    expect(response2.status).toBe(200)
+    const first = await post(token, `/${target.id}/sign-in-link`)
+    expect(first.status).toBe(200)
+    expect(dataOf<{ emailSent: boolean }>(first).emailSent).toBe(true)
+    const second = await post(token, `/${target.id}/sign-in-link`)
+    expect(second.status).toBe(200)
 
-    const live = await sql`
-      select id from user_tokens
-      where user_id = ${target.id} and purpose = 'password_reset' and revoked_at is null`
-    expect(live).toHaveLength(1)
-    expect(firstJob.data.templateKey).toBe(ACCOUNT_SETUP_TEMPLATE_KEY)
+    const job = await mailFor(target.email, SIGN_IN_LINK_TEMPLATE_KEY)
+    const variables = job.data.variables as { signInUrl: string; firstName: string; reason: string }
+    expect(variables).toMatchObject({ firstName: 'Ada', reason: 'staff' })
+    expect(new URL(variables.signInUrl).origin).toBe(new URL(getEnv().WEB_URL).origin)
+    expect(await linkAppOf(job.data)).toBe('web')
+    // Issuing a link revokes the address's earlier one.
+    const rows = await linkRows(target.email)
+    expect(rows.map((row) => [row.app, row.revoked])).toEqual([
+      ['web', true],
+      ['web', false],
+    ])
     expect(await auditRows(target.id)).toMatchObject([
-      { action: 'user.password_setup_sent', metadata: { kind: 'setup' } },
-      { action: 'user.password_setup_sent', metadata: { kind: 'setup' } },
+      { action: 'user.sign_in_link_sent', metadata: { app: 'web' } },
+      { action: 'user.sign_in_link_sent', metadata: { app: 'web' } },
     ])
   })
 
-  it('sends an ordinary reset mail to a user with a password', async () => {
+  it('mails an apex link to a staff target', async () => {
     const { token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true })
+    const staff = await createTrackedStaff('viewer')
+    usedEmails.push(staff.user.email)
 
-    const response = await post(token, `/${target.id}/password-setup`)
+    const response = await post(token, `/${staff.user.id}/sign-in-link`)
 
     expect(response.status).toBe(200)
-    expect(dataOf<{ emailSent: boolean }>(response).emailSent).toBe(true)
-    await waitForJob<NotificationJobData>(
-      getNotificationQueue(),
-      (data) => data.userId === target.id && data.email?.templateKey === PASSWORD_RESET_TEMPLATE_KEY
-    )
-    expect(await auditRows(target.id)).toMatchObject([
-      { action: 'user.password_setup_sent', metadata: { kind: 'reset' } },
+    const job = await mailFor(staff.user.email, SIGN_IN_LINK_TEMPLATE_KEY)
+    const signInUrl = (job.data.variables as { signInUrl: string }).signInUrl
+    expect(new URL(signInUrl).origin).toBe(new URL(frontendUrl('apex')).origin)
+    expect(await linkAppOf(job.data)).toBe('apex')
+    const rows = await linkRows(staff.user.email)
+    expect(rows.map((row) => row.app)).toEqual(['apex'])
+    expect(await auditRows(staff.user.id)).toMatchObject([
+      { action: 'user.sign_in_link_sent', metadata: { app: 'apex' } },
     ])
+  })
+
+  it('answers 409 for a deactivated user and mails nothing', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const target = await createTrackedUser({ active: false })
+    usedEmails.push(target.email)
+
+    const response = await post(token, `/${target.id}/sign-in-link`)
+
+    expect(response.status).toBe(409)
+    expect((response.body as ApiEnvelope<unknown>).message).toBe(
+      'This account is deactivated. Reactivate it, then try again.'
+    )
+    expect(await linkRows(target.email)).toEqual([])
+    expect(await auditRows(target.id)).toEqual([])
+  })
+
+  it('answers 404 for an unknown, a soft-deleted and a malformed id', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const gone = await createTrackedUser()
+    usedEmails.push(gone.email)
+    await sql`update users set deleted_at = now() where id = ${gone.id}`
+
+    for (const id of [randomUUID(), gone.id, 'nope']) {
+      const response = await post(token, `/${id}/sign-in-link`)
+      expect(response.status).toBe(404)
+    }
+    expect(await linkRows(gone.email)).toEqual([])
   })
 
   it('refuses a staff admin mailing a staff owner (403), and allows an admin mailing an admin', async () => {
     const admin = await createTrackedStaff('admin')
     const owner = await createTrackedStaff('owner')
     const otherAdmin = await createTrackedStaff('admin')
+    usedEmails.push(owner.user.email, otherAdmin.user.email)
 
-    const response = await post(admin.token, `/${owner.user.id}/password-setup`)
-    expect(response.status).toBe(403)
-    const response2 = await post(admin.token, `/${otherAdmin.user.id}/password-setup`)
-    expect(response2.status).toBe(200)
-  })
-})
-
-describe('POST /api/v1/platform/users/:id/resend-verification', () => {
-  it('mails a verification link to an unverified user with a password, and audits it', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true, verified: false })
-
-    const first = await post(token, `/${target.id}/resend-verification`)
-    expect(first.status).toBe(200)
-    await waitForJob<NotificationJobData>(
-      getNotificationQueue(),
-      (data) => data.userId === target.id && data.type === 'verify_email'
-    )
-    await truncateAuditLogs()
-    const response = await post(token, `/${target.id}/resend-verification`)
-
-    expect(response.status).toBe(200)
-    await waitForJob<NotificationJobData>(
-      getNotificationQueue(),
-      (data) => data.userId === target.id && data.type === 'verify_email'
-    )
-    expect(await auditRows(target.id)).toMatchObject([
-      { action: 'user.verification_resent', metadata: {} },
-    ])
-    const live = await sql`
-      select id from user_tokens
-      where user_id = ${target.id} and purpose = 'email_verification' and revoked_at is null`
-    expect(live).toHaveLength(1)
+    const refused = await post(admin.token, `/${owner.user.id}/sign-in-link`)
+    expect(refused.status).toBe(403)
+    expect(await linkRows(owner.user.email)).toEqual([])
+    expect(await auditRows(owner.user.id)).toEqual([])
+    const allowed = await post(admin.token, `/${otherAdmin.user.id}/sign-in-link`)
+    expect(allowed.status).toBe(200)
   })
 
-  it('answers 409 to either mail for a deactivated user, whose link would lead nowhere', async () => {
+  it('refuses a platform viewer with 404', async () => {
+    const viewer = await createTrackedStaff('viewer')
+    const target = await createTrackedUser()
+    usedEmails.push(target.email)
+
+    const response = await post(viewer.token, `/${target.id}/sign-in-link`)
+
+    expect(response.status).toBe(404)
+    expect(await linkRows(target.email)).toEqual([])
+  })
+
+  it('answers 404 on the removed password-setup and resend-verification paths', async () => {
     const { token } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true, verified: false, active: false })
+    const target = await createTrackedUser()
+    const unknown = await post(token, `/${target.id}/not-a-route`)
 
-    const setup = await post(token, `/${target.id}/password-setup`)
-    const verification = await post(token, `/${target.id}/resend-verification`)
-
-    for (const response of [setup, verification]) {
-      expect(response.status).toBe(409)
-      expect((response.body as ApiEnvelope<unknown>).message).toBe(
-        'This account is deactivated; reactivate it first'
-      )
+    for (const path of ['password-setup', 'resend-verification']) {
+      const response = await post(token, `/${target.id}/${path}`)
+      expect(response.status).toBe(unknown.status)
+      expect(response.body).toEqual({
+        ...(unknown.body as object),
+        requestId: (response.body as { requestId?: unknown }).requestId,
+      })
     }
+    expect(unknown.status).toBe(404)
     expect(await auditRows(target.id)).toEqual([])
-  })
-
-  it('answers 409 for a verified user and for a passwordless one', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const verified = await createTrackedUser({ hasPassword: true })
-    const passwordless = await createTrackedUser({ verified: false })
-
-    const verifiedResponse = await post(token, `/${verified.id}/resend-verification`)
-    expect(verifiedResponse.status).toBe(409)
-    expect((verifiedResponse.body as ApiEnvelope<unknown>).message).toBe(
-      'Email address already verified'
-    )
-
-    const passwordlessResponse = await post(token, `/${passwordless.id}/resend-verification`)
-    expect(passwordlessResponse.status).toBe(409)
-    expect((passwordlessResponse.body as ApiEnvelope<unknown>).message).toBe(
-      'This account has no password yet; send a set-password link instead'
-    )
   })
 })
 

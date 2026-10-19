@@ -1,7 +1,7 @@
 /**
  * @file A change into `full` through the real app with the notification
  * and email Workers running: the notices are delivered (an in-app row and
- * a finished email) before every queue pauses, nothing is left pending,
+ * a finished email) before every queue but auth-email pauses, nothing is left pending,
  * and switching off resumes the queues.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -22,6 +22,26 @@ import { request } from '../../helpers/request'
 
 const app = createApp()
 const emailWorker = startEmailWorker()
+
+/**
+ * What `full` leaves each queue: paused, but for auth-email.
+ */
+const FULL_PAUSE = {
+  email: true,
+  'auth-email': false,
+  notification: true,
+  maintenance: true,
+  analytics: true,
+}
+
+/**
+ * Each queue's pause flag in a view, keyed by queue name.
+ * @param view - The maintenance-mode view a change answered with.
+ * @returns The flags.
+ */
+function pausedByName(view: PlatformMaintenanceModeView): Record<string, boolean | null> {
+  return Object.fromEntries(view.queues.map((queue) => [queue.name, queue.paused]))
+}
 const notificationWorker = startNotificationWorker()
 const PATH = '/api/v1/platform/maintenance-mode'
 
@@ -71,7 +91,7 @@ describe('entering and leaving full', () => {
 
     expect(on.status).toBe(200)
     const onView = (on.body as { data: PlatformMaintenanceModeView }).data
-    expect(onView.queues.every((queue) => queue.paused === true)).toBe(true)
+    expect(pausedByName(onView)).toEqual(FULL_PAUSE)
     const [row] = await sql<{ count: number }[]>`
       select count(*)::int as count from notifications
       where user_id = ${admin.id} and type = 'maintenance_mode_changed'`
@@ -103,6 +123,6 @@ describe('entering and leaving full', () => {
 
     expect(response.status).toBe(200)
     const after = (response.body as { data: PlatformMaintenanceModeView }).data
-    expect(after.queues.every((queue) => queue.paused === true)).toBe(true)
+    expect(pausedByName(after)).toEqual(FULL_PAUSE)
   })
 })

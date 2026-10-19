@@ -5,14 +5,14 @@ Postgres, Redis, a validated environment, a documented HTTP error contract,
 OpenTelemetry traces and logs, and a git-hook and CI pipeline that enforces
 all of it.
 
-On top of that platform it ships email and password registration with email
-verification, JWT access tokens with rotating opaque refresh tokens, forgot,
-reset and change password, optional Google sign-in, multi-tenancy with roles
-and invitations, an audit log, platform staff access, in-app notifications over
-server-sent events, BullMQ jobs and a daily data-retention purge. A staff
-directory, email delivery tracking, onboarding, PostHog analytics, feature
-flags and a maintenance mode sit on the same base. How the code is built is in
-[ARCHITECTURE.md](ARCHITECTURE.md); [SECURITY.md](SECURITY.md) lists the
+On top of that platform it ships sign-in by emailed link, with the account
+created on the first click, optional Google sign-in, staff step-up by link or
+Google, JWT access tokens with rotating opaque refresh tokens, multi-tenancy
+with roles and one-click invitations, an audit log, platform staff access,
+in-app notifications over server-sent events, BullMQ jobs and a daily
+data-retention purge. A staff directory, email delivery tracking, onboarding,
+PostHog analytics, feature flags and a maintenance mode sit on the same base.
+How the code is built is in [ARCHITECTURE.md](ARCHITECTURE.md); [SECURITY.md](SECURITY.md) lists the
 defences and, under
 [what it does not implement](SECURITY.md#what-this-boilerplate-does-not-implement),
 what is left to you.
@@ -58,30 +58,31 @@ with a named list if a required variable is missing. The server listens on
 curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}; 503 when a dependency is down
 ```
 
-### Register and log in
+### Sign in
 
 ```bash
-curl -X POST http://localhost:4040/api/v1/auth/register \
+curl -X POST http://localhost:4040/api/v1/auth/link/request \
   -H 'Content-Type: application/json' \
-  -d '{"email":"grace@example.com","password":"a very long passphrase"}'
+  -d '{"email":"grace@example.com","app":"web"}'
 ```
 
-Registration answers `202` with the same body whether or not the address is
-free, and mails a verification link. Open Mailpit at <http://localhost:8025>,
-copy the `token` from the link, and verify with the account's password:
+The request answers `202` with the same body for every address, then mails a
+sign-in link. Read it in Mailpit at <http://localhost:8025>, or take the token
+from the newest message and verify it:
 
 ```bash
-curl -X POST http://localhost:4040/api/v1/auth/verify-email \
-  -H 'Content-Type: application/json' \
-  -d '{"token":"<token from the link>","password":"a very long passphrase"}'
+TOKEN=$(curl -s http://localhost:8025/api/v1/message/latest \
+  | grep -oE 'token=[A-Za-z0-9_-]{43}' | head -1 | cut -d= -f2)
 
-curl -X POST http://localhost:4040/api/v1/auth/login \
+curl -X POST http://localhost:4040/api/v1/auth/link/verify \
   -H 'Content-Type: application/json' \
-  -d '{"email":"grace@example.com","password":"a very long passphrase"}'
+  -d "{\"token\":\"$TOKEN\",\"email\":\"grace@example.com\"}"
 ```
 
-Login answers `data.user` and `data.accessToken`, and sets the refresh-token
-cookie. Send the token as `Authorization: Bearer <accessToken>` to reach an
+The first click for an address creates its account (`isNewUser: true`). Verify
+answers `data.user` and `data.accessToken`, and sets the refresh-token cookie.
+A link works once and expires in 15 minutes; send the first request again for
+a new one. Send the token as `Authorization: Bearer <accessToken>` to reach an
 authenticated route such as `GET /api/v1/profile`. Every `/api/v1/auth` route
 refuses a non-JSON body with 415. See
 [ARCHITECTURE.md](ARCHITECTURE.md#request-path-auth-and-beyond) for the rest.
@@ -173,7 +174,7 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                             |
 | `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                  |
 | `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                        |
-| `pnpm platform:grant -- <e> <role>` | Gives an existing, verified user a role in the platform tenant; see below.                          |
+| `pnpm platform:grant -- <e> <role>` | Gives an address a role in the platform tenant, creating its account; see below.                    |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).          |
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).              |
 | `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).      |
@@ -186,10 +187,13 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
 | `pnpm prepare`                      | Installs the husky git hooks; `pnpm install` runs it.                                               |
 
-`pnpm platform:grant -- <email> <role>` gives an existing user with a verified
-address a role (`owner` to `viewer`) in the platform tenant, audited as
-`platform.member.granted`. Nobody can invite staff before a platform owner
-exists, so this is how the first one is made.
+`pnpm platform:grant -- <email> <role>` gives the account at an address a role
+(`owner` to `viewer`) in the platform tenant, audited as
+`platform.member.granted`. An address with no account gets a verified one,
+audited as `user.created`; an unverified account is claimed as a sign-in link
+claims it: its federated links are removed, its sessions end and the
+address is verified. Nobody can invite staff before a platform owner exists, so this is how
+the first one is made.
 
 The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -231,8 +235,8 @@ provider IP past its budget ([SECURITY.md](SECURITY.md#mail-at-rest)) can be
 throttled (providers retry, and the event id makes a retry exact). A wrong
 `TRUST_PROXY` puts every caller in the proxy's single per-IP bucket.
 
-**Two senders.** Token emails (verification, password reset, account setup,
-invitations) go from `MAIL_FROM_TRANSACTIONAL`; the other mail goes from
+**Two senders.** Link emails (sign-in, step-up, welcome and invitation mail)
+go from `MAIL_FROM_TRANSACTIONAL`; the other mail goes from
 `MAIL_FROM`. Give `MAIL_FROM_TRANSACTIONAL` its own subdomain (for example
 `no-reply@auth.example.com`) and keep click tracking **off** for that domain
 at the provider: tracked links are rewritten through the provider's
@@ -275,10 +279,12 @@ the user's address: they belong to the mailbox, not the account.
   mail. It runs the action that sent it, which issues a fresh token, and that
   action's role rules, errors and audit entry apply unchanged; `email.resent`
   records the reason beside it. A template with no resend action
-  (`password_changed`, `registration_attempt`, `onboarding_reminder`,
-  `maintenance_mode_changed`) is never resent, nor is a row without the ids its
+  (`step_up_link`, `onboarding_reminder`, `maintenance_mode_changed`) is never
+  resent, nor is a row without the ids its
   action needs (409 `not_resendable`); a suppressed recipient gets 409
-  `recipient_suppressed` and a template this build lacks 409
+  `recipient_suppressed`, and a template this build lacks or has retired
+  (`email_verification`, `password_reset`, `registration_attempt`,
+  `password_changed`, `account_setup`; their rows stay listable) gets 409
   `template_unavailable`. Every invitation resend needs a sign-in within the
   last 10 minutes (401 `REAUTH_REQUIRED`).
 
@@ -352,7 +358,7 @@ is and is not sent is in
 a free-text `reason` reduced to `has_reason`, and a tenant's `name` and `slug`
 left out; a few product events; and each email tracking event as
 `email_<type>`. No name, full address, reason or recipient is sent; invitation,
-auto-join, user and email audit events carry only the address's
+user and email audit events carry only the address's
 `email_domain`. `$session_id` goes only on an event of the user whose browser
 sent it. The rules live in `analytics-event-builder.service.ts` and
 [SECURITY.md](SECURITY.md#server-events).
@@ -487,26 +493,33 @@ let-through list and the controls on changing it are in
 Runbook:
 
 1. **Confirm staff access before `full`.** In `full` only staff can sign in,
-   and nobody can reset a password, so make sure whoever will switch it off can
-   sign in to Apex with a password or Google.
-2. **Use `read_only` for data fixes where reads are safe.** Customers keep
+   so make sure whoever will switch it off can request a sign-in link on Apex,
+   or use Google; auth mail is never paused.
+2. **Expect invitations to wait.** In `read_only` and `full`,
+   `/invitations/verify` and `/invitations/confirm` answer 503 (`READ_ONLY_MODE`
+   or `MAINTENANCE_MODE`) for everyone, staff invitees included. An invitee
+   joins after maintenance ends, with the same link while it is unexpired: the
+   invitation lasts 3 days, its confirm link 15 minutes, and a new click on the
+   invitation mails a new confirm link.
+3. **Use `read_only` for data fixes where reads are safe.** Customers keep
    reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
-3. **Before database work, check "0 running" on every queue** on the
-   Maintenance page. `full` pauses every queue, but jobs already running
-   finish first.
-4. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
+4. **Before database work, check "0 running" on every paused queue** on the
+   Maintenance page. `full` pauses every queue but `auth-email`, which keeps
+   sending sign-in, step-up, invitation and invitation confirm mail. Jobs already running finish
+   first.
+5. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
    working and writing during maintenance.
-5. **Switch off from Apex.** Leaving `full` resumes every queue; notices that
+6. **Switch off from Apex.** Leaving `full` resumes the paused queues; notices that
    were still queued go out then.
-6. **Restart every replica after restoring the database during maintenance.**
+7. **Restart every replica after restoring the database during maintenance.**
    A replica ignores a row whose version is not above the one it holds, so a
    restore to an earlier version leaves each replica on the old mode until it
    restarts.
-7. **Keep the clocks in sync (NTP) on the database and every replica.** The 10 s
+8. **Keep the clocks in sync (NTP) on the database and every replica.** The 10 s
    pause grace and the notice wait are measured from the time the database
    stamps on the change, on each replica's own clock, so skew shifts when the
    queues pause.
-8. **Failed notice jobs keep personal data.** A notice job that fails keeps the
+9. **Failed notice jobs keep personal data.** A notice job that fails keeps the
    actor's name and the reason in its Redis job data until it is removed; the
    windows are in [SECURITY.md](SECURITY.md#mail-at-rest).
 

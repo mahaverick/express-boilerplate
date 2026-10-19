@@ -28,7 +28,7 @@ describe('render', () => {
    * A field a real caller reads (session.service.ts for
    * JWT_ACCESS_SECRET; passport.config.ts's `configurePassport()`/
    * `createOAuthSessionMiddleware()` for APP_URL/SESSION_SECRET
-   * respectively; services such as auth.service.ts for APP_NAME) must
+   * respectively; services such as sign-in-link.service.ts for APP_NAME) must
    * render its real description, never a "PLACEHOLDER" note. One
    * parameterized test, not several near-identical ones
    * (sonarjs/parameterized-tests); each case pins its own

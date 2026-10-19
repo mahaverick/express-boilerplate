@@ -110,8 +110,8 @@ async function boot(): Promise<void> {
   workers.supervised = startWorkers()
   logger.info(
     isAnalyticsEnabled() || isPosthogApiEnabled()
-      ? 'Workers started (email, notification, maintenance, analytics)'
-      : 'Workers started (email, notification, maintenance)'
+      ? 'Workers started (email, auth-email, notification, maintenance, analytics)'
+      : 'Workers started (email, auth-email, notification, maintenance)'
   )
 }
 

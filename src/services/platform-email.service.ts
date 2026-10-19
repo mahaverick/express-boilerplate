@@ -29,21 +29,12 @@ import {
 } from '@/repositories/platform-email.repository'
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
+import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { utcDays } from '@/services/platform-stats.service'
-import {
-  platformTenantOrThrow,
-  resendUserVerification,
-  sendPasswordSetup,
-} from '@/services/platform-user.service'
+import { platformTenantOrThrow, sendSignInLinkByStaff } from '@/services/platform-user.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
 import { resend as resendInvitation } from '@/services/tenant-invitation.service'
-import {
-  buildInvitationAcceptUrl,
-  buildPasswordResetUrl,
-  buildVerificationUrl,
-  frontendUrl,
-} from '@/services/verification.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import type { Actor } from '@/types/actor'
 import type { EmailDelivery } from '@/types/email-delivery'
@@ -65,6 +56,7 @@ import {
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import { isRecentAuth } from '@/utilities/recent-auth.utilities'
+import { withEmailUtm } from '@/utilities/utm.utilities'
 import type {
   PlatformEmailListQuery,
   PlatformSuppressionListQuery,
@@ -196,9 +188,9 @@ export interface ResendContext {
  * enforce, which the resend endpoint still runs. True only when the actor
  * is a platform admin or owner, the template has a resend action, the row
  * carries the ids that action needs, the recipient is not suppressed, the
- * user (for user-targeted mail) is active and, for verification, not yet
- * verified, and the action's own actor check passes: `canStaffMailTarget`
- * against the user's platform role for verification and password mail, and
+ * user (for a sign-in link) is live and active, and the action's own actor
+ * check passes: `canStaffMailTarget` against the user's platform role for a
+ * sign-in link, and
  * `canActorGrantRole` on the invitation's role for an invitation, with the
  * actor's role in that tenant (membership first, as `lockTenantAccess`
  * resolves it, else the platform role). An invitation also needs to be
@@ -235,9 +227,8 @@ export function canResendFor(
   if (message.userId === null || message.user === null || message.user.deletedAt !== null) {
     return false
   }
-  // A deactivated user, or a verification resend to a verified one, is a certain 409
+  // A deactivated user is a certain 409
   if (!message.user.isActive) return false
-  if (action === 'verification' && message.user.isVerified) return false
   // eslint-disable-next-line unicorn/no-null -- a non-staff user has no platform role
   return canStaffMailTarget(actorRole, context.targetPlatformRoles.get(message.userId) ?? null)
 }
@@ -383,7 +374,51 @@ export async function getEmailDetail(actor: Actor, id: string): Promise<EmailMes
  * @returns The masked URL.
  */
 function maskedLink(build: (rawToken: string, webUrl: string) => string, origin: string): string {
-  return `${build('', origin)}${TOKEN_MASK}`
+  // `token=` is the first parameter in every built link; UTM parameters follow it.
+  return build('', origin).replace('token=', () => `token=${TOKEN_MASK}`)
+}
+
+/**
+ * The sign-in page a sign-in link opens, carrying `rawToken`: the shape of
+ * `buildSignInLinkUrl`'s link without the address, which a preview never
+ * shows.
+ * @param rawToken - The token text, empty for a preview's masked link.
+ * @param origin - The frontend origin the real link pointed at.
+ * @param templateKey - The mail the link is in: its key is the `utm_campaign`.
+ * @returns The URL.
+ */
+function signInPageUrl(
+  rawToken: string,
+  origin: string,
+  templateKey: 'sign_in_link' | 'welcome'
+): string {
+  const base = new URL('auth/link', origin.endsWith('/') ? origin : `${origin}/`)
+  return withEmailUtm(`${base.href}?token=${rawToken}`, templateKey, 'text_link')
+}
+
+/**
+ * The Apex page a step-up link opens, carrying `rawToken`: the shape of
+ * `buildStepUpConfirmUrl`'s link.
+ * @param rawToken - The token text, empty for a preview's masked link.
+ * @param origin - The frontend origin the real link pointed at.
+ * @returns The URL.
+ */
+function stepUpConfirmPageUrl(rawToken: string, origin: string): string {
+  const base = new URL('auth/confirm', origin.endsWith('/') ? origin : `${origin}/`)
+  return withEmailUtm(`${base.href}?token=${rawToken}`, 'step_up_link', 'text_link')
+}
+
+/**
+ * The page an invitation confirm link opens, carrying `rawToken`: the shape
+ * of `buildInvitationConfirmUrl`'s link without the address, which a preview
+ * never shows.
+ * @param rawToken - The token text, empty for a preview's masked link.
+ * @param origin - The frontend origin the real link pointed at.
+ * @returns The URL.
+ */
+function invitationConfirmPageUrl(rawToken: string, origin: string): string {
+  const base = new URL('invitations/confirm', origin.endsWith('/') ? origin : `${origin}/`)
+  return withEmailUtm(`${base.href}?token=${rawToken}`, 'invitation_confirm', 'primary_button')
 }
 
 /**
@@ -421,39 +456,6 @@ export function buildPreviewMessage(
   const to = TOKEN_MASK
   const message = ((): MailMessage => {
     switch (templateKey) {
-      case 'email_verification': {
-        return {
-          to,
-          templateKey,
-          variables: {
-            firstName: fill('firstName'),
-            verificationUrl: maskedLink(buildVerificationUrl, origin),
-            appName: fill('appName'),
-          },
-        }
-      }
-      case 'password_reset': {
-        return {
-          to,
-          templateKey,
-          variables: {
-            firstName: fill('firstName'),
-            resetUrl: maskedLink(buildPasswordResetUrl, origin),
-            appName: fill('appName'),
-          },
-        }
-      }
-      case 'account_setup': {
-        return {
-          to,
-          templateKey,
-          variables: {
-            firstName: fill('firstName'),
-            setupUrl: maskedLink(buildPasswordResetUrl, origin),
-            appName: fill('appName'),
-          },
-        }
-      }
       case 'tenant_invitation': {
         return {
           to,
@@ -497,12 +499,58 @@ export function buildPreviewMessage(
           },
         }
       }
-      case 'password_changed':
-      case 'registration_attempt': {
+      case 'sign_in_link': {
         return {
           to,
           templateKey,
-          variables: { firstName: fill('firstName'), appName: fill('appName') },
+          variables: {
+            firstName: fill('firstName'),
+            signInUrl: maskedLink(
+              (token, from) => signInPageUrl(token, from, 'sign_in_link'),
+              origin
+            ),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
+            reason: fill('reason') === 'staff' ? 'staff' : 'self',
+          },
+        }
+      }
+      case 'welcome': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            signInUrl: maskedLink((token, from) => signInPageUrl(token, from, 'welcome'), origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
+          },
+        }
+      }
+      case 'step_up_link': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            confirmUrl: maskedLink(stepUpConfirmPageUrl, origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
+          },
+        }
+      }
+      case 'invitation_confirm': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            tenantName: fill('tenantName'),
+            role: fill('role'),
+            confirmUrl: maskedLink(invitationConfirmPageUrl, origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
+          },
         }
       }
     }
@@ -524,7 +572,7 @@ export async function previewEmail(id: string): Promise<EmailPreview> {
   const message = await requireMessage(id)
   if (!isKnownTemplateKey(message.templateKey)) {
     throw new HttpError(
-      'This email template is no longer available',
+      "This email's template is retired, so it can't be shown. Check its status and delivery events on this page instead.",
       409,
       TEMPLATE_UNAVAILABLE_CODE
     )
@@ -657,7 +705,7 @@ function resendTargetOf(
   action: ResendAction,
   message: PlatformEmailRecord
 ):
-  | { action: 'verification' | 'password_setup'; userId: string }
+  | { action: 'sign_in_link'; userId: string }
   | { action: 'invitation'; tenantId: string; invitationId: string } {
   if (action === 'invitation') {
     if (message.tenantId !== null && message.invitationId !== null) {
@@ -666,15 +714,19 @@ function resendTargetOf(
   } else if (message.userId !== null) {
     return { action, userId: message.userId }
   }
-  throw new HttpError('This email cannot be resent', 409, NOT_RESENDABLE_CODE)
+  throw new HttpError(
+    "This email lacks the record its resend needs, so it can't be resent. Send a new invitation, or a sign-in link from the user's profile, instead.",
+    409,
+    NOT_RESENDABLE_CODE
+  )
 }
 
 /**
  * Resend a token email by running the action that sent it, which issues a
- * fresh token: resend-verification or password-setup for the user, or the
- * invitation resend for the invitation. Password-setup sends `account_setup`
- * or `password_reset` by the user's state now, which may differ from the
- * original. The delegated action's gates, errors and audit entry apply
+ * fresh token: the staff sign-in link for the user (for a `sign_in_link` or
+ * `welcome` message, both answered with a `sign_in_link` mail), or the
+ * invitation resend for the invitation. A retired template answers
+ * `template_unavailable`. The delegated action's gates, errors and audit entry apply
  * unchanged; this adds an `email.resent` entry with the reason once it
  * succeeds. That entry is written after, and separately from, the delegated
  * action's commit: if it fails the call answers 500 though the mail was
@@ -707,7 +759,7 @@ export async function resendEmail(
   const message = await requireMessage(id)
   if (!isKnownTemplateKey(message.templateKey)) {
     throw new HttpError(
-      'This email template is no longer available',
+      "This email's template is retired, so it can't be resent. Send the user a new sign-in link from their profile instead.",
       409,
       TEMPLATE_UNAVAILABLE_CODE
     )
@@ -716,12 +768,16 @@ export async function resendEmail(
   const templateKey = message.templateKey
   const action = EMAIL_TEMPLATE_META[templateKey].resendAction
   if (action === null) {
-    throw new HttpError('This email is never resent', 409, NOT_RESENDABLE_CODE)
+    throw new HttpError(
+      'This kind of email is never resent. Send a new one from the action that sent it, such as a new onboarding reminder.',
+      409,
+      NOT_RESENDABLE_CODE
+    )
   }
   const target = resendTargetOf(action, message)
   if (await emailSuppressionRepository.findActive(message.recipient)) {
     throw new HttpError(
-      'This address is suppressed; lift the suppression first',
+      'This address is suppressed. Lift the suppression, then resend.',
       409,
       RECIPIENT_SUPPRESSED_CODE
     )
@@ -730,19 +786,15 @@ export async function resendEmail(
 
   let delivery: Partial<EmailDelivery> = {}
   switch (target.action) {
-    case 'verification': {
-      delivery = await resendUserVerification(actor, target.userId, options)
-      break
-    }
-    case 'password_setup': {
-      delivery = await sendPasswordSetup(actor, target.userId, options)
+    case 'sign_in_link': {
+      delivery = await sendSignInLinkByStaff(actor, target.userId, options)
       break
     }
     case 'invitation': {
       const tenant = await platformEmailRepository.tenantState(target.tenantId)
       if (tenant?.lifecycleState !== 'active') throw new HttpError('Tenant not found', 404)
       if (!isRecentAuth(authTime, now)) {
-        throw new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE)
+        throw new HttpError("Confirm it's you to continue.", 401, REAUTH_REQUIRED_CODE)
       }
       // The reason goes on the invitation.resent entry too, as the member route's staff path does.
       await resendInvitation(actor, target.tenantId, target.invitationId, { ...options, reason })

@@ -51,7 +51,7 @@ describe('final job failures reach error tracking', () => {
           await addJob<NotificationJobData>(
             getNotificationQueue(),
             'notification',
-            { userId: randomUUID(), type: 'verify_email', title: marker, body: marker },
+            { userId: randomUUID(), type: 'tenant_invitation', title: marker, body: marker },
             { attempts: 3 }
           )
           await waitUntil(() => reportsAtAttempt.has(3), {

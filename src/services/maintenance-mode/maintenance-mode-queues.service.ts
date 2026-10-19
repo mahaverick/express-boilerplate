@@ -1,7 +1,9 @@
 /**
  * @file Maintenance mode's hold on the BullMQ queues: in `full` every queue
- * `getAllQueues()` (queue.service.ts) returns is paused, and in any other
- * known mode they are resumed. A pause is BullMQ's queue-wide `Queue.pause()`,
+ * `getPausableQueues()` (queue.service.ts) returns is paused, and in any other
+ * known mode they are resumed. That is every queue but `auth-email`, so
+ * sign-in, step-up and invitation mail still goes out in `full`; the staff
+ * status (`getQueuePauseStates`) lists every queue, `auth-email` included. A pause is BullMQ's queue-wide `Queue.pause()`,
  * a flag in Redis that every replica's Workers obey: running jobs finish,
  * waiting ones stay. Pausing and resuming are both idempotent, so replicas
  * reconciling at once are harmless.
@@ -23,7 +25,7 @@ import type { Job, Queue } from 'bullmq'
 import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.constants'
 import { logger } from '@/services/logger.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
-import { getAllQueues } from '@/services/queue.service'
+import { getAllQueues, getPausableQueues } from '@/services/queue.service'
 import { withStatusTimeout } from '@/services/status-read.service'
 import type { MaintenanceModeSnapshot, QueuePauseState } from '@/types/maintenance-mode'
 
@@ -218,7 +220,7 @@ async function applyTarget(
 }
 
 /**
- * Bring every queue to one target. Never rejects.
+ * Bring every pausable queue to one target. Never rejects.
  * @param target - Pause or resume.
  * @param version - The store version the target was decided for, if it is to be rechecked.
  * @returns Resolves once every queue has been tried.
@@ -226,7 +228,7 @@ async function applyTarget(
 async function applyToAllQueues(target: 'pause' | 'resume', version?: number): Promise<void> {
   let queues: Queue[]
   try {
-    queues = getAllQueues()
+    queues = getPausableQueues()
   } catch (error) {
     // Only during shutdown: the queue module refuses new connections.
     logger.warn('Maintenance mode could not reach the queues', { error })
@@ -236,7 +238,7 @@ async function applyToAllQueues(target: 'pause' | 'resume', version?: number): P
 }
 
 /**
- * Pause or resume every queue now, whatever the grace: what the changing
+ * Pause or resume every pausable queue now, whatever the grace: what the changing
  * request does once its notice wait is over (pause) or when leaving `full`
  * (resume, after removing duplicate scheduler runs). Never rejects.
  * @param shouldPause - True to pause, false to resume.
@@ -247,7 +249,7 @@ export async function setAllQueuesPaused(shouldPause: boolean): Promise<void> {
 }
 
 /**
- * Bring every queue to what one snapshot asks (`queuePauseTarget`). Called
+ * Bring every pausable queue to what one snapshot asks (`queuePauseTarget`). Called
  * after every store reload. Never rejects.
  * @param snapshot - The replica's snapshot.
  * @param now - The current instant; injectable for tests.

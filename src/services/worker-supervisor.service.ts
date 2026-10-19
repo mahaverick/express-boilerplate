@@ -57,9 +57,10 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 }
 
 /**
- * Start the email, notification and maintenance Workers, and the analytics
- * Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()` (feature flags
- * need the project key, so `isFlagsEnabled()` implies the first), replacing
+ * Start the email, auth-email, notification and maintenance Workers, and the
+ * analytics Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`
+ * (feature flags need the project key, so `isFlagsEnabled()` implies the
+ * first), replacing
  * them whenever their connection gives up before its first ready. Each
  * generation registers the retention schedule, the analytics drain schedule
  * when `isAnalyticsEnabled()`, the PostHog deletion schedule when
@@ -106,7 +107,12 @@ export function startWorkers(): SupervisedWorkers {
     supervisor.generation = generation
     try {
       generation.connection = getQueueConnection()
-      const starters = [startEmailWorker, startNotificationWorker, startMaintenanceWorker]
+      const starters = [
+        () => startEmailWorker('email'),
+        () => startEmailWorker('auth-email'),
+        startNotificationWorker,
+        startMaintenanceWorker,
+      ]
       if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
         starters.push(startAnalyticsWorker)
       }

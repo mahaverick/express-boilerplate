@@ -17,7 +17,12 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql, type DbExecutor } from '@/services/database.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
@@ -32,6 +37,7 @@ const userRepository = new UserRepository()
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -245,7 +251,10 @@ describe('the staff role is re-read under lock (platform role changed after reso
     await withPlatformRoleChangedAfterResolve(staff, 'demote-to-viewer', {}, async () => {
       const response = await rename(tenant, token)
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     expect(await storedName(tenant)).toBe('Acme Inc')
@@ -299,7 +308,10 @@ describe('the staff role is re-read under lock (platform role changed after reso
         .set('Authorization', `Bearer ${recentToken}`)
         .send({ role: 'editor', reason: 'Customer asked us to, ticket 4411' })
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
@@ -471,7 +483,8 @@ describe('the staff role is re-read under lock (platform role changed after reso
             expect(response.status).toBe(403)
             expect(response.body).toMatchObject({
               statusCode: 403,
-              message: 'Insufficient permissions',
+              message:
+                "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
             })
           }
         )

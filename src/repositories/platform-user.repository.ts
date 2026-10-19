@@ -28,8 +28,8 @@ import {
 import { sortAtField } from '@/validators/cursor.validators'
 
 /**
- * One user as the staff search and detail return it. Never carries the
- * password hash.
+ * One user as the staff search and detail return it: an explicit
+ * projection, never the full row.
  */
 export interface PlatformUserRecord {
   id: string
@@ -95,6 +95,10 @@ export interface PlatformUserPendingInvitation {
   tenantName: string
   role: MembershipRole
   expiresAt: Date
+  /**
+   * When the invitation was last mailed, or null for a row never stamped.
+   */
+  lastSentAt: Date | null
 }
 
 /**
@@ -340,6 +344,7 @@ export class PlatformUserRepository {
         tenantName: tenantModel.name,
         role: tenantInvitationModel.role,
         expiresAt: tenantInvitationModel.expiresAt,
+        lastSentAt: tenantInvitationModel.lastSentAt,
       })
       .from(tenantInvitationModel)
       .innerJoin(tenantModel, eq(tenantModel.id, tenantInvitationModel.tenantId))

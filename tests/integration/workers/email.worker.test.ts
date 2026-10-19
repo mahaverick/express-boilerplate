@@ -26,7 +26,7 @@ import { EmailSuppressionRepository } from '@/repositories/email-suppression.rep
 import { sql } from '@/services/database.service'
 import { createQueuedMessage } from '@/services/email-message.service'
 import { logger } from '@/services/logger.service'
-import { addJob, closeQueue, getEmailQueue } from '@/services/queue.service'
+import { addJob, closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { processEmailJob, startEmailWorker } from '@/workers/email.worker'
 import {
   assertNoMailpitMessage,
@@ -56,15 +56,16 @@ function uniqueRecipient(label: string): string {
 }
 
 /**
- * A valid `password_reset` payload for `to`, in the shape `addEmailJob` takes.
+ * A valid `step_up_link` payload for `to`, in the shape `addEmailJob` takes.
  */
-function passwordResetMessage(to: string): Parameters<typeof addEmailJob>[0] {
+function stepUpLinkMessage(to: string): Parameters<typeof addEmailJob>[0] {
   return {
     to,
-    templateKey: 'password_reset',
+    templateKey: 'step_up_link',
     variables: {
       firstName: 'Ada',
-      resetUrl: `https://example.test/reset?token=${randomUUID()}`,
+      confirmUrl: `https://example.test/auth/confirm?token=${randomUUID()}`,
+      expiresInMinutes: '15',
       appName: 'Test App',
     },
   }
@@ -94,6 +95,8 @@ const originalUpdateData = jobPrototype.updateData
 
 describe('email.worker', () => {
   const worker = startEmailWorker()
+  // step_up_link is an auth template, so its jobs run on the auth-email queue.
+  const authWorker = startEmailWorker('auth-email')
   const createdLogIds: string[] = []
   const createdRecipients: string[] = []
 
@@ -106,18 +109,22 @@ describe('email.worker', () => {
     await sql`delete from email_suppressions where address = any(${createdRecipients})`
     // worker.close() first drains the current job; closeQueue()'s connection.quit() is what actually closes the socket, since BullMQ skips quitting a connection it was handed pre-built.
     await worker.close()
+    await authWorker.close()
     // Left-over jobs from this run would otherwise sit under this worker's prefix and be picked up by the very next run's worker on start.
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await closeQueue()
   })
 
   it('processes a real enqueued job end to end: sends via Mailpit and records it as sent', async () => {
     const recipient = uniqueRecipient('happy-path')
     createdRecipients.push(recipient)
-    const job = await addEmailJob(passwordResetMessage(recipient), 'user-happy-path')
+    const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-happy-path')
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
 
     const messages = await findMailpitMessages(recipient)
     expect(messages).toHaveLength(1)
@@ -143,8 +150,13 @@ describe('email.worker', () => {
     const job = await addEmailJob(
       {
         to: recipient,
-        templateKey: 'password_changed',
-        variables: { firstName: 'Ada', appName: 'Test App' },
+        templateKey: 'onboarding_reminder',
+        variables: {
+          tenantName: 'Acme',
+          appName: 'Test App',
+          nextStep: 'Invite a teammate',
+          overviewLink: 'https://example.test/tenants/acme',
+        },
       },
       'user-general-sender'
     )
@@ -153,7 +165,7 @@ describe('email.worker', () => {
     await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
 
     const [message] = await findMailpitMessages(recipient)
-    if (!message) throw new Error('expected the password_changed mail in Mailpit')
+    if (!message) throw new Error('expected the onboarding_reminder mail in Mailpit')
     const detail = await getMailpitMessage(message.ID)
     expect(detail.From.Address).toBe('no-reply@example.com')
     await deleteMailpitMessage(message.ID)
@@ -164,10 +176,12 @@ describe('email.worker', () => {
     createdRecipients.push(recipient)
     await emailSuppressionRepository.suppress({ address: recipient, reason: 'hard_bounce' })
 
-    const job = await addEmailJob(passwordResetMessage(recipient), 'user-suppressed')
+    const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-suppressed')
     if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-    await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('completed')
+    await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+      'completed'
+    )
     const tracked = await emailMessageRepository.findById(job.data.messageId ?? '')
     expect(tracked?.status).toBe('suppressed')
     await expect(emailLogRepository.findByRecipient(recipient)).resolves.toEqual([])
@@ -180,8 +194,8 @@ describe('email.worker', () => {
     // As a replica without tracking enqueued it: no messageId in the payload.
     const job = await addJob(
       getEmailQueue(),
-      'password_reset',
-      { ...passwordResetMessage(recipient), userId: '' },
+      'step_up_link',
+      { ...stepUpLinkMessage(recipient), userId: '' },
       emailJobDefaults
     )
     if (!job.id) throw new Error('expected addJob to assign a job id')
@@ -205,7 +219,7 @@ describe('email.worker', () => {
   it('never lets its sent overwrite a delivered that a provider event recorded first', async () => {
     const recipient = uniqueRecipient('delivered-first')
     createdRecipients.push(recipient)
-    const message = passwordResetMessage(recipient)
+    const message = stepUpLinkMessage(recipient)
     const tracked = await createQueuedMessage(message, '')
     await emailMessageRepository.advanceStatus(tracked.id, 'delivered')
     const job = {
@@ -237,7 +251,7 @@ describe('email.worker', () => {
         'sendMail',
         rejectWithConnectionError as (typeof transporter)['sendMail'],
         async () => {
-          const job = await addEmailJob(passwordResetMessage(recipient), 'user-five-failures', {
+          const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-five-failures', {
             backoff: { type: 'fixed', delay: 10 },
           })
           if (!job.id) throw new Error('expected addEmailJob to assign a job id')
@@ -273,15 +287,17 @@ describe('email.worker', () => {
       rejectWithConnectionError as (typeof transporter)['sendMail'],
       async () => {
         // attempts: 1 asserts the terminal failed state, not the retry count, which the five-failures test above covers.
-        const job = await addEmailJob(passwordResetMessage(recipient), 'user-failure-path', {
+        const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-failure-path', {
           attempts: 1,
         })
         if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-        await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('failed')
+        await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+          'failed'
+        )
 
         // The load-bearing assertion: what BullMQ itself persisted to Redis as failedReason, not merely the Error thrown in-process.
-        const failedJob = await getEmailQueue().getJob(job.id)
+        const failedJob = await getAuthEmailQueue().getJob(job.id)
         expect(failedJob?.failedReason).toBeDefined()
         expect(failedJob?.failedReason).not.toContain(recipient)
         expect(failedJob?.failedReason).toContain(job.id)
@@ -308,14 +324,16 @@ describe('email.worker', () => {
       'findActive',
       failWithAddress,
       async () => {
-        const job = await addEmailJob(passwordResetMessage(recipient), 'user-lookup-failure', {
+        const job = await addEmailJob(stepUpLinkMessage(recipient), 'user-lookup-failure', {
           attempts: 1,
         })
         if (!job.id) throw new Error('expected addEmailJob to assign a job id')
 
-        await expect(waitForJobSettled(worker, getEmailQueue(), job.id)).resolves.toBe('failed')
+        await expect(waitForJobSettled(authWorker, getAuthEmailQueue(), job.id)).resolves.toBe(
+          'failed'
+        )
 
-        const failedJob = await getEmailQueue().getJob(job.id)
+        const failedJob = await getAuthEmailQueue().getJob(job.id)
         expect(failedJob?.failedReason).toContain(job.id)
         expect(failedJob?.failedReason).not.toContain(recipient)
         expect(JSON.stringify(failedJob?.stacktrace)).not.toContain(recipient)
@@ -349,10 +367,11 @@ describe('email.worker', () => {
             const job = await addEmailJob(
               {
                 to: recipient,
-                templateKey: 'password_reset',
+                templateKey: 'step_up_link',
                 variables: {
                   firstName: 'Ada',
-                  resetUrl: `https://example.test/reset?token=${token}`,
+                  confirmUrl: `https://example.test/auth/confirm?token=${token}`,
+                  expiresInMinutes: '15',
                   appName: 'Test App',
                 },
               },
@@ -368,12 +387,12 @@ describe('email.worker', () => {
               10_000
             )
 
-            const stored = await getEmailQueue().getJob(jobId)
+            const stored = await getAuthEmailQueue().getJob(jobId)
             expect(stored?.attemptsMade).toBe(2)
             expect(stored?.data).toMatchObject({
               to: '[redacted]',
-              templateKey: 'password_reset',
-              variables: { firstName: 'Ada', resetUrl: '[redacted]', appName: 'Test App' },
+              templateKey: 'step_up_link',
+              variables: { firstName: 'Ada', confirmUrl: '[redacted]', appName: 'Test App' },
             })
             expect(JSON.stringify(stored?.data)).not.toContain(token)
             // The first, retryable attempt did not scrub: the retry needed the link.
@@ -388,10 +407,10 @@ describe('email.worker', () => {
             expect(loggerError).toHaveBeenCalledWith(
               'job failed permanently',
               expect.objectContaining({
-                queue: 'email',
+                queue: 'auth-email',
                 jobId,
-                name: 'password_reset',
-                template: 'password_reset',
+                name: 'step_up_link',
+                template: 'step_up_link',
                 userId: 'user-scrub',
                 attemptsMade: 2,
               })
@@ -428,7 +447,7 @@ describe('email.worker', () => {
         async () => {
           // Extra address fields ride along on the job's data; the scrub must not depend on their shape.
           const message: Parameters<typeof addEmailJob>[0] = Object.assign(
-            passwordResetMessage(recipient),
+            stepUpLinkMessage(recipient),
             {
               cc: [{ name: 'Ops', address: sentinel }],
               bcc: [sentinel],
@@ -447,7 +466,7 @@ describe('email.worker', () => {
             10_000
           )
 
-          const stored = await getEmailQueue().getJob(jobId)
+          const stored = await getAuthEmailQueue().getJob(jobId)
           expect(stored?.data).toMatchObject({
             to: '[redacted]',
             cc: '[redacted]',
@@ -480,7 +499,11 @@ describe('email.worker', () => {
     try {
       const syntheticError = new Error('synthetic worker error')
       worker.emit('error', syntheticError)
-      expect(loggerErrorSpy).toHaveBeenCalledWith('Email worker error', { error: syntheticError })
+      authWorker.emit('error', syntheticError)
+      expect(loggerErrorSpy.mock.calls).toEqual([
+        ['Email worker error', { queue: 'email', error: syntheticError }],
+        ['Email worker error', { queue: 'auth-email', error: syntheticError }],
+      ])
     } finally {
       loggerErrorSpy.mockRestore()
     }

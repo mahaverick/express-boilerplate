@@ -1,14 +1,18 @@
 /**
  * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
- * accept. Multi-step writes run in one transaction with their audit entry,
+ * accept, the signed-out verify, and the confirm link. A verify joins a new
+ * address on a customer invitation in one click, creating its account; an
+ * address that has an account, and every staff invitation, is mailed a
+ * 15-minute confirm link instead, whose click signs in and joins. Multi-step writes run in one transaction with their audit entry,
  * and every query inside one goes through its `tx`. Audit metadata carries
  * the address's domain, never the address. Mail and the in-app notification
  * are enqueued after the write commits, and a failed enqueue is logged,
  * never thrown. A teammate invitation and an accept that adds a membership
  * emit their domain event after commit.
  */
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import { RATE_LIMITED_CODE } from '@/constants/rate-limit.constants'
 import {
   INVITATION_TOKEN_BYTES,
@@ -19,34 +23,65 @@ import type { TenantInvitation } from '@/database/models/tenant-invitation.model
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { canActorGrantRole } from '@/policies/tenant.policy'
 import {
   TenantInvitationRepository,
   type PendingInvitationSummary,
+  type ValidInvitation,
 } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import {
+  claimNeverVerifiedAccount,
+  clearSquatterCredentials,
+  createLinkedAccount,
+  isAddressTaken,
+  isClaimedAccountGone,
+} from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
+import { platformRoleForLogin } from '@/services/auth.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import {
+  buildInvitationAcceptUrl,
+  frontendUrl,
+  MISSING_FIRST_NAME_FALLBACK,
+} from '@/services/frontend-links.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
+import {
+  buildInvitationConfirmUrl,
+  claimLinkToken,
+  issueLinkToken,
+  peekLinkToken,
+} from '@/services/link-token.service'
 import { logger } from '@/services/logger.service'
-import { hashToken } from '@/services/session.service'
+import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
+import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
+import {
+  hashToken,
+  issueRefreshToken,
+  signAccessToken,
+  type IssuedRefreshToken,
+} from '@/services/session.service'
+import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import {
   assertStaffReasonGiven,
   lockActorRole,
   lockUserForOwnership,
 } from '@/services/tenant-membership.service'
-import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
+import { INVITATION_CONFIRM_TEMPLATE_KEY } from '@/templates/email/invitation-confirm.template'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
-import { requireDurationMs } from '@/utilities/duration.utilities'
+import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import type { InvitationListQuery } from '@/validators/tenant.validators'
@@ -70,7 +105,8 @@ export const PLATFORM_OWNER_INVITATION_MESSAGE =
 /**
  * Message for `ALREADY_MEMBER_CODE`.
  */
-const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
+const ALREADY_MEMBER_MESSAGE =
+  'That person is already a member of this workspace. No invitation was sent.'
 
 /**
  * Error code: the token is unknown, expired, revoked, already used, or for a
@@ -79,9 +115,33 @@ const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
 export const INVITATION_INVALID_CODE = 'invitation_invalid'
 
 /**
+ * Message for `INVITATION_INVALID_CODE` on `POST /invitations/confirm`: every
+ * refusal there, a dead confirm link or a dead invitation alike. Its next
+ * step names both ways back: a new confirm link from the invitation, or a
+ * new invite.
+ */
+export const INVITATION_CONFIRM_INVALID_MESSAGE =
+  "We couldn't use this link. Open your invitation email and select Join again, or ask the person who invited you for a new invite."
+
+/**
+ * The message of the `202` an invite click answers when the invitee must
+ * confirm by email.
+ */
+export const INVITATION_CONFIRM_MESSAGE = 'Check your inbox to finish joining.'
+
+/**
+ * The cooldown key segment for confirm-link mail, followed by the
+ * invitation's id: its own scope, so a sign-in request for the address a
+ * moment earlier does not hold it, and per invitation, so a click on one
+ * workspace's invitation does not hold back another's.
+ */
+const CONFIRM_MAIL_COOLDOWN_SCOPE = 'invitation-confirm'
+
+/**
  * Message for `INVITATION_INVALID_CODE`.
  */
-export const INVITATION_INVALID_MESSAGE = 'This invitation is invalid or has expired.'
+export const INVITATION_INVALID_MESSAGE =
+  'This invitation link has expired or was already used. Ask the person who invited you for a new one.'
 
 /**
  * Error code: the signed-in user's address is not the invited one.
@@ -91,7 +151,8 @@ const INVITATION_EMAIL_MISMATCH_CODE = 'invitation_email_mismatch'
 /**
  * Message for `INVITATION_EMAIL_MISMATCH_CODE`.
  */
-const INVITATION_EMAIL_MISMATCH_MESSAGE = 'This invitation was sent to a different email address.'
+const INVITATION_EMAIL_MISMATCH_MESSAGE =
+  'This invitation is for a different email address. Sign in with the address it was sent to.'
 
 /**
  * Error code: the signed-in user's address is the invited one, but unverified.
@@ -102,7 +163,7 @@ const INVITATION_EMAIL_UNVERIFIED_CODE = 'invitation_email_unverified'
  * Message for `INVITATION_EMAIL_UNVERIFIED_CODE`.
  */
 const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
-  'Verify your email address before accepting this invitation.'
+  'Confirm your email address before you accept this invitation. Open the invitation link from your inbox.'
 
 /**
  * Error code: no pending invitation with that id in this tenant.
@@ -115,16 +176,10 @@ const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
 
 /**
- * Message for `INVITATION_RESEND_COOLDOWN_CODE`.
- */
-const INVITATION_RESEND_COOLDOWN_MESSAGE =
-  'This invitation was just sent. Try again in a few minutes.'
-
-/**
  * The 429 message when an address has had its day's share of invitation mail.
  */
 const INVITATION_RECIPIENT_LIMITED_MESSAGE =
-  'This address has received too many invitations today. Try again tomorrow.'
+  'This address has reached its daily invitation limit. Try again in 24 hours.'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
 /**
@@ -132,7 +187,7 @@ const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
  */
 const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 const INVITER_NAME_FALLBACK = 'A teammate'
-const GRANT_REFUSED_MESSAGE = 'Insufficient permissions to grant this role'
+const GRANT_REFUSED_MESSAGE = "Your role can't grant this role. Ask a workspace owner."
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 /**
@@ -146,11 +201,14 @@ export interface InvitationPreview {
 }
 
 /**
- * The outcome of an accept: the tenant and the role the user holds in it.
+ * The outcome of an accept: the tenant, the role the user holds in it, and
+ * whether this accept added no membership (the user had joined already, by
+ * this invitation or otherwise), so the client can say "You've already joined".
  */
 export interface AcceptedInvitation {
   tenant: { name: string; slug: string }
   role: MembershipRole
+  alreadyMember: boolean
 }
 
 /**
@@ -163,6 +221,32 @@ interface AcceptOutcome {
 }
 
 /**
+ * A click that joined (one-click verify or confirm link): the account, its
+ * new session's tokens, its platform role, whether this click created it,
+ * and the tenant and role it holds there.
+ */
+export interface InvitationSession {
+  user: User
+  accessToken: string
+  refreshToken: IssuedRefreshToken
+  platformRole: MembershipRole | null
+  isNewUser: boolean
+  tenant: { name: string; slug: string }
+  role: MembershipRole
+}
+
+/**
+ * What a join's transaction settles: the account, its session, the role it
+ * holds, and the membership it added, when it added one.
+ */
+interface VerifyOutcome {
+  user: User
+  refreshToken: IssuedRefreshToken
+  role: MembershipRole
+  joined?: DomainEventOf<'invitation_accepted'>
+}
+
+/**
  * Everything the invitation email and notification are built from.
  */
 interface InvitationMessageContext {
@@ -171,6 +255,11 @@ interface InvitationMessageContext {
   tenant: { name: string; slug: string; isPlatform: boolean }
   inviterName: string
   invitee: User | undefined
+  /**
+   * The mail's "expires in" days when the invitation keeps an earlier
+   * expiry; the full `INVITATION_TTL` when absent.
+   */
+  expiresInDays?: string
 }
 
 /**
@@ -195,6 +284,19 @@ function invitationExpiry(): Date {
  */
 function expiresInDays(): string {
   const days = Math.ceil(requireDurationMs(getEnv().INVITATION_TTL) / MS_PER_DAY)
+  return String(Math.max(1, days))
+}
+
+/**
+ * The whole days an invitation has left, for a mail about one that keeps its
+ * expiry: rounded down, so the mail never promises time past `expires_at`,
+ * and at least 1, so it never says 0 days for a link that still works.
+ * @param expiresAt - The invitation's expiry.
+ * @param now - The time the mail is composed.
+ * @returns The day count, as the template's variable.
+ */
+function daysLeftUntil(expiresAt: Date, now: Date = new Date()): string {
+  const days = Math.floor((expiresAt.getTime() - now.getTime()) / MS_PER_DAY)
   return String(Math.max(1, days))
 }
 
@@ -253,18 +355,69 @@ async function assertRecipientBudget(email: string, tenantId: string): Promise<v
 }
 
 /**
+ * When a resend of an invitation last mailed at `lastSentAt` is allowed.
+ * @param lastSentAt - When it was last mailed, or null for a row never stamped.
+ * @param now - The current time in epoch milliseconds; the caller's one clock read.
+ * @returns The instant the cooldown ends, or null when it is over or never began.
+ */
+export function resendAvailableAt(lastSentAt: Date | null, now: number = Date.now()): Date | null {
+  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no cooldown applies
+  if (lastSentAt === null) return null
+  const availableAt = new Date(
+    lastSentAt.getTime() + requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+  )
+  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null once the cooldown is over
+  return availableAt.getTime() > now ? availableAt : null
+}
+
+/**
+ * The 429 for a resend inside the cooldown, carrying `Retry-After`. It reads
+ * the clock once, so the end of the cooldown and the seconds left agree.
+ * @param lastSentAt - When the invitation was last mailed.
+ * @param now - The current time in epoch milliseconds.
+ * @returns The error to throw; `retryAfterSeconds` is the whole seconds left, at least 1, and 1 when the cooldown has already lapsed (a race re-read).
+ */
+export function resendCooldownError(lastSentAt: Date | null, now: number = Date.now()): HttpError {
+  const availableAt = resendAvailableAt(lastSentAt, now)
+  const secondsLeft = availableAt === null ? 1 : Math.ceil((availableAt.getTime() - now) / 1000)
+  const retryAfterSeconds = Math.max(1, secondsLeft)
+  return new HttpError(
+    `You can resend this invitation in ${formatWait(retryAfterSeconds)}.`,
+    429,
+    INVITATION_RESEND_COOLDOWN_CODE,
+    undefined,
+    { retryAfterSeconds }
+  )
+}
+
+/**
  * Refuse a resend sooner than `INVITATION_RESEND_COOLDOWN` after the
  * invitation's last send. A row never stamped is let through.
  * @param invitation - The pending invitation.
- * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown.
+ * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown, with `Retry-After`.
  */
 function assertResendCooldownOver(invitation: TenantInvitation): void {
-  if (invitation.lastSentAt === null) return
-  const elapsedMs = Date.now() - invitation.lastSentAt.getTime()
-  if (elapsedMs < requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)) {
-    throw new HttpError(INVITATION_RESEND_COOLDOWN_MESSAGE, 429, INVITATION_RESEND_COOLDOWN_CODE)
-  }
+  if (isInsideResendCooldown(invitation)) throw resendCooldownError(invitation.lastSentAt)
 }
+
+/**
+ * Whether an invitation was last mailed less than
+ * `INVITATION_RESEND_COOLDOWN` ago. A row never stamped is not.
+ * @param invitation - The pending invitation.
+ * @returns True inside the cooldown.
+ */
+function isInsideResendCooldown(invitation: TenantInvitation): boolean {
+  if (invitation.lastSentAt === null) return false
+  const elapsedMs = Date.now() - invitation.lastSentAt.getTime()
+  return elapsedMs < requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+}
+
+/**
+ * Thrown inside the sign-in resend's transaction when the address has had
+ * its day's invitation mail, so the token swap rolls back; caught and
+ * dropped, since a refused resend is silent.
+ */
+class RecipientBudgetSpentError extends Error {}
 
 /**
  * The one 404 for every token that cannot be previewed or accepted.
@@ -272,6 +425,15 @@ function assertResendCooldownOver(invitation: TenantInvitation): void {
  */
 function invitationInvalid(): HttpError {
   return new HttpError(INVITATION_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
+}
+
+/**
+ * The one 404 for every confirm-link click that signs nobody in: the same
+ * code as `invitationInvalid`, with the confirm page's message.
+ * @returns The error to throw.
+ */
+function confirmInvalid(): HttpError {
+  return new HttpError(INVITATION_CONFIRM_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
 }
 
 /**
@@ -303,7 +465,7 @@ async function dispatchInvitationMessages(
           inviterName,
           role: invitation.role,
           acceptUrl: buildInvitationAcceptUrl(rawToken, acceptOrigin),
-          expiresInDays: expiresInDays(),
+          expiresInDays: context.expiresInDays ?? expiresInDays(),
           appName: getEnv().APP_NAME,
         },
       },
@@ -491,7 +653,11 @@ export async function createOwnerInvitation(
   const rawToken = generateInvitationToken()
   const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
   if (invitee && !invitee.active) {
-    throw new HttpError('That account is deactivated', 409, INVITEE_DEACTIVATED_CODE)
+    throw new HttpError(
+      'This account is deactivated. Reactivate it before you invite it as owner.',
+      409,
+      INVITEE_DEACTIVATED_CODE
+    )
   }
   if (invitee && (await userMembershipRepository.findByUserAndTenant(invitee.id, tenantId, tx))) {
     throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
@@ -553,6 +719,11 @@ export async function sendOwnerInvitation(
 }
 
 /**
+ * One pending invitation as the list returns it: the stored summary and when a resend opens up.
+ */
+export type PendingInvitationItem = PendingInvitationSummary & { resendAvailableAt: Date | null }
+
+/**
  * One page of a tenant's pending, unexpired invitations.
  * @param tenantId - The tenant.
  * @param query - The parsed list query.
@@ -562,8 +733,17 @@ export async function sendOwnerInvitation(
 export async function listPending(
   tenantId: string,
   query: InvitationListQuery
-): Promise<ListPage<PendingInvitationSummary>> {
-  return invitationRepository.listPending(tenantId, query.params, { roles: query.filters.role })
+): Promise<ListPage<PendingInvitationItem>> {
+  const page = await invitationRepository.listPending(tenantId, query.params, {
+    roles: query.filters.role,
+  })
+  return {
+    ...page,
+    items: page.items.map((item) => ({
+      ...item,
+      resendAvailableAt: resendAvailableAt(item.lastSentAt),
+    })),
+  }
 }
 
 /**
@@ -577,7 +757,7 @@ export async function listPending(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,
@@ -610,11 +790,7 @@ export async function resend(
     if (!updated) {
       const stillPending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
       if (hasCooldown && stillPending) {
-        throw new HttpError(
-          INVITATION_RESEND_COOLDOWN_MESSAGE,
-          429,
-          INVITATION_RESEND_COOLDOWN_CODE
-        )
+        throw resendCooldownError(stillPending.lastSentAt)
       }
       throw invitationNotFound()
     }
@@ -654,6 +830,84 @@ export async function resend(
   dispatchInvitationMessages(context, undefined, resendOptions).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })
+}
+
+/**
+ * Mail a staff invitee their pending invitation again, because they asked
+ * Apex for a sign-in link: an Apex link reaches only staff, and an invitee is
+ * not staff until they accept. Run from the sign-in request's follow-up,
+ * after its reply, so nothing here is visible to the requester.
+ *
+ * It does nothing when the platform tenant holds no pending, unexpired
+ * invitation for the address, inside `INVITATION_RESEND_COOLDOWN` of its last
+ * send (re-checked by the token swap, so two concurrent requests mail once),
+ * or when the address has had its day's invitation mail. Otherwise one
+ * transaction gives the invitation a new link, keeping its expiry so a
+ * request from anyone cannot lengthen it, stamps `last_sent_at`, spends the
+ * recipient budget and audits `invitation.resent` as the system with
+ * `trigger: 'sign_in_request'`; the mail is queued after commit.
+ * @param email - The address that asked for a link.
+ * @returns Resolves once the mail is queued or nothing is due; it never rejects, and logs its own failure.
+ */
+export async function resendPlatformInvitationForSignIn(email: string): Promise<void> {
+  try {
+    const platform = await tenantRepository.findPlatformTenant()
+    if (!platform) throw new HttpError('The platform tenant is missing', 500)
+    const pending = await invitationRepository.findRedeemableForEmail(platform.id, email)
+    if (!pending || isInsideResendCooldown(pending)) return
+
+    const rawToken = generateInvitationToken()
+    const invitation = await db.transaction(async (tx) => {
+      const updated = await invitationRepository.replaceToken(
+        pending.id,
+        hashToken(rawToken),
+        pending.expiresAt,
+        tx,
+        { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) }
+      )
+      // Accepted, revoked or resent since the read: nothing is due.
+      if (!updated) return
+      // After the token swap, so a refusal rolls it back and the mailed link keeps working.
+      if ((await spendInvitationRecipientBudget(updated.email, platform.id)) === 'exhausted') {
+        throw new RecipientBudgetSpentError()
+      }
+      await record(
+        {
+          action: 'invitation.resent',
+          actor: 'system',
+          access: 'system',
+          tenantId: platform.id,
+          targetId: updated.id,
+          metadata: {
+            role: updated.role,
+            emailDomain: auditEmailDomain(updated.email),
+            trigger: 'sign_in_request',
+          },
+        },
+        tx
+      )
+      return updated
+    })
+    if (!invitation) return
+
+    const context = {
+      invitation,
+      rawToken,
+      tenant: { name: platform.name, slug: platform.slug, isPlatform: platform.isPlatform },
+      inviterName: inviterDisplayName(
+        invitation.invitedBy === null
+          ? undefined
+          : await userRepository.findById(invitation.invitedBy)
+      ),
+      invitee: await userRepository.findByEmail(invitation.email),
+      // The swap kept the expiry, so the mail states the time actually left.
+      expiresInDays: daysLeftUntil(invitation.expiresAt),
+    }
+    await dispatchInvitationMessages(context, undefined)
+  } catch (error) {
+    if (error instanceof RecipientBudgetSpentError) return
+    logger.error('Sign-in invitation resend failed', { error: redactedForLog(error) })
+  }
 }
 
 /**
@@ -729,6 +983,7 @@ function assertInvitedAddress(user: User, invitedEmail: string): void {
   if (user.email.trim().toLowerCase() !== invitedEmail) {
     throw new HttpError(INVITATION_EMAIL_MISMATCH_MESSAGE, 403, INVITATION_EMAIL_MISMATCH_CODE)
   }
+  // Every sign-in now verifies the account, so this refuses only a session from before passwordless; kept with its wire code as defence in depth.
   if (user.emailVerifiedAt === null) {
     throw new HttpError(INVITATION_EMAIL_UNVERIFIED_MESSAGE, 403, INVITATION_EMAIL_UNVERIFIED_CODE)
   }
@@ -758,7 +1013,11 @@ async function acceptedEarlierBy(
     executor
   )
   if (!membership) throw invitationInvalid()
-  return { tenant: { name: found.tenant.name, slug: found.tenant.slug }, role: membership.role }
+  return {
+    tenant: { name: found.tenant.name, slug: found.tenant.slug },
+    role: membership.role,
+    alreadyMember: true,
+  }
 }
 
 /**
@@ -773,7 +1032,7 @@ async function acceptedEarlierBy(
  * wins and this answers 401.
  * @param rawToken - The raw token from the link.
  * @param userId - The signed-in user.
- * @returns The tenant and the role the user holds (an existing membership's role is kept).
+ * @returns The tenant, the role the user holds (an existing membership's role is kept), and `alreadyMember`: true for a repeat accept and for a user who was a member already.
  * @throws {HttpError} 404 `invitation_invalid`; 403 `invitation_email_mismatch` when the address differs; 403 `invitation_email_unverified` when it matches but is unverified; 401 when the account is gone or inactive.
  */
 export async function accept(rawToken: string, userId: string): Promise<AcceptedInvitation> {
@@ -814,6 +1073,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     const accepted = {
       tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
       role: membership.role,
+      alreadyMember: !inserted,
     }
     if (!inserted) return { accepted }
     const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
@@ -831,4 +1091,417 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
   })
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
   return outcome.accepted
+}
+
+/**
+ * Refuse a join the maintenance mode forbids: joining is a write, so both
+ * `read_only` and `full` refuse it, for staff too (the route has no staff
+ * pass). The route's gate refused it already; this catches a mode that
+ * changed since, before anything is written.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+function assertJoinAllowedByMode(): void {
+  const snapshot = getMaintenanceMode()
+  if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
+  if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+}
+
+/**
+ * The account the invited address holds, read before anything is written:
+ * none when the address has no live account (a soft-deleted one released
+ * it); refused when the account is inactive or `assertSignInAllowed`
+ * refuses it.
+ * @param email - The invitation's stored (lowercased) address.
+ * @param refuse - The route's 404 `invitation_invalid`.
+ * @returns The account, or undefined when the address has none.
+ * @throws {HttpError} 404 `invitation_invalid` for an inactive account.
+ * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
+ */
+async function existingInvitee(
+  email: string,
+  refuse: () => HttpError = invitationInvalid
+): Promise<User | undefined> {
+  const existing = await userRepository.findByEmail(email)
+  if (existing && !existing.active) throw refuse()
+  await assertSignInAllowed(existing?.id)
+  return existing
+}
+
+/**
+ * The account a confirm link signs in, settled before the confirm's
+ * transaction: `existingInvitee`, and a never-verified account is claimed,
+ * as a sign-in link claims one (the click proves the mailbox, so a
+ * squatter's sessions and federated links go). An account deleted or
+ * deactivated during the claim is the generic invalid link, never the
+ * claim's 500.
+ * @param email - The link's (lowercased) address.
+ * @param refuse - The route's 404 `invitation_invalid`.
+ * @returns The account, or undefined when the click should create one.
+ * @throws {HttpError} 404 `invitation_invalid` for an inactive or vanished account.
+ * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
+ */
+async function invitedAccount(email: string, refuse: () => HttpError): Promise<User | undefined> {
+  const existing = await existingInvitee(email, refuse)
+  if (existing?.emailVerifiedAt !== null) return existing
+  let claimed: User
+  try {
+    claimed = await claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
+  } catch (error) {
+    if (isClaimedAccountGone(error)) throw refuse()
+    throw error
+  }
+  if (!claimed.active) throw refuse()
+  return claimed
+}
+
+/**
+ * Create the invitee's verified account in the join's transaction. When
+ * another write created an account for the address first (a concurrent
+ * click, or a sign-in), the insert loses the users unique index and the
+ * click answers the generic invalid link; the transaction rolls back before
+ * anything is claimed, so the link stays usable for the next click.
+ * @param email - The invitation's address.
+ * @param tx - The join's transaction.
+ * @param refuse - The route's 404 `invitation_invalid`.
+ * @returns The new account.
+ * @throws {HttpError} 404 `invitation_invalid` when the address was taken meanwhile.
+ */
+async function createInvitedAccount(
+  email: string,
+  tx: DbTransaction,
+  refuse: () => HttpError = invitationInvalid
+): Promise<User> {
+  try {
+    return await createLinkedAccount(email, tx)
+  } catch (error) {
+    if (isAddressTaken(error)) throw refuse()
+    throw error
+  }
+}
+
+/**
+ * Lock an existing invitee's row `FOR SHARE` in the confirm's transaction
+ * and re-check it, so a deactivation or delete that committed since the
+ * lookup wins, and one that commits later waits for the join and the
+ * session and then revokes them. The lock comes before the link and the
+ * invitation are claimed, the order a deactivation takes (the user row,
+ * then the address's links).
+ * @param userId - The invitee.
+ * @param tx - The confirm's transaction.
+ * @returns The locked row.
+ * @throws {HttpError} 404 `invitation_invalid` when the account is gone or inactive.
+ */
+async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<User> {
+  const locked = await userRepository.lockById(userId, 'share', tx)
+  if (!locked?.active) throw confirmInvalid()
+  return locked
+}
+
+/**
+ * Inside a join's transaction, once the invitation is claimed for `user`:
+ * add the membership (an existing one keeps its role), audit
+ * `invitation.accepted` and issue the session.
+ * @param user - The account joining.
+ * @param claimed - The invitation, claimed for it.
+ * @param sessionId - The new session's id.
+ * @param isRecentAuth - Whether the session counts as a recent sign-in.
+ * @param tx - The join's transaction.
+ * @returns The account, its session, its role, and the membership event when one was added.
+ */
+async function joinAndIssueSession(
+  user: User,
+  claimed: TenantInvitation,
+  sessionId: string,
+  isRecentAuth: boolean,
+  tx: DbTransaction
+): Promise<VerifyOutcome> {
+  const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
+  const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
+  // An existing membership keeps its role; createIfAbsent reads it back.
+  const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
+  await record(
+    {
+      action: 'invitation.accepted',
+      actor: { userId: user.id },
+      access: 'member',
+      tenantId: claimed.tenantId,
+      targetId: membership.id,
+      metadata: { role: membership.role, invitationId: claimed.id },
+    },
+    tx
+  )
+  const refreshToken = await issueRefreshToken(user.id, sessionId, tx, {
+    recentAuth: isRecentAuth,
+  })
+  const settled = { user, refreshToken, role: membership.role }
+  if (!inserted) return settled
+  const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
+  return {
+    ...settled,
+    joined: {
+      type: 'invitation_accepted',
+      tenantId: claimed.tenantId,
+      userId: user.id,
+      role: inserted.role,
+      wasFirstMember: memberCount === 1,
+      at: inserted.createdAt,
+    },
+  }
+}
+
+/**
+ * After a join commits: stamp `lastLoggedInAt` (best effort), sign the
+ * access token, and emit `invitation_accepted` when it joined,
+ * `email_verified` and `user_signed_up` when it created the account, and
+ * `user_signed_in`.
+ * @param outcome - What the join's transaction settled.
+ * @param sessionId - The new session's id.
+ * @param isNewUser - Whether the join created the account.
+ * @param tenant - The tenant it joined.
+ * @param tenant.name - Its name.
+ * @param tenant.slug - Its slug.
+ * @returns The session.
+ */
+async function finishJoin(
+  outcome: VerifyOutcome,
+  sessionId: string,
+  isNewUser: boolean,
+  tenant: { name: string; slug: string }
+): Promise<InvitationSession> {
+  const user = await stampSignIn(outcome.user)
+  const accessToken = signAccessToken(user, sessionId, outcome.refreshToken.authenticatedAt)
+  const platformRole = await platformRoleForLogin(user.id)
+  if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
+  if (isNewUser) {
+    await emitDomainEvent({ type: 'email_verified', userId: user.id, at: new Date() })
+    await emitDomainEvent({
+      type: 'user_signed_up',
+      userId: user.id,
+      method: 'link',
+      at: user.createdAt,
+    })
+  }
+  await emitDomainEvent({ type: 'user_signed_in', userId: user.id, method: 'link', at: new Date() })
+  return {
+    user,
+    accessToken,
+    refreshToken: outcome.refreshToken,
+    platformRole,
+    isNewUser,
+    tenant: { name: tenant.name, slug: tenant.slug },
+    role: outcome.role,
+  }
+}
+
+/**
+ * What a click on an invitation link comes to: a one-click session, or
+ * "check your inbox" with the mail work to run after the reply.
+ */
+export type InvitationVerifyOutcome =
+  | { kind: 'session'; session: InvitationSession }
+  | { kind: 'confirm'; email: string; followUp: () => Promise<void> }
+
+/**
+ * Mail the invitee a confirm link, after the reply to an invite click that
+ * needs one. In order, it stops silently at the first "no": its own
+ * cooldown per address and invitation (`SIGN_IN_LINK_MAIL_COOLDOWN`, scope
+ * `invitation-confirm:<invitation id>`, sent when Redis is down), the daily
+ * budget per address, shared with sign-in links
+ * (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), then the link (`SIGN_IN_LINK_TTL`,
+ * revoking the address's earlier confirm link for the same invitation) and
+ * the mail. The link opens Apex for the platform tenant and the web app
+ * otherwise. It writes no audit entry.
+ * @param valid - The redeemable invitation the click opened.
+ * @param existing - The account the address holds, already read by the click.
+ * @returns The follow-up; it never rejects, and logs its own failure.
+ */
+function requestInvitationConfirm(
+  valid: ValidInvitation,
+  existing: User | undefined
+): () => Promise<void> {
+  return async () => {
+    try {
+      const env = getEnv()
+      const { invitation, tenant } = valid
+      const cooldownMs = requireDurationMs(env.SIGN_IN_LINK_MAIL_COOLDOWN)
+      // Per address and invitation: a click on one workspace's invitation never holds back another's mail.
+      const canSend = await didClaimMailCooldown(
+        `${CONFIRM_MAIL_COOLDOWN_SCOPE}:${invitation.id}`,
+        invitation.email,
+        cooldownMs,
+        { whenUnavailable: 'send' }
+      )
+      // The budget is spent only once the cooldown is won.
+      if (!canSend || (await spendSignInLinkBudget(invitation.email)) === 'exhausted') return
+      // Server-decided, as for the invitation itself: staff join through Apex.
+      const linkApp = tenant.isPlatform ? 'apex' : 'web'
+      const ttlMs = requireDurationMs(env.SIGN_IN_LINK_TTL)
+      const { raw, row } = await issueLinkToken(
+        {
+          intent: 'invitation',
+          email: invitation.email,
+          app: linkApp,
+          invitationId: invitation.id,
+        },
+        ttlMs
+      )
+      await addEmailJob(
+        {
+          to: invitation.email,
+          templateKey: INVITATION_CONFIRM_TEMPLATE_KEY,
+          variables: {
+            // The stored name, never a submitted one.
+            firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+            tenantName: tenant.name,
+            role: invitation.role,
+            confirmUrl: buildInvitationConfirmUrl(raw, row),
+            expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+            appName: env.APP_NAME,
+          },
+        },
+        // The account the mail is for: '' (stored as NULL) when the address has none.
+        existing?.id ?? '',
+        { context: { tenantId: invitation.tenantId, invitationId: invitation.id, linkApp } }
+      )
+    } catch (error) {
+      logger.error('Invitation confirm mail failed', { error: redactedForLog(error) })
+    }
+  }
+}
+
+/**
+ * A click on an invitation link, signed out. A customer invitation to an
+ * address with no account joins in that click: it signs the invitee in,
+ * creating their verified account, and joins them. Every other click (an
+ * address that holds an account, whether verified or not, or any staff
+ * invitation) writes nothing and answers `confirm`, whose follow-up mails a
+ * 15-minute confirm link (`requestInvitationConfirm`): a forwarded
+ * invitation then signs nobody in to an existing account and grants no
+ * staff role. The link is single-use: once accepted it signs nobody in.
+ *
+ * Order: the link is looked up first, outside any transaction, so a used,
+ * expired, revoked, suspended-tenant or archived-tenant link touches no
+ * account; the maintenance mode is re-checked (`assertJoinAllowedByMode`);
+ * the address's account is read and passed through `assertSignInAllowed`
+ * (`existingInvitee`); then, for a one-click join, the mode is checked once
+ * more and one transaction creates the account, claims the invitation, adds
+ * the membership, audits `invitation.accepted` and issues a session that
+ * does not count as a recent sign-in. A claim that loses (the link went dead
+ * since the lookup) rolls the new account back.
+ * @param rawToken - The raw token from the link.
+ * @returns The one-click session, or the confirm branch's address and follow-up.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in and mails nothing.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` when a mode began after the route's gate.
+ */
+export async function verifyInvitation(rawToken: string): Promise<InvitationVerifyOutcome> {
+  const tokenHash = hashToken(rawToken)
+  const valid = await invitationRepository.findValidByTokenHash(tokenHash)
+  if (!valid) throw invitationInvalid()
+  assertJoinAllowedByMode()
+  const existing = await existingInvitee(valid.invitation.email)
+  if (existing || valid.tenant.isPlatform) {
+    return {
+      kind: 'confirm',
+      email: valid.invitation.email,
+      followUp: requestInvitationConfirm(valid, existing),
+    }
+  }
+  // Again after the account read, so a mode that began meanwhile writes no join.
+  assertJoinAllowedByMode()
+
+  const sessionId = randomUUID()
+  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
+    const user = await createInvitedAccount(valid.invitation.email, tx)
+    const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
+    // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
+    if (!claimed) throw invitationInvalid()
+    // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
+    return joinAndIssueSession(user, claimed, sessionId, false, tx)
+  })
+  const session = await finishJoin(outcome, sessionId, true, valid.tenant)
+  return { kind: 'session', session }
+}
+
+/**
+ * Join by an invitation confirm link: spend it once, sign the invitee in
+ * (creating their verified account when the address has none, which only a
+ * staff invitation reaches) and join them. The session counts as a recent
+ * sign-in: the click proves the mailbox within `SIGN_IN_LINK_TTL`, as a
+ * sign-in link does. Every refusal is the one `invitation_invalid` and
+ * spends nothing, with one exception: a never-verified account is claimed
+ * before the transaction, as a sign-in link claims one, and that claim
+ * stands even if the join is then refused.
+ *
+ * Order: the maintenance mode; a read-only peek of the link; the address the
+ * client shows, when it sends one, against the link's (neither is logged);
+ * the invitation by the link's id, which must still be redeemable, for the
+ * link's address, and for the link's frontend (Apex for the platform
+ * tenant); the account (`invitedAccount`, which claims a never-verified
+ * one); the mode again; then one transaction that locks the user row
+ * `FOR SHARE` (or inserts the new account), claims the link, claims the
+ * invitation (`claimForAcceptById`, which re-checks it atomically), adds
+ * the membership, audits `invitation.accepted` and issues the session. Any
+ * refusal inside rolls the link's claim back. No platform-role check runs
+ * for an Apex link: the invitee becomes staff by this join, and the
+ * invitation's tenant is what authorises Apex.
+ * @param rawLink - The raw token from the confirm link.
+ * @param shownEmail - The address the link displays, trimmed and lowercased, when the client sends it.
+ * @returns The session, and the tenant and role it joined with.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+export async function confirmInvitation(
+  rawLink: string,
+  shownEmail?: string
+): Promise<InvitationSession> {
+  assertJoinAllowedByMode()
+  const peeked = await peekLinkToken(rawLink, 'invitation')
+  if (!peeked?.email || !peeked.app || !peeked.invitationId) throw confirmInvalid()
+  const { email, app, invitationId } = peeked
+  if (shownEmail !== undefined && shownEmail.trim().toLowerCase() !== email) {
+    throw confirmInvalid()
+  }
+  const valid = await invitationRepository.findValidById(invitationId)
+  // The last two are defence in depth: the follow-up issues links only of this shape.
+  if (
+    !valid ||
+    valid.invitation.email.toLowerCase() !== email ||
+    app !== (valid.tenant.isPlatform ? 'apex' : 'web')
+  ) {
+    throw confirmInvalid()
+  }
+  const account = await invitedAccount(email, confirmInvalid)
+  // Again after the claim's own transactions, so a mode that began meanwhile writes no join.
+  assertJoinAllowedByMode()
+
+  const sessionId = randomUUID()
+  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
+    // The user row first, then the link row: the order a deactivation takes.
+    const user = account
+      ? await lockActiveInvitee(account.id, tx)
+      : await createInvitedAccount(email, tx, confirmInvalid)
+    const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
+    if (link?.invitationId !== invitationId) throw confirmInvalid()
+    const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)
+    // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
+    if (!claimed) throw confirmInvalid()
+    return joinAndIssueSession(user, claimed, sessionId, true, tx)
+  })
+  return finishJoin(outcome, sessionId, account === undefined, valid.tenant)
+}
+
+/**
+ * Stamp `lastLoggedInAt` on an account a verify just signed in, after the
+ * join commits. Best effort: the link is spent by then, so a failed stamp is
+ * logged and the session is still handed back.
+ * @param user - The account as the verify's transaction left it.
+ * @returns The stamped row, or the given one when the stamp failed.
+ */
+async function stampSignIn(user: User): Promise<User> {
+  try {
+    return (await userRepository.update(user.id, { lastLoggedInAt: new Date() })) ?? user
+  } catch (error) {
+    logger.error('Last sign-in could not be stamped', { error, userId: user.id })
+    return user
+  }
 }

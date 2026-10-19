@@ -1,5 +1,5 @@
 /**
- * @file The bulk writers (the five revokers and markSessionAuthenticated)
+ * @file The bulk writers (the revokers, deleteForEmail and markSessionAuthenticated)
  * lock the rows they write in id order, whatever plan or physical row layout
  * Postgres uses (`user-token.repository.ts`'s header). Three groups of tests
  * pin that property: a race on a built physical layout, a plan-shape check,
@@ -11,7 +11,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { userTokenModel, type TokenPurpose } from '@/database/models/user-token.model'
+import { userTokenModel } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql as rawSql, type DbExecutor } from '@/services/database.service'
@@ -161,24 +161,7 @@ async function unorderedRevokeAllForUserExceptToken(
 }
 
 /**
- * A `revokeAllForUserAndPurpose` stand-in that updates by its predicate with no id-ordered lock,
- * so it locks rows in scan order.
- */
-async function unorderedRevokeAllForUserAndPurpose(
-  userId: string,
-  purpose: TokenPurpose,
-  executor: DbExecutor = db
-): Promise<void> {
-  await executor
-    .update(userTokenModel)
-    .set(revokedNow())
-    .where(
-      sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null and ${userTokenModel.deletedAt} is null`
-    )
-}
-
-/**
- * Runs `run` with the five revokers swapped for their unordered stand-ins, and restores every
+ * Runs `run` with the four revokers swapped for their unordered stand-ins, and restores every
  * writer afterwards.
  */
 async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
@@ -194,13 +177,7 @@ async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
             prototype,
             'revokeAllForUserExceptToken',
             unorderedRevokeAllForUserExceptToken,
-            () =>
-              withMutatedMethod(
-                prototype,
-                'revokeAllForUserAndPurpose',
-                unorderedRevokeAllForUserAndPurpose,
-                run
-              )
+            run
           )
       )
     )
@@ -450,9 +427,35 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
       ),
   },
   {
-    name: 'revokeAllForUserAndPurpose',
+    name: 'revokeLiveFor (sign-in links of an address)',
     run: (executor) =>
-      userTokenRepository.revokeAllForUserAndPurpose(randomUUID(), 'email_verification', executor),
+      userTokenRepository.revokeLiveFor(
+        { email: `${randomUUID()}@example.test`, intent: 'sign_in' },
+        executor
+      ),
+  },
+  {
+    name: 'revokeLiveFor (invitation confirm links of an address)',
+    run: (executor) =>
+      userTokenRepository.revokeLiveFor(
+        { email: `${randomUUID()}@example.test`, intent: 'invitation' },
+        executor
+      ),
+  },
+  {
+    name: 'revokeLiveFor (step-up links of a session)',
+    run: (executor) =>
+      userTokenRepository.revokeLiveFor(
+        { userId: randomUUID(), sessionId: randomUUID(), intent: 'step_up' },
+        executor
+      ),
+  },
+  {
+    name: 'deleteForEmail',
+    run: (executor) =>
+      executor.transaction((tx) =>
+        userTokenRepository.deleteForEmail(`${randomUUID()}@example.test`, new Date(), tx)
+      ),
   },
   {
     name: 'markSessionAuthenticated',
@@ -476,15 +479,19 @@ const PLANNERS: { label: string; settings: readonly string[] }[] = [
 ]
 
 /**
- * The UPDATE a writer sends, captured by running it for ids that match no row.
+ * The UPDATE (or, for a deleting writer, the DELETE) a writer sends, captured by running it for
+ * ids that match no row.
  */
 async function capturedUpdate(
   run: (executor: DbExecutor) => Promise<unknown>
 ): Promise<CapturedStatement> {
   captured.length = 0
   await run(capturing.conn)
-  const update = captured.find(({ query }) => query.startsWith('update "user_tokens"'))
-  if (!update) throw new Error('the writer sent no UPDATE of user_tokens')
+  const update = captured.find(
+    ({ query }) =>
+      query.startsWith('update "user_tokens"') || query.startsWith('delete from "user_tokens"')
+  )
+  if (!update) throw new Error('the writer sent no UPDATE or DELETE of user_tokens')
   return update
 }
 

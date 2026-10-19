@@ -11,17 +11,12 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { stackFrameLinesOf } from '@/errors/stack-frames'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
-import {
-  ACCOUNT_SETUP_TEMPLATE_KEY,
-  renderAccountSetupTemplate,
-  type AccountSetupVariables,
-} from '@/templates/email/account-setup.template'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
-  EMAIL_VERIFICATION_TEMPLATE_KEY,
-  renderEmailVerificationTemplate,
-  type EmailVerificationVariables,
-} from '@/templates/email/email-verification.template'
+  INVITATION_CONFIRM_TEMPLATE_KEY,
+  renderInvitationConfirmTemplate,
+  type InvitationConfirmVariables,
+} from '@/templates/email/invitation-confirm.template'
 import {
   MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY,
   renderMaintenanceModeChangedTemplate,
@@ -33,25 +28,25 @@ import {
   type OnboardingReminderVariables,
 } from '@/templates/email/onboarding-reminder.template'
 import {
-  PASSWORD_CHANGED_TEMPLATE_KEY,
-  renderPasswordChangedTemplate,
-  type PasswordChangedVariables,
-} from '@/templates/email/password-changed.template'
+  renderSignInLinkTemplate,
+  SIGN_IN_LINK_TEMPLATE_KEY,
+  type SignInLinkVariables,
+} from '@/templates/email/sign-in-link.template'
 import {
-  PASSWORD_RESET_TEMPLATE_KEY,
-  renderPasswordResetTemplate,
-  type PasswordResetVariables,
-} from '@/templates/email/password-reset.template'
-import {
-  REGISTRATION_ATTEMPT_TEMPLATE_KEY,
-  renderRegistrationAttemptTemplate,
-  type RegistrationAttemptVariables,
-} from '@/templates/email/registration-attempt.template'
+  renderStepUpLinkTemplate,
+  STEP_UP_LINK_TEMPLATE_KEY,
+  type StepUpLinkVariables,
+} from '@/templates/email/step-up-link.template'
 import {
   renderTenantInvitationTemplate,
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
 } from '@/templates/email/tenant-invitation.template'
+import {
+  renderWelcomeTemplate,
+  WELCOME_TEMPLATE_KEY,
+  type WelcomeVariables,
+} from '@/templates/email/welcome.template'
 import { senderFor } from '@/utilities/email-sender.utilities'
 import type { RenderedEmail } from '@/utilities/email-template.utilities'
 
@@ -71,33 +66,8 @@ const emailLogRepository = new EmailLogRepository()
 export type MailMessage =
   | {
       to: string
-      templateKey: typeof EMAIL_VERIFICATION_TEMPLATE_KEY
-      variables: EmailVerificationVariables
-    }
-  | {
-      to: string
-      templateKey: typeof PASSWORD_RESET_TEMPLATE_KEY
-      variables: PasswordResetVariables
-    }
-  | {
-      to: string
-      templateKey: typeof REGISTRATION_ATTEMPT_TEMPLATE_KEY
-      variables: RegistrationAttemptVariables
-    }
-  | {
-      to: string
-      templateKey: typeof PASSWORD_CHANGED_TEMPLATE_KEY
-      variables: PasswordChangedVariables
-    }
-  | {
-      to: string
       templateKey: typeof TENANT_INVITATION_TEMPLATE_KEY
       variables: TenantInvitationVariables
-    }
-  | {
-      to: string
-      templateKey: typeof ACCOUNT_SETUP_TEMPLATE_KEY
-      variables: AccountSetupVariables
     }
   | {
       to: string
@@ -108,6 +78,26 @@ export type MailMessage =
       to: string
       templateKey: typeof MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY
       variables: MaintenanceModeChangedVariables
+    }
+  | {
+      to: string
+      templateKey: typeof SIGN_IN_LINK_TEMPLATE_KEY
+      variables: SignInLinkVariables
+    }
+  | {
+      to: string
+      templateKey: typeof STEP_UP_LINK_TEMPLATE_KEY
+      variables: StepUpLinkVariables
+    }
+  | {
+      to: string
+      templateKey: typeof WELCOME_TEMPLATE_KEY
+      variables: WelcomeVariables
+    }
+  | {
+      to: string
+      templateKey: typeof INVITATION_CONFIRM_TEMPLATE_KEY
+      variables: InvitationConfirmVariables
     }
 
 /**
@@ -136,29 +126,26 @@ export interface TrackedDelivery {
  */
 export function renderForMessage(message: MailMessage): RenderedEmail {
   switch (message.templateKey) {
-    case EMAIL_VERIFICATION_TEMPLATE_KEY: {
-      return renderEmailVerificationTemplate(message.variables)
-    }
-    case PASSWORD_RESET_TEMPLATE_KEY: {
-      return renderPasswordResetTemplate(message.variables)
-    }
-    case REGISTRATION_ATTEMPT_TEMPLATE_KEY: {
-      return renderRegistrationAttemptTemplate(message.variables)
-    }
-    case PASSWORD_CHANGED_TEMPLATE_KEY: {
-      return renderPasswordChangedTemplate(message.variables)
-    }
     case TENANT_INVITATION_TEMPLATE_KEY: {
       return renderTenantInvitationTemplate(message.variables)
-    }
-    case ACCOUNT_SETUP_TEMPLATE_KEY: {
-      return renderAccountSetupTemplate(message.variables)
     }
     case ONBOARDING_REMINDER_TEMPLATE_KEY: {
       return renderOnboardingReminderTemplate(message.variables)
     }
     case MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY: {
       return renderMaintenanceModeChangedTemplate(message.variables)
+    }
+    case SIGN_IN_LINK_TEMPLATE_KEY: {
+      return renderSignInLinkTemplate(message.variables)
+    }
+    case STEP_UP_LINK_TEMPLATE_KEY: {
+      return renderStepUpLinkTemplate(message.variables)
+    }
+    case WELCOME_TEMPLATE_KEY: {
+      return renderWelcomeTemplate(message.variables)
+    }
+    case INVITATION_CONFIRM_TEMPLATE_KEY: {
+      return renderInvitationConfirmTemplate(message.variables)
     }
     default: {
       throw new Error(
@@ -173,8 +160,8 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
  * when there is no string `.code`.
  *
  * Reads only `.code`, never `.message` or `.response`: a rejecting SMTP server
- * can quote the refused body back, and the templates put a reset or
- * verification URL in that body. The code is not shape-checked here: the
+ * can quote the refused body back, and the templates put a sign-in or
+ * invitation URL in that body. The code is not shape-checked here: the
  * repository replaces a wrong-shaped one, and the `error_code` column's CHECK
  * backs that up.
  * @param error - Whatever the transport call rejected with.
@@ -268,7 +255,7 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * send, so a log-write failure after a successful send is never recorded as a
  * failed send. Response latency never waits on SMTP: every send runs from the
  * queue in email.worker.ts. When mail is down the user gets no email and no
- * error; every attempt is in `email_logs`, and resend-verification lets them retry.
+ * error; every attempt is in `email_logs`, and asking for a new link lets them retry.
  * @param message - The email to render and send.
  * @param delivery - The tracked message this attempt belongs to. Without it, nodemailer generates the Message-ID and the attempt row has no `message_id`.
  * @returns `'sent'` or `'failed'`, the attempt's status. Resolves once the send has been attempted and the outcome recorded, even if recording failed. `email.worker.ts` reads it to decide whether to retry.

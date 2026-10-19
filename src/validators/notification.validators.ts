@@ -37,17 +37,12 @@ export const notificationIdSchema = z.object({
  * repository ignores a stored email toggle for these types when it decides
  * delivery; `updatePreferencesSchemaFor` refuses to store `emailEnabled:
  * false` for them, so the settings UI never shows a toggle the repository
- * would ignore. `verify_email` and `password_reset_requested` would lock the
- * user out if disabled; `password_changed` must not be silenceable by someone
- * who has taken the account over; `maintenance_mode_changed` must reach every
+ * would ignore. `maintenance_mode_changed` must reach every
  * platform owner and admin; `tenant_invitation` has no email on the
  * notification path and is listed only to keep the two sets the same. Their
  * in-app channel stays switchable.
  */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
-  'verify_email',
-  'password_reset_requested',
-  'password_changed',
   'tenant_invitation',
   'maintenance_mode_changed',
 ])
@@ -94,7 +89,8 @@ export function updatePreferencesSchemaFor(isStaff: boolean) {
         context.addIssue({
           code: 'custom',
           path: ['emailEnabled'],
-          message: 'Email for this notification type cannot be turned off.',
+          message:
+            "You can't turn off email for this notification type. You can turn off its in-app notifications.",
         })
       }
     })

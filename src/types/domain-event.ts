@@ -8,7 +8,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 /**
  * How a user signed up or signed in.
  */
-export type SignInMethod = 'password' | 'google'
+export type SignInMethod = 'link' | 'google'
 
 /**
  * The product events: what a user or tenant did that the audit log does not
@@ -21,9 +21,7 @@ export type ProductDomainEvent =
   | { type: 'user_signed_up'; userId: string; method: SignInMethod; at: Date }
   | { type: 'user_signed_in'; userId: string; method: SignInMethod; at: Date }
   | { type: 'user_signed_out'; userId: string; at: Date }
-  | { type: 'password_changed'; userId: string; at: Date }
   | { type: 'other_sessions_revoked'; userId: string; at: Date }
-  | { type: 'password_reset_completed'; userId: string; at: Date }
   | { type: 'email_verified'; userId: string; at: Date }
   | {
       type: 'onboarding_step_completed'

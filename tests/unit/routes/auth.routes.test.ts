@@ -1,17 +1,30 @@
 /**
- * @file The auth router's one staff route, `POST /reauthenticate`, answers a
- * refused caller what an unknown auth path answers: the router-wide JSON gate
- * runs first for every path, an OPTIONS refusal follows it on the staff path,
- * and the route comes after both, with the role gate ahead of its limiter.
+ * @file The auth router's staff routes, the step-up routes under `/step-up`,
+ * answer a refused caller what an unknown auth path answers: the router-wide
+ * JSON gate runs first for every path, an OPTIONS refusal follows it on
+ * `/step-up`, and each bearer route comes after both, with `requireAuth`,
+ * then the role gate ahead of its limiter. The two link routes share one
+ * limiter instance; the popup's `GET /step-up/google` shares `/google`'s.
+ * Google is configured for the whole file, before anything reads the
+ * environment, so its routes are mounted.
  */
 import type { RequestHandler, Router } from 'express'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { authController } from '@/controllers/auth.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { refusePlatformOptions } from '@/middlewares/platform.middleware'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { createAuthRouter } from '@/routes/auth.routes'
+
+vi.hoisted(() => {
+  vi.stubEnv('GOOGLE_CLIENT_ID', 'test-google-client-id')
+  vi.stubEnv('GOOGLE_CLIENT_SECRET', 'test-google-client-secret')
+})
+
+afterAll(() => {
+  vi.unstubAllEnvs()
+})
 
 /**
  * A router layer as router@2 builds it. Express's published types describe an
@@ -35,14 +48,28 @@ function layersOf(router: Router): RouteLayer[] {
 }
 
 /**
- * The index of the `POST /reauthenticate` route layer; throws when there is none.
+ * The index of one route's layer; throws when there is none.
  */
-function reauthenticateIndex(layers: RouteLayer[]): number {
+function routeIndex(layers: RouteLayer[], method: string, path: string): number {
   const index = layers.findIndex(
-    (layer) => layer.route?.path === '/reauthenticate' && layer.route.methods.post === true
+    (layer) => layer.route?.path === path && layer.route.methods[method] === true
   )
-  if (index === -1) throw new Error('no POST /reauthenticate route')
+  if (index === -1) throw new Error(`no ${method.toUpperCase()} ${path} route`)
   return index
+}
+
+/**
+ * One route's handlers, in order.
+ */
+function handlersOf(layers: RouteLayer[], method: string, path: string): RequestHandler[] {
+  return layers[routeIndex(layers, method, path)]?.route?.stack.map(({ handle }) => handle) ?? []
+}
+
+/**
+ * Whether a handler is a rate limiter built by `createRateLimiter`.
+ */
+function isLimiter(handler: RequestHandler | undefined): boolean {
+  return Object.hasOwn(handler ?? {}, RATE_LIMITER_MARK)
 }
 
 /**
@@ -54,7 +81,13 @@ function gateIndex(layers: RouteLayer[]): number {
   )
 }
 
-describe('createAuthRouter: POST /reauthenticate', () => {
+const BEARER_STEP_UP_ROUTES = [
+  { path: '/step-up/link/request', handler: authController.requestStepUpLink },
+  { path: '/step-up/link/verify', handler: authController.verifyStepUpLink },
+  { path: '/step-up/google/start', handler: authController.startGoogleStepUp },
+]
+
+describe('createAuthRouter: the step-up routes', () => {
   it('mounts the router-wide JSON gate ahead of every route', () => {
     const layers = layersOf(createAuthRouter())
     const gateAt = gateIndex(layers)
@@ -63,29 +96,64 @@ describe('createAuthRouter: POST /reauthenticate', () => {
     expect(layers.slice(0, gateAt).some((layer) => layer.route !== undefined)).toBe(false)
   })
 
-  it('refuses OPTIONS on the staff path right after the JSON gate', () => {
+  it('refuses OPTIONS under /step-up right after the JSON gate', () => {
     const layers = layersOf(createAuthRouter())
     const refusalAt = layers.findIndex(
       (layer) => layer.route === undefined && layer.handle === refusePlatformOptions
     )
 
     expect(refusalAt).toBe(gateIndex(layers) + 1)
-    expect(layers[refusalAt]?.match('/reauthenticate')).toBe(true)
+    for (const path of ['/step-up', '/step-up/link/request', '/step-up/google']) {
+      expect(layers[refusalAt]?.match(path)).toBe(true)
+    }
     expect(layers[refusalAt]?.match('/login')).toBe(false)
+    expect(layers[refusalAt]?.match('/google')).toBe(false)
   })
 
-  it('registers the route after both, with requireAuth, the role gate, the limiter, then the handler', () => {
-    const layers = layersOf(createAuthRouter())
-    const routeAt = reauthenticateIndex(layers)
-    const handlers = layers[routeAt]?.route?.stack.map(({ handle }) => handle)
+  it.each(BEARER_STEP_UP_ROUTES)(
+    'registers POST $path after both, with requireAuth, the role gate, then the limiter',
+    ({ path, handler }) => {
+      const layers = layersOf(createAuthRouter())
+      const handlers = handlersOf(layers, 'post', path)
 
-    expect(routeAt).toBeGreaterThan(gateIndex(layers) + 1)
-    expect(handlers).toHaveLength(4)
-    expect(handlers?.[0]).toBe(requireAuth)
-    // requirePlatformRole builds a fresh closure per route, so the role gate is known by what it is not.
-    expect([requireAuth, requireJsonContentType]).not.toContain(handlers?.[1])
-    expect(Object.hasOwn(handlers?.[1] ?? {}, RATE_LIMITER_MARK)).toBe(false)
-    expect(Object.hasOwn(handlers?.[2] ?? {}, RATE_LIMITER_MARK)).toBe(true)
-    expect(handlers?.[3]).toBe(authController.reauthenticate)
+      expect(routeIndex(layers, 'post', path)).toBeGreaterThan(gateIndex(layers) + 1)
+      expect(handlers[0]).toBe(requireAuth)
+      // requirePlatformRole builds a fresh closure per route, so the role gate is known by what it is not.
+      expect([requireAuth, requireJsonContentType]).not.toContain(handlers[1])
+      expect(isLimiter(handlers[1])).toBe(false)
+      expect(isLimiter(handlers[2])).toBe(true)
+      expect(handlers.at(-1)).toBe(handler)
+    }
+  )
+
+  it('mounts the two link routes on one shared limiter instance', () => {
+    const layers = layersOf(createAuthRouter())
+
+    expect(handlersOf(layers, 'post', '/step-up/link/request')[2]).toBe(
+      handlersOf(layers, 'post', '/step-up/link/verify')[2]
+    )
+  })
+
+  it('runs the OAuth session after the limiter on the Google start', () => {
+    const handlers = handlersOf(layersOf(createAuthRouter()), 'post', '/step-up/google/start')
+
+    expect(handlers).toHaveLength(5)
+    expect(isLimiter(handlers[3])).toBe(false)
+  })
+
+  it("mounts GET /step-up/google on /google's own limiter instance, with no bearer gate", () => {
+    const layers = layersOf(createAuthRouter())
+    const popup = handlersOf(layers, 'get', '/step-up/google')
+
+    expect(isLimiter(popup[0])).toBe(true)
+    expect(popup[0]).toBe(handlersOf(layers, 'get', '/google')[0])
+    expect(popup).not.toContain(requireAuth)
+    expect(popup.at(-1)).toBe(authController.openGoogleStepUp)
+  })
+
+  it('mounts no /reauthenticate route', () => {
+    const layers = layersOf(createAuthRouter())
+
+    expect(layers.some((layer) => layer.route?.path === '/reauthenticate')).toBe(false)
   })
 })

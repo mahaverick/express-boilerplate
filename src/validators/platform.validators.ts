@@ -158,8 +158,8 @@ export function parseIdParameter(
 
 /**
  * `POST /platform/users`: an address and optional names. Strict: staff never
- * set a password or a status, nor pick the frontend the set-password link
- * opens (the server does).
+ * set a status, nor pick the frontend the welcome link opens (the server
+ * does).
  */
 export const newPlatformUserSchema = z.strictObject({
   email: emailSchema,

@@ -16,7 +16,7 @@ FROM base AS deps
 # allowBuilds, minimumReleaseAge and minimumReleaseAgeExclude from
 # pnpm-workspace.yaml at install time (the lockfile doesn't record them), and
 # --frozen-lockfile enforces the release-age gate, so the install needs the
-# file on disk to allow bcrypt's build and apply the excludes.
+# file on disk to allow the native builds and apply the excludes.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN corepack install
 # Cache mount keeps the store between builds without baking it into a layer.

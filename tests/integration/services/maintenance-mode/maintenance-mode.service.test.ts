@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
@@ -81,6 +82,14 @@ async function googleLinks(by: { providerId: string } | { userId: string }): Pro
  */
 async function enterFull(): Promise<void> {
   await storeMaintenanceMode('full')
+  await reloadMaintenanceMode()
+}
+
+/**
+ * Switches this process to `read_only`.
+ */
+async function enterReadOnly(): Promise<void> {
+  await storeMaintenanceMode('read_only')
   await reloadMaintenanceMode()
 }
 
@@ -164,7 +173,7 @@ describe('Google sign-in in full', () => {
     await storeMaintenanceMode('full')
     await reloadMaintenanceMode()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
     expect(await sessionsOf(user.id)).toBe(0)
@@ -176,7 +185,7 @@ describe('Google sign-in in full', () => {
     await storeMaintenanceMode('full')
     await reloadMaintenanceMode()
 
-    await completeGoogleSignIn(googleProfile(user.email))
+    await completeGoogleSignIn(googleProfile(user.email), 'web')
 
     expect(await sessionsOf(user.id)).toBe(1)
   })
@@ -186,7 +195,7 @@ describe('Google sign-in in full', () => {
     const profile = googleProfile(email)
     await enterFull()
 
-    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+    await expect(completeGoogleSignIn(profile, 'web')).rejects.toBeInstanceOf(MaintenanceModeError)
 
     const [users] = await sql<{ count: number }[]>`
       select count(*)::int as count from users where email = ${email}`
@@ -198,7 +207,7 @@ describe('Google sign-in in full', () => {
     const user = await createTrackedUser({ email: googleEmail() })
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
 
@@ -209,19 +218,17 @@ describe('Google sign-in in full', () => {
     const user = await createTrackedUser({
       email: googleEmail(),
       verified: false,
-      hasPassword: true,
     })
     await issueRefreshToken(user.id, randomUUID())
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
 
-    const [row] = await sql<{ hasPassword: boolean; isUnverified: boolean }[]>`
-      select password_hash is not null as "hasPassword", email_verified_at is null as "isUnverified"
-      from users where id = ${user.id}`
-    expect(row).toEqual({ hasPassword: true, isUnverified: true })
+    const [row] = await sql<{ isUnverified: boolean }[]>`
+      select email_verified_at is null as "isUnverified" from users where id = ${user.id}`
+    expect(row).toEqual({ isUnverified: true })
     expect(await googleLinks({ userId: user.id })).toBe(0)
     const [tokens] = await sql<{ live: number }[]>`
       select count(*)::int as live from user_tokens
@@ -232,7 +239,7 @@ describe('Google sign-in in full', () => {
   it('answers a non-staff profile with no email with the 503, not a 400', async () => {
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(undefined))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(undefined), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
   })
@@ -249,7 +256,7 @@ describe('Google sign-in in full', () => {
     })
     await enterFull()
 
-    await completeGoogleSignIn(profile)
+    await completeGoogleSignIn(profile, 'web')
 
     expect(await sessionsOf(user.id)).toBe(1)
   })
@@ -259,9 +266,9 @@ describe('Google sign-in in full', () => {
     await makeStaff(user.id, 'admin')
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email, false))).rejects.toBeInstanceOf(
-      MaintenanceModeError
-    )
+    await expect(
+      completeGoogleSignIn(googleProfile(user.email, false), 'web')
+    ).rejects.toBeInstanceOf(MaintenanceModeError)
 
     expect(await googleLinks({ userId: user.id })).toBe(0)
     expect(await sessionsOf(user.id)).toBe(0)
@@ -297,7 +304,7 @@ describe('Google sign-in in full', () => {
     const answers: Record<string, unknown> = {}
     for (const [name, profile] of Object.entries(profiles)) {
       try {
-        await completeGoogleSignIn(profile)
+        await completeGoogleSignIn(profile, 'web')
         answers[name] = 'signed in'
       } catch (error) {
         answers[name] =
@@ -329,7 +336,7 @@ describe('Google sign-in in full', () => {
     const profile = googleProfile(googleEmail())
     await enterFull()
 
-    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+    await expect(completeGoogleSignIn(profile, 'web')).rejects.toBeInstanceOf(MaintenanceModeError)
 
     expect(await googleLinks({ providerId: profile.id })).toBe(0)
   })
@@ -350,12 +357,95 @@ describe('Google sign-in in full', () => {
       findPlatformRole,
       async () => {
         for (const profile of [unknownProfile, memberProfile]) {
-          await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+          await expect(completeGoogleSignIn(profile, 'web')).rejects.toBeInstanceOf(
+            MaintenanceModeError
+          )
         }
       }
     )
 
     expect(findPlatformRole).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Google sign-in in read_only', () => {
+  it('refuses a web profile that reaches no account with READ_ONLY_MODE, and creates nothing', async () => {
+    const email = googleEmail()
+    const profile = googleProfile(email)
+    await enterReadOnly()
+
+    await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
+      statusCode: 503,
+      code: READ_ONLY_MODE_CODE,
+    })
+
+    const [users] = await sql<{ count: number }[]>`
+      select count(*)::int as count from users where email = ${email}`
+    expect(users?.count).toBe(0)
+    expect(await googleLinks({ providerId: profile.id })).toBe(0)
+  })
+
+  it('answers READ_ONLY_MODE before the verified-address check for a profile that reaches no account', async () => {
+    // Only the up-front guard answers this: the one before the insert comes after email_not_verified.
+    const unverified = googleProfile(googleEmail(), false)
+    await enterReadOnly()
+
+    await expect(completeGoogleSignIn(unverified, 'web')).rejects.toMatchObject({
+      statusCode: 503,
+      code: READ_ONLY_MODE_CODE,
+    })
+  })
+
+  it('refuses the creation when read_only begins after the first lookup', async () => {
+    const email = googleEmail()
+    const profile = googleProfile(email)
+    const { UserRepository: Users } = await import('@/repositories/user.repository')
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realFindByEmail = Users.prototype.findByEmail
+    /**
+     * Stands in for `UserRepository.findByEmail`: read_only begins just before resolveGoogleUser's own lookup.
+     */
+    const enteringFind: typeof realFindByEmail = async function (
+      this: InstanceType<typeof Users>,
+      ...arguments_
+    ) {
+      await enterReadOnly()
+      return realFindByEmail.apply(this, arguments_)
+    }
+
+    await withMutatedMethod(Users.prototype, 'findByEmail', enteringFind, async () => {
+      await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
+        statusCode: 503,
+        code: READ_ONLY_MODE_CODE,
+      })
+    })
+
+    const [users] = await sql<{ count: number }[]>`
+      select count(*)::int as count from users where email = ${email}`
+    expect(users?.count).toBe(0)
+  })
+
+  it('signs an existing account in without linking the Google identity', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    const profile = googleProfile(user.email)
+    await enterReadOnly()
+
+    const signIn = await completeGoogleSignIn(profile, 'web')
+
+    expect(signIn.refreshToken.userId).toBe(user.id)
+    expect(signIn.isNewUser).toBe(false)
+    expect(await googleLinks({ userId: user.id })).toBe(0)
+  })
+
+  it('signs a linked account in', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    const profile = googleProfile(user.email)
+    await completeGoogleSignIn(profile, 'web')
+    await enterReadOnly()
+
+    const signIn = await completeGoogleSignIn(profile, 'web')
+
+    expect(signIn.refreshToken.userId).toBe(user.id)
   })
 })
 

@@ -25,10 +25,17 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { issueLinkToken } from '@/services/link-token.service'
 import { logger } from '@/services/logger.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -42,13 +49,9 @@ import {
   recentAuthTokenFor,
   tokenFor,
 } from '../../helpers/platform-users'
-import {
-  expectNoJob,
-  waitForInvitationEmail,
-  waitForJob,
-  waitForVerificationToken,
-} from '../../helpers/queue-jobs'
+import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
+import { signInByLink } from '../../helpers/sign-in'
 import { settle } from '../../helpers/timing'
 
 /**
@@ -69,7 +72,6 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 const HOUR_MS = 60 * 60 * 1000
-const PASSWORD = 'correct horse battery staple'
 const INVITATION_SENT = {
   success: true,
   message: 'If that address can be invited, an invitation has been sent.',
@@ -81,19 +83,22 @@ const INVALID = {
   success: false,
   statusCode: 404,
   code: 'invitation_invalid',
-  message: 'This invitation is invalid or has expired.',
+  message:
+    'This invitation link has expired or was already used. Ask the person who invited you for a new one.',
 }
 const UNVERIFIED = {
   success: false,
   statusCode: 403,
   code: 'invitation_email_unverified',
-  message: 'Verify your email address before accepting this invitation.',
+  message:
+    'Confirm your email address before you accept this invitation. Open the invitation link from your inbox.',
 }
 const MISMATCH = {
   success: false,
   statusCode: 403,
   code: 'invitation_email_mismatch',
-  message: 'This invitation was sent to a different email address.',
+  message:
+    'This invitation is for a different email address. Sign in with the address it was sent to.',
 }
 
 /**
@@ -124,6 +129,7 @@ function uniqueEmail(): string {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -209,6 +215,27 @@ function recipientBudgetKey(email: string): string {
 async function recipientBudgetSpent(email: string): Promise<number> {
   const redis = await getRedis()
   return Number((await redis.get(recipientBudgetKey(email))) ?? 0)
+}
+
+/**
+ * The origin the CORS config allows.
+ */
+const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
+
+/**
+ * One page of a tenant's invitations over HTTP, as `bearer`.
+ */
+async function listVia(
+  slug: string,
+  bearer: string
+): Promise<{
+  items: { id: string; lastSentAt: string | null; resendAvailableAt: string | null }[]
+}> {
+  const response = await request(app)
+    .get(`/api/v1/tenants/${slug}/invitations`)
+    .set('Authorization', `Bearer ${bearer}`)
+  expect(response.status).toBe(200)
+  return envelopeOf<Awaited<ReturnType<typeof listVia>>>(response).data ?? { items: [] }
 }
 
 /**
@@ -380,7 +407,7 @@ describe('invitations API', () => {
         success: false,
         statusCode: 409,
         code: 'already_member',
-        message: 'That person is already a member.',
+        message: 'That person is already a member of this workspace. No invitation was sent.',
       })
     })
 
@@ -500,6 +527,8 @@ describe('invitations API', () => {
         'expiresAt',
         'id',
         'invitedBy',
+        'lastSentAt',
+        'resendAvailableAt',
         'role',
       ])
       expect(items[0]).toMatchObject({
@@ -682,10 +711,61 @@ describe('invitations API', () => {
       expect(resent.status).toBe(429)
       expect(resent.body).toMatchObject({
         code: 'invitation_resend_cooldown',
-        message: 'This invitation was just sent. Try again in a few minutes.',
+        message: 'You can resend this invitation in 10 minutes.',
       })
       const stillValid = await previewVia(rawToken)
       expect(stillValid.status).toBe(200)
+    })
+
+    it('reports resendAvailableAt inside the cooldown and null after it', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const cooldownMs = requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+
+      const inside = await listVia(tenant.slug, ownerToken)
+      const [fresh] = inside.items
+      expect(typeof fresh?.lastSentAt).toBe('string')
+      expect(Date.parse(fresh?.resendAvailableAt ?? '')).toBe(
+        Date.parse(fresh?.lastSentAt ?? '') + cooldownMs
+      )
+
+      await backdateInvitationSend(fresh?.id ?? '')
+      const after = await listVia(tenant.slug, ownerToken)
+      const [sent] = after.items
+      // eslint-disable-next-line unicorn/no-null -- JSON null: the cooldown is over
+      expect(sent).toMatchObject({ resendAvailableAt: null })
+      expect(typeof sent?.lastSentAt).toBe('string')
+    })
+
+    it('answers the early resend 429 invitation_resend_cooldown with Retry-After of the seconds left', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const { items } = await listVia(tenant.slug, ownerToken)
+      const [pending] = items
+      const cooldownSeconds = requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) / 1000
+
+      const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
+
+      expect(resent.status).toBe(429)
+      const retryAfter = Number(resent.headers['retry-after'])
+      expect(retryAfter).toBeGreaterThanOrEqual(1)
+      expect(retryAfter).toBeLessThanOrEqual(cooldownSeconds)
+      const secondsLeft = (Date.parse(pending?.resendAvailableAt ?? '') - Date.now()) / 1000
+      expect(Math.abs(retryAfter - secondsLeft)).toBeLessThanOrEqual(2)
+    })
+
+    it('exposes Retry-After to the browser', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const { items } = await listVia(tenant.slug, ownerToken)
+      const [pending] = items
+
+      const resent = await request(app)
+        .post(`/api/v1/tenants/${tenant.slug}/invitations/${pending?.id ?? ''}/resend`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('Origin', allowedOrigin)
+
+      expect(resent.headers['access-control-expose-headers']).toContain('Retry-After')
     })
 
     it('resends once the cooldown has passed', async () => {
@@ -734,6 +814,7 @@ describe('invitations API', () => {
 
       expect(resent?.status).toBe(429)
       expect(resent?.body).toMatchObject({ code: 'invitation_resend_cooldown' })
+      expect(Number(resent?.headers['retry-after'])).toBeGreaterThanOrEqual(1)
       const stillValid = await previewVia(rawToken)
       expect(stillValid.status).toBe(200)
     })
@@ -1036,6 +1117,7 @@ describe('invitations API', () => {
       expect(envelopeOf(response).data).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
       expect(response.headers).toHaveProperty('ratelimit-limit')
       const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
@@ -1128,7 +1210,75 @@ describe('invitations API', () => {
 
       expect(first.status).toBe(200)
       expect(second.status).toBe(200)
-      expect(envelopeOf(second).data).toStrictEqual(envelopeOf(first).data)
+      expect(envelopeOf(second).data).toStrictEqual({
+        ...envelopeOf<Record<string, unknown>>(first).data,
+        alreadyMember: true,
+      })
+    })
+
+    it('answers alreadyMember false on the first accept', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+
+      const response = await acceptVia(rawToken, inviteeToken)
+
+      expect(response.status).toBe(200)
+      expect(envelopeOf(response).data).toStrictEqual({
+        tenant: { name: 'Acme Inc', slug: tenant.slug },
+        role: 'editor',
+        alreadyMember: false,
+      })
+    })
+
+    it('answers alreadyMember true when the invitee accepts a used link again', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      await acceptVia(rawToken, inviteeToken)
+
+      const again = await acceptVia(rawToken, inviteeToken)
+
+      expect(again.status).toBe(200)
+      expect(envelopeOf(again).data).toStrictEqual({
+        tenant: { name: 'Acme Inc', slug: tenant.slug },
+        role: 'editor',
+        alreadyMember: true,
+      })
+    })
+
+    it('answers alreadyMember true to the invitee who joined through the confirm link', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken, invitationId } = await seedInvitation(tenant, owner, {
+        email: invitee.email,
+      })
+      // The confirm link an invite click mails, minted directly: no Worker runs here.
+      const { raw } = await issueLinkToken(
+        { intent: 'invitation', email: invitee.email, app: 'web', invitationId },
+        requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+      )
+      const confirmed = await request(app).post('/api/v1/invitations/confirm').send({ token: raw })
+      expect(confirmed.status).toBe(200)
+
+      const again = await acceptVia(rawToken, inviteeToken)
+
+      expect(again.status).toBe(200)
+      expect(envelopeOf<{ alreadyMember: boolean }>(again).data?.alreadyMember).toBe(true)
+    })
+
+    it('still answers invitation_invalid to someone else holding a used link', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { token: otherToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      await acceptVia(rawToken, inviteeToken)
+
+      const response = await acceptVia(rawToken, otherToken)
+
+      expect(response.status).toBe(404)
+      expect(response.body).toMatchObject(INVALID)
+      expect(envelopeOf(response).data).toBeUndefined()
     })
 
     it('404s anyone else once the invitation is accepted', async () => {
@@ -1146,32 +1296,17 @@ describe('invitations API', () => {
   })
 
   describe('an invitation to an unregistered address', () => {
-    it('is accepted after the invitee registers, verifies and logs in', async () => {
+    it('is accepted after the invitee signs up by a sign-in link', async () => {
       const { ownerToken, tenant } = await setup()
       const email = uniqueEmail()
       const invited = await inviteVia(tenant.slug, ownerToken, { email, role: 'editor' })
       expect(invited.status).toBe(202)
       const { token: invitationToken } = await waitForInvitationEmail(email)
 
-      const registered = await request(app)
-        .post('/api/v1/auth/register')
-        .send({ email, password: PASSWORD, firstName: 'Grace' })
-      expect(registered.status).toBe(202)
-      const user = await userRepository.findByEmail(email)
-      if (!user) throw new Error('registration created no user')
-      createdUserIds.push(user.id)
-
-      const verificationToken = await waitForVerificationToken(user.id)
-      const verified = await request(app)
-        .post('/api/v1/auth/verify-email')
-        .send({ token: verificationToken, password: PASSWORD })
-      expect(verified.status).toBe(200)
-
-      const login = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email, password: PASSWORD })
-      expect(login.status).toBe(200)
-      const accessToken = envelopeOf<{ accessToken: string }>(login).data?.accessToken ?? ''
+      const { accessToken, userId } = await signInByLink(email)
+      createdUserIds.push(userId)
+      const user = await userRepository.findById(userId)
+      if (!user) throw new Error('the sign-in link created no user')
 
       const accepted = await acceptVia(invitationToken, accessToken)
 
@@ -1179,6 +1314,7 @@ describe('invitations API', () => {
       expect(envelopeOf(accepted).data).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
       const membership = await userMembershipRepository.findByUserAndTenant(user.id, tenant.id)
       expect(membership?.role).toBe('editor')

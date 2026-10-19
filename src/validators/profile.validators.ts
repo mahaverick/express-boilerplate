@@ -25,7 +25,7 @@ const optionalNameField = z
  * `PATCH /api/v1/profile` request body: the only fields this endpoint lets a
  * caller change, the two names and the browser analytics opt-out.
  *
- * Not strict: an unrecognised key (`email`, `id`, `passwordHash`, `active`)
+ * Not strict: an unrecognised key (`email`, `id`, `active`)
  * is stripped, not rejected, so a client that PATCHes back the whole object
  * it fetched still succeeds. `email` is excluded because it is a verified
  * identity; changing it here would leave `emailVerifiedAt` attached to an

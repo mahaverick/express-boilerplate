@@ -164,34 +164,36 @@ describe('parseEnv', () => {
     )
   })
 
-  it('defaults EMAIL_VERIFICATION_TTL to 24h', () => {
-    expect(parseEnv(valid).EMAIL_VERIFICATION_TTL).toBe('24h')
+  it('defaults INVITATION_TTL to 3d', () => {
+    expect(parseEnv(valid).INVITATION_TTL).toBe('3d')
   })
 
-  it('rejects an EMAIL_VERIFICATION_TTL that ms() cannot parse', () => {
-    expect(() => parseEnv({ ...valid, EMAIL_VERIFICATION_TTL: 'soon' })).toThrow(
-      /EMAIL_VERIFICATION_TTL/
+  it('defaults the sign-in and step-up link settings', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.SIGN_IN_LINK_TTL).toBe('15m')
+    expect(parsed.SIGN_IN_LINK_MAIL_COOLDOWN).toBe('1m')
+    expect(parsed.SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT).toBe(10)
+    expect(parsed.STEP_UP_LINK_TTL).toBe('15m')
+    expect(parsed.STEP_UP_LINK_COOLDOWN).toBe('1m')
+  })
+
+  it.each([
+    'SIGN_IN_LINK_TTL',
+    'SIGN_IN_LINK_MAIL_COOLDOWN',
+    'STEP_UP_LINK_TTL',
+    'STEP_UP_LINK_COOLDOWN',
+  ])('rejects a %s that is unparseable or zero', (name) => {
+    expect(() => parseEnv({ ...valid, [name]: 'soon' })).toThrow(new RegExp(name))
+    expect(() => parseEnv({ ...valid, [name]: '0' })).toThrow(new RegExp(name))
+  })
+
+  it('rejects a SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT that is not a positive integer', () => {
+    expect(() => parseEnv({ ...valid, SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: '0' })).toThrow(
+      /SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT/
     )
-  })
-
-  it('defaults PASSWORD_RESET_TTL to 1h', () => {
-    expect(parseEnv(valid).PASSWORD_RESET_TTL).toBe('1h')
-  })
-
-  it('rejects a PASSWORD_RESET_TTL that ms() cannot parse', () => {
-    expect(() => parseEnv({ ...valid, PASSWORD_RESET_TTL: 'soon' })).toThrow(/PASSWORD_RESET_TTL/)
-  })
-
-  it('defaults ACCOUNT_SETUP_TTL to 24h', () => {
-    expect(parseEnv(valid).ACCOUNT_SETUP_TTL).toBe('24h')
-  })
-
-  it('rejects an ACCOUNT_SETUP_TTL that ms() cannot parse', () => {
-    expect(() => parseEnv({ ...valid, ACCOUNT_SETUP_TTL: 'soon' })).toThrow(/ACCOUNT_SETUP_TTL/)
-  })
-
-  it('defaults INVITATION_TTL to 7d', () => {
-    expect(parseEnv(valid).INVITATION_TTL).toBe('7d')
+    expect(() => parseEnv({ ...valid, SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: '1.5' })).toThrow(
+      /SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT/
+    )
   })
 
   it('rejects an INVITATION_TTL that ms() cannot parse', () => {
@@ -720,41 +722,6 @@ describe('derivations from APP_ENV', () => {
     expect(isCookieSecure(parsed)).toBe(true)
     expect(logFormat(parsed)).toBe('json')
     expect(requiresSmtpTls(parsed)).toBe(true)
-  })
-})
-
-describe('PLATFORM_EMAIL_DOMAINS', () => {
-  it('is unset by default, so nobody joins the platform tenant automatically', () => {
-    expect(parseEnv(valid).PLATFORM_EMAIL_DOMAINS).toBeUndefined()
-  })
-
-  it('treats an empty value as unset', () => {
-    expect(
-      parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: '' }).PLATFORM_EMAIL_DOMAINS
-    ).toBeUndefined()
-  })
-
-  it('accepts lowercase domains separated by commas, with spaces around the commas', () => {
-    const value = 'staff.example.com, example.org'
-    expect(parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value }).PLATFORM_EMAIL_DOMAINS).toBe(value)
-  })
-
-  it.each([
-    'Example.com',
-    'example',
-    '*.example.com',
-    'example.com,',
-    'example..com',
-    '.example.com',
-    'https://example.com',
-    'example.c0m',
-    'foo-.com',
-    '-foo.com',
-    `${'a'.repeat(64)}.com`,
-  ])('refuses %s', (value) => {
-    expect(() => parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value })).toThrow(
-      /PLATFORM_EMAIL_DOMAINS/
-    )
   })
 })
 

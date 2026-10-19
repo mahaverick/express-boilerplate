@@ -8,20 +8,43 @@ points at the code or doc that holds the detail. How things work is in
 
 ## Auth and access
 
-- **Name it `isPasswordValid`, not `verifyPassword`.** Answer
-  `unicorn/consistent-boolean-name` by renaming, never with an `ignore` entry.
 - **`verifyAccessToken` never throws.** It returns `{ ok: true; payload }` or
   `{ ok: false; reason: 'expired' | 'invalid' }`, and `'expired'` means only
   `jsonwebtoken`'s `TokenExpiredError` (`src/services/session.service.ts`).
   Don't derive a third reason from an error message.
-- **Keep the user-row lock modes and their placement.** Login keeps
-  `lastLoggedInAt` and `autoJoinSafely` outside the transaction that re-reads
-  the hash `FOR SHARE` and issues the token, so that lock covers only the
-  re-read and the insert. The refresh kills run after the rotation commits,
-  never inside it. The lock each of them takes is in
-  [SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
-- **A wrong step-up password answers 400, never 401** (`reauthenticate`,
-  `src/services/auth.service.ts`): clients sign out on a 401.
+- **Keep the user-row lock modes and their placement.** `verifySignInLink`
+  (`src/services/sign-in-link.service.ts`) and the Google sign-in stamp
+  `lastLoggedInAt` before the transaction that re-reads the user `FOR SHARE`
+  and issues the token, and the invitation verify and confirm stamp it after
+  their transaction commits, so that lock covers only the re-read and the
+  writes that need it. The refresh kills run after the rotation
+  commits, never inside it. The lock each of them takes is in
+  [SECURITY.md](SECURITY.md#deactivation-against-a-concurrent-sign-in).
+- **A sign-in request replies before any lookup.** `POST /auth/link/request`
+  sends its fixed 202 first; the cooldown, the budget, the lookup and the mail
+  run in the follow-up `requestSignInLink` returns. A read before the reply
+  makes its timing an oracle for who has an account. See
+  [SECURITY.md](SECURITY.md#sign-in-links-one-answer-one-reply-before-the-lookup).
+- **`sign_in_link` and `invitation_link` rows never carry a user id.** The
+  click looks the account up by address, which is what gives a soft-deleted
+  user's address a fresh account (`user_tokens_shape_check` enforces it). A
+  user-wide revocation therefore misses them, so revoke-others, a staff
+  sign-out and a deactivation also call `revokeSignInLinksOf`
+  (`src/services/session.service.ts`), which revokes both purposes, in their
+  transaction, after the user row lock. A deletion deliberately does not: a
+  later click creates a fresh account for the same mailbox owner.
+- **An invitation click joins in one step only for a new address on a
+  customer invitation.** An address with an account, and every staff
+  invitation, gets `202` and an emailed confirm link (`verifyInvitation`,
+  `src/services/tenant-invitation.service.ts`): a forwarded invitation must
+  never sign in to an existing account or grant staff. The confirm
+  (`confirmInvitation`) locks the user row before it claims the link, the
+  order a deactivation takes; claiming first deadlocks against it. See
+  [SECURITY.md](SECURITY.md#invitation-links-are-single-use).
+- **A dead link answers 400 `LINK_INVALID`, never 401** (sign-in and step-up
+  verify): clients sign out on a 401. Keep one body for every dead link, and
+  keep every check that refuses before the claim on a read-only peek, so the
+  refusal spends nothing.
 - **The refresh cookie's name, path and domain come only from
   `refreshCookieSpec`** (`src/constants/auth.constants.ts`), and the
   controller reads it only through `currentRefreshCookie(env)`. A browser
@@ -48,10 +71,6 @@ points at the code or doc that holds the detail. How things work is in
   `X-Forwarded-Proto`.** When `COOKIE_SECURE` resolves true, `oauth.sid` is
   `Secure`, and express-session silently skips a `Secure` cookie on a request
   it doesn't see as HTTPS, which breaks Google sign-in.
-- **Platform auto-join grants `viewer` only, and runs after the
-  timing-equalised credential check.** A wider grant gives one compromised
-  inbox on a `PLATFORM_EMAIL_DOMAINS` domain write access to every tenant; an
-  earlier run leaks whether an address is registered.
 
 ### Tenants and roles
 
@@ -93,8 +112,8 @@ points at the code or doc that holds the detail. How things work is in
   `requireJsonContentType`, then `requireRecentAuth()` where it applies, then
   the limiter. Anything earlier answers a non-staff caller a 415, `RateLimit-*`
   headers or a 401 `REAUTH_REQUIRED`. A staff route inside another router,
-  today only `POST /auth/reauthenticate`, keeps that router's shared gates
-  ahead of its role gate, because an unknown sibling path meets them too: the
+  today the step-up routes under `/auth/step-up`, keeps that router's shared
+  gates ahead of its role gate, because an unknown sibling path meets them too: the
   auth router's JSON gate gives a non-JSON body the same 415 an unknown
   `/auth/*` path gets, and the role gate then comes before the limiter. Keep
   `refusePlatformOptions` on every staff route's path, after any shared gate
@@ -212,13 +231,16 @@ points at the code or doc that holds the detail. How things work is in
   `attemptsMade >= attempts`, not `+ 1`, because BullMQ counts the attempt
   before it emits `failed`. Mount a new Worker's `failed` listener with
   `reportFinalJobFailure` first.
-- **`registration_attempt` mail never goes through the notification worker:**
-  an in-app row would be an enumeration oracle. `tenant_invitation` mail goes
-  through `addEmailJob()` directly, since the invitee may have no account.
-- **Some email channels can't be switched off** (`verify_email`,
-  `password_reset_requested`, `password_changed`, `tenant_invitation`,
-  `maintenance_mode_changed`): disabling them would lock a user out or silence
-  the mail an account owner must see. `PUT /notifications/preferences`
+- **Auth mail goes to `auth-email`; never add a template to
+  `AUTH_EMAIL_TEMPLATE_KEYS` that a full maintenance should hold.**
+  `emailQueueFor` (`src/jobs/email.job.ts`) picks the queue from the template
+  key, and `full` pauses every queue but `auth-email`, so the sign-in, step-up,
+  welcome, invitation and invitation confirm mail still reaches staff who must
+  sign in to switch maintenance off. `tenant_invitation` mail goes through `addEmailJob()`
+  directly, since the invitee may have no account.
+- **Some email channels can't be switched off** (`tenant_invitation`,
+  `maintenance_mode_changed`): disabling them would cut off an invitee or
+  silence the mail an account owner must see. `PUT /notifications/preferences`
   answers 400 for `emailEnabled: false` on any of them (the repository's
   `upsert` refuses it too); `inAppEnabled` can still be switched off for any
   type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
@@ -226,7 +248,7 @@ points at the code or doc that holds the detail. How things work is in
   `NON_DISABLEABLE_NOTIFICATION_TYPES`
   (`src/validators/notification.validators.ts`) together, or a client can
   save an email preference the repository then ignores.
-- **Notification `metadata` never holds `variables`.** Verification tokens
+- **Notification `metadata` never holds `variables`.** A link token can
   live there; the worker strips them before the insert and the email fan-out
   reads them from the job payload (`src/workers/notification.worker.ts`).
 - **The SSE stream authenticates with `Authorization: Bearer` and refuses a
@@ -247,6 +269,13 @@ points at the code or doc that holds the detail. How things work is in
   (`analytics-signature.service.ts`): the project key is public, so any
   browser can send `source: 'audit'`, and a reader of PostHog's events trusts
   those fields only when `server_sig` verifies.
+- **Every link a user receives gets its UTM parameters from `withUtm`**
+  (`src/utilities/utm.utilities.ts`), never from a template: fixed code
+  constants only, never an address, a name, an id or a token, on the outer URL
+  and never inside `redirect`. This is the one exception to the frontends'
+  analytics URL allowlist: they keep a `utm_*` key only while its value matches
+  `/^[a-z0-9_-]{1,64}$/`, so a new value must fit that shape. See
+  [SECURITY.md](SECURITY.md#email-links).
 - **Add a staff read view's audit through `auditThrottledView`**
   (`platform-view-audit.service.ts`).
 - **Outbox writes go through `enqueueAnalytics`, or `enqueueAuditAnalytics`
@@ -345,10 +374,13 @@ points at the code or doc that holds the detail. How things work is in
 - **Never set `process.env` to change config after `getEnv()` has run;** pass
   the value as an argument instead, as `startServer(port)` takes the port.
 - **An integration test that asserts mail delivery starts its own
-  `startEmailWorker()`** (and `startNotificationWorker()` for verification
-  mail): `createApp()` starts no worker. In `afterAll`, close it before
-  `obliterate` and `closeQueue()`. `tests/integration/api/auth.test.ts` shows
-  both.
+  `startEmailWorker()`** (and `startNotificationWorker()` for a notification's
+  mail): `createApp()` starts no worker. Auth mail (`AUTH_EMAIL_TEMPLATE_KEYS`,
+  `src/jobs/email.job.ts`) runs on the `auth-email` queue, so a test of it
+  starts `startEmailWorker('auth-email')` and reads jobs from
+  `emailQueueFor(templateKey)`. In `afterAll`, close it before `obliterate`
+  (both email queues) and `closeQueue()`. `tests/integration/api/sign-in-link.test.ts`
+  shows both.
 - **A test that reads data `recordPermanentFailure` scrubbed waits for its log
   line** (`waitForLoggedCall`, `tests/helpers/queue-jobs.ts`), not the
   `failed` event.

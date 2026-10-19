@@ -31,6 +31,7 @@ const state: {
   worker: QueueRedis | undefined
   producer: QueueRedis | undefined
   emailQueue: Queue | undefined
+  authEmailQueue: Queue | undefined
   notificationQueue: Queue | undefined
   maintenanceQueue: Queue | undefined
   analyticsQueue: Queue | undefined
@@ -41,6 +42,7 @@ const state: {
   worker: undefined,
   producer: undefined,
   emailQueue: undefined,
+  authEmailQueue: undefined,
   notificationQueue: undefined,
   maintenanceQueue: undefined,
   analyticsQueue: undefined,
@@ -171,11 +173,13 @@ function getProducerConnection(): IORedis {
       // Every queue holds the dead instance, so each is rebuilt on next use.
       const orphans = [
         state.emailQueue,
+        state.authEmailQueue,
         state.notificationQueue,
         state.maintenanceQueue,
         state.analyticsQueue,
       ]
       state.emailQueue = undefined
+      state.authEmailQueue = undefined
       state.notificationQueue = undefined
       state.maintenanceQueue = undefined
       state.analyticsQueue = undefined
@@ -200,6 +204,26 @@ export function getEmailQueue(): Queue {
     })
   }
   return state.emailQueue
+}
+
+/**
+ * Get the shared "auth-email" queue, creating it on first use. It carries the
+ * mail a person needs to sign in or join (`AUTH_EMAIL_TEMPLATE_KEYS`,
+ * email.job.ts), and full maintenance never pauses it: a paused sign-in link
+ * would lock staff out of the switch that ends the maintenance.
+ * @returns The auth-email queue.
+ */
+export function getAuthEmailQueue(): Queue {
+  if (!state.authEmailQueue) {
+    state.authEmailQueue = new Queue('auth-email', {
+      connection: getProducerConnection(),
+      prefix: redisKey('bull'),
+    })
+    state.authEmailQueue.on('error', (error: unknown) => {
+      logger.error('Auth email queue error', { error })
+    })
+  }
+  return state.authEmailQueue
 }
 
 /**
@@ -257,14 +281,39 @@ export function getAnalyticsQueue(): Queue {
 }
 
 /**
- * Every queue this module creates, creating any not yet created: what
- * maintenance mode pauses and resumes. A queue added to this module must be
- * added here; `tests/integration/services/queue-registry.test.ts` compares
- * this list with every `new Queue(` in this file.
- * @returns The email, notification, maintenance and analytics queues.
+ * Every queue this module creates, creating any not yet created: what the
+ * staff status lists. A queue added to this module must be added here;
+ * `tests/integration/services/queue-registry.test.ts` compares this list with
+ * every `new Queue(` in this file.
+ * @returns The email, auth-email, notification, maintenance and analytics queues.
  */
 export function getAllQueues(): Queue[] {
-  return [getEmailQueue(), getNotificationQueue(), getMaintenanceQueue(), getAnalyticsQueue()]
+  return [
+    getEmailQueue(),
+    getAuthEmailQueue(),
+    getNotificationQueue(),
+    getMaintenanceQueue(),
+    getAnalyticsQueue(),
+  ]
+}
+
+/**
+ * Whether full maintenance pauses the queue of this name: every queue but
+ * auth-email, so sign-in and invitation mail still goes out.
+ * @param name - The queue's name.
+ * @returns False only for `auth-email`.
+ */
+export function isPausableQueueName(name: string): boolean {
+  return name !== 'auth-email'
+}
+
+/**
+ * Every queue full maintenance pauses and leaving it resumes: `getAllQueues()`
+ * without auth-email (`isPausableQueueName`).
+ * @returns The email, notification, maintenance and analytics queues.
+ */
+export function getPausableQueues(): Queue[] {
+  return getAllQueues().filter((queue) => isPausableQueueName(queue.name))
 }
 
 /**
@@ -369,6 +418,11 @@ export async function closeQueue(): Promise<void> {
     const emailQueue = state.emailQueue
     state.emailQueue = undefined
     await emailQueue.close()
+  }
+  if (state.authEmailQueue) {
+    const authEmailQueue = state.authEmailQueue
+    state.authEmailQueue = undefined
+    await authEmailQueue.close()
   }
   if (state.notificationQueue) {
     const notificationQueue = state.notificationQueue

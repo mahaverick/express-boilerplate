@@ -36,7 +36,12 @@ import {
   offNotification,
   onNotification,
 } from '@/services/notification-emitter.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { denySession, isSessionDenied } from '@/services/session-denylist.service'
 import {
@@ -250,17 +255,17 @@ function uniqueEmail(): string {
 }
 
 /**
- * Inserts one `verify_email` notification through the repository, as `processNotificationJob`
+ * Inserts one `tenant_invitation` notification through the repository, as `processNotificationJob`
  * (notification.worker.ts) does before it calls `emitNotification`, without running BullMQ or the
  * worker.
  */
 async function seedNotification(
   userId: string,
-  title = 'Verify your email'
+  title = 'You have an invitation'
 ): Promise<Notification> {
   return notificationRepository.create({
     userId,
-    type: 'verify_email',
+    type: 'tenant_invitation',
     title,
     body: 'Click the link to verify your email address.',
   })
@@ -280,7 +285,7 @@ async function framesBeforeSentinel(
   emitNotification(userId, {
     id: sentinelId,
     userId,
-    type: 'verify_email',
+    type: 'tenant_invitation',
     title: 'Sentinel',
     body: 'Marks the end of what was emitted before it.',
     // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns
@@ -335,6 +340,7 @@ describe('GET /api/v1/notifications/stream', () => {
     await closeNotificationSubscriber()
     // The invitation test's jobs: its Worker is closed by then, and nothing consumes the email.
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await getNotificationQueue().obliterate({ force: true })
     await closeQueue()
   })
@@ -600,7 +606,7 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(frame?.id).toBe(notification.id)
     expect(JSON.parse(frame?.data ?? '{}')).toEqual({
       id: notification.id,
-      type: 'verify_email',
+      type: 'tenant_invitation',
       title: 'Pushed live',
       body: notification.body,
       // eslint-disable-next-line unicorn/no-null -- asserting against the actual wire value: the SSE payload serializes an unread notification's readAt as JSON `null` (notification-stream.controller.ts's toStreamPayload), and `JSON.parse` produces a real `null` here, not `undefined`.
@@ -1083,7 +1089,7 @@ describe('GET /api/v1/notifications/stream', () => {
       emitNotification(user.id, {
         id: randomUUID(),
         userId: user.id,
-        type: 'verify_email',
+        type: 'tenant_invitation',
         title: 'Large',
         body,
         // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns

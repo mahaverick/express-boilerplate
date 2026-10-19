@@ -5,14 +5,13 @@
  * before anything can store it.
  */
 import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
-import { ACCOUNT_SETUP_TEMPLATE_META } from '@/templates/email/account-setup.template'
-import { EMAIL_VERIFICATION_TEMPLATE_META } from '@/templates/email/email-verification.template'
+import { INVITATION_CONFIRM_TEMPLATE_META } from '@/templates/email/invitation-confirm.template'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_META } from '@/templates/email/maintenance-mode-changed.template'
 import { ONBOARDING_REMINDER_TEMPLATE_META } from '@/templates/email/onboarding-reminder.template'
-import { PASSWORD_CHANGED_TEMPLATE_META } from '@/templates/email/password-changed.template'
-import { PASSWORD_RESET_TEMPLATE_META } from '@/templates/email/password-reset.template'
-import { REGISTRATION_ATTEMPT_TEMPLATE_META } from '@/templates/email/registration-attempt.template'
+import { SIGN_IN_LINK_TEMPLATE_META } from '@/templates/email/sign-in-link.template'
+import { STEP_UP_LINK_TEMPLATE_META } from '@/templates/email/step-up-link.template'
 import { TENANT_INVITATION_TEMPLATE_META } from '@/templates/email/tenant-invitation.template'
+import { WELCOME_TEMPLATE_META } from '@/templates/email/welcome.template'
 import type { EmailTemplateKey, EmailTemplateMetaEntry } from '@/utilities/email-template.utilities'
 
 /**
@@ -46,12 +45,11 @@ export function assertTemplateMetaSafe<T extends Readonly<Record<string, EmailTe
  */
 export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplateMetaEntry>> =
   assertTemplateMetaSafe({
-    email_verification: EMAIL_VERIFICATION_TEMPLATE_META,
-    password_reset: PASSWORD_RESET_TEMPLATE_META,
-    registration_attempt: REGISTRATION_ATTEMPT_TEMPLATE_META,
-    password_changed: PASSWORD_CHANGED_TEMPLATE_META,
     tenant_invitation: TENANT_INVITATION_TEMPLATE_META,
-    account_setup: ACCOUNT_SETUP_TEMPLATE_META,
     onboarding_reminder: ONBOARDING_REMINDER_TEMPLATE_META,
     maintenance_mode_changed: MAINTENANCE_MODE_CHANGED_TEMPLATE_META,
+    sign_in_link: SIGN_IN_LINK_TEMPLATE_META,
+    step_up_link: STEP_UP_LINK_TEMPLATE_META,
+    welcome: WELCOME_TEMPLATE_META,
+    invitation_confirm: INVITATION_CONFIRM_TEMPLATE_META,
   })

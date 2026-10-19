@@ -8,15 +8,15 @@ import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 
-vi.mock('@/services/verification.service', () => ({
+vi.mock('@/services/frontend-links.service', () => ({
   frontendUrl: () => 'https://app.example.com',
 }))
 vi.mock('passport', () => ({
   default: {
     authenticate:
-      (_name: string, _options: unknown, callback: (error: unknown, profile: object) => void) =>
+      (_name: string, _options: unknown, callback: (error: unknown, result: object) => void) =>
       () => {
-        callback(undefined, { id: 'google-id' })
+        callback(undefined, { profile: { id: 'google-id' }, idToken: undefined })
       },
   },
 }))
@@ -38,7 +38,7 @@ describe('handleGoogleCallback in full maintenance', () => {
     const { authController } = await import('@/controllers/auth.controller')
     const redirect = vi.fn()
     authController.handleGoogleCallback(
-      { session: { oauthApp: 'react' } } as unknown as Request,
+      { session: { oauthIntent: { kind: 'sign_in', app: 'react' } } } as unknown as Request,
       { redirect } as unknown as Response,
       vi.fn() as NextFunction
     )

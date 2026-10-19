@@ -14,13 +14,12 @@ import { userTokenModel } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
 import { sql, withTransaction, type DbExecutor } from '@/services/database.service'
+import { claimLinkToken, issueLinkToken } from '@/services/link-token.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import {
-  claimToken,
   issueRefreshToken,
-  issueToken,
-  revokeAllSessions,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
@@ -39,6 +38,7 @@ function hashRawToken(raw: string): string {
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
+const LINK_TTL_MS = 15 * 60_000
 
 // Each repository revocation, called for one user's one session; the except-session case spares an unrelated id.
 const REPOSITORY_REVOKES: readonly [
@@ -81,6 +81,16 @@ function uniqueEmail(): string {
  * only one that presents an already-rotated token, and it first ages the row past the reuse
  * grace window.
  */
+/**
+ * Issue a step-up link for one session of a user.
+ */
+function issueStepUp(user: User, sessionId: string) {
+  return issueLinkToken(
+    { intent: 'step_up', email: user.email, app: 'apex', userId: user.id, sessionId },
+    LINK_TTL_MS
+  )
+}
+
 describe('refresh token issuance, rotation, and revocation', () => {
   const createdUserIds: string[] = []
 
@@ -345,158 +355,50 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(rotatedOther.sessionId).toBe(otherSessionId)
   })
 
-  it('revokeAllSessions revokes every session belonging to a user', async () => {
-    const userId = await createUser()
-    const sessionA = randomUUID()
-    const sessionB = randomUUID()
-    const issuedA = await issueRefreshToken(userId, sessionA)
-    const issuedB = await issueRefreshToken(userId, sessionB)
+  it('a claimed step-up link does not kill its session', async () => {
+    const user = await createUserRow()
+    const sessionId = randomUUID()
+    const first = await issueRefreshToken(user.id, sessionId)
+    const second = await rotateRefreshToken(first.raw)
+    // One link superseded (revoked unused) and one claimed: both leave revoked_at on the session's id.
+    await issueStepUp(user, sessionId)
+    const confirm = await issueStepUp(user, sessionId)
+    expect(
+      await claimLinkToken(confirm.raw, 'step_up', { userId: user.id, sessionId })
+    ).toBeDefined()
 
-    await revokeAllSessions(userId)
-
-    await expect(rotateRefreshToken(issuedA.raw)).rejects.toMatchObject({ statusCode: 401 })
-    await expect(rotateRefreshToken(issuedB.raw)).rejects.toMatchObject({ statusCode: 401 })
-  })
-})
-
-describe('issueToken and cross-purpose claiming', () => {
-  const createdUserIds: string[] = []
-
-  afterEach(async () => {
-    if (createdUserIds.length === 0) return
-    await sql`delete from users where id = any(${createdUserIds})`
-    createdUserIds.length = 0
+    // A grace-window replay of the rotated token still gets a sibling: no kill marker was read.
+    const sibling = await rotateRefreshToken(first.raw)
+    expect(sibling.sessionId).toBe(sessionId)
+    const next = await rotateRefreshToken(second.raw)
+    expect(next.sessionId).toBe(sessionId)
   })
 
-  /**
-   * Create a user for a test and track it for the `afterEach` cleanup; resolves with its id.
-   */
-  async function createUser(): Promise<string> {
-    const user = await userRepository.create({ email: `issue-token-${randomUUID()}@example.test` })
-    createdUserIds.push(user.id)
-    return user.id
-  }
+  it('refuses a link presented as a refresh token, and kills no session', async () => {
+    const user = await createUserRow()
+    const sessionId = randomUUID()
+    const refresh = await issueRefreshToken(user.id, sessionId)
+    const link = await issueStepUp(user, sessionId)
 
-  it('issues a token scoped to a purpose, with no session fields set', async () => {
-    const userId = await createUser()
-    const issued = await issueToken(userId, 'password_reset', 60_000)
+    await expect(rotateRefreshToken(link.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await revokeRefreshToken(link.raw)
 
-    expect(issued.userId).toBe(userId)
-    expect(issued.purpose).toBe('password_reset')
-
-    const row = await userTokenRepository.findByHash(hashRawToken(issued.raw))
-    expect(row).toBeDefined()
-    expect(row?.purpose).toBe('password_reset')
-    expect(row?.sessionId).toBeNull()
-    expect(row?.sessionStartedAt).toBeNull()
-    expect(row?.revokedAt).toBeNull()
-    // The raw value is never what's stored — same property `issueRefreshToken` is proven against above.
-    expect(row?.tokenHash).not.toBe(issued.raw)
+    expect(await isSessionDenied(sessionId)).toBe(false)
+    const next = await rotateRefreshToken(refresh.raw)
+    expect(next.sessionId).toBe(sessionId)
   })
 
-  /**
-   * A token issued for one purpose must not be claimable as another.
-   * Without this, a password-reset token could be spent as an email
-   * verification, or a verification link, valid for `EMAIL_VERIFICATION_TTL`
-   * (24h by default) and mailed without a reset request, could be spent as a
-   * reset link, outside the window `PASSWORD_RESET_TTL` (1h by default) keeps
-   * reset links to.
-   */
-  it('rejects claiming a password-reset token as an email verification, and vice versa', async () => {
-    const userId = await createUser()
-    const resetIssued = await issueToken(userId, 'password_reset', 60_000)
-    const verifyIssued = await issueToken(userId, 'email_verification', 60_000)
-    const resetHash = hashRawToken(resetIssued.raw)
-    const verifyHash = hashRawToken(verifyIssued.raw)
+  it("sign-out revokes the session's live step-up link", async () => {
+    const user = await createUserRow()
+    const sessionId = randomUUID()
+    const refresh = await issueRefreshToken(user.id, sessionId)
+    const link = await issueStepUp(user, sessionId)
 
-    const resetClaimedAsVerify = await userTokenRepository.claimOnce(
-      resetHash,
-      'email_verification'
-    )
-    const verifyClaimedAsReset = await userTokenRepository.claimOnce(verifyHash, 'password_reset')
-    expect(resetClaimedAsVerify).toBeUndefined()
-    expect(verifyClaimedAsReset).toBeUndefined()
+    await revokeRefreshToken(refresh.raw)
 
-    // Neither rejected claim touched its row: both are still claimable under their real purpose.
-    const resetClaimedCorrectly = await userTokenRepository.claimOnce(resetHash, 'password_reset')
-    const verifyClaimedCorrectly = await userTokenRepository.claimOnce(
-      verifyHash,
-      'email_verification'
-    )
-    expect(resetClaimedCorrectly).toBeDefined()
-    expect(verifyClaimedCorrectly).toBeDefined()
-  })
-})
-
-describe('claimToken', () => {
-  const createdUserIds: string[] = []
-
-  afterEach(async () => {
-    if (createdUserIds.length === 0) return
-    await sql`delete from users where id = any(${createdUserIds})`
-    createdUserIds.length = 0
-  })
-
-  /**
-   * Create a user for a test and track it for the `afterEach` cleanup; resolves with its id.
-   */
-  async function createUser(): Promise<string> {
-    const user = await userRepository.create({ email: `claim-token-${randomUUID()}@example.test` })
-    createdUserIds.push(user.id)
-    return user.id
-  }
-
-  it('claims a live token once', async () => {
-    const userId = await createUser()
-    const issued = await issueToken(userId, 'email_verification', 60_000)
-
-    const claimed = await claimToken(issued.raw, 'email_verification')
-
-    expect(claimed?.userId).toBe(userId)
-    // Single use: `claimOnce` revoked the token on the first claim, so a second claim finds nothing.
-    expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
-  })
-
-  it('refuses a token issued for another purpose', async () => {
-    const userId = await createUser()
-    const issued = await issueToken(userId, 'password_reset', 60_000)
-
-    expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
-  })
-
-  it('refuses an EXPIRED token', async () => {
-    /**
-     * The only test here that fails if `claimToken` stops checking `expiresAt`: `claimOnce`
-     * has no expiry predicate and claims this row, so without the check the product would ship
-     * a verification link that works forever. Under `MUTATION_PROOF=1`,
-     * `claim-token-mutation.test.ts` disables that check and reproduces this assertion going red.
-     */
-    const userId = await createUser()
-    const issued = await issueToken(userId, 'email_verification', -1000)
-
-    expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
-  })
-
-  it('consumes an expired token rather than leaving it claimable', async () => {
-    /**
-     * `claimOnce` revokes the row before expiry is checked: one presentation is one attempt.
-     * This pins that order, so checking expiry first cannot make an expired link retryable.
-     */
-    const userId = await createUser()
-    const issued = await issueToken(userId, 'email_verification', -1000)
-
-    await claimToken(issued.raw, 'email_verification')
-
-    const row = await userTokenRepository.findByHash(hashRawToken(issued.raw))
-    // Found first: `expect(row?.revokedAt).not.toBeNull()` also passes for an undefined row, which would hide a missing one.
-    expect(row).toBeDefined()
-    expect(row?.revokedAt).not.toBeNull()
-    // `consumedAt` is set only by `claimOnce`'s claim path, never by a bare revoke, so it shows the row was spent through `claimToken`.
-    expect(row?.consumedAt).not.toBeNull()
-  })
-
-  it('refuses an unknown token', async () => {
-    expect(await claimToken('deadbeef', 'email_verification')).toBeUndefined()
+    expect(
+      await claimLinkToken(link.raw, 'step_up', { userId: user.id, sessionId })
+    ).toBeUndefined()
   })
 })
 
@@ -531,7 +433,7 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     expect(await isSessionDenied(untouched)).toBe(false)
   })
 
-  it('revokeAllSessions denies every session it revoked, and only those', async () => {
+  it('an account claim denies every session it revoked, and only those', async () => {
     const userId = await createUser()
     const otherUserId = await createUser()
     const sessionOne = randomUUID()
@@ -540,10 +442,15 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     await issueRefreshToken(userId, sessionOne)
     await issueRefreshToken(userId, sessionTwo)
     // No session id: must neither crash the null filter nor deny a bogus key.
-    await issueToken(userId, 'password_reset', 60_000)
+    await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      tokenHash: hashRawToken(randomUUID()),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
     await issueRefreshToken(otherUserId, otherUsersSession)
 
-    await revokeAllSessions(userId)
+    await claimNeverVerifiedAccount(userId)
 
     expect(await isSessionDenied(sessionOne)).toBe(true)
     expect(await isSessionDenied(sessionTwo)).toBe(true)

@@ -18,25 +18,31 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { updatePreferences } from '@/services/notification.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForJobSettled, waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
- * The email queue's jobs in the waiting, active, completed, delayed and prioritized states,
- * typed as `EmailJobData`: `getEmailQueue()` returns a bare `Queue`, so `getJobs()` would
+ * The jobs of both email queues (email and auth-email: the paired email goes on its
+ * template's queue) in the waiting, active, completed, delayed and prioritized states,
+ * typed as `EmailJobData`: the queue getters return a bare `Queue`, so `getJobs()` would
  * otherwise give `Job<any>[]`.
  */
 async function emailQueueJobs(): Promise<Job<EmailJobData>[]> {
   // 'prioritized', not just 'waiting': every email job carries an explicit priority (JobPriority.high), which BullMQ routes into its own list rather than "waiting" until a worker pulls it.
-  return getEmailQueue().getJobs([
-    'waiting',
-    'active',
-    'completed',
-    'delayed',
-    'prioritized',
-  ]) as Promise<Job<EmailJobData>[]>
+  const states = ['waiting', 'active', 'completed', 'delayed', 'prioritized'] as const
+  const lists = await Promise.all(
+    [getEmailQueue(), getAuthEmailQueue()].map(
+      (queue) => queue.getJobs([...states]) as Promise<Job<EmailJobData>[]>
+    )
+  )
+  return lists.flat()
 }
 
 const notificationRepository = new NotificationRepository()
@@ -63,6 +69,7 @@ describe('notification.worker', () => {
     await worker.close()
     await getNotificationQueue().obliterate({ force: true })
     await getEmailQueue().obliterate({ force: true })
+    await getAuthEmailQueue().obliterate({ force: true })
     await closeQueue()
   })
 
@@ -84,19 +91,20 @@ describe('notification.worker', () => {
 
     const job = await addNotificationJob({
       userId,
-      type: 'verify_email',
-      title: 'Verify your email',
-      body: 'Click the link to verify your email address.',
+      type: 'tenant_invitation',
+      title: 'You have an invitation',
+      body: 'Open the invitation to join the workspace.',
       metadata: {
-        templateKey: 'email_verification',
-        variables: { verificationUrl: `https://example.test/verify?token=${rawToken}` },
+        templateKey: 'step_up_link',
+        variables: { confirmUrl: `https://example.test/auth/confirm?token=${rawToken}` },
       },
       email: {
         to: recipient,
-        templateKey: 'email_verification',
+        templateKey: 'step_up_link',
         variables: {
           firstName: 'Ada',
-          verificationUrl: `https://example.test/verify?token=${rawToken}`,
+          confirmUrl: `https://example.test/auth/confirm?token=${rawToken}`,
+          expiresInMinutes: '15',
           appName: 'Test App',
         },
       },
@@ -109,9 +117,9 @@ describe('notification.worker', () => {
 
     const notifications = await notificationRepository.listRecent(userId, 10)
     expect(notifications).toHaveLength(1)
-    expect(notifications[0]?.title).toBe('Verify your email')
+    expect(notifications[0]?.title).toBe('You have an invitation')
     // The load-bearing assertion: what was actually persisted to Postgres, not merely what the worker was asked to strip in-process.
-    expect(notifications[0]?.metadata).toEqual({ templateKey: 'email_verification' })
+    expect(notifications[0]?.metadata).toEqual({ templateKey: 'step_up_link' })
     expect(notifications[0]?.metadata).not.toHaveProperty('variables')
     expect(JSON.stringify(notifications[0]?.metadata)).not.toContain(rawToken)
 
@@ -123,7 +131,7 @@ describe('notification.worker', () => {
 
   it('skips the in-app row when the in_app channel is disabled, but still enqueues the email', async () => {
     const userId = await createUser()
-    await preferenceRepository.upsert(userId, 'verify_email', {
+    await preferenceRepository.upsert(userId, 'tenant_invitation', {
       emailEnabled: true,
       inAppEnabled: false,
     })
@@ -131,15 +139,16 @@ describe('notification.worker', () => {
 
     const job = await addNotificationJob({
       userId,
-      type: 'verify_email',
-      title: 'Verify your email',
+      type: 'tenant_invitation',
+      title: 'You have an invitation',
       body: 'body',
       email: {
         to: recipient,
-        templateKey: 'email_verification',
+        templateKey: 'step_up_link',
         variables: {
           firstName: 'Ada',
-          verificationUrl: 'https://example.test/verify?token=abc',
+          confirmUrl: 'https://example.test/auth/confirm?token=abc',
+          expiresInMinutes: '15',
           appName: 'Test',
         },
       },
@@ -160,21 +169,22 @@ describe('notification.worker', () => {
   it('skips the in-app row for a type switched off through the preferences service, and keeps the other types', async () => {
     const userId = await createUser()
     await updatePreferences(userId, [
-      { notificationType: 'password_changed', emailEnabled: true, inAppEnabled: false },
+      { notificationType: 'maintenance_mode_changed', emailEnabled: true, inAppEnabled: false },
     ])
 
     const recipient = uniqueEmail('in-app-toggled')
     const quiet = await addNotificationJob({
       userId,
-      type: 'password_changed',
-      title: 'Password changed',
+      type: 'maintenance_mode_changed',
+      title: 'Maintenance mode changed',
       body: 'body',
       email: {
         to: recipient,
-        templateKey: 'email_verification',
+        templateKey: 'step_up_link',
         variables: {
           firstName: 'Ada',
-          verificationUrl: 'https://example.test/verify?token=abc',
+          confirmUrl: 'https://example.test/auth/confirm?token=abc',
+          expiresInMinutes: '15',
           appName: 'Test',
         },
       },
@@ -184,8 +194,8 @@ describe('notification.worker', () => {
     const quietSettled = waitForJobSettled(worker, getNotificationQueue(), quiet.id)
     const loud = await addNotificationJob({
       userId,
-      type: 'verify_email',
-      title: 'Verify your email',
+      type: 'tenant_invitation',
+      title: 'You have an invitation',
       body: 'body',
     })
     if (!loud.id) throw new Error('expected addNotificationJob to assign a job id')
@@ -197,7 +207,7 @@ describe('notification.worker', () => {
     ])
 
     const notifications = await notificationRepository.listRecent(userId, 10)
-    expect(notifications.map((notification) => notification.type)).toEqual(['verify_email'])
+    expect(notifications.map((notification) => notification.type)).toEqual(['tenant_invitation'])
 
     const emailJobs = await emailQueueJobs()
     expect(emailJobs.some((emailQueueJob) => emailQueueJob.data.to === recipient)).toBe(true)
@@ -208,8 +218,8 @@ describe('notification.worker', () => {
 
     const job = await addNotificationJob({
       userId,
-      type: 'verify_email',
-      title: 'Verify your email',
+      type: 'tenant_invitation',
+      title: 'You have an invitation',
       body: 'body',
     })
     if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
@@ -230,7 +240,12 @@ describe('notification.worker', () => {
     const bogusUserId = randomUUID()
 
     const job = await addNotificationJob(
-      { userId: bogusUserId, type: 'verify_email', title: 'Verify your email', body: 'body' },
+      {
+        userId: bogusUserId,
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
+        body: 'body',
+      },
       { attempts: 1 }
     )
     if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
@@ -255,16 +270,17 @@ describe('notification.worker', () => {
           // notificationJobDefaults allows 3 attempts; only the error type ends it at 1.
           const job = await addNotificationJob({
             userId,
-            type: 'verify_email',
-            title: 'Verify your email',
+            type: 'tenant_invitation',
+            title: 'You have an invitation',
             body: 'body',
-            metadata: { templateKey: 'email_verification' },
+            metadata: { templateKey: 'step_up_link' },
             email: {
               to: uniqueEmail('unrecoverable'),
-              templateKey: 'email_verification',
+              templateKey: 'step_up_link',
               variables: {
                 firstName: 'Ada',
-                verificationUrl: `https://example.test/verify?token=${token}`,
+                confirmUrl: `https://example.test/auth/confirm?token=${token}`,
+                expiresInMinutes: '15',
                 appName: 'Test App',
               },
             },
@@ -282,11 +298,11 @@ describe('notification.worker', () => {
           expect(stored?.attemptsMade).toBe(1)
           expect(stored?.data).toMatchObject({
             userId,
-            metadata: { templateKey: 'email_verification' },
+            metadata: { templateKey: 'step_up_link' },
             email: {
               to: '[redacted]',
-              templateKey: 'email_verification',
-              variables: { firstName: 'Ada', verificationUrl: '[redacted]', appName: 'Test App' },
+              templateKey: 'step_up_link',
+              variables: { firstName: 'Ada', confirmUrl: '[redacted]', appName: 'Test App' },
             },
           })
           expect(JSON.stringify(stored?.data)).not.toContain(token)
@@ -295,8 +311,8 @@ describe('notification.worker', () => {
             expect.objectContaining({
               queue: 'notification',
               jobId,
-              name: 'verify_email',
-              template: 'email_verification',
+              name: 'tenant_invitation',
+              template: 'step_up_link',
               userId,
               attemptsMade: 1,
             })

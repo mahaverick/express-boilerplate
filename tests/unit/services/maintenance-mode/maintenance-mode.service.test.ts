@@ -37,7 +37,7 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
 
 vi.mock('@/services/queue.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/queue.service')>()
-  return { ...actual, getAllQueues: () => [] }
+  return { ...actual, getAllQueues: () => [], getPausableQueues: () => [] }
 })
 
 afterEach(() => {

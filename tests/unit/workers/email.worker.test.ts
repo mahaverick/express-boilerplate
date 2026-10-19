@@ -35,7 +35,7 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
   return {
     id: MESSAGE_ID,
     recipient: 'user@example.com',
-    templateKey: 'email_verification',
+    templateKey: 'step_up_link',
     userId: 'user-123',
     // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     tenantId: null,
@@ -64,10 +64,11 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
 function untrackedData(): EmailJobData {
   return {
     to: 'user@example.com',
-    templateKey: 'email_verification',
+    templateKey: 'step_up_link',
     variables: {
       firstName: 'Ada',
-      verificationUrl: 'https://example.com/verify?token=abc',
+      confirmUrl: 'https://example.com/auth/confirm?token=abc',
+      expiresInMinutes: '15',
       appName: 'Test',
     },
     userId: 'user-123',
@@ -89,10 +90,12 @@ function trackedData(): EmailJobData {
  */
 function mockJob(
   data: EmailJobData = trackedData(),
-  updateData: (data: unknown) => Promise<void> = () => Promise.resolve()
+  updateData: (data: unknown) => Promise<void> = () => Promise.resolve(),
+  queueName = 'email'
 ): Job<EmailJobData> {
   return {
     id: 'test-job-1',
+    queueName,
     timestamp: 1_767_225_600_000,
     updateData,
     data,
@@ -114,7 +117,7 @@ describe('processEmailJob', () => {
     vi.mocked(mailerService.sendMail).mockResolvedValue('sent')
     await expect(processEmailJob(mockJob())).resolves.toBeUndefined()
     expect(mailerService.sendMail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: 'user@example.com', templateKey: 'email_verification' }),
+      expect.objectContaining({ to: 'user@example.com', templateKey: 'step_up_link' }),
       { messageId: MESSAGE_ID, messageIdHeader: `<${MESSAGE_ID}@mail.example.com>` }
     )
     expect(emailMessageService.markMessageSent).toHaveBeenCalledWith(MESSAGE_ID)
@@ -135,7 +138,7 @@ describe('processEmailJob', () => {
 
   it('includes the job id and templateKey in the thrown error, for operator triage', async () => {
     vi.mocked(mailerService.sendMail).mockResolvedValue('failed')
-    await expect(processEmailJob(mockJob())).rejects.toThrow(/test-job-1.*email_verification/)
+    await expect(processEmailJob(mockJob())).rejects.toThrow(/test-job-1.*step_up_link/)
   })
 
   it('completes without retrying when recording sent fails: a retry would send the email twice', async () => {
@@ -177,6 +180,19 @@ describe('processEmailJob', () => {
     })
   })
 
+  it('keys an untracked auth-email job apart from an email job with the same id and timestamp', async () => {
+    vi.mocked(mailerService.sendMail).mockResolvedValue('sent')
+
+    await processEmailJob(mockJob(untrackedData(), undefined, 'auth-email'))
+
+    // Job ids count per queue, so without the queue name the two would share one row.
+    expect(emailMessageService.createQueuedMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-123',
+      { jobKey: 'auth-email-job-test-job-1-1767225600000' }
+    )
+  })
+
   it('still sends when storing the new message id on the job fails', async () => {
     vi.mocked(mailerService.sendMail).mockResolvedValue('sent')
     const job = mockJob(untrackedData(), () =>
@@ -198,7 +214,7 @@ describe('processEmailJob', () => {
       const rejected = expect(processEmailJob(mockJob())).rejects
       await rejected.toThrow(expect.not.stringContaining('user@example.com'))
       await rejected.toThrow(
-        /Email job test-job-1 failed before sending, for template email_verification/
+        /Email job test-job-1 failed before sending, for template step_up_link/
       )
       expect(mailerService.sendMail).not.toHaveBeenCalled()
       expect(loggerError).toHaveBeenCalledWith(

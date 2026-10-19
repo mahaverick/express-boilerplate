@@ -85,7 +85,7 @@ describe('emitDomainEvent', () => {
     await emitDomainEvent({
       type: 'user_signed_in',
       userId: 'user-9',
-      method: 'password',
+      method: 'link',
       at: new Date('2026-10-02T09:00:00.000Z'),
     })
 

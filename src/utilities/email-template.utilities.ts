@@ -13,14 +13,26 @@ import type { SenderClass } from '@/constants/email.constants'
  * against that union, so a typo in a key is a compile error.
  */
 export const EMAIL_TEMPLATE_KEYS = [
+  'tenant_invitation',
+  'onboarding_reminder',
+  'maintenance_mode_changed',
+  'sign_in_link',
+  'step_up_link',
+  'welcome',
+  'invitation_confirm',
+] as const
+
+/**
+ * Template keys no build renders or sends, whose `email_messages` rows stay.
+ * The staff email list's `template` filter accepts them, so those rows stay
+ * findable; a resend of one answers `template_unavailable`.
+ */
+export const RETIRED_EMAIL_TEMPLATE_KEYS = [
   'email_verification',
   'password_reset',
   'registration_attempt',
   'password_changed',
-  'tenant_invitation',
   'account_setup',
-  'onboarding_reminder',
-  'maintenance_mode_changed',
 ] as const
 
 /**
@@ -35,7 +47,7 @@ export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number]
  * that produced them.
  *
  * Carries `templateKey` with the body, produced by the same call, so a
- * caller building `{ to, ...renderPasswordResetTemplate(vars) }` cannot send
+ * caller building `{ to, ...renderSignInLinkTemplate(vars) }` cannot send
  * one template's body while logging another's key in `email_logs`.
  */
 export interface RenderedEmail {
@@ -123,9 +135,10 @@ export function requireEmailVariables<T extends object>(
 
 /**
  * The flows a staff resend can re-run. Each issues a fresh token; a
- * token email is never replayed.
+ * token email is never replayed. `sign_in_link` mails the user a fresh
+ * staff-sent sign-in link; `invitation` resends the invitation.
  */
-export type ResendAction = 'verification' | 'password_setup' | 'invitation'
+export type ResendAction = 'sign_in_link' | 'invitation'
 
 /**
  * The keys of a template's variables that carry a secret: every name ending
@@ -153,8 +166,9 @@ export type EmailTemplateMeta<V> = {
   previewVariables: readonly Exclude<keyof V, SecretKey<V>>[]
   /**
    * The flow a staff resend re-runs, or null when the template is never
-   * resent: a notice about an event that did not recur (a password change, a
-   * registration attempt, a maintenance change), or an onboarding reminder,
+   * resent: a notice about an event that did not recur (a maintenance
+   * change), a link only its requester can ask for again (a step-up
+   * confirmation), or an onboarding reminder,
    * which staff send afresh instead.
    */
   resendAction: ResendAction | null

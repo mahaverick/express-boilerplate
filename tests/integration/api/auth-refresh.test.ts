@@ -12,20 +12,19 @@ import type { Response, Test } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
-import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 const app = createApp()
 const userRepository = new UserRepository()
 const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
-
-const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
  * A disposable email unique to this call, so it cannot collide with rows other
@@ -70,53 +69,53 @@ function refreshCookiePair(response: Response): string | undefined {
 }
 
 /**
- * Register a fresh user, mark them verified, and log in through the real
- * HTTP endpoints.
- *
- * The user is looked up by address, not read from the register response,
- * which does not carry it (that would be an enumeration oracle). A helper
- * reading `registerBody.data.id` would not fail on a null there: it would
- * silently stop tracking the row and leak it into the worker's database.
+ * Sign a fresh address in by a sign-in link, through the real HTTP endpoint,
+ * which creates the verified account on this click.
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
- * @returns The login response, the email used, and the verified user row.
+ * @returns The sign-in response, the email used, and the user row.
  */
 async function registerAndLogin(
   createdIds: string[]
 ): Promise<{ response: Response; email: string; user: User }> {
   const email = uniqueEmail()
-  await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
+  const response = await linkSignIn(email)
   const user = await userRepository.findByEmail(email)
   if (!user) throw new Error(`registerAndLogin: no user for ${email}`)
   createdIds.push(user.id)
-  await sql`update users set email_verified_at = now() where id = ${user.id}`
-
-  const response = await request(app)
-    .post('/api/v1/auth/login')
-    .send({ email, password: VALID_PASSWORD })
   return { response, email, user }
 }
 
 /**
- * Register a user through the real HTTP endpoint, look it up, track it for
- * cleanup, and mark it verified.
- *
- * Marked verified because login requires `emailVerifiedAt`: with an
- * unverified seed login would be rejected, and a before/after comparison of
- * two `null`s would look like proof that rotation does not write when it
- * only proves login never happened.
+ * POST a fresh sign-in link for `email` to `/auth/link/verify`.
+ * @param email - The address to sign in as.
+ * @returns The verify response.
+ */
+async function linkSignIn(email: string): Promise<Response> {
+  return request(app)
+    .post('/api/v1/auth/link/verify')
+    .send({ token: await issueTestLink(email) })
+}
+
+/**
+ * One verify presenting a link that signs nobody in.
+ * @returns The pending request.
+ */
+function deadLinkVerify(): Test {
+  return request(app)
+    .post('/api/v1/auth/link/verify')
+    .send({ token: `dead-link-${randomUUID()}` })
+}
+
+/**
+ * Create a verified user, look it up, and track it for cleanup.
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
- * @returns The seeded (verified) user row and the email it was registered with.
+ * @returns The seeded (verified) user row and its email.
  */
 async function seedLoginableUser(createdIds: string[]): Promise<{ user: User; email: string }> {
   const email = uniqueEmail()
-  await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
-  const user = await userRepository.findByEmail(email)
-  if (!user) throw new Error(`seedLoginableUser: no user for ${email}`)
+  const user = await userRepository.create({ email, emailVerifiedAt: new Date() })
   createdIds.push(user.id)
-  await sql`update users set email_verified_at = now() where id = ${user.id}`
-  const verified = await userRepository.findById(user.id)
-  if (!verified) throw new Error(`seedLoginableUser: user vanished for ${email}`)
-  return { user: verified, email }
+  return { user, email }
 }
 
 /**
@@ -142,12 +141,13 @@ function rawTokenOf(pair: string): string {
 
 /**
  * Refresh and logout exercise cookie round-tripping, rotation and rate
- * limiting, which auth.test.ts's register and login tests do not.
+ * limiting; sign-in-link.test.ts covers the sign-in itself.
  */
 describe('POST /api/v1/auth/refresh and /logout', () => {
   const createdIds: string[] = []
 
   afterEach(async () => {
+    await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
     if (createdIds.length === 0) return
     await sql`delete from users where id = any(${createdIds})`
     createdIds.length = 0
@@ -289,9 +289,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
     it('does not record lastLoggedInAt on refresh — a rotation is not a sign-in', async () => {
       const { user, email } = await seedLoginableUser(createdIds)
-      const login = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email, password: VALID_PASSWORD })
+      const login = await linkSignIn(email)
       expect(login.status).toBe(200)
       const before = await userRepository.findById(user.id)
       // Without this, a before/after comparison of two nulls (e.g. login itself failing) would look identical to proof that refresh doesn't write.
@@ -334,9 +332,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       const { response: firstLogin, email } = await registerAndLogin(createdIds)
       const stale = refreshCookiePair(firstLogin) as string
       await request(app).post('/api/v1/auth/logout').set('Cookie', stale)
-      const secondLogin = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email, password: VALID_PASSWORD })
+      const secondLogin = await linkSignIn(email)
       const live = refreshCookiePair(secondLogin) as string
 
       const loggedOut = await request(app)
@@ -349,6 +345,33 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
         where token_hash = ${hashToken(rawTokenOf(live))}
       `
       expect(row?.isRevoked).toBe(true)
+    })
+
+    it('stops honouring the access token as soon as the user logs out', async () => {
+      // A real sign-in, not signAccessToken(user, randomUUID()): logout denies the sid of the session it revokes, so a fabricated session id would never be denied and the final 401 could not happen.
+      const { response: signIn } = await registerAndLogin(createdIds)
+      const accessToken = envelopeOf<{ accessToken: string }>(signIn).data?.accessToken
+      expect(accessToken).toBeDefined()
+      const refreshCookie = refreshCookiePair(signIn)
+      expect(refreshCookie).toBeDefined()
+
+      // Works before logout: the token is genuinely valid for a live session.
+      const beforeLogout = await request(app)
+        .get('/api/v1/profile')
+        .set('Authorization', `Bearer ${accessToken as string}`)
+      expect(beforeLogout.status).toBe(200)
+
+      // The refresh cookie (not the bearer token) is what tells logout which session to revoke.
+      const logoutResponse = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', refreshCookie as string)
+      expect(logoutResponse.status).toBe(200)
+
+      // The same access token, which has not expired, is now refused: the auth middleware reads the denylist entry logout wrote.
+      const afterLogout = await request(app)
+        .get('/api/v1/profile')
+        .set('Authorization', `Bearer ${accessToken as string}`)
+      expect(afterLogout.status).toBe(401)
     })
 
     it('succeeds even with no refresh cookie at all — logout never leaks whether a token was live', async () => {
@@ -457,8 +480,8 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   })
 
   /**
-   * The limiters on /register and /logout are proven wired, not proven to
-   * 429: exhausting either would take 100 registrations (or 300 logouts) from
+   * The limiters on /link/request and /logout are proven wired, not proven to
+   * 429: exhausting either would take 10 link requests (or 300 logouts) from
    * this suite's single client address, spending a budget that every
    * integration file running in parallel shares. The 429 behaviour is proven
    * with small `limit` overrides in
@@ -469,9 +492,9 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
    * that a limiter ran.
    */
   describe('every auth route is behind a limiter (wiring, not thresholds)', () => {
-    it('runs a limiter on /register — proven by the RateLimit-* headers on an ordinary response', async () => {
-      // A body that fails validation reaches the limiter (which runs first) but never reaches bcrypt or the database, so the wiring proof costs nothing and creates no row to clean up.
-      const response = await request(app).post('/api/v1/auth/register').send({ email: 'nope' })
+    it('runs a limiter on /link/request — proven by the RateLimit-* headers on an ordinary response', async () => {
+      // A body that fails validation reaches the limiter (which runs first) but never reaches the database or the mail queue, so the wiring proof costs nothing and creates no row to clean up.
+      const response = await request(app).post('/api/v1/auth/link/request').send({ email: 'nope' })
 
       expect(response.status).toBe(400)
       expect(response.headers).toHaveProperty('ratelimit-limit')
@@ -485,25 +508,23 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(response.headers).toHaveProperty('ratelimit-limit')
     })
 
-    it('runs a limiter on /login and /refresh', async () => {
-      const loginResponse = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email: uniqueEmail(), password: VALID_PASSWORD })
+    it('runs a limiter on /link/verify and /refresh', async () => {
+      const verifyResponse = await request(app)
+        .post('/api/v1/auth/link/verify')
+        .send({ token: `dead-link-${randomUUID()}` })
       const refreshResponse = await request(app).post('/api/v1/auth/refresh')
 
-      expect(loginResponse.headers).toHaveProperty('ratelimit-limit')
+      expect(verifyResponse.headers).toHaveProperty('ratelimit-limit')
       expect(refreshResponse.headers).toHaveProperty('ratelimit-limit')
     })
   })
 
-  describe('login rate limiting (end to end, against the real production limiter and real Redis)', () => {
+  describe('link verify rate limiting (end to end, against the real production limiter and real Redis)', () => {
     it('never writes the submitted address into a rate-limit key name', async () => {
       const email = uniqueEmail()
 
-      const response = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email, password: 'not-the-password' })
-      expect(response.status).toBe(401)
+      const response = await request(app).post('/api/v1/auth/link/request').send({ email })
+      expect(response.status).toBe(202)
 
       const client = await getRedis()
       const keys: string[] = []
@@ -511,25 +532,18 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       for await (const batch of batches) {
         keys.push(...batch)
       }
-      expect(keys).toContain(`${redisKey('rl', 'login-account')}:${hashRateLimitIdentity(email)}`)
       expect(keys.filter((key) => key.includes(email))).toEqual([])
     })
 
     it('returns 429 after the configured number of attempts, with RateLimit-* headers', async () => {
-      const email = uniqueEmail()
-      /**
-       * One login with a wrong password for this test's address.
-       */
-      const attempt = (): Test =>
-        request(app).post('/api/v1/auth/login').send({ email, password: 'wrong-password' })
-
-      // The production limiter allows 5 attempts per 15 minutes — the first 5 fail normally (401, unknown email), the 6th is rate-limited.
-      for (let index = 0; index < 5; index += 1) {
+      const { limit } = RATE_LIMITS.signInLinkVerify
+      // The first `limit` attempts answer LINK_INVALID; the next is rate-limited.
+      for (let index = 0; index < limit; index += 1) {
         // Sequential on purpose: attempts against one shared counter must happen one after another for the count to be deterministic.
-        const response = await attempt()
-        expect(response.status).toBe(401)
+        const response = await deadLinkVerify()
+        expect(response.status).toBe(400)
       }
-      const limited = await attempt()
+      const limited = await deadLinkVerify()
 
       expect(limited.status).toBe(429)
       expect(limited.headers).toHaveProperty('ratelimit-limit')

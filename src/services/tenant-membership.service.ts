@@ -196,11 +196,14 @@ export async function revokeInvitationsBeyondAuthorityElsewhere(
  * Refuse an actor whose current role is below the route's `requireRole` bar.
  * @param access - The actor's access as locked in this transaction.
  * @param minimum - The lowest role the route admits.
- * @throws {HttpError} 403 `Insufficient permissions`, `requireRole`'s answer.
+ * @throws {HttpError} 403, the same answer `requireRole` gives.
  */
 function assertRoleAtLeast(access: ActorAccess, minimum: MembershipRole): void {
   if (!isRoleAtLeast(access.role, minimum)) {
-    throw new HttpError('Insufficient permissions', 403)
+    throw new HttpError(
+      "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      403
+    )
   }
 }
 
@@ -231,7 +234,7 @@ export function assertStaffReasonGiven(access: TenantAccess, options: StaffReaso
  * @param minimum - The lowest role the route admits.
  * @param executor - The transaction to hold the locks in.
  * @returns The actor's current effective role, at least `minimum`, and how they reached the tenant.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 `Insufficient permissions` when their role is below `minimum`.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 (`requireRole`'s answer) when their role is below `minimum`.
  */
 export async function lockActorRole(
   actor: Actor,
@@ -254,7 +257,7 @@ export async function lockActorRole(
  * @param mode - `'update'` when the caller deletes the target's membership.
  * @param executor - The transaction to hold the locks in.
  * @returns The actor's current effective role, how they reached the tenant, and the target's membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 `Insufficient permissions` when their role is below `minimum`; 404 `member_not_found` (message `Member not found`) when the target is not a member.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 (`requireRole`'s answer) when their role is below `minimum`; 404 `member_not_found` (message `Member not found`) when the target is not a member.
  */
 async function lockActorAndTarget(
   actor: Actor,
@@ -405,7 +408,7 @@ export async function changeRole(
     )
     assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
-      throw new HttpError("Insufficient permissions to change this member's role", 403)
+      throw new HttpError("Your role can't change this member's role. Ask a workspace owner.", 403)
     }
     // After lockActorAndTarget's owner-row locks: a delete that holds them took them before the target's user row, so this queues there holding nothing the delete wants. The role gate only skips a redundant lock.
     if (role === 'owner' && target.role !== 'owner') {
@@ -483,7 +486,7 @@ export async function removeMember(
     )
     assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
-      throw new HttpError('Insufficient permissions to remove this member', 403)
+      throw new HttpError("Your role can't remove this member. Ask a workspace owner.", 403)
     }
     if (target.role === 'owner') {
       await assertOwnerRemainsFor(

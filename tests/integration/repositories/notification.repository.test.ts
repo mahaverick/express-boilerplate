@@ -84,8 +84,8 @@ describe('NotificationRepository', () => {
     createdUserIds.push(user.id)
     const data = {
       userId: user.id,
-      type: 'verify_email' as const,
-      title: 'Verify your email',
+      type: 'tenant_invitation' as const,
+      title: 'You have an invitation',
       body: 'body',
       dedupeKey: `notification-job-${randomUUID()}-1`,
     }
@@ -116,10 +116,10 @@ describe('NotificationRepository', () => {
     const userId = await createUser()
     const read = new Date(Date.UTC(2026, 1, 1)).toISOString()
     await sql`insert into notifications (user_id, type, title, body, read_at, created_at) values
-      (${userId}, 'password_changed', 'first', 'plain', ${read}, ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
-      (${userId}, 'password_changed', 'Invoice paid', 'plain', ${read}, ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
-      (${userId}, 'password_changed', 'third', 'unpaid invoice', NULL, ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
-      (${userId}, 'password_changed', 'fourth', 'plain', NULL, ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
+      (${userId}, 'maintenance_mode_changed', 'first', 'plain', ${read}, ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
+      (${userId}, 'maintenance_mode_changed', 'Invoice paid', 'plain', ${read}, ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
+      (${userId}, 'maintenance_mode_changed', 'third', 'unpaid invoice', NULL, ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
+      (${userId}, 'maintenance_mode_changed', 'fourth', 'plain', NULL, ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
     return userId
   }
 
@@ -129,17 +129,17 @@ describe('NotificationRepository', () => {
 
       const notification = await notificationRepository.create({
         userId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'Click the link to verify your email address.',
-        metadata: { templateKey: 'email_verification' },
+        metadata: { templateKey: 'tenant_invitation' },
       })
 
       expect(notification.id).toBeTruthy()
       expect(notification.userId).toBe(userId)
-      expect(notification.type).toBe('verify_email')
-      expect(notification.title).toBe('Verify your email')
-      expect(notification.metadata).toEqual({ templateKey: 'email_verification' })
+      expect(notification.type).toBe('tenant_invitation')
+      expect(notification.title).toBe('You have an invitation')
+      expect(notification.metadata).toEqual({ templateKey: 'tenant_invitation' })
       expect(notification.readAt).toBeNull()
       expect(notification.createdAt).toBeInstanceOf(Date)
     })
@@ -149,8 +149,8 @@ describe('NotificationRepository', () => {
 
       const notification = await notificationRepository.create({
         userId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'Click the link to verify your email address.',
       })
 
@@ -163,8 +163,8 @@ describe('NotificationRepository', () => {
       const userId = await createUser()
       const notification = await notificationRepository.create({
         userId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
 
@@ -182,8 +182,8 @@ describe('NotificationRepository', () => {
       const otherUserId = await createUser()
       const notification = await notificationRepository.create({
         userId: ownerId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
 
@@ -198,8 +198,8 @@ describe('NotificationRepository', () => {
       const userId = await createUser()
       const notification = await notificationRepository.create({
         userId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
 
@@ -211,8 +211,8 @@ describe('NotificationRepository', () => {
       const userId = await createUser()
       const notification = await notificationRepository.create({
         userId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
       const first = await notificationRepository.markRead(notification.id, userId)
@@ -227,8 +227,8 @@ describe('NotificationRepository', () => {
       const otherUserId = await createUser()
       const notification = await notificationRepository.create({
         userId: ownerId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
 
@@ -244,7 +244,7 @@ describe('NotificationRepository', () => {
       for (let index = 0; index < 3; index += 1) {
         await notificationRepository.create({
           userId,
-          type: 'verify_email',
+          type: 'tenant_invitation',
           title: `Notification ${index}`,
           body: 'body',
         })
@@ -267,7 +267,7 @@ describe('NotificationRepository', () => {
       const otherUserId = await createUser()
       const other = await notificationRepository.create({
         userId: otherUserId,
-        type: 'verify_email',
+        type: 'tenant_invitation',
         title: 'Not yours',
         body: 'body',
       })
@@ -283,8 +283,8 @@ describe('NotificationRepository', () => {
       const userId = await createUser()
       const notification = await notificationRepository.create({
         userId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
 
@@ -302,8 +302,8 @@ describe('NotificationRepository', () => {
       const otherUserId = await createUser()
       const notification = await notificationRepository.create({
         userId: ownerId,
-        type: 'verify_email',
-        title: 'Verify your email',
+        type: 'tenant_invitation',
+        title: 'You have an invitation',
         body: 'body',
       })
 
@@ -325,13 +325,13 @@ describe('NotificationRepository', () => {
       const userId = await createUser()
       await notificationRepository.create({
         userId,
-        type: 'verify_email',
+        type: 'tenant_invitation',
         title: 'One',
         body: 'body',
       })
       await notificationRepository.create({
         userId,
-        type: 'verify_email',
+        type: 'tenant_invitation',
         title: 'Two',
         body: 'body',
       })
@@ -347,7 +347,7 @@ describe('NotificationRepository', () => {
       const otherUserId = await createUser()
       await notificationRepository.create({
         userId: otherUserId,
-        type: 'verify_email',
+        type: 'tenant_invitation',
         title: 'Not yours',
         body: 'body',
       })
@@ -368,7 +368,7 @@ describe('NotificationRepository', () => {
       for (let index = 0; index < 9; index += 1) {
         const notification = await notificationRepository.create({
           userId,
-          type: 'verify_email',
+          type: 'tenant_invitation',
           title: `Notification ${index}`,
           body: 'body',
         })
@@ -394,7 +394,7 @@ describe('NotificationRepository', () => {
       for (let index = 0; index < 5; index += 1) {
         const notification = await notificationRepository.create({
           userId,
-          type: 'verify_email',
+          type: 'tenant_invitation',
           title: `Notification ${index}`,
           body: 'body',
           createdAt: sharedCreatedAt,
@@ -414,10 +414,10 @@ describe('NotificationRepository', () => {
       const other = await userRepository.create({ email: uniqueEmail() })
       createdUserIds.push(user.id, other.id)
       await sql`insert into notifications (user_id, type, title, body, created_at) values
-        (${user.id}, 'password_changed', 'oldest', 'b', ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
-        (${user.id}, 'password_changed', 'middle', 'b', ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
-        (${user.id}, 'password_changed', 'newest', 'b', ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
-        (${other.id}, 'password_changed', 'not mine', 'b', ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
+        (${user.id}, 'maintenance_mode_changed', 'oldest', 'b', ${new Date(Date.UTC(2026, 0, 1)).toISOString()}),
+        (${user.id}, 'maintenance_mode_changed', 'middle', 'b', ${new Date(Date.UTC(2026, 0, 2)).toISOString()}),
+        (${user.id}, 'maintenance_mode_changed', 'newest', 'b', ${new Date(Date.UTC(2026, 0, 3)).toISOString()}),
+        (${other.id}, 'maintenance_mode_changed', 'not mine', 'b', ${new Date(Date.UTC(2026, 0, 4)).toISOString()})`
 
       const recent = await notificationRepository.listRecent(user.id, 2)
 
@@ -464,8 +464,8 @@ describe('NotificationRepository', () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     const notification = await notificationRepository.create({
       userId: user.id,
-      type: 'verify_email',
-      title: 'Verify your email',
+      type: 'tenant_invitation',
+      title: 'You have an invitation',
       body: 'body',
     })
 

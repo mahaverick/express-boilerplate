@@ -13,7 +13,11 @@ const config = mergeConfig(
     test: { exclude: [...configDefaults.exclude, 'tests/integration/**'] },
   })
 )
-// Assigned after the merge: mergeConfig concatenates arrays, so `globalSetup: []` would keep the base entry.
-config.test = { ...config.test, globalSetup: [] }
+// Assigned after the merge (mergeConfig concatenates arrays); setup-rate-limits.ts stays out, since the hooks may run with Docker down.
+config.test = {
+  ...config.test,
+  globalSetup: [],
+  setupFiles: ['./tests/helpers/setup-global.ts'],
+}
 
 export default config

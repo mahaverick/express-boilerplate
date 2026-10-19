@@ -200,7 +200,12 @@ export function requireRole(
     const isAdmitted =
       role !== undefined && allowedRoles.some((allowed) => isRoleAtLeast(role, allowed))
     if (!isAdmitted) {
-      next(new HttpError('Insufficient permissions', 403))
+      next(
+        new HttpError(
+          "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+          403
+        )
+      )
       return
     }
     next()

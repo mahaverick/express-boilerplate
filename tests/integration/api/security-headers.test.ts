@@ -12,21 +12,21 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
-import { getRedis, redisKey } from '@/services/redis.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   createTrackedStaff,
   createTrackedUser,
   deleteTrackedUsers,
-  TEST_PASSWORD,
   tokenFor,
 } from '../../helpers/platform-users'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 const app = createApp()
 
@@ -59,8 +59,7 @@ describe('security headers', () => {
     },
     {
       description: 'are set on a 415 rejection from the auth routes',
-      makeRequest: () =>
-        request(app).post('/api/v1/auth/login').type('form').send('email=a@example.com&password=x'),
+      makeRequest: () => request(app).post('/api/v1/auth/link/verify').type('form').send('token=x'),
       expectedStatus: 415,
     },
     {
@@ -72,7 +71,7 @@ describe('security headers', () => {
       description: 'are set on a CORS preflight',
       makeRequest: () =>
         request(app)
-          .options('/api/v1/auth/login')
+          .options('/api/v1/auth/link/verify')
           .set('Origin', process.env.WEB_URL ?? 'http://localhost:5173')
           .set('Access-Control-Request-Method', 'POST'),
       expectedStatus: 204,
@@ -206,12 +205,12 @@ describe('Cache-Control', () => {
     expect(response.headers['cache-control']).toBe('no-store')
   })
 
-  it('is no-store on the login and refresh responses that carry an access token', async () => {
-    const user = await createTrackedUser({ hasPassword: true })
+  it('is no-store on the sign-in and refresh responses that carry an access token', async () => {
+    const user = await createTrackedUser()
 
     const loggedIn = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email: user.email, password: TEST_PASSWORD })
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(user.email) })
     expect(loggedIn.status).toBe(200)
     expect(loggedIn.headers['cache-control']).toBe('no-store')
 
@@ -245,11 +244,7 @@ describe('Cache-Control', () => {
 
   it('leaves the public maintenance status at public, max-age=5', async () => {
     // Other files in this worker poll the route under the same IP; start its per-IP budget afresh.
-    const client = await getRedis()
-    const keys: string[] = []
-    const batches = client.scanIterator({ MATCH: `${redisKey('rl', 'maintenance-status')}:*` })
-    for await (const batch of batches) keys.push(...batch)
-    if (keys.length > 0) await client.del(keys)
+    await clearRateLimiter(RATE_LIMITS.maintenanceStatus.name)
 
     const response = await request(app).get('/api/v1/status/maintenance')
 

@@ -12,8 +12,7 @@ import {
   getUserDetail,
   listUsers,
   reactivateUser,
-  resendUserVerification,
-  sendPasswordSetup,
+  sendSignInLinkByStaff,
   signOutUser,
   updateUser,
 } from '@/services/platform-user.service'
@@ -53,7 +52,7 @@ class PlatformUserController extends BaseController {
   })
 
   /**
-   * `POST /platform/users`: create a user and mail a set-password link.
+   * `POST /platform/users`: create a user and mail them a welcome sign-in link.
    */
   createUser = this.handle(async (request, response) => {
     const input = parseBody(newPlatformUserSchema, request.body)
@@ -71,21 +70,12 @@ class PlatformUserController extends BaseController {
   })
 
   /**
-   * `POST /platform/users/:id/password-setup`: mail a set-password or reset link.
+   * `POST /platform/users/:id/sign-in-link`: mail the user a sign-in link.
    */
-  sendPasswordSetup = this.handle(async (request, response) => {
+  sendSignInLink = this.handle(async (request, response) => {
     const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
-    const result = await sendPasswordSetup(actorFrom(request), userId)
-    successResponse(response, result, 'Password link sent.')
-  })
-
-  /**
-   * `POST /platform/users/:id/resend-verification`: mail a fresh verification link.
-   */
-  resendVerification = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
-    const result = await resendUserVerification(actorFrom(request), userId)
-    successResponse(response, result, 'Verification link sent.')
+    const result = await sendSignInLinkByStaff(actorFrom(request), userId)
+    successResponse(response, result, 'Sign-in link sent.')
   })
 
   /**

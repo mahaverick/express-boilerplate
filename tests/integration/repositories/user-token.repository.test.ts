@@ -6,22 +6,18 @@
  * so there is nothing separate to clean up there.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
-import { userTokenModel } from '@/database/models/user-token.model'
+import { type LinkTokenPurpose, type NewUserToken } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import {
-  hashToken,
-  issueRefreshToken,
-  issueToken,
-  rotateRefreshToken,
-} from '@/services/session.service'
+import { hashToken, issueRefreshToken, rotateRefreshToken } from '@/services/session.service'
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
+const LINK_PREFIX = `user-token-link-${randomUUID()}-`
+const LINK_PREFIX_LIKE = `${LINK_PREFIX}%`
 
 /**
  * A disposable email unique to this call, so it cannot collide with rows other tests in this
@@ -77,10 +73,83 @@ async function consumedHashIn(userId: string, sessionId: string): Promise<string
   return hashToken(issued.raw)
 }
 
+/**
+ * A fresh address for a link row, under this file's prefix so afterEach finds it.
+ */
+function linkAddress(): string {
+  return `${LINK_PREFIX}${randomUUID()}@example.test`
+}
+
+/**
+ * A live `sign_in_link` row's values, with `overrides` merged over them.
+ */
+function signInRow(overrides: Partial<NewUserToken> = {}): NewUserToken {
+  return {
+    purpose: 'sign_in_link',
+    app: 'web',
+    email: linkAddress(),
+    tokenHash: uniqueHash(),
+    expiresAt: new Date(Date.now() + 3_600_000),
+    ...overrides,
+  }
+}
+
+/**
+ * A live `step_up_link` row's values for one user and session, with `overrides` merged over them.
+ */
+function stepUpRow(
+  userId: string,
+  sessionId: string,
+  overrides: Partial<NewUserToken> = {}
+): NewUserToken {
+  return {
+    purpose: 'step_up_link',
+    app: 'apex',
+    email: linkAddress(),
+    userId,
+    sessionId,
+    tokenHash: uniqueHash(),
+    expiresAt: new Date(Date.now() + 3_600_000),
+    ...overrides,
+  }
+}
+
+/**
+ * The id `claimOnce` claims for a link, or undefined when it claims nothing.
+ */
+async function claimedLinkId(
+  tokenHash: string,
+  purpose: LinkTokenPurpose,
+  bound?: { userId: string; sessionId: string }
+): Promise<string | undefined> {
+  const row = await userTokenRepository.claimOnce(tokenHash, purpose, db, bound)
+  return row?.id
+}
+
+/**
+ * Inserts a live `step_up_link` row for `userId` under `tokenHash`, with
+ * every column its shape CHECK requires.
+ * @param userId - The link's user.
+ * @param tokenHash - The row's hash.
+ * @returns Resolves once the row is stored.
+ */
+async function stepUpLinkRow(userId: string, tokenHash: string): Promise<void> {
+  await userTokenRepository.create({
+    userId,
+    purpose: 'step_up_link',
+    sessionId: randomUUID(),
+    email: `step-up-${randomUUID()}@example.test`,
+    app: 'apex',
+    tokenHash,
+    expiresAt: new Date(Date.now() + 60_000),
+  })
+}
+
 describe('UserTokenRepository', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await sql`delete from user_tokens where email like ${LINK_PREFIX_LIKE}`
     if (createdUserIds.length === 0) return
     await sql`delete from users where id = any(${createdUserIds})`
     createdUserIds.length = 0
@@ -221,44 +290,32 @@ describe('UserTokenRepository', () => {
 
   /**
    * The `purpose` predicate keeps a token minted for one purpose from being
-   * spent as another (SECURITY.md): a password-reset token as an email
-   * verification, or a verification link, valid for `EMAIL_VERIFICATION_TTL`
-   * (24h by default) and mailed without a reset request, as a reset link,
-   * outside the window `PASSWORD_RESET_TTL` (1h by default) keeps reset links to.
+   * spent as another (SECURITY.md): a step-up link as a sign-in link, which
+   * would sign a session in with a link mailed to confirm one.
    */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
-    await userTokenRepository.create({
-      userId,
-      purpose: 'password_reset',
-      tokenHash,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
+    await stepUpLinkRow(userId, tokenHash)
 
     // Wrong purpose: the row exists and is live, but must not be claimable as anything other than what it was issued for.
-    const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
+    const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'sign_in_link')
     expect(wrongPurpose).toBeUndefined()
 
     // The row must be untouched by the rejected claim above: a claimOnce that revoked on a purpose mismatch would silently burn a legitimate token on a mere probe.
     const stillLive = await userTokenRepository.findByHash(tokenHash)
     expect(stillLive?.revokedAt).toBeNull()
 
-    const rightPurpose = await userTokenRepository.claimOnce(tokenHash, 'password_reset')
+    const rightPurpose = await userTokenRepository.claimOnce(tokenHash, 'step_up_link')
     expect(rightPurpose).toBeDefined()
     expect(rightPurpose?.revokedAt).not.toBeNull()
   })
 
-  it('claimOnce rejects a refresh claim for a token issued as a password reset, and vice versa', async () => {
+  it('claimOnce rejects a refresh claim for a token issued as a step-up link, and vice versa', async () => {
     const userId = await createUser()
-    const resetHash = uniqueHash()
+    const linkHash = uniqueHash()
     const refreshHash = uniqueHash()
-    await userTokenRepository.create({
-      userId,
-      purpose: 'password_reset',
-      tokenHash: resetHash,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
+    await stepUpLinkRow(userId, linkHash)
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
@@ -267,11 +324,11 @@ describe('UserTokenRepository', () => {
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    expect(await userTokenRepository.claimOnce(resetHash, 'refresh')).toBeUndefined()
-    expect(await userTokenRepository.claimOnce(refreshHash, 'password_reset')).toBeUndefined()
+    expect(await userTokenRepository.claimOnce(linkHash, 'refresh')).toBeUndefined()
+    expect(await userTokenRepository.claimOnce(refreshHash, 'step_up_link')).toBeUndefined()
 
     // Both remain claimable under their real, original purpose.
-    expect(await userTokenRepository.claimOnce(resetHash, 'password_reset')).toBeDefined()
+    expect(await userTokenRepository.claimOnce(linkHash, 'step_up_link')).toBeDefined()
     expect(await userTokenRepository.claimOnce(refreshHash, 'refresh')).toBeDefined()
   })
 
@@ -358,7 +415,7 @@ describe('UserTokenRepository', () => {
     // No sessionId: contributes nothing to the returned list.
     await userTokenRepository.create({
       userId,
-      purpose: 'password_reset',
+      purpose: 'refresh',
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
@@ -455,7 +512,7 @@ describe('UserTokenRepository', () => {
       })
       const noSessionToken = await userTokenRepository.create({
         userId,
-        purpose: 'password_reset',
+        purpose: 'refresh',
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -578,9 +635,9 @@ describe('UserTokenRepository', () => {
       const spared = await refreshRow(userId, callerSessionId)
       const sibling = await refreshRow(userId, callerSessionId)
       const other = await refreshRow(userId, otherSessionId)
-      const reset = await userTokenRepository.create({
+      const sessionless = await userTokenRepository.create({
         userId,
-        purpose: 'password_reset',
+        purpose: 'refresh',
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -591,7 +648,7 @@ describe('UserTokenRepository', () => {
       })
 
       expect(await revokedAtOf(spared.tokenHash)).toBeNull()
-      for (const row of [sibling, other, reset]) {
+      for (const row of [sibling, other, sessionless]) {
         expect(await revokedAtOf(row.tokenHash)).toBeInstanceOf(Date)
       }
       // The caller's own session is never reported: denying it would end the caller's access token.
@@ -620,30 +677,6 @@ describe('UserTokenRepository', () => {
     })
   })
 
-  describe('revokeAllForUserAndPurpose', () => {
-    it('revokes the named purpose and leaves a live refresh token alone', async () => {
-      const userId = await createUser()
-      const refresh = await issueRefreshToken(userId, randomUUID())
-      await issueToken(userId, 'email_verification', 60_000)
-
-      await userTokenRepository.revokeAllForUserAndPurpose(userId, 'email_verification')
-
-      // This assertion is the entire reason the method exists: revokeAllForUser matches on userId alone, so calling it here would log the user out of every device as a side effect of requesting a verification mail.
-      expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
-
-      // IssuedToken (session.service.ts) carries no row id, so the verification row is identified by userId + purpose.
-      const [remaining] = await db
-        .select()
-        .from(userTokenModel)
-        .where(
-          and(eq(userTokenModel.userId, userId), eq(userTokenModel.purpose, 'email_verification'))
-        )
-      // Proves a row was actually found: remaining?.revokedAt alone passes when remaining is undefined too.
-      expect(remaining).toBeDefined()
-      expect(remaining?.revokedAt).not.toBeNull()
-    })
-  })
-
   describe('isSessionKilled', () => {
     it('is false for a session holding only a rotated token and its live successor', async () => {
       const userId = await createUser()
@@ -662,7 +695,7 @@ describe('UserTokenRepository', () => {
       expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
     })
 
-    it('is true once every session of the user is revoked (password reset)', async () => {
+    it('is true once every session of the user is revoked (an account claim)', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
       const presented = await consumedHashIn(userId, sessionId)
@@ -700,6 +733,169 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.revokeAllForSession(killed)
 
       expect(await userTokenRepository.isSessionKilled(untouched, presented)).toBe(false)
+    })
+
+    it('ignores a step-up link of the session, revoked unused or claimed', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const presented = await consumedHashIn(userId, sessionId)
+      const superseded = await userTokenRepository.create(stepUpRow(userId, sessionId))
+      await userTokenRepository.revokeLiveFor({ userId, sessionId, intent: 'step_up' })
+      const claimed = await userTokenRepository.create(stepUpRow(userId, sessionId))
+      await userTokenRepository.claimOnce(claimed.tokenHash, 'step_up_link', db, {
+        userId,
+        sessionId,
+      })
+
+      expect(await revokedAtOf(superseded.tokenHash)).not.toBeNull()
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(false)
+    })
+  })
+
+  describe('emailed links', () => {
+    it('claims a live link once and never twice', async () => {
+      const row = await userTokenRepository.create(signInRow())
+      expect(await claimedLinkId(row.tokenHash, 'sign_in_link')).toBe(row.id)
+      expect(await userTokenRepository.claimOnce(row.tokenHash, 'sign_in_link')).toBeUndefined()
+      const spent = await userTokenRepository.findByHash(row.tokenHash)
+      expect(spent?.consumedAt).not.toBeNull()
+    })
+
+    it('never claims a sign-in link as a step-up link or a refresh token', async () => {
+      const row = await userTokenRepository.create(signInRow())
+      expect(await userTokenRepository.claimOnce(row.tokenHash, 'step_up_link')).toBeUndefined()
+      expect(await userTokenRepository.claimOnce(row.tokenHash, 'refresh')).toBeUndefined()
+      expect(await revokedAtOf(row.tokenHash)).toBeNull()
+    })
+
+    it('claims a step-up link only for its own user and session', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const sessionId = randomUUID()
+      const row = await userTokenRepository.create(stepUpRow(userId, sessionId))
+
+      expect(
+        await claimedLinkId(row.tokenHash, 'step_up_link', { userId, sessionId: randomUUID() })
+      ).toBeUndefined()
+      expect(
+        await claimedLinkId(row.tokenHash, 'step_up_link', { userId: otherUserId, sessionId })
+      ).toBeUndefined()
+      expect(await revokedAtOf(row.tokenHash)).toBeNull()
+
+      expect(await claimedLinkId(row.tokenHash, 'step_up_link', { userId, sessionId })).toBe(row.id)
+    })
+
+    it('peeks without spending, and past nothing expired, revoked or claimed', async () => {
+      const live = await userTokenRepository.create(signInRow())
+      const first = await userTokenRepository.findLiveByHash(live.tokenHash, 'sign_in_link')
+      const again = await userTokenRepository.findLiveByHash(live.tokenHash, 'sign_in_link')
+      expect(first?.id).toBe(live.id)
+      expect(again?.consumedAt).toBeNull()
+      expect(
+        await userTokenRepository.findLiveByHash(live.tokenHash, 'step_up_link')
+      ).toBeUndefined()
+
+      const aSecondAgo = new Date(Date.now() - 1000)
+      const expired = await userTokenRepository.create(signInRow({ expiresAt: aSecondAgo }))
+      const revoked = await userTokenRepository.create(signInRow({ revokedAt: new Date() }))
+      const claimed = await userTokenRepository.create(signInRow())
+      await userTokenRepository.claimOnce(claimed.tokenHash, 'sign_in_link')
+      for (const row of [expired, revoked, claimed]) {
+        expect(
+          await userTokenRepository.findLiveByHash(row.tokenHash, 'sign_in_link')
+        ).toBeUndefined()
+      }
+    })
+
+    it('revokes only the live sign-in links of one address', async () => {
+      const email = linkAddress()
+      const first = await userTokenRepository.create(signInRow({ email }))
+      const second = await userTokenRepository.create(signInRow({ email, app: 'apex' }))
+      const otherAddress = await userTokenRepository.create(signInRow())
+      const userId = await createUser()
+      const stepUp = await userTokenRepository.create(stepUpRow(userId, randomUUID(), { email }))
+
+      expect(
+        await userTokenRepository.revokeLiveFor({ email: email.toUpperCase(), intent: 'sign_in' })
+      ).toBe(2)
+
+      const firstRow = await userTokenRepository.findByHash(first.tokenHash)
+      expect(firstRow?.revokedAt).not.toBeNull()
+      expect(firstRow?.consumedAt).toBeNull()
+      expect(await revokedAtOf(second.tokenHash)).not.toBeNull()
+      expect(await revokedAtOf(otherAddress.tokenHash)).toBeNull()
+      expect(await revokedAtOf(stepUp.tokenHash)).toBeNull()
+    })
+
+    it("revokes only one session's live step-up links, never its refresh tokens", async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const refresh = await issueRefreshToken(userId, sessionId)
+      const mine = await userTokenRepository.create(stepUpRow(userId, sessionId))
+      const otherSession = await userTokenRepository.create(stepUpRow(userId, randomUUID()))
+
+      expect(
+        await userTokenRepository.revokeLiveFor({ userId, sessionId, intent: 'step_up' })
+      ).toBe(1)
+
+      expect(await revokedAtOf(mine.tokenHash)).not.toBeNull()
+      expect(await revokedAtOf(otherSession.tokenHash)).toBeNull()
+      expect(await revokedAtOf(hashToken(refresh.raw))).toBeNull()
+    })
+
+    it("sign-out revokes the session's live step-up link", async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      await issueRefreshToken(userId, sessionId)
+      const pending = await userTokenRepository.create(stepUpRow(userId, sessionId))
+
+      await userTokenRepository.revokeAllForSession(sessionId)
+
+      expect(await revokedAtOf(pending.tokenHash)).not.toBeNull()
+    })
+
+    it('finds a refresh token by hash, but never a link', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const refresh = await issueRefreshToken(userId, sessionId)
+      const link = await userTokenRepository.create(stepUpRow(userId, sessionId))
+
+      const found = await userTokenRepository.findRefreshByHash(hashToken(refresh.raw))
+      expect(found?.sessionId).toBe(sessionId)
+      expect(await userTokenRepository.findRefreshByHash(link.tokenHash)).toBeUndefined()
+    })
+
+    it('session listing ignores link rows', async () => {
+      const userId = await createUser()
+      const mine = randomUUID()
+      const other = randomUUID()
+      await issueRefreshToken(userId, mine)
+      await issueRefreshToken(userId, other)
+      // A session with only a pending step-up link is not a signed-in session.
+      await userTokenRepository.create(stepUpRow(userId, randomUUID()))
+
+      const aMinuteAgo = new Date(Date.now() - 60_000)
+      expect(await userTokenRepository.liveSessionIdsExcept(userId, mine, aMinuteAgo)).toEqual([
+        other,
+      ])
+    })
+
+    it('deletes every link for an address up to a moment, whatever its case', async () => {
+      const email = linkAddress()
+      const old = await userTokenRepository.create(signInRow({ email }))
+      await sql`update user_tokens set created_at = now() - interval '2 hours' where id = ${old.id}`
+      const recent = await userTokenRepository.create(signInRow({ email }))
+      const other = await userTokenRepository.create(signInRow())
+      const anHourAgo = new Date(Date.now() - 3_600_000)
+
+      const deleted = await db.transaction((tx) =>
+        userTokenRepository.deleteForEmail(email.toUpperCase(), anHourAgo, tx)
+      )
+
+      expect(deleted).toBe(1)
+      expect(await userTokenRepository.findByHash(old.tokenHash)).toBeUndefined()
+      expect(await userTokenRepository.findByHash(recent.tokenHash)).toBeDefined()
+      expect(await userTokenRepository.findByHash(other.tokenHash)).toBeDefined()
     })
   })
 })

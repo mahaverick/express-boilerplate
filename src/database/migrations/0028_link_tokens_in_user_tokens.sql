@@ -1,0 +1,10 @@
+-- Every existing row is a refresh, email_verification or password_reset row with a user_id, and the new email, app and redirect columns start NULL, so every existing row satisfies user_tokens_app_check and user_tokens_shape_check.
+ALTER TABLE "user_tokens" DROP CONSTRAINT "user_tokens_purpose_check";--> statement-breakpoint
+ALTER TABLE "user_tokens" ALTER COLUMN "user_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD COLUMN "email" varchar(320);--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD COLUMN "app" varchar(8);--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD COLUMN "redirect" varchar(2048);--> statement-breakpoint
+CREATE INDEX "user_tokens_live_email_idx" ON "user_tokens" USING btree ("email","purpose") WHERE "user_tokens"."email" is not null and "user_tokens"."revoked_at" is null;--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD CONSTRAINT "user_tokens_app_check" CHECK ("user_tokens"."app" in ('web', 'apex'));--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD CONSTRAINT "user_tokens_shape_check" CHECK (("user_tokens"."purpose" in ('refresh', 'email_verification', 'password_reset') and "user_tokens"."user_id" is not null and "user_tokens"."email" is null and "user_tokens"."app" is null and "user_tokens"."redirect" is null) or ("user_tokens"."purpose" = 'sign_in_link' and "user_tokens"."user_id" is null and "user_tokens"."session_id" is null and "user_tokens"."email" is not null and "user_tokens"."app" is not null) or ("user_tokens"."purpose" = 'step_up_link' and "user_tokens"."user_id" is not null and "user_tokens"."session_id" is not null and "user_tokens"."email" is not null and "user_tokens"."app" is not null and "user_tokens"."redirect" is null));--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD CONSTRAINT "user_tokens_purpose_check" CHECK ("user_tokens"."purpose" in ('refresh', 'email_verification', 'password_reset', 'sign_in_link', 'step_up_link'));

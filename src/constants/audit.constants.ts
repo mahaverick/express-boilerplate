@@ -3,6 +3,7 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
+import { FRONTEND_APPS } from '@/constants/frontend.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
   ONBOARDING_STEP_KEY_MAX_LENGTH,
@@ -121,9 +122,15 @@ export const AUDIT_ACTIONS = {
     target: 'invitation',
     metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
   },
+  // `trigger` is set when the system resent it because the invitee asked Apex for a sign-in link; a member's or staff resend carries none.
   'invitation.resent': {
     target: 'invitation',
-    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
+    metadata: z.strictObject({
+      role,
+      emailDomain: invitationEmailDomain,
+      reason: staffReason,
+      trigger: z.literal('sign_in_request').optional(),
+    }),
   },
   'invitation.revoked': {
     target: 'invitation',
@@ -132,10 +139,6 @@ export const AUDIT_ACTIONS = {
   'invitation.accepted': {
     target: 'membership',
     metadata: z.strictObject({ role, invitationId: id }),
-  },
-  'platform.member.auto_joined': {
-    target: 'membership',
-    metadata: z.strictObject({ userId: id, emailDomain }),
   },
   'platform.member.granted': {
     target: 'membership',
@@ -153,11 +156,11 @@ export const AUDIT_ACTIONS = {
   'user.deactivated': { target: 'user', metadata: z.strictObject({ reason }) },
   'user.reactivated': { target: 'user', metadata: z.strictObject({ reason }) },
   'user.signed_out': { target: 'user', metadata: z.strictObject({ reason }) },
-  'user.password_setup_sent': {
+  // A staff member mailed the user a sign-in link; `app` is the frontend it opens.
+  'user.sign_in_link_sent': {
     target: 'user',
-    metadata: z.strictObject({ kind: z.enum(['setup', 'reset']) }),
+    metadata: z.strictObject({ app: z.enum(FRONTEND_APPS) }),
   },
-  'user.verification_resent': { target: 'user', metadata: z.strictObject({}) },
   'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
   'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },
@@ -172,9 +175,14 @@ export const AUDIT_ACTIONS = {
       reason: reason.nullable(),
     }),
   },
-  'auth.reauthenticated': {
+  // A staff step-up: confirmed by an emailed link or a fresh Google login. A refused Google confirm is audited, and so is a link confirm by a caller no longer staff.
+  'auth.step_up_confirmed': {
     target: 'user',
-    metadata: z.strictObject({ outcome: z.enum(['success', 'failure']) }),
+    metadata: z.strictObject({ method: z.enum(['link', 'google']) }),
+  },
+  'auth.step_up_refused': {
+    target: 'user',
+    metadata: z.strictObject({ method: z.enum(['link', 'google']) }),
   },
   'user.purged': {
     target: 'user',
@@ -254,6 +262,10 @@ export const RETIRED_AUDIT_ACTIONS = [
   'tenant.timeline_viewed',
   'user.errors_viewed',
   'tenant.errors_viewed',
+  'platform.member.auto_joined',
+  'auth.reauthenticated',
+  'user.password_setup_sent',
+  'user.verification_resent',
 ] as const
 
 /**

@@ -17,18 +17,28 @@ import {
 } from '@/services/maintenance-mode/maintenance-mode-queues.service'
 import type { MaintenanceModeSnapshot } from '@/types/maintenance-mode'
 
-const queues = vi.hoisted(() => ({ isHung: false }))
+const queues = vi.hoisted(() => {
+  const state = {
+    isHung: false,
+    /**
+     * Stand-ins for the named queues, answering at once or never, as `isHung` says.
+     */
+    fakes: (names: readonly string[]): unknown[] =>
+      names.map((name) => ({
+        name,
+        isPaused: () => (state.isHung ? new Promise<never>(() => {}) : Promise.resolve(false)),
+        getActiveCount: () => (state.isHung ? new Promise<never>(() => {}) : Promise.resolve(2)),
+      })),
+  }
+  return state
+})
 
 vi.mock('@/services/queue.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/queue.service')>()
   return {
     ...actual,
-    getAllQueues: () =>
-      ['email', 'notification'].map((name) => ({
-        name,
-        isPaused: () => (queues.isHung ? new Promise<never>(() => {}) : Promise.resolve(false)),
-        getActiveCount: () => (queues.isHung ? new Promise<never>(() => {}) : Promise.resolve(2)),
-      })),
+    getAllQueues: () => queues.fakes(['email', 'auth-email', 'notification']),
+    getPausableQueues: () => queues.fakes(['email', 'notification']),
   }
 })
 
@@ -205,6 +215,8 @@ describe('getQueuePauseStates with a Redis that stalls', () => {
       // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
       { name: 'email', paused: null, active: null },
       // eslint-disable-next-line unicorn/no-null -- as above
+      { name: 'auth-email', paused: null, active: null },
+      // eslint-disable-next-line unicorn/no-null -- as above
       { name: 'notification', paused: null, active: null },
     ])
     expect(warn).toHaveBeenCalledTimes(1)
@@ -216,6 +228,7 @@ describe('getQueuePauseStates with a Redis that stalls', () => {
     queues.isHung = false
     await expect(getQueuePauseStates()).resolves.toEqual([
       { name: 'email', paused: false, active: 2 },
+      { name: 'auth-email', paused: false, active: 2 },
       { name: 'notification', paused: false, active: 2 },
     ])
     expect(vi.getTimerCount()).toBe(0)

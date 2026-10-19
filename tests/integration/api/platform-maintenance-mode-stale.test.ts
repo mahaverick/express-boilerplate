@@ -13,7 +13,7 @@ import {
   getMaintenanceMode,
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
-import { closeQueue, getAllQueues } from '@/services/queue.service'
+import { closeQueue, getAllQueues, getPausableQueues } from '@/services/queue.service'
 import type { PlatformMaintenanceModeView } from '@/types/maintenance-mode'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode } from '../../helpers/maintenance-mode'
@@ -78,7 +78,7 @@ describe('a change that waits for its notices', () => {
     const response = await pending
 
     expect(response.status).toBe(200)
-    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
     expect(flags).toEqual([false, false, false, false])
   })
 
@@ -114,7 +114,7 @@ describe('a change that waits for its notices', () => {
     const response = await pending
 
     expect(response.status).toBe(200)
-    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
     expect(flags).toEqual([true, true, true, true])
   })
 
@@ -135,7 +135,7 @@ describe('a change that waits for its notices', () => {
 
     expect(response.status).toBe(200)
     expect(getMaintenanceMode().version).toBeLessThan(version + 1)
-    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
     expect(flags).toEqual([true, true, true, true])
   })
 

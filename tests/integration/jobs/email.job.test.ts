@@ -7,11 +7,11 @@
 import { randomUUID } from 'node:crypto'
 import { Queue } from 'bullmq'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
-import { addEmailJob } from '@/jobs/email.job'
+import { addEmailJob, emailQueueFor } from '@/jobs/email.job'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { sql } from '@/services/database.service'
 import type { MailMessage } from '@/services/mailer.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const messages = new EmailMessageRepository()
@@ -25,6 +25,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await closeQueue()
 })
 
@@ -109,7 +110,16 @@ describe('addEmailJob', () => {
   it("builds a token-free template's Message-ID on the general sender's domain", async () => {
     const to = uniqueRecipient()
     const job = await addEmailJob(
-      { to, templateKey: 'password_changed', variables: { firstName: 'Ada', appName: 'Test' } },
+      {
+        to,
+        templateKey: 'onboarding_reminder',
+        variables: {
+          tenantName: 'Acme',
+          appName: 'Test',
+          nextStep: 'Invite a teammate',
+          overviewLink: 'https://example.test/tenants/acme',
+        },
+      },
       'user-1'
     )
     const row = await rowFor(job.data.messageId)
@@ -177,7 +187,11 @@ describe('addEmailJob', () => {
       }
     )
 
-    const jobs = await getEmailQueue().getJobs(['waiting', 'prioritized', 'delayed'])
+    const jobs = await emailQueueFor(message.templateKey).getJobs([
+      'waiting',
+      'prioritized',
+      'delayed',
+    ])
     expect(jobs.some((job) => (job.data as { to?: string }).to === to)).toBe(false)
   })
 })

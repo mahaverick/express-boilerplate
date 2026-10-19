@@ -17,7 +17,7 @@ import { onboardingStepByKey } from '@/constants/onboarding.constants'
 import type { EmailJobData } from '@/jobs/email.job'
 import { PlatformOnboardingRepository } from '@/repositories/platform-onboarding.repository'
 import { sql, type DbTransaction } from '@/services/database.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -170,6 +170,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await closeQueue()
 })
 
@@ -336,7 +337,7 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
           tenantName: 'Acme Rockets',
           appName: getEnv().APP_NAME,
           nextStep: onboardingStepByKey('configure_settings')?.title,
-          overviewLink: `${getEnv().WEB_URL.replace(/\/$/, '')}/tenants/${tenant.slug}`,
+          overviewLink: `${getEnv().WEB_URL.replace(/\/$/, '')}/tenants/${tenant.slug}?utm_source=email&utm_medium=email&utm_campaign=onboarding_reminder&utm_content=primary_button`,
         },
       })
     }

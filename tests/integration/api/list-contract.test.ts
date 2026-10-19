@@ -914,7 +914,7 @@ describeListContract({
     const readAt = new Date(now).toISOString()
     const rows = Array.from({ length: count }, (_unused, index) => ({
       user_id: recipient.id,
-      type: 'password_changed',
+      type: 'tenant_invitation',
       title: `${tag} title ${pad(index)}`,
       body: index === 2 ? `${tag} body with a needle` : `${tag} body`,
       read_at: index < 2 ? readAt : NONE,

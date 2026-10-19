@@ -11,12 +11,18 @@
  * so no address is a Redis key name.
  */
 import { getEnv } from '@/configs/env.config'
+import {
+  dailyRecipientKey,
+  incrementDailyCount,
+  spendDailyRecipientBudget,
+  type RecipientBudget,
+} from '@/services/daily-recipient-budget.service'
 import { logger } from '@/services/logger.service'
-import { withRedisDeadline } from '@/services/redis-deadline.service'
-import { getRedis, redisKey } from '@/services/redis.service'
-import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
-const WINDOW_MS = 24 * 60 * 60 * 1000
+/**
+ * The key segment the address's count lives under.
+ */
+const SCOPE = 'invitation-recipient'
 
 /**
  * Most of one address's daily invitation budget a single tenant may spend.
@@ -28,46 +34,14 @@ const WINDOW_MS = 24 * 60 * 60 * 1000
 export const INVITATION_RECIPIENT_TENANT_SHARE = 3
 
 /**
- * The verdict on one invitation send: `spent` when the mail may go (it fit
- * the budget, or Redis did not answer), `exhausted` when the tenant's share
- * or the address's ceiling is used up.
- */
-export type InvitationRecipientBudget = 'spent' | 'exhausted'
-
-/**
- * The connected Redis client `getRedis` resolves to.
- */
-type RedisClient = Awaited<ReturnType<typeof getRedis>>
-
-/**
- * The Redis key one address's count across every tenant lives under.
- * @param email - The invited address, in any case.
- * @returns The key.
- */
-function recipientKey(email: string): string {
-  return redisKey('rl', 'invitation-recipient', hashRateLimitIdentity(email.trim().toLowerCase()))
-}
-
-/**
- * Increment a count whose fixed 24-hour window starts at its first
- * increment: one `MULTI` runs `INCR` and `PEXPIRE … NX`.
- * @param redis - The client.
- * @param key - The count's key.
- * @returns The count after this increment.
- */
-async function incrementInWindow(redis: RedisClient, key: string): Promise<number> {
-  const [incremented] = await redis.multi().incr(key).pExpire(key, WINDOW_MS, 'NX').exec()
-  return Number(incremented)
-}
-
-/**
  * Count one invitation send to `email` from `tenantId` and say whether it
- * fits the budget. The tenant's share is counted first; a send past it is
- * refused without touching the address's count, so one tenant cannot spend
- * the other tenants' room. A refused send still counts against whichever
- * count refused it, and one the address's ceiling refuses has also spent one
- * of the tenant's share. A Redis failure returns `spent`, logged at `warn`:
- * the ceiling fails open, as the limiters do.
+ * fits the budget. The tenant's share is counted first, under the address's
+ * key suffixed with the tenant; a send past it is refused without touching
+ * the address's count, so one tenant cannot spend the other tenants' room. A
+ * refused send still counts against whichever count refused it, and one the
+ * address's ceiling refuses has also spent one of the tenant's share. A
+ * Redis failure returns `spent`, logged at `warn`: the ceiling fails open, as
+ * the limiters do.
  * @param email - The invited address, in any case.
  * @param tenantId - The tenant the invitation belongs to.
  * @returns `spent` when the mail may go, `exhausted` when the tenant or the address has had its share.
@@ -75,19 +49,14 @@ async function incrementInWindow(redis: RedisClient, key: string): Promise<numbe
 export async function spendInvitationRecipientBudget(
   email: string,
   tenantId: string
-): Promise<InvitationRecipientBudget> {
-  const key = recipientKey(email)
+): Promise<RecipientBudget> {
   try {
-    const tenantCount = await withRedisDeadline(
-      async () => incrementInWindow(await getRedis(), `${key}:${tenantId}`),
+    const tenantCount = await incrementDailyCount(
+      `${dailyRecipientKey(SCOPE, email)}:${tenantId}`,
       'invitation recipient budget'
     )
     if (tenantCount > INVITATION_RECIPIENT_TENANT_SHARE) return 'exhausted'
-    const count = await withRedisDeadline(
-      async () => incrementInWindow(await getRedis(), key),
-      'invitation recipient budget'
-    )
-    return count <= getEnv().INVITATION_RECIPIENT_DAILY_LIMIT ? 'spent' : 'exhausted'
+    return await spendDailyRecipientBudget(SCOPE, email, getEnv().INVITATION_RECIPIENT_DAILY_LIMIT)
   } catch (error) {
     logger.warn('Invitation recipient budget unavailable; allowing the invitation', { error })
     return 'spent'

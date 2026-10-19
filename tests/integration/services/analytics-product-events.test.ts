@@ -1,9 +1,8 @@
 /**
  * @file Every product event's emit site, through the real services and the
  * subscribers createApp() registers, against the real per-worker Postgres:
- * sign-up (inside the deferred register returns, created path only),
- * password and Google sign-in (a first Google sign-in is also a sign-up),
- * sign-out (once per session), password change and reset, email
+ * sign-up and sign-in by an emailed link (a first link sign-in is also a
+ * sign-up), Google sign-in (likewise), sign-out (once per session), email
  * verification (once), and the email webhook's `email_*` events (once per
  * stored provider event). Over HTTP, the row carries the browser session
  * the request named. Analytics is off under `.env.test`, so
@@ -13,19 +12,23 @@ import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
-import type { User } from '@/database/models/user.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
-import { changePassword, login, register, resetPassword } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
 import { resetDomainEventSubscribers } from '@/services/domain-events.service'
 import { getEmailWebhookAdapter, processEmailWebhook } from '@/services/email-webhook.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { registerOnboardingSubscribers } from '@/services/onboarding.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { issueToken, revokeRefreshToken } from '@/services/session.service'
-import { verifyEmail } from '@/services/verification.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
+import { revokeRefreshToken } from '@/services/session.service'
+import { verifySignInLink } from '@/services/sign-in-link.service'
 import { createInvitationRow } from '../../helpers/analytics-invitation'
 import { clearOutbox, outboxRows, outboxRowsOf } from '../../helpers/analytics-outbox'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -34,9 +37,9 @@ import {
   createTrackedStaff,
   createTrackedUser,
   deleteTrackedUsers,
-  TEST_PASSWORD,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { issueTestLink } from '../../helpers/sign-in'
 
 const analytics = vi.hoisted(() => ({ isEnabled: true }))
 
@@ -48,7 +51,6 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 const PREFIX = `analytics-${randomUUID()}-`
-const NEW_PASSWORD = 'a brand new passphrase 42'
 // eslint-disable-next-line unicorn/no-null -- a non-staff user's platform role, as sent
 const NONE = null
 const createdTenantIds: string[] = []
@@ -86,6 +88,7 @@ afterAll(async () => {
   registerOnboardingSubscribers()
   registerAnalyticsSubscribers()
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -100,10 +103,13 @@ function freshEmail(): string {
 }
 
 /**
- * Creates a verified user with a password, tracked for cleanup.
+ * Signs `email` in by a fresh sign-in link, through the service, creating the
+ * account on this click when the address has none.
+ * @param email - The address.
+ * @returns The sign-in's session, as `verifySignInLink` answers it.
  */
-async function passwordUser(): Promise<User> {
-  return createTrackedUser({ hasPassword: true })
+async function linkSignIn(email: string): Promise<Awaited<ReturnType<typeof verifySignInLink>>> {
+  return verifySignInLink(await issueTestLink(email))
 }
 
 /**
@@ -130,14 +136,11 @@ function googleProfile(email: string): GoogleProfile {
   }
 }
 
-describe('user_signed_up from register', () => {
-  it('is written by the deferred work, after the reply, on the created path only', async () => {
+describe('user_signed_up from a sign-in link', () => {
+  it('is written by the click that creates the account, with the server-owned person properties', async () => {
     const email = freshEmail()
 
-    const followUp = await register({ email, password: TEST_PASSWORD, app: 'web' })
-    expect(await outboxRows()).toEqual([])
-
-    await followUp()
+    await linkSignIn(email)
 
     const user = await userRepository.findByEmail(email)
     const rows = await outboxRowsOf('user_signed_up')
@@ -147,13 +150,13 @@ describe('user_signed_up from register', () => {
       properties: {
         source: 'product',
         access: 'member',
-        method: 'password',
+        method: 'link',
         via_invitation: false,
         $set: {
           is_staff: false,
           platform_role: NONE,
-          email_verified: false,
-          auth_provider: 'password',
+          email_verified: true,
+          auth_provider: 'link',
         },
         $set_once: { created_at: user?.createdAt.toISOString() },
       },
@@ -162,11 +165,10 @@ describe('user_signed_up from register', () => {
     expect(JSON.stringify(rows)).not.toContain(email)
   })
 
-  it('writes nothing for an address already taken', async () => {
-    const existing = await passwordUser()
+  it('writes nothing for an address that already has an account', async () => {
+    const existing = await createTrackedUser()
 
-    const followUp = await register({ email: existing.email, password: TEST_PASSWORD, app: 'web' })
-    await followUp()
+    await linkSignIn(existing.email)
 
     expect(await outboxRowsOf('user_signed_up')).toEqual([])
   })
@@ -182,8 +184,7 @@ describe('user_signed_up from register', () => {
     const email = freshEmail()
     await createInvitationRow(tenant.id, email.toUpperCase(), owner.id)
 
-    const followUp = await register({ email, password: TEST_PASSWORD, app: 'web' })
-    await followUp()
+    await linkSignIn(email)
 
     const [row] = await outboxRowsOf('user_signed_up')
     expect(row?.properties).toMatchObject({ via_invitation: true })
@@ -191,22 +192,22 @@ describe('user_signed_up from register', () => {
 })
 
 describe('user_signed_in', () => {
-  it('is written by a password login with the server-owned person properties', async () => {
-    const { user } = await createTrackedStaff('admin', { hasPassword: true })
+  it('is written by a link sign-in with the server-owned person properties', async () => {
+    const { user } = await createTrackedStaff('admin')
 
-    await login({ email: user.email, password: TEST_PASSWORD })
+    await linkSignIn(user.email)
 
     expect(await outboxRows()).toEqual([
       expect.objectContaining({
         event: 'user_signed_in',
         distinctId: user.id,
         properties: expect.objectContaining({
-          method: 'password',
+          method: 'link',
           $set: {
             is_staff: true,
             platform_role: 'admin',
             email_verified: true,
-            auth_provider: 'password',
+            auth_provider: 'link',
           },
         }) as unknown,
       }),
@@ -214,18 +215,18 @@ describe('user_signed_in', () => {
   })
 
   it('carries the browser session the request named in X-POSTHOG-SESSION-ID, and drops a malformed one', async () => {
-    const user = await passwordUser()
+    const user = await createTrackedUser()
     const app = createApp()
     const sessionId = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
 
     const named = await request(app)
-      .post('/api/v1/auth/login')
+      .post('/api/v1/auth/link/verify')
       .set('X-POSTHOG-SESSION-ID', sessionId)
-      .send({ email: user.email, password: TEST_PASSWORD })
+      .send({ token: await issueTestLink(user.email) })
     const malformed = await request(app)
-      .post('/api/v1/auth/login')
+      .post('/api/v1/auth/link/verify')
       .set('X-POSTHOG-SESSION-ID', 'not-a-session')
-      .send({ email: user.email, password: TEST_PASSWORD })
+      .send({ token: await issueTestLink(user.email) })
 
     expect([named.status, malformed.status]).toEqual([200, 200])
     const rows = await outboxRowsOf('user_signed_in')
@@ -234,10 +235,8 @@ describe('user_signed_in', () => {
     expect(rows[1]?.properties).not.toHaveProperty('$session_id')
   })
 
-  it('is not written by a failed login', async () => {
-    const user = await passwordUser()
-
-    await expect(login({ email: user.email, password: 'wrong password here' })).rejects.toThrow()
+  it('is not written by a link that signs nobody in', async () => {
+    await expect(verifySignInLink(`not-a-link-${randomUUID()}`)).rejects.toThrow()
 
     expect(await outboxRows()).toEqual([])
   })
@@ -246,7 +245,7 @@ describe('user_signed_in', () => {
     const email = freshEmail()
     const profile = googleProfile(email)
 
-    await completeGoogleSignIn(profile)
+    await completeGoogleSignIn(profile, 'web')
     const first = await outboxRows()
     expect(first.map((row) => row.event)).toEqual(['user_signed_up', 'user_signed_in'])
     expect(first[0]?.properties).toMatchObject({
@@ -256,7 +255,7 @@ describe('user_signed_in', () => {
     })
 
     await clearOutbox()
-    await completeGoogleSignIn(profile)
+    await completeGoogleSignIn(profile, 'web')
     const second = await outboxRows()
     expect(second.map((row) => row.event)).toEqual(['user_signed_in'])
     expect(second[0]?.properties).toMatchObject({ method: 'google' })
@@ -265,8 +264,8 @@ describe('user_signed_in', () => {
 
 describe('user_signed_out', () => {
   it('is written once per session, however often its cookie is presented', async () => {
-    const user = await passwordUser()
-    const { refreshToken } = await login({ email: user.email, password: TEST_PASSWORD })
+    const user = await createTrackedUser()
+    const { refreshToken } = await linkSignIn(user.email)
     await clearOutbox()
 
     await revokeRefreshToken(refreshToken.raw)
@@ -279,8 +278,8 @@ describe('user_signed_out', () => {
   })
 
   it('is written once when two sign-outs race on one cookie', async () => {
-    const user = await passwordUser()
-    const { refreshToken } = await login({ email: user.email, password: TEST_PASSWORD })
+    const user = await createTrackedUser()
+    const { refreshToken } = await linkSignIn(user.email)
     await clearOutbox()
 
     await Promise.all([
@@ -293,8 +292,8 @@ describe('user_signed_out', () => {
   })
 
   it('is not written for a session that had already lapsed', async () => {
-    const user = await passwordUser()
-    const { refreshToken } = await login({ email: user.email, password: TEST_PASSWORD })
+    const user = await createTrackedUser()
+    const { refreshToken } = await linkSignIn(user.email)
     await sql`update user_tokens set expires_at = now() - interval '1 hour' where user_id = ${user.id}`
     await clearOutbox()
 
@@ -304,63 +303,22 @@ describe('user_signed_out', () => {
   })
 })
 
-describe('password events', () => {
-  it('password_changed is written by a successful change only', async () => {
-    const user = await passwordUser()
-
-    await expect(
-      changePassword(user.id, undefined, {
-        currentPassword: 'not the password',
-        newPassword: NEW_PASSWORD,
-      })
-    ).rejects.toThrow()
-    expect(await outboxRows()).toEqual([])
-
-    await changePassword(user.id, undefined, {
-      currentPassword: TEST_PASSWORD,
-      newPassword: NEW_PASSWORD,
-    })
-
-    expect(await outboxRows()).toEqual([
-      expect.objectContaining({ event: 'password_changed', distinctId: user.id }),
-    ])
-  })
-
-  it('password_reset_completed is written by a reset', async () => {
-    const user = await passwordUser()
-    const issued = await issueToken(user.id, 'password_reset', 60_000)
-
-    await resetPassword({ token: issued.raw, password: NEW_PASSWORD })
-
-    expect(await outboxRows()).toEqual([
-      expect.objectContaining({ event: 'password_reset_completed', distinctId: user.id }),
-    ])
-  })
-})
-
 describe('email_verified', () => {
   it('is written when a link verifies an unverified account, and not again', async () => {
-    const user = await createTrackedUser({ hasPassword: true, verified: false })
-    const first = await issueToken(user.id, 'email_verification', 60_000)
+    const user = await createTrackedUser({ verified: false })
 
-    await verifyEmail(first.raw, TEST_PASSWORD)
-    const second = await issueToken(user.id, 'email_verification', 60_000)
-    await verifyEmail(second.raw, TEST_PASSWORD)
+    await linkSignIn(user.email)
+    await linkSignIn(user.email)
 
-    expect(await outboxRows()).toEqual([
+    expect(await outboxRowsOf('email_verified')).toEqual([
       expect.objectContaining({ event: 'email_verified', distinctId: user.id }),
     ])
   })
 
-  it('is written once when two live links verify at the same moment', async () => {
-    const user = await createTrackedUser({ hasPassword: true, verified: false })
-    const first = await issueToken(user.id, 'email_verification', 60_000)
-    const second = await issueToken(user.id, 'email_verification', 60_000)
+  it('is written once when two claims verify the account at the same moment', async () => {
+    const user = await createTrackedUser({ verified: false })
 
-    await Promise.all([
-      verifyEmail(first.raw, TEST_PASSWORD),
-      verifyEmail(second.raw, TEST_PASSWORD),
-    ])
+    await Promise.all([claimNeverVerifiedAccount(user.id), claimNeverVerifiedAccount(user.id)])
 
     expect(await outboxRowsOf('email_verified')).toHaveLength(1)
   })
@@ -414,7 +372,7 @@ describe('email_* from the email webhook', () => {
 
   it('sends an event for a message with no user as a system event', async () => {
     if (!adapter) throw new Error('setup: the fake adapter is served on APP_ENV local')
-    const message = await insertTestMessage(PREFIX, { templateKey: 'registration_attempt' })
+    const message = await insertTestMessage(PREFIX, { templateKey: 'step_up_link' })
     const { body, headers } = signedFakeBody({ type: 'opened', messageId: message.header })
 
     await processEmailWebhook(adapter, body, headers)
@@ -432,11 +390,10 @@ describe('email_* from the email webhook', () => {
 describe('while analytics is disabled', () => {
   it('no emit site writes a row', async () => {
     analytics.isEnabled = false
-    const user = await passwordUser()
+    const user = await createTrackedUser()
 
-    await login({ email: user.email, password: TEST_PASSWORD })
-    const followUp = await register({ email: freshEmail(), password: TEST_PASSWORD, app: 'web' })
-    await followUp()
+    await linkSignIn(user.email)
+    await linkSignIn(freshEmail())
 
     expect(await outboxRows()).toEqual([])
   })

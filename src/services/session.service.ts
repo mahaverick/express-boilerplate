@@ -10,7 +10,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE, REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
-import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
+import { refreshTokenOf, type RefreshUserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -97,29 +97,15 @@ export interface IssuedRefreshToken {
   expiresAt: Date
   /**
    * When the session last authenticated, as stored on the token's row; the
-   * caller signs it into the access token. Null only for a session that
-   * started before migration 0018.
+   * caller signs it into the access token. Null for a session that started
+   * before migration 0018, or one an invitation link started.
    */
   authenticatedAt: Date | null
 }
 
 /**
- * A freshly issued token for a non-session purpose (email verification,
- * password reset): the raw value to hand to the caller (an email link, in
- * practice), and everything about it that isn't recoverable from the raw
- * value alone. No `sessionId`, which means nothing outside `'refresh'`, and
- * `purpose` excludes `'refresh'` (see `issueToken`).
- */
-export interface IssuedToken {
-  raw: string
-  userId: string
-  purpose: Exclude<TokenPurpose, 'refresh'>
-  expiresAt: Date
-}
-
-/**
  * SHA-256 hash a raw token, hex-encoded. Deterministic, so a token is found
- * by its hash; that rules out bcrypt (see user-token.model.ts).
+ * by its hash; that rules out a salted hash (see user-token.model.ts).
  * @param raw - The raw token, of any purpose.
  * @returns The hex-encoded digest, as stored in `tokenHash`.
  */
@@ -136,23 +122,22 @@ function generateRawToken(): string {
 }
 
 /**
- * Generate, hash, and persist one token row: the single insert every issuing
- * path in this module goes through. Session fields apply to `'refresh'` only.
+ * Generate, hash, and persist one refresh row: the single insert every
+ * issuing path in this module goes through. Emailed links have their own
+ * insert (link-token.service.ts).
  * @param userId - The user the token belongs to.
- * @param purpose - Which of `TokenPurpose`'s three things this row is.
  * @param ttlMs - How long the token is valid for, in milliseconds.
- * @param session - For `'refresh'`: the rotation-chain id, when the chain began, and when it last authenticated. Omitted for every other purpose, leaving all three columns NULL (none has a DB default).
+ * @param session - The rotation-chain id, when the chain began, and when it last authenticated.
  * @param session.sessionId - The rotation-chain id.
  * @param session.sessionStartedAt - When that chain began.
- * @param session.authenticatedAt - When it last authenticated; null for a chain from before migration 0018.
+ * @param session.authenticatedAt - When it last authenticated; null for a chain from before migration 0018 or one an invitation link started.
  * @param executor - Where to insert. Defaults to the pool.
  * @returns The inserted row's id, the raw token to hand back, and its expiry.
  */
-async function createTokenRow(
+async function createRefreshRow(
   userId: string,
-  purpose: TokenPurpose,
   ttlMs: number,
-  session: { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null } | undefined,
+  session: { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null },
   executor: DbExecutor = db
 ): Promise<{ id: string; raw: string; expiresAt: Date }> {
   const raw = generateRawToken()
@@ -161,10 +146,10 @@ async function createTokenRow(
   const row = await userTokenRepository.create(
     {
       userId,
-      purpose,
-      sessionId: session?.sessionId,
-      sessionStartedAt: session?.sessionStartedAt,
-      authenticatedAt: session?.authenticatedAt,
+      purpose: 'refresh',
+      sessionId: session.sessionId,
+      sessionStartedAt: session.sessionStartedAt,
+      authenticatedAt: session.authenticatedAt,
       tokenHash: hashToken(raw),
       expiresAt,
     },
@@ -248,72 +233,36 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
 /**
  * Issue a new refresh token for a session. This starts the session's absolute
  * clock (`sessionStartedAt`). The session's authentication time starts at the
- * same moment. `rotateRefreshToken` copies both forward instead of calling
- * this. Calling it again for an existing sessionId would restart both clocks;
- * login always mints a fresh sessionId.
+ * same moment, unless `options.recentAuth` is false. `rotateRefreshToken`
+ * copies both forward instead of calling this. Calling it again for an
+ * existing sessionId would restart both clocks; login always mints a fresh
+ * sessionId.
  * @param userId - The user the token belongs to.
  * @param sessionId - The session (rotation-chain) id this token starts or continues.
  * @param executor - Where to insert the token row: a caller's transaction, or the pool (default).
+ * @param options - How the session counts toward step-up.
+ * @param options.recentAuth - False stores `authenticated_at` as NULL, so every step-up route asks again (`requireRecentAuth`) until the user confirms it's them. Defaults to true.
  * @returns The raw token to hand to the client, and its metadata.
  */
 export async function issueRefreshToken(
   userId: string,
   sessionId: string,
-  executor: DbExecutor = db
+  executor: DbExecutor = db,
+  options: { recentAuth?: boolean } = {}
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
   const sessionStartedAt = new Date()
+  // eslint-disable-next-line unicorn/no-null -- the stored column is null for a session that is not a recent sign-in
+  const authenticatedAt = options.recentAuth === false ? null : sessionStartedAt
 
-  const { raw, expiresAt } = await createTokenRow(
+  const { raw, expiresAt } = await createRefreshRow(
     userId,
-    'refresh',
     requireDurationMs(env.REFRESH_TOKEN_TTL),
-    { sessionId, sessionStartedAt, authenticatedAt: sessionStartedAt },
+    { sessionId, sessionStartedAt, authenticatedAt },
     executor
   )
 
-  return { raw, userId, sessionId, expiresAt, authenticatedAt: sessionStartedAt }
-}
-
-/**
- * Issue a new token for a purpose that has no session: email verification or
- * password reset. `'refresh'` is excluded at the type level: minted here it
- * would have no session id, so `revokeAllForSession` could never find it and
- * reuse detection could never contain it. `issueRefreshToken` is its one entry point.
- * @param userId - The user the token belongs to.
- * @param purpose - Which non-session purpose to issue — `'email_verification'` or `'password_reset'`.
- * @param ttlMs - How long the token is valid for, in milliseconds.
- * @returns The raw token to hand to the caller, and its metadata.
- */
-export async function issueToken(
-  userId: string,
-  purpose: Exclude<TokenPurpose, 'refresh'>,
-  ttlMs: number
-): Promise<IssuedToken> {
-  const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined)
-  return { raw, userId, purpose, expiresAt }
-}
-
-/**
- * Claim a non-session token — email verification or password reset — once,
- * atomically, and only while it is still live.
- *
- * `claimOnce` (user-token.repository.ts) leaves expiry to its caller, so it is
- * checked here; without it a mailed link would be redeemable forever. The row
- * is claimed before expiry is judged, so presenting an expired token still
- * spends it: one presentation is one attempt.
- * @param raw - The raw token presented by the caller.
- * @param purpose - The purpose it must have been issued for.
- * @returns The claimed row, or undefined when the token is unknown, of another purpose, already claimed, or expired.
- */
-export async function claimToken(
-  raw: string,
-  purpose: Exclude<TokenPurpose, 'refresh'>
-): Promise<UserToken | undefined> {
-  const claimed = await userTokenRepository.claimOnce(hashToken(raw), purpose)
-  if (!claimed) return undefined
-  if (claimed.expiresAt.getTime() <= Date.now()) return undefined
-  return claimed
+  return { raw, userId, sessionId, expiresAt, authenticatedAt }
 }
 
 /**
@@ -346,28 +295,25 @@ type RotationOutcome = RotationIssued | RotationRefused
  * its rotation gets a sibling (an accepted trade-off); later reuse revokes
  * the session.
  *
- * A kill that races this check (logout, reuse, the locked pass of a password
- * write or an account claim) takes the user row FOR NO KEY UPDATE, which
- * waits for this rotation's FOR SHARE, so it revokes the sibling this check
- * lets through. `revokeAllSessions`, the first pass of a reset or a claim,
- * takes the same lock in its own transaction, so it revokes the sibling too.
+ * A kill that races this check (logout, reuse, or either pass of an account
+ * claim) takes the user row FOR NO KEY UPDATE, which waits for this
+ * rotation's FOR SHARE, so it revokes the sibling this check lets through.
  *
  * Only a kill marker at or after the presented row's consumption refuses
  * grace (`isSessionKilled`): an older one is a revoke that spared this chain,
- * such as a sibling a password change or sign-out of other sessions ended,
+ * such as a sibling a sign-out of other sessions ended,
  * and the session keeps its grace window.
  * @param existing - The already-claimed row the presented token hashes to.
  * @param tx - The rotation's transaction.
  * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
  */
 async function findGraceSession(
-  existing: UserToken,
+  existing: RefreshUserToken,
   tx: DbTransaction
 ): Promise<
   { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null } | undefined
 > {
-  const { purpose, sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
-  if (purpose !== 'refresh' || sessionId === null || sessionStartedAt === null) return undefined
+  const { sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
   // consumedAt is null for a row an explicit revoke killed, and set for one a rotation spent.
   if (consumedAt === null) return undefined
   // Judged by Postgres's own clock, not Date.now() — see wasConsumedWithin.
@@ -406,9 +352,8 @@ async function continueSession(
     return { ok: false, message: 'Refresh token expired', killSessionId: sessionId }
   }
 
-  const { id, raw, expiresAt } = await createTokenRow(
+  const { id, raw, expiresAt } = await createRefreshRow(
     userId,
-    'refresh',
     requireDurationMs(env.REFRESH_TOKEN_TTL),
     { sessionId, sessionStartedAt, authenticatedAt },
     tx
@@ -421,7 +366,7 @@ async function continueSession(
  * not thrown, so the transaction still commits the claim. A session to kill
  * is revoked after commit, under FOR NO KEY UPDATE, never in this FOR SHARE
  * transaction: upgrading here would deadlock two concurrent reuses. The
- * FOR SHARE lock waits for a password write holding the row; a
+ * FOR SHARE lock waits for an account claim holding the row; a
  * soft-deleted user has no row to lock, and refresh() (auth.service.ts)
  * refuses that user afterwards.
  * @param userId - The presented token's user.
@@ -435,11 +380,11 @@ async function rotateUnderUserLock(
   tx: DbTransaction
 ): Promise<RotationOutcome> {
   await userRepository.lockById(userId, 'share', tx)
-  const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh', tx)
+  const spent = await userTokenRepository.claimOnce(tokenHash, 'refresh', tx)
 
-  if (!claimed) {
-    // Never issued as 'refresh', or already revoked (the reuse signal); only a 'refresh' row has a session.
-    const existing = await userTokenRepository.findByHash(tokenHash, {}, tx)
+  if (!spent) {
+    // Never issued as 'refresh', or already revoked (the reuse signal); only a 'refresh' row is found, so a link never kills a session.
+    const existing = await userTokenRepository.findRefreshByHash(tokenHash, tx)
     const graceSession = existing ? await findGraceSession(existing, tx) : undefined
     if (existing && graceSession) {
       return continueSession(
@@ -450,17 +395,16 @@ async function rotateUnderUserLock(
         tx
       )
     }
-    if (existing && existing.sessionId !== null) {
+    if (existing) {
       return { ok: false, message: 'Invalid refresh token', killSessionId: existing.sessionId }
     }
     return { ok: false, message: 'Invalid refresh token' }
   }
 
-  // issueRefreshToken always fills both for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
+  // issueRefreshToken always fills these for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
+  const claimed = refreshTokenOf(spent)
+  if (!claimed) return { ok: false, message: 'Invalid refresh token' }
   const { sessionId, sessionStartedAt } = claimed
-  if (sessionId === null || sessionStartedAt === null) {
-    return { ok: false, message: 'Invalid refresh token' }
-  }
 
   if (claimed.expiresAt.getTime() < Date.now()) {
     // Already revoked by the claim; expiry is not a reuse signal, so the session is untouched.
@@ -495,8 +439,7 @@ async function rotateUnderUserLock(
  * that holds the user row FOR SHARE, so no locked revoke runs in between. A
  * session killed by reuse or by its absolute lifetime is revoked after that
  * commit, under the user row lock, then denied. Logout, those kills, the
- * Google account claim and password writes lock the row FOR NO KEY UPDATE
- * before their revoke (`revokeAllSessions` too, in its own transaction), so
+ * account claims lock the row FOR NO KEY UPDATE before their revoke, so
  * a rotation in a session they revoke either commits first and its new token
  * is revoked, or waits and finds the presented token revoked.
  * @param raw - The raw refresh token presented by the client.
@@ -506,7 +449,7 @@ async function rotateUnderUserLock(
 export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToken> {
   const tokenHash = hashToken(raw)
   // Read only to learn whose row to lock; everything that decides runs under the lock.
-  const presented = await userTokenRepository.findByHash(tokenHash)
+  const presented = await userTokenRepository.findRefreshByHash(tokenHash)
   if (!presented) throw new HttpError('Invalid refresh token', 401)
 
   const outcome = await withTransaction((tx) =>
@@ -525,8 +468,8 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
  * logout's primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
- * issued for another purpose (`findByHash` is purpose-agnostic, but a reset
- * or verification token has no session to revoke), and returns nothing that
+ * issued for another purpose (`findRefreshByHash` finds only a refresh row,
+ * so an emailed link signs nothing out), and returns nothing that
  * tells those apart from a live one: logout must not be a way to test
  * whether a token string is live. Its timing is not uniform: a matched token
  * opens a locked transaction and a miss returns at once.
@@ -545,8 +488,8 @@ export async function revokeRefreshToken(
   raw: string,
   options: { emitSignedOut?: boolean } = {}
 ): Promise<void> {
-  const existing = await userTokenRepository.findByHash(hashToken(raw))
-  if (!existing || existing.sessionId === null) return
+  const existing = await userTokenRepository.findRefreshByHash(hashToken(raw))
+  if (!existing) return
   const revoked = await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
   const isLive = existing.expiresAt.getTime() > Date.now() && existing.revokedAt === null
   if (isLive && revoked > 0 && options.emitSignedOut !== false) {
@@ -625,8 +568,27 @@ export async function revokeSessionRows(
 }
 
 /**
- * Deny the sessions a committed revocation revoked: a password change or
- * reset, a Google account claim, a sign-out of other sessions, or a staff
+ * Revoke the live sign-in links and invitation confirm links mailed to a
+ * user's address, in the caller's transaction. A `sign_in_link` or
+ * `invitation_link` row names the address, not the user, so the user-wide
+ * revocations (`revokeSessionRows`) never reach it; every path that ends a
+ * user's sessions to cut their access (a sign-out of the other sessions, a
+ * staff sign-out, a deactivation) calls this beside them, or a link already
+ * in the inbox would mint a new session. The caller holds the user row lock
+ * first, then these link rows: the order an invitation confirm takes.
+ * @param email - The user's address.
+ * @param tx - The revoking transaction, holding the user row lock.
+ * @returns Resolves once the links are revoked.
+ */
+export async function revokeSignInLinksOf(email: string, tx: DbTransaction): Promise<void> {
+  await userTokenRepository.revokeLiveFor({ email, intent: 'sign_in' }, tx)
+  // No invitationId: every invitation's confirm link for the address goes.
+  await userTokenRepository.revokeLiveFor({ email, intent: 'invitation' }, tx)
+}
+
+/**
+ * Deny the sessions a committed revocation revoked: an account claim, a
+ * sign-out of other sessions, or a staff
  * deactivation, sign-out or deletion. Never rejects, because the revocation
  * already stands. When Redis refuses, those sessions' access tokens stay
  * valid for up to ACCESS_TOKEN_TTL, as when the denylist fails open, and one
@@ -661,10 +623,11 @@ function absoluteLifetimeCutoff(): Date {
 
 /**
  * Sign a user out of every session but the one making the request: revoke
- * their other sessions' token rows (and any reset or verification token)
- * under the user row lock, then deny each revoked session's access tokens
- * after commit, which also ends that session's notification stream at its
- * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
+ * their other sessions' token rows (and any step-up link of theirs) and
+ * the live sign-in links mailed to their address under the user row lock,
+ * then deny each revoked session's access tokens after commit, which also
+ * ends that session's notification stream at its next heartbeat
+ * (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  *
  * When the request presented the caller's unrevoked refresh cookie, a sibling
  * chain a grace-window replay minted in the calling session is revoked too
@@ -702,6 +665,7 @@ export async function revokeOtherSessions(
       { exceptSessionId: sessionId, presentedRefreshToken },
       tx
     )
+    await revokeSignInLinksOf(locked.email, tx)
     return { revoked: revokedSessionIds, live: new Set(liveSessionIds) }
   })
   await denySessionsAfterCommit(userId, revoked)
@@ -710,31 +674,10 @@ export async function revokeOtherSessions(
 }
 
 /**
- * Revoke every unrevoked token a user holds, across every session and
- * purpose, and deny each revoked session's access tokens (best-effort, see
- * `denySession`). It runs in a transaction of its own, which commits
- * whatever its caller does next, and locks the user row FOR NO KEY UPDATE
- * first: a rotation in flight holds that row FOR SHARE, so it commits before
- * the revoke and its successor token is revoked too, and a rotation that
- * starts later finds its token revoked. Its callers (a password reset and the
- * Google account claim) still revoke again under the lock in their own
- * transaction, for a session created between the two; if that transaction
- * rolls back, every session this pass revoked stays revoked.
- * @param userId - The user whose sessions should all end.
- * @returns Resolves once every token is revoked and each revoked session is denied, best-effort.
- */
-export async function revokeAllSessions(userId: string): Promise<void> {
-  const sessionIds = await withTransaction(async (tx) => {
-    await userRepository.lockById(userId, 'no key update', tx)
-    return revokeSessionRows(userId, {}, tx)
-  })
-  await denySessionsAfterCommit(userId, sessionIds)
-}
-
-/**
- * Record that a session's user just proved their identity again, by
- * password (`POST /auth/reauthenticate`): move `authenticated_at` to the
- * current time on every row of the session (`markSessionAuthenticated`).
+ * Record that a session's user just proved their identity again, by step-up
+ * (a confirmed link or a fresh Google login, step-up.service.ts): move
+ * `authenticated_at` to the current time on every refresh row of the session
+ * (`markSessionAuthenticated`).
  * Holds the user row FOR NO KEY UPDATE, which waits for a rotation holding it
  * FOR SHARE, so that rotation's new row exists before the update and gets
  * the new time.

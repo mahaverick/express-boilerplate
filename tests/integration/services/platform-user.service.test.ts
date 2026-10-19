@@ -5,11 +5,9 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as envConfig from '@/configs/env.config'
-import type { EmailJobData } from '@/jobs/email.job'
-import type { NotificationJobData } from '@/jobs/notification.job'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
-import { getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { ACCOUNT_SETUP_TEMPLATE_KEY } from '@/templates/email/account-setup.template'
+import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedModule } from '../../helpers/mutate'
 import {
@@ -19,9 +17,18 @@ import {
 } from '../../helpers/platform-users'
 import { waitForJob } from '../../helpers/queue-jobs'
 
+/**
+ * Every address a test mailed a sign-in link to: those rows carry no user,
+ * so `afterEach` deletes them by address.
+ */
+const usedEmails: string[] = []
+
 afterEach(async () => {
   await truncateAuditLogs()
   await deleteTrackedUsers()
+  if (usedEmails.length === 0) return
+  await sql`delete from user_tokens where email = any(${usedEmails})`
+  usedEmails.length = 0
 })
 
 const failingEmailJob = {
@@ -32,6 +39,7 @@ describe('platform-user.service mail failures', () => {
   it('createUser keeps the user and answers emailSent: false when the mail cannot be queued', async () => {
     const { user: admin } = await createTrackedStaff('admin')
     const email = `mailfail-${randomUUID()}@example.test`
+    usedEmails.push(email)
 
     await withMutatedModule(
       '@/jobs/email.job',
@@ -49,42 +57,24 @@ describe('platform-user.service mail failures', () => {
     await sql`delete from users where email = ${email}`
   })
 
-  it('sendPasswordSetup answers emailSent: false and still records the attempt', async () => {
+  it('sendSignInLinkByStaff answers emailSent: false and still records the attempt', async () => {
     const { user: admin } = await createTrackedStaff('admin')
     const target = await createTrackedUser()
+    usedEmails.push(target.email)
 
     await withMutatedModule(
       '@/jobs/email.job',
       failingEmailJob,
       () => import('@/services/platform-user.service'),
-      async ({ sendPasswordSetup }) => {
-        expect(await sendPasswordSetup({ userId: admin.id }, target.id)).toEqual({
+      async ({ sendSignInLinkByStaff }) => {
+        expect(await sendSignInLinkByStaff({ userId: admin.id }, target.id)).toEqual({
           emailSent: false,
         })
       }
     )
 
     const rows = await sql`select action from audit_logs where target_id = ${target.id}`
-    expect(rows).toEqual([{ action: 'user.password_setup_sent' }])
-  })
-
-  it('resendUserVerification answers emailSent: false and still records the attempt', async () => {
-    const { user: admin } = await createTrackedStaff('admin')
-    const target = await createTrackedUser({ hasPassword: true, verified: false })
-
-    await withMutatedModule(
-      '@/jobs/notification.job',
-      { addNotificationJob: (): Promise<never> => Promise.reject(new Error('queue unavailable')) },
-      () => import('@/services/platform-user.service'),
-      async ({ resendUserVerification }) => {
-        expect(await resendUserVerification({ userId: admin.id }, target.id)).toEqual({
-          emailSent: false,
-        })
-      }
-    )
-
-    const rows = await sql`select action from audit_logs where target_id = ${target.id}`
-    expect(rows).toEqual([{ action: 'user.verification_resent' }])
+    expect(rows).toEqual([{ action: 'user.sign_in_link_sent' }])
   })
 })
 
@@ -94,56 +84,35 @@ const withApexUrl = {
 }
 
 describe('platform-user.service link origins', () => {
-  it('a staff target gets an Apex link and a customer a web link, for set-password and verification', async () => {
+  it('a staff target gets an Apex sign-in link and a customer a web one', async () => {
     const { user: owner } = await createTrackedStaff('owner')
-    const staffTarget = await createTrackedStaff('viewer', { verified: false })
-    const customer = await createTrackedUser({ verified: false })
-    const staffWithPassword = await createTrackedStaff('viewer', {
-      hasPassword: true,
-      verified: false,
-    })
-    const customerWithPassword = await createTrackedUser({ hasPassword: true, verified: false })
+    const staffTarget = await createTrackedStaff('viewer')
+    const customer = await createTrackedUser()
+    usedEmails.push(staffTarget.user.email, customer.email)
 
     await withMutatedModule(
       '@/configs/env.config',
       withApexUrl,
       () => import('@/services/platform-user.service'),
-      async ({ sendPasswordSetup, resendUserVerification }) => {
-        await sendPasswordSetup({ userId: owner.id }, staffTarget.user.id)
-        await sendPasswordSetup({ userId: owner.id }, customer.id)
-        await resendUserVerification({ userId: owner.id }, staffWithPassword.user.id)
-        await resendUserVerification({ userId: owner.id }, customerWithPassword.id)
+      async ({ sendSignInLinkByStaff }) => {
+        await sendSignInLinkByStaff({ userId: owner.id }, staffTarget.user.id)
+        await sendSignInLinkByStaff({ userId: owner.id }, customer.id)
       }
     )
 
     /**
-     * Reads the origin of the account-setup link queued for `to`, which shows the frontend it
-     * opens.
+     * Reads the origin of the sign-in link queued for `to`, which shows the frontend it opens.
      */
-    const originOfSetup = async (to: string): Promise<string> => {
+    const originOfLink = async (to: string): Promise<string> => {
       const job = await waitForJob<EmailJobData>(
-        getEmailQueue(),
-        (data) => data.to === to && data.templateKey === ACCOUNT_SETUP_TEMPLATE_KEY
+        emailQueueFor(SIGN_IN_LINK_TEMPLATE_KEY),
+        (data) => data.to === to && data.templateKey === SIGN_IN_LINK_TEMPLATE_KEY
       )
-      return new URL((job.data.variables as { setupUrl: string }).setupUrl).origin
-    }
-    /**
-     * Reads the origin of the verification link queued for `userId`, which shows the frontend
-     * it opens.
-     */
-    const originOfVerification = async (userId: string): Promise<string> => {
-      const job = await waitForJob<NotificationJobData>(
-        getNotificationQueue(),
-        (data) => data.userId === userId && data.type === 'verify_email'
-      )
-      return new URL((job.data.email?.variables as { verificationUrl: string }).verificationUrl)
-        .origin
+      return new URL((job.data.variables as { signInUrl: string }).signInUrl).origin
     }
     const webOrigin = new URL(envConfig.getEnv().WEB_URL).origin
     expect(webOrigin).not.toBe(APEX_ORIGIN)
-    expect(await originOfSetup(staffTarget.user.email)).toBe(APEX_ORIGIN)
-    expect(await originOfSetup(customer.email)).toBe(webOrigin)
-    expect(await originOfVerification(staffWithPassword.user.id)).toBe(APEX_ORIGIN)
-    expect(await originOfVerification(customerWithPassword.id)).toBe(webOrigin)
+    expect(await originOfLink(staffTarget.user.email)).toBe(APEX_ORIGIN)
+    expect(await originOfLink(customer.email)).toBe(webOrigin)
   })
 })

@@ -68,6 +68,7 @@ import type {
 } from '@/types/platform-onboarding'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
+import { withEmailUtm } from '@/utilities/utm.utilities'
 import {
   STEP_NOT_FOUND_CODE,
   STEP_NOT_FOUND_MESSAGE,
@@ -584,14 +585,18 @@ const REMINDED_RECENTLY_CODE = 'reminded_recently'
 
 /**
  * The customer app's overview page of a tenant: the reminder's one link.
- * It carries no token.
+ * It carries no token, and UTM parameters for the reminder's button.
  * @param slug - The tenant's slug.
  * @param webUrl - The customer app's origin; defaults to the configured `WEB_URL`.
  * @returns The absolute URL.
  */
-function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
+export function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
   const base = webUrl.endsWith('/') ? webUrl : `${webUrl}/`
-  return new URL(`tenants/${encodeURIComponent(slug)}`, base).href
+  return withEmailUtm(
+    new URL(`tenants/${encodeURIComponent(slug)}`, base).href,
+    'onboarding_reminder',
+    'primary_button'
+  )
 }
 
 /**
@@ -609,7 +614,14 @@ async function lockActiveCustomerTenant(tenantId: string, tx: DbTransaction): Pr
   const tenant = locked ?? (await tenantRepository.findByIdIncludingDeleted(tenantId, tx))
   if (!tenant || tenant.isPlatform) throw new HttpError(TENANT_NOT_FOUND, 404)
   if (locked === undefined || locked.lifecycleState !== 'active') {
-    throw new HttpError(`This tenant is ${tenant.lifecycleState}.`, 409, TENANT_STATE_CONFLICT_CODE)
+    // Only a suspended tenant can be reactivated; an archived one ends in a purge.
+    throw new HttpError(
+      tenant.lifecycleState === 'suspended'
+        ? 'This tenant is suspended. Reactivate it, then try again.'
+        : "This tenant is archived, so its onboarding can't change.",
+      409,
+      TENANT_STATE_CONFLICT_CODE
+    )
   }
   return locked
 }
@@ -655,7 +667,11 @@ export async function completeTenantStep(
       tx
     )
     if (completion === undefined) {
-      throw new HttpError('This step is complete already.', 409, ALREADY_COMPLETE_CODE)
+      throw new HttpError(
+        'This step is complete already. Refresh the page to see it.',
+        409,
+        ALREADY_COMPLETE_CODE
+      )
     }
     await record(
       {
@@ -685,7 +701,11 @@ function reminderRefusal(block: {
 }): HttpError {
   switch (block.blockedBy) {
     case 'tenant_state_conflict': {
-      return new HttpError('This tenant is not active.', 409, TENANT_STATE_CONFLICT_CODE)
+      return new HttpError(
+        'This tenant is not active. Reactivate a suspended tenant, then send the reminder.',
+        409,
+        TENANT_STATE_CONFLICT_CODE
+      )
     }
     case 'not_in_progress': {
       return new HttpError(
@@ -695,7 +715,11 @@ function reminderRefusal(block: {
       )
     }
     case 'no_owner': {
-      return new HttpError('This tenant has no active owner to remind.', 409, NO_OWNER_CODE)
+      return new HttpError(
+        'This tenant has no active owner to remind. Invite an owner first.',
+        409,
+        NO_OWNER_CODE
+      )
     }
     case 'reminded_recently': {
       const retryAfter = block.nextAllowedAt?.toISOString()

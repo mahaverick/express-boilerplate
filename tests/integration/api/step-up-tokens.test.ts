@@ -1,7 +1,7 @@
 /**
- * @file The access tokens login and refresh hand out carry the session's
+ * @file The access tokens a sign-in and a refresh hand out carry the session's
  * authentication time, and a refresh keeps it: refreshing is not
- * re-authenticating. Real login through HTTP, so the refresh cookie is real.
+ * re-authenticating. A real link sign-in through HTTP, so the refresh cookie is real.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -10,12 +10,11 @@ import { createApp } from '@/app'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { verifyAccessToken } from '@/services/session.service'
-import { hashPassword } from '@/utilities/password.utilities'
 import { agent } from '../../helpers/request'
+import { issueTestLink } from '../../helpers/sign-in'
 
 const app = createApp()
 const userRepository = new UserRepository()
-const PASSWORD = 'correct horse battery staple'
 
 /**
  * The `auth_time` and `sid` claims of the access token in a login or refresh reply.
@@ -37,22 +36,24 @@ describe('auth_time on issued access tokens', () => {
   })
 
   /**
-   * A verified user with a password, tracked for deletion in afterEach; returns their email.
+   * A verified user, tracked for deletion in afterEach; returns their email.
    */
   async function createUser(): Promise<string> {
     const email = `step-up-tokens-${randomUUID()}@example.test`
-    const user = await userRepository.create({ email, passwordHash: await hashPassword(PASSWORD) })
+    const user = await userRepository.create({ email })
     createdIds.push(user.id)
     await sql`update users set email_verified_at = now() where id = ${user.id}`
     return email
   }
 
-  it('a login token carries auth_time = now, and a refresh keeps it', async () => {
+  it('a sign-in token carries auth_time = now, and a refresh keeps it', async () => {
     const email = await createUser()
     const browser = agent(app)
     const before = Math.floor(Date.now() / 1000)
 
-    const login = await browser.post('/api/v1/auth/login').send({ email, password: PASSWORD })
+    const login = await browser
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(email) })
     expect(login.status).toBe(200)
     const atLogin = claimsOf(login)
     expect(atLogin.authTime).toBeGreaterThanOrEqual(before - 1)
@@ -68,7 +69,9 @@ describe('auth_time on issued access tokens', () => {
   it('a refresh after the session aged carries the old time, not the refresh time', async () => {
     const email = await createUser()
     const browser = agent(app)
-    const login = await browser.post('/api/v1/auth/login').send({ email, password: PASSWORD })
+    const login = await browser
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(email) })
     const { sid, authTime } = claimsOf(login)
     await sql`
       update user_tokens set authenticated_at = authenticated_at - interval '1 hour'

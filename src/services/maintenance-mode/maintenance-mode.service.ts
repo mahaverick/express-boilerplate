@@ -17,6 +17,7 @@ import {
   MAINTENANCE_ACTOR_PLACEHOLDER,
   MAINTENANCE_MODE_CODE,
   MAINTENANCE_MODE_CONFLICT_CODE,
+  READ_ONLY_MODE_CODE,
   type MaintenanceMode,
 } from '@/constants/maintenance-mode.constants'
 import { HttpError } from '@/errors/http-error'
@@ -51,6 +52,7 @@ import {
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
+import { isPausableQueueName } from '@/services/queue.service'
 import { withStatusTimeout } from '@/services/status-read.service'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY } from '@/templates/email/maintenance-mode-changed.template'
 import type { Actor } from '@/types/actor'
@@ -58,6 +60,7 @@ import type {
   MaintenanceModeStatus,
   PlatformMaintenanceModeView,
   PublicMaintenanceStatus,
+  QueuePauseState,
 } from '@/types/maintenance-mode'
 import type { ChangeMaintenanceModeBody } from '@/validators/maintenance-mode.validators'
 import { emailJobIdFor } from '@/workers/notification.worker'
@@ -98,11 +101,25 @@ const NO_REASON = 'No reason given.'
 const NO_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000'
 
 /**
+ * Refuse an account creation in `read_only` or `full`. A sign-in link click
+ * and a web Google sign-in call it just before the insert, to catch a mode
+ * that began after their first check.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+export function assertCreationAllowedByMode(): void {
+  const snapshot = getMaintenanceMode()
+  if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
+  if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+}
+
+/**
  * Refuse a sign-in in `full` unless the user is staff (holds any platform
- * role). Password login calls it once the credentials pass; the Google
+ * role). A sign-in link verify calls it on a read-only peek before the claim
+ * and again once the account is resolved; an invitation verify calls it
+ * once, on the account its read-only lookup found, before the claim; the Google
  * callback, in `full` only, calls it on a read-only account lookup before
- * anything is written, and in every mode again once the account is resolved. Both call it before a session is
- * created. In any other mode, or while the mode is unknown, it allows the
+ * anything is written, and in every mode again once the account is
+ * resolved. Each calls it before a session is created. In any other mode, or while the mode is unknown, it allows the
  * sign-in without reading the user's role.
  * @param userId - The user signing in; undefined for a sign-in that reaches no account, which cannot be staff.
  * @returns Resolves when the sign-in may go ahead.
@@ -129,6 +146,17 @@ export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
 }
 
 /**
+ * Whether every queue full maintenance pauses answered and is paused;
+ * `auth-email`, which it never pauses, is left out.
+ * @param queues - Each queue's pause state.
+ * @returns True when at least one pausable queue is listed and all of them are paused.
+ */
+function areQueuesPaused(queues: readonly QueuePauseState[]): boolean {
+  const pausable = queues.filter((queue) => isPausableQueueName(queue.name))
+  return pausable.length > 0 && pausable.every((queue) => queue.paused === true)
+}
+
+/**
  * The maintenance section of the staff system status, as this replica sees
  * it: the mode, when it began and when it last changed (also while off),
  * whether it is known, each queue's pause state, whether the last change's
@@ -147,7 +175,7 @@ export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus>
     since: snapshot.since,
     changedAt: snapshot.changedAt,
     known: snapshot.known,
-    queuesPaused: queues.length > 0 && queues.every((queue) => queue.paused === true),
+    queuesPaused: areQueuesPaused(queues),
     queues,
     noticesPending,
     lastReloadError: getMaintenanceModeReloadError(),
@@ -395,7 +423,7 @@ export async function changeMaintenanceMode(
     const current = await lockMaintenanceModeState(tx)
     if (current.version !== body.expectedVersion) {
       throw new HttpError(
-        'Maintenance mode changed since it was loaded.',
+        'Someone changed maintenance mode after you opened this page. Reload it, then try again.',
         409,
         MAINTENANCE_MODE_CONFLICT_CODE
       )
@@ -421,7 +449,7 @@ export async function changeMaintenanceMode(
     )
     if (!updated) {
       throw new HttpError(
-        'Maintenance mode changed since it was loaded.',
+        'Someone changed maintenance mode after you opened this page. Reload it, then try again.',
         409,
         MAINTENANCE_MODE_CONFLICT_CODE
       )

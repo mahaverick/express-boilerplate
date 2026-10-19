@@ -141,12 +141,12 @@ describe('claimOnce is atomic under real concurrency', () => {
     const tokenHash = uniqueHash()
     await userTokenRepository.create({
       userId,
-      purpose: 'password_reset',
+      purpose: 'refresh',
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    const results = await claimConcurrently(tokenHash, 'password_reset', CONCURRENT_CLAIMS)
+    const results = await claimConcurrently(tokenHash, 'refresh', CONCURRENT_CLAIMS)
     const claimed = results.filter((row): row is UserToken => row !== undefined)
 
     // Exactly one: "at least one" passes when every caller wins, and "at most one" passes when none does.
@@ -176,7 +176,7 @@ describe('claimOnce is atomic under real concurrency', () => {
       const tokenHash = uniqueHash()
       await userTokenRepository.create({
         userId,
-        purpose: 'password_reset',
+        purpose: 'refresh',
         tokenHash,
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -186,7 +186,7 @@ describe('claimOnce is atomic under real concurrency', () => {
         'claimOnce',
         unsafeClaimOnce(meetingPoint(CONCURRENT_CLAIMS)),
         async () => {
-          const results = await claimConcurrently(tokenHash, 'password_reset', CONCURRENT_CLAIMS)
+          const results = await claimConcurrently(tokenHash, 'refresh', CONCURRENT_CLAIMS)
           const claimed = results.filter((row): row is UserToken => row !== undefined)
 
           // The real test's own assertion, reproduced against the mutated, non-atomic implementation — this is what goes red, not a hand-written stand-in.

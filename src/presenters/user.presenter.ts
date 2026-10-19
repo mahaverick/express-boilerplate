@@ -9,7 +9,7 @@ import type { User } from '@/database/models/user.model'
 
 /**
  * The subset of a user row it is safe to attach to `request.user`.
- * Deliberately excludes `passwordHash` and anything else a route handler
+ * Deliberately excludes anything a route handler
  * has no business reading off the authenticated principal.
  *
  * Everything here is client-visible, since `PublicUser` inherits it and

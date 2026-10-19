@@ -1,77 +1,37 @@
 /**
  * @file Platform staff are the members of the one tenant with `is_platform` set.
- * This module reads a user's platform role, joins verified addresses on
- * PLATFORM_EMAIL_DOMAINS as viewer (never changing an existing member's role),
- * and grants roles for the bootstrap script.
+ * This module reads a user's platform role, re-checks it inside a staff
+ * write, and grants roles for the bootstrap script. Staff join only by
+ * invitation or that grant.
  */
-import { PgTransaction } from 'drizzle-orm/pg-core'
-import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import { redactedForLog } from '@/errors/postgres-errors'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { record } from '@/services/audit.service'
 import {
-  db,
-  withTransaction,
-  type DbExecutor,
-  type DbTransaction,
-} from '@/services/database.service'
-import { logger } from '@/services/logger.service'
+  claimNeverVerifiedAccount,
+  clearSquatterCredentials,
+  createLinkedAccount,
+  isAddressTaken,
+} from '@/services/account-claim.service'
+import { record } from '@/services/audit.service'
+import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import {
   revokeInvitationsBeyondAuthorityElsewhere,
   revokeInvitationsSentIn,
   rolesUngrantableBy,
 } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
-import { emailDomain } from '@/utilities/email.utilities'
+import { hostnameDomain } from '@/utilities/email.utilities'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
-
-/**
- * The user fields auto-join reads.
- */
-export type AutoJoinCandidate = Pick<User, 'id' | 'email' | 'emailVerifiedAt'>
-
-/**
- * The configured auto-join domains, trimmed and lowercased.
- * @param raw - `PLATFORM_EMAIL_DOMAINS` as validated, or undefined.
- * @returns The domains; empty when unset.
- */
-export function parsePlatformEmailDomains(raw: string | undefined): string[] {
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map((domain) => domain.trim().toLowerCase())
-    .filter((domain) => domain.length > 0)
-}
-
-/**
- * Whether an address is on one of the auto-join domains. Exact match only:
- * a subdomain, or a domain that merely ends with a listed one, does not count.
- * @param email - The address.
- * @param domains - The lowercase auto-join domains.
- * @returns True when the address's domain is listed.
- */
-export function isPlatformEmailDomain(email: string, domains: readonly string[]): boolean {
-  const domain = emailDomain(email)
-  return domain !== undefined && domains.includes(domain)
-}
-
-/**
- * The configured auto-join domains, read from the environment on each call.
- * @returns The domains; empty when PLATFORM_EMAIL_DOMAINS is unset.
- */
-function configuredDomains(): string[] {
-  return parsePlatformEmailDomains(getEnv().PLATFORM_EMAIL_DOMAINS)
-}
 
 /**
  * The user's role in the platform tenant, read at call time with no cache, so a
@@ -117,76 +77,6 @@ export async function assertStillPlatformRole(
 }
 
 /**
- * Join a verified address on an auto-join domain to the platform tenant as
- * viewer, and audit the join. Does nothing to a user who already has a
- * platform membership, whatever its role.
- * @param user - The user.
- * @param tx - The transaction to write in.
- * @param domains - The auto-join domains; defaults to PLATFORM_EMAIL_DOMAINS.
- * @returns The new membership, or undefined when the user was not joined.
- * @throws {HttpError} 500 when the platform tenant is missing.
- */
-export async function autoJoin(
-  user: AutoJoinCandidate,
-  tx: DbTransaction,
-  domains: readonly string[] = configuredDomains()
-): Promise<UserMembership | undefined> {
-  const domain = emailDomain(user.email)
-  if (domain === undefined || !domains.includes(domain)) return undefined
-  if (user.emailVerifiedAt === null) return undefined
-
-  const platform = await tenantRepository.findPlatformTenant(tx)
-  if (!platform) throw new HttpError('The platform tenant is missing', 500)
-
-  const created = await userMembershipRepository.insertIfAbsent(
-    { userId: user.id, tenantId: platform.id, role: 'viewer' },
-    tx
-  )
-  if (!created) return undefined
-
-  await record(
-    {
-      action: 'platform.member.auto_joined',
-      actor: 'system',
-      access: 'system',
-      tenantId: platform.id,
-      targetId: created.id,
-      metadata: { userId: user.id, emailDomain: domain },
-    },
-    tx
-  )
-  return created
-}
-
-/**
- * Run `autoJoin`, logging a failure at warn instead of throwing it. Inside a
- * caller's transaction it runs in a savepoint, so a failure leaves that
- * transaction usable. Safe to call twice for one user: the second call
- * finds the membership and does nothing.
- * @param user - The user.
- * @param executor - The caller's transaction, or the pool (default) for a transaction of its own.
- * @param domains - The auto-join domains; defaults to PLATFORM_EMAIL_DOMAINS.
- * @returns Resolves once the join is done, skipped or its failure logged.
- */
-export async function autoJoinSafely(
-  user: AutoJoinCandidate,
-  executor: DbExecutor = db,
-  domains: readonly string[] = configuredDomains()
-): Promise<void> {
-  if (!isPlatformEmailDomain(user.email, domains)) return
-  /**
-   * The unit run in a savepoint or a transaction of its own, so a failure stays contained.
-   */
-  const join = (tx: DbTransaction): Promise<UserMembership | undefined> =>
-    autoJoin(user, tx, domains)
-  try {
-    await (executor instanceof PgTransaction ? executor.transaction(join) : db.transaction(join))
-  } catch (error) {
-    logger.warn('Platform auto-join failed', { error: redactedForLog(error), userId: user.id })
-  }
-}
-
-/**
  * Change an existing platform membership's role, refusing to demote the
  * last platform owner. A lower role also revokes, as a system action, the
  * member's pending invitations it could not grant: on the platform tenant,
@@ -205,7 +95,11 @@ async function regrant(
 ): Promise<UserMembership> {
   if (role !== 'owner' && existing.role === 'owner') {
     const owners = await userMembershipRepository.countOwners(existing.tenantId, tx)
-    if (owners <= 1) throw new HttpError('Cannot demote the last platform owner', 409)
+    if (owners <= 1)
+      throw new HttpError(
+        "Make another staff member a platform owner before you change this owner's role.",
+        409
+      )
   }
   const updated = await userMembershipRepository.updateRole(existing.id, role, tx)
   if (!updated) throw new HttpError('Membership not found', 404)
@@ -226,46 +120,181 @@ async function regrant(
 }
 
 /**
- * Give an existing, verified user a role in the platform tenant, creating
+ * A grant's account create lost the users unique index to a concurrent
+ * write of the same address: the one failure `bootstrapGrant` retries.
+ */
+class GrantAddressTakenError extends HttpError {
+  /**
+   * The 409 the create answered, kept for the second attempt to replace.
+   */
+  constructor() {
+    super('An account already uses that email address', 409)
+  }
+}
+
+/**
+ * A grant found its account unverified, or gone, under the row lock: a
+ * write landed between the claim's commit and the grant. `bootstrapGrant` claims and
+ * grants once more; a second one is its answer.
+ */
+class GrantAccountUnverifiedError extends HttpError {
+  /**
+   * The 409 the second attempt answers.
+   */
+  constructor() {
+    super('The account for that address is unverified. Run the grant again.', 409)
+  }
+}
+
+/**
+ * Give the account an address holds a role in the platform tenant, creating
  * or changing their membership, audited as a system grant. For the
- * bootstrap script: nobody can invite before the first platform owner exists.
- * @param email - The user's address, in any case.
+ * bootstrap script: nobody can invite before the first platform owner
+ * exists. The operator naming the address vouches for its mailbox, so:
+ * - an address with no live account gets a verified one
+ *   (`createLinkedAccount`, audited `user.created` by the system), created
+ *   and granted in one transaction, and `email_verified` is emitted after
+ *   its commit;
+ * - an unverified account is claimed first, as a sign-in link claims it
+ *   (`claimNeverVerifiedAccount` with `clearSquatterCredentials`): a
+ *   squatter's federated links go, every session is revoked,
+ *   the address is verified and `email_verified` is emitted. The claim
+ *   commits on its own, before the grant, so the grant locks the account's
+ *   row and refuses it while it is unverified: the role never reaches an
+ *   unverified account.
+ *
+ * A create that loses the users unique index to a concurrent create of the
+ * address, and a grant that finds its account unverified, run the whole
+ * claim and grant again once; no other failure is retried.
+ * @param email - The address, in any case.
  * @param role - The platform role to hold.
  * @returns The membership after the change.
- * @throws {HttpError} 404 when no account uses `email`; 409 when it is unverified, or when the change would leave the platform tenant without an owner; 500 when the platform tenant is missing.
+ * @throws {HttpError} 409 when the change would leave the platform tenant without an owner, or the account is still unverified on the second attempt; 500 when the platform tenant is missing.
  */
 export async function bootstrapGrant(email: string, role: MembershipRole): Promise<UserMembership> {
-  return withTransaction(async (tx) => {
-    const user = await userRepository.findByEmail(email, {}, tx)
-    if (!user) throw new HttpError('No account uses that email address', 404)
-    if (user.emailVerifiedAt === null) {
-      throw new HttpError('That account has not verified its email address', 409)
+  try {
+    return await grantOnce(email, role)
+  } catch (error) {
+    if (!(
+      error instanceof GrantAddressTakenError || error instanceof GrantAccountUnverifiedError
+    )) {
+      throw error
     }
-    const platform = await tenantRepository.findPlatformTenant(tx)
-    if (!platform) throw new HttpError('The platform tenant is missing', 500)
+    return grantOnce(email, role)
+  }
+}
 
-    await userMembershipRepository.lockOwners(platform.id, 'no key update', tx)
-    const [existing] = await userMembershipRepository.lockMemberships(
-      platform.id,
-      [user.id],
-      'no key update',
-      tx
-    )
-    const membership = existing
-      ? await regrant(existing, role, tx)
-      : await userMembershipRepository.create({ userId: user.id, tenantId: platform.id, role }, tx)
-
-    await record(
-      {
-        action: 'platform.member.granted',
-        actor: 'system',
-        access: 'system',
-        tenantId: platform.id,
-        targetId: membership.id,
-        metadata: { userId: user.id, role, via: 'script' },
-      },
-      tx
-    )
-    return membership
+/**
+ * One attempt of `bootstrapGrant`.
+ * @param email - The address, in any case.
+ * @param role - The platform role to hold.
+ * @returns The membership after the change.
+ * @throws {GrantAddressTakenError} When a concurrent create won the address.
+ * @throws {GrantAccountUnverifiedError} When the account is unverified or gone under the row lock; the transaction rolls the grant back.
+ * @throws {HttpError} 409 from the last-owner check; 500 when the platform tenant is missing or a claimed account vanished.
+ */
+async function grantOnce(email: string, role: MembershipRole): Promise<UserMembership> {
+  const existing = await userRepository.findByEmail(email)
+  if (existing && existing.emailVerifiedAt === null) {
+    await claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
+  }
+  const { membership, createdUserId } = await withTransaction(async (tx) => {
+    const found = await userRepository.findByEmail(email, {}, tx)
+    const user = found ?? (await createForGrant(email, tx))
+    const granted = await grantInTransaction(user.id, role, tx)
+    return {
+      membership: granted,
+      // eslint-disable-next-line unicorn/no-null -- the address held an account already
+      createdUserId: found ? null : user.id,
+    }
   })
+  if (createdUserId !== null) {
+    await emitDomainEvent({ type: 'email_verified', userId: createdUserId, at: new Date() })
+  }
+  return membership
+}
+
+/**
+ * Create the verified account a grant names, audited `user.created` by the
+ * system in the platform tenant.
+ * @param email - The address.
+ * @param tx - The grant's transaction.
+ * @returns The new account.
+ * @throws {GrantAddressTakenError} When a live account holds the address (the users unique index).
+ * @throws {HttpError} 500 when the platform tenant is missing.
+ */
+async function createForGrant(email: string, tx: DbTransaction): Promise<User> {
+  let user: User
+  try {
+    user = await createLinkedAccount(email, tx)
+  } catch (error) {
+    if (isAddressTaken(error)) throw new GrantAddressTakenError()
+    throw error
+  }
+  const platform = await tenantRepository.findPlatformTenant(tx)
+  if (!platform) throw new HttpError('The platform tenant is missing', 500)
+  await record(
+    {
+      action: 'user.created',
+      actor: 'system',
+      access: 'system',
+      tenantId: platform.id,
+      targetId: user.id,
+      // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+      metadata: { emailDomain: hostnameDomain(user.email) ?? null },
+    },
+    tx
+  )
+  return user
+}
+
+/**
+ * The grant's membership write and its audit entry, in the grant's
+ * transaction. Before the write, the account's user row is locked `FOR
+ * SHARE`, after the owner and membership locks as staff writes take it, and
+ * an account that is unverified or gone by then is refused. `FOR SHARE`, as
+ * a platform-invitation accept takes the same row (`lockUserForOwnership`):
+ * the two coexist, so an accept that holds the row while it waits for this
+ * grant's membership insert cannot deadlock with it, and the share lock
+ * still blocks a write that would unverify the account.
+ * @param userId - The account.
+ * @param role - The platform role to hold.
+ * @param tx - The grant's transaction.
+ * @returns The membership after the change.
+ * @throws {GrantAccountUnverifiedError} When the account is unverified or gone under the row lock; the transaction rolls the grant back.
+ * @throws {HttpError} 409 when the change would leave the platform tenant without an owner; 500 when the platform tenant is missing.
+ */
+async function grantInTransaction(
+  userId: string,
+  role: MembershipRole,
+  tx: DbTransaction
+): Promise<UserMembership> {
+  const platform = await tenantRepository.findPlatformTenant(tx)
+  if (!platform) throw new HttpError('The platform tenant is missing', 500)
+
+  await userMembershipRepository.lockOwners(platform.id, 'no key update', tx)
+  const [existing] = await userMembershipRepository.lockMemberships(
+    platform.id,
+    [userId],
+    'no key update',
+    tx
+  )
+  const locked = await userRepository.lockById(userId, 'share', tx)
+  if (!locked?.emailVerifiedAt) throw new GrantAccountUnverifiedError()
+  const membership = existing
+    ? await regrant(existing, role, tx)
+    : await userMembershipRepository.create({ userId, tenantId: platform.id, role }, tx)
+
+  await record(
+    {
+      action: 'platform.member.granted',
+      actor: 'system',
+      access: 'system',
+      tenantId: platform.id,
+      targetId: membership.id,
+      metadata: { userId, role, via: 'script' },
+    },
+    tx
+  )
+  return membership
 }

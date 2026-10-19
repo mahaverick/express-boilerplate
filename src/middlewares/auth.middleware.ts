@@ -92,8 +92,7 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * would trade that for a window in which a disabled account keeps working,
  * and is deliberately not built. Session revocations in session.service.ts
  * deny the session too (`denySession`, directly or through
- * `denySessionsAfterCommit`); `revokeAllForUserAndPurpose` (verification-link
- * cleanup) is not a session revocation and denies nothing.
+ * `denySessionsAfterCommit`).
  *
  * A verified token without `sid` skips the denylist and is admitted until it
  * expires (at most `ACCESS_TOKEN_TTL`). To drop that tolerance, throw a 401
@@ -176,7 +175,7 @@ export function requireRecentAuth(
       return
     }
     if (!isRecentAuth(request.authTime, Date.now(), maxAgeMs)) {
-      next(new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE))
+      next(new HttpError("Confirm it's you to continue.", 401, REAUTH_REQUIRED_CODE))
       return
     }
     next()

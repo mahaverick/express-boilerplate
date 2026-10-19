@@ -46,12 +46,12 @@ const baseEnv: Env = {
   ACCESS_TOKEN_TTL: '15m',
   REFRESH_TOKEN_TTL: '30d',
   SESSION_ABSOLUTE_TTL: '30d',
-  EMAIL_VERIFICATION_TTL: '24h',
-  PASSWORD_RESET_TTL: '1h',
-  PASSWORD_RESET_MAIL_COOLDOWN: '5m',
-  REGISTRATION_ATTEMPT_NOTICE_COOLDOWN: '1h',
-  ACCOUNT_SETUP_TTL: '24h',
-  INVITATION_TTL: '7d',
+  SIGN_IN_LINK_TTL: '15m',
+  SIGN_IN_LINK_MAIL_COOLDOWN: '1m',
+  SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: 10,
+  STEP_UP_LINK_TTL: '15m',
+  STEP_UP_LINK_COOLDOWN: '1m',
+  INVITATION_TTL: '3d',
   INVITATION_RESEND_COOLDOWN: '10m',
   INVITATION_RECIPIENT_DAILY_LIMIT: 10,
   TRUST_PROXY: 'false',
@@ -97,6 +97,7 @@ const baseEnv: Env = {
 type StrategyVerify = (
   accessToken: string,
   refreshToken: string,
+  params: import('passport-google-oauth20').GoogleCallbackParameters,
   profile: import('passport-google-oauth20').Profile,
   done: VerifyCallback
 ) => void
@@ -107,8 +108,21 @@ type StrategyVerify = (
  * tests/unit/utilities/email-template.utilities.test.ts, for a value with no safe static type.
  */
 function registeredVerifyCallback(): StrategyVerify {
+  return registeredStrategy()._verify
+}
+
+/**
+ * The registered `'google'` strategy instance, with the two members these tests read; throws
+ * when none is registered.
+ */
+function registeredStrategy(): {
+  _verify: StrategyVerify
+  authorizationParams(options: Record<string, unknown>): Record<string, unknown>
+} {
   const strategies = (
-    passport as unknown as { _strategies: Record<string, { _verify: StrategyVerify } | undefined> }
+    passport as unknown as {
+      _strategies: Record<string, ReturnType<typeof registeredStrategy> | undefined>
+    }
   )._strategies
   const strategy = strategies[GOOGLE_STRATEGY_NAME]
   if (!strategy) {
@@ -116,7 +130,7 @@ function registeredVerifyCallback(): StrategyVerify {
       `No '${GOOGLE_STRATEGY_NAME}' strategy registered — call configurePassport() first`
     )
   }
-  return strategy._verify
+  return strategy
 }
 
 /**
@@ -169,8 +183,37 @@ describe('configurePassport', () => {
     ).toBeDefined()
   })
 
-  // The pass-through verify function: no database lookup, `done` called with the raw profile unchanged; account linking is the callback route's policy (`resolveGoogleUser`, google-auth.service.ts).
-  it('passthroughGoogleProfile hands the raw profile straight to done, with no error', () => {
+  // The pass-through verify function: no database lookup, `done` called with the raw profile and the token endpoint's ID token; account linking is the callback route's policy (`resolveGoogleUser`, google-auth.service.ts).
+  it('passthroughGoogleProfile hands the raw profile and the ID token straight to done, with no error', () => {
+    vi.mocked(getEnv).mockReturnValue({
+      ...baseEnv,
+      GOOGLE_CLIENT_ID: 'client-id',
+      GOOGLE_CLIENT_SECRET: 'client-secret',
+    })
+    configurePassport()
+
+    const verify = registeredVerifyCallback()
+    // Arity 5: passport-oauth2 passes the token endpoint's params, and so the ID token, only to a verify that declares them.
+    expect(verify).toHaveLength(5)
+    const done = vi.fn()
+    const profile = { id: 'google-user-id', displayName: 'Ada Lovelace' } as unknown as Parameters<
+      typeof verify
+    >[3]
+    const params = {
+      access_token: 'access-token',
+      id_token: 'header.payload.signature',
+      expires_in: 3599,
+      scope: 'openid email profile',
+      token_type: 'Bearer',
+    }
+
+    verify('access-token', 'refresh-token', params, profile, done)
+
+    // eslint-disable-next-line unicorn/no-null -- asserting against Passport's own Node-style callback convention (see passport.config.ts's own disable comment on the line this proves).
+    expect(done).toHaveBeenCalledWith(null, { profile, idToken: 'header.payload.signature' })
+  })
+
+  it('passthroughGoogleProfile hands an undefined ID token on when the token endpoint sent none', () => {
     vi.mocked(getEnv).mockReturnValue({
       ...baseEnv,
       GOOGLE_CLIENT_ID: 'client-id',
@@ -180,14 +223,33 @@ describe('configurePassport', () => {
 
     const verify = registeredVerifyCallback()
     const done = vi.fn()
-    const profile = { id: 'google-user-id', displayName: 'Ada Lovelace' } as unknown as Parameters<
-      typeof verify
-    >[2]
+    const profile = { id: 'google-user-id' } as unknown as Parameters<typeof verify>[3]
+    const params = { access_token: 'a', expires_in: 1, scope: 'email', token_type: 'Bearer' }
 
-    verify('access-token', 'refresh-token', profile, done)
+    verify('access-token', 'refresh-token', params, profile, done)
 
-    // eslint-disable-next-line unicorn/no-null -- asserting against Passport's own Node-style callback convention (see passport.config.ts's own disable comment on the line this proves).
-    expect(done).toHaveBeenCalledWith(null, profile)
+    // eslint-disable-next-line unicorn/no-null -- Passport's Node-style "no error" sentinel, as above
+    expect(done).toHaveBeenCalledWith(null, { profile, idToken: undefined })
+  })
+
+  it.each([
+    ['max_age=0 for maxAge 0, which is falsy', { maxAge: 0 }, { max_age: 0 }],
+    ['max_age for a positive maxAge', { maxAge: 300 }, { max_age: 300 }],
+    ['no max_age without maxAge', {}, {}],
+    [
+      "Google's own prompt alongside it",
+      { maxAge: 0, prompt: 'select_account' },
+      { max_age: 0, prompt: 'select_account' },
+    ],
+  ])('the strategy sends %s', (_label, options, expected) => {
+    vi.mocked(getEnv).mockReturnValue({
+      ...baseEnv,
+      GOOGLE_CLIENT_ID: 'client-id',
+      GOOGLE_CLIENT_SECRET: 'client-secret',
+    })
+    configurePassport()
+
+    expect(registeredStrategy().authorizationParams(options)).toEqual(expected)
   })
 })
 

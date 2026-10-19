@@ -129,23 +129,12 @@ describe('GET /api/v1/platform/users', () => {
       expect(response2.status).toBe(400)
     })
   })
-
-  it('never returns a password hash', async () => {
-    const { token } = await createTrackedStaff('viewer')
-    const tag = `ph${randomUUID().slice(0, 8)}`
-    await createTrackedUser({ email: `${tag}@example.test`, hasPassword: true })
-
-    const response = await list(token, { search: tag })
-
-    expect(JSON.stringify(response.body)).not.toContain('passwordHash')
-    expect(JSON.stringify(response.body)).not.toContain('$2')
-  })
 })
 
 describe('GET /api/v1/platform/users/:id', () => {
-  it('returns the user with memberships, sign-in methods, password flag and pending invitations', async () => {
+  it('returns the user with memberships, sign-in methods and pending invitations', async () => {
     const { token } = await createTrackedStaff('viewer')
-    const user = await createTrackedUser({ firstName: 'Ada', hasPassword: true })
+    const user = await createTrackedUser({ firstName: 'Ada' })
     await authProviderRepository.create({
       userId: user.id,
       provider: 'email',
@@ -165,7 +154,6 @@ describe('GET /api/v1/platform/users/:id', () => {
       id: user.id,
       email: user.email,
       firstName: 'Ada',
-      hasPassword: true,
       authProviders: ['email'],
       // eslint-disable-next-line unicorn/no-null -- JSON null: not staff
       platformRole: null,
@@ -173,7 +161,29 @@ describe('GET /api/v1/platform/users/:id', () => {
       memberships: [{ tenantId: tenant.id, tenantName: 'Analytical Engines', role: 'owner' }],
       pendingInvitations: [],
     })
-    expect(JSON.stringify(response.body)).not.toContain('passwordHash')
+  })
+
+  it('gives each pending invitation lastSentAt and resendAvailableAt', async () => {
+    const { token } = await createTrackedStaff('viewer')
+    const invitee = await createTrackedUser()
+    const owner = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Resend Co',
+      slug: `pu-${randomUUID()}`,
+      ownerId: owner.id,
+    })
+    createdTenantIds.push(tenant.id)
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at, last_sent_at)
+      values (${tenant.id}, ${invitee.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day', now())`
+
+    const response = await detail(token, invitee.id)
+
+    const [pending] = dataOf<{
+      pendingInvitations: { lastSentAt: string | null; resendAvailableAt: string | null }[]
+    }>(response).pendingInvitations
+    expect(typeof pending?.lastSentAt).toBe('string')
+    expect(Date.parse(pending?.resendAvailableAt ?? '')).toBeGreaterThan(Date.now())
   })
 
   it('answers 404 for a malformed id and an unknown id', async () => {

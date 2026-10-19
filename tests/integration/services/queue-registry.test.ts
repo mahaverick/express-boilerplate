@@ -2,12 +2,13 @@
  * @file `getAllQueues()` is every queue queue.service.ts creates: its names
  * equal the names in every `new Queue('…'` of the module's source, so a
  * queue added without joining the registry (and so never paused by
- * maintenance mode) fails here.
+ * maintenance mode) fails here. `getPausableQueues()` is that list without
+ * `auth-email`, the queue full maintenance leaves running.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { closeQueue, getAllQueues } from '@/services/queue.service'
+import { closeQueue, getAllQueues, getPausableQueues } from '@/services/queue.service'
 
 /**
  * Orders queue names alphabetically, so the two lists compare whatever order they were built in.
@@ -29,5 +30,17 @@ describe('queue registry', () => {
 
     expect(created.length).toBeGreaterThan(0)
     expect(registered.toSorted(byText)).toEqual(created.toSorted(byText))
+  })
+
+  it('holds the five queues, and pauses all of them but auth-email', () => {
+    const registered = getAllQueues().map((queue) => queue.name)
+    const pausable = getPausableQueues().map((queue) => queue.name)
+
+    expect(registered.toSorted(byText)).toEqual(
+      ['analytics', 'auth-email', 'email', 'maintenance', 'notification'].toSorted(byText)
+    )
+    expect(pausable.toSorted(byText)).toEqual(
+      registered.filter((name) => name !== 'auth-email').toSorted(byText)
+    )
   })
 })

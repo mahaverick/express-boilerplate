@@ -15,7 +15,12 @@ import { sql } from '@/services/database.service'
 import { resetDomainEventSubscribers } from '@/services/domain-events.service'
 import { completeStepAsMember, registerOnboardingSubscribers } from '@/services/onboarding.service'
 import { completeTenantStep, reconcileOnboarding } from '@/services/platform-onboarding.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { updateSettings } from '@/services/tenant.service'
 import { clearOutbox, outboxRows } from '../../helpers/analytics-outbox'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -53,6 +58,7 @@ afterAll(async () => {
   registerOnboardingSubscribers()
   registerAnalyticsSubscribers()
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })

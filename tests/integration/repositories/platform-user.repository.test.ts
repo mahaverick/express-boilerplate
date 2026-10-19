@@ -272,6 +272,7 @@ describe('PlatformUserRepository detail reads', () => {
         tenantName: tenant.name,
         role: 'editor',
         expiresAt: pending.expiresAt,
+        lastSentAt: pending.lastSentAt,
       },
     ])
   })

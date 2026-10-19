@@ -7,6 +7,7 @@
  * the staff pass on the customer routes Apex calls (one platform-role read per request, and a
  * revoked role taking effect on the next request).
  */
+import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -22,10 +23,10 @@ import {
   createTrackedStaff,
   createTrackedUser,
   deleteTrackedUsers,
-  TEST_PASSWORD,
   tokenFor,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 /**
  * How many times a request read a platform membership, for the staff-pass
@@ -90,6 +91,9 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
+  // The status budget is per IP and per worker: a spent one would 429 the next file's status reads.
+  await clearRateLimiter(RATE_LIMITS.maintenanceStatus.name)
   vi.restoreAllMocks()
   await resetMaintenanceMode()
   await reloadMaintenanceMode()
@@ -208,13 +212,12 @@ describe('refusals', () => {
 })
 
 describe('sign-in in full', () => {
-  it('refuses a non-staff login with the right password 503 MAINTENANCE_MODE, writing nothing', async () => {
-    const user = await createTrackedUser({ hasPassword: true })
+  it('refuses a non-staff sign-in link 503 MAINTENANCE_MODE, writing nothing', async () => {
+    const user = await createTrackedUser()
+    const token = await issueTestLink(user.email)
     await enter('full', 'Back at noon.')
 
-    const response = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email: user.email, password: TEST_PASSWORD })
+    const response = await request(app).post('/api/v1/auth/link/verify').send({ token })
 
     expect(response.status).toBe(503)
     expect(response.body).toMatchObject({ code: 'MAINTENANCE_MODE', message: 'Back at noon.' })
@@ -226,35 +229,33 @@ describe('sign-in in full', () => {
     expect(row).toEqual({ lastLoggedInAt: NONE, sessions: 0 })
   })
 
-  it('still answers a wrong password 401, so the refusal reveals nothing more than a login would', async () => {
-    const user = await createTrackedUser({ hasPassword: true })
+  it('answers a dead link the same 503, so the refusal tells nothing about the link', async () => {
     await enter('full')
 
     const response = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email: user.email, password: 'not-the-password-1' })
+      .post('/api/v1/auth/link/verify')
+      .send({ token: `dead-link-${randomUUID()}` })
 
-    expect(response.status).toBe(401)
+    expect(response.status).toBe(503)
+    expect(response.body).toMatchObject({ code: 'MAINTENANCE_MODE' })
   })
 
   it('admits staff', async () => {
-    const { user } = await createTrackedStaff('viewer', { hasPassword: true })
+    const { user } = await createTrackedStaff('viewer')
+    const token = await issueTestLink(user.email)
     await enter('full')
 
-    const response = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email: user.email, password: TEST_PASSWORD })
+    const response = await request(app).post('/api/v1/auth/link/verify').send({ token })
 
     expect(response.status).toBe(200)
   })
 
-  it('admits a non-staff login in read_only', async () => {
-    const user = await createTrackedUser({ hasPassword: true })
+  it('admits a non-staff sign-in to an existing account in read_only', async () => {
+    const user = await createTrackedUser()
+    const token = await issueTestLink(user.email)
     await enter('read_only')
 
-    const response = await request(app)
-      .post('/api/v1/auth/login')
-      .send({ email: user.email, password: TEST_PASSWORD })
+    const response = await request(app).post('/api/v1/auth/link/verify').send({ token })
 
     expect(response.status).toBe(200)
   })
@@ -279,15 +280,16 @@ describe('sign-in in full', () => {
     expect(response.headers['maintenance-mode']).toBe('full')
   })
 
-  it('refuses registration in both modes', async () => {
+  it('refuses a link that would create an account, in both modes', async () => {
+    const email = `maintenance-new-${randomUUID()}@example.test`
     await enter('read_only')
     const readOnly = await request(app)
-      .post('/api/v1/auth/register')
-      .send({ email: 'someone@example.test', password: 'long-enough-password-1' })
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(email) })
     await enter('full')
     const full = await request(app)
-      .post('/api/v1/auth/register')
-      .send({ email: 'someone@example.test', password: 'long-enough-password-1' })
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(email) })
 
     const codes = [readOnly, full].map((response) => (response.body as { code?: string }).code)
     expect(codes).toEqual(['READ_ONLY_MODE', 'MAINTENANCE_MODE'])

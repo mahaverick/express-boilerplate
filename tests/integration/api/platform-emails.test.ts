@@ -316,7 +316,7 @@ describe('canResend', () => {
   })
 
   it.each(['password_changed', 'registration_attempt'])(
-    'is false for the security notice %s',
+    'is false for the retired notice %s',
     async (templateKey) => {
       const { token } = await createTrackedStaff('owner')
       const user = await createTrackedUser()
@@ -332,13 +332,10 @@ describe('canResend', () => {
   )
 
   it.each([
-    ['a verification resend to a verified user', 'email_verification', {}],
-    ['a set-password resend to a deactivated user', 'account_setup', { active: false }],
-    [
-      'a verification resend to a deactivated user',
-      'email_verification',
-      { active: false, verified: false },
-    ],
+    ['a retired verification mail', 'email_verification', {}],
+    ['a retired account_setup mail', 'account_setup', {}],
+    ['a sign-in link resend to a deactivated user', 'sign_in_link', { active: false }],
+    ['a welcome resend to a deactivated user', 'welcome', { active: false }],
   ])('is false, in the detail and the list, for %s', async (_label, templateKey, userOptions) => {
     const { token } = await createTrackedStaff('admin')
     const tag = tagged()
@@ -355,13 +352,13 @@ describe('canResend', () => {
     expect(page.items.find((row) => row.id === message.id)?.canResend).toBe(false)
   })
 
-  it('is true for a verification resend to an unverified, active user', async () => {
+  it('is true for a welcome resend to an unverified, active user', async () => {
     const { token } = await createTrackedStaff('admin')
     const user = await createTrackedUser({ verified: false })
     const message = await createTrackedMessage({
       recipient: user.email,
       userId: user.id,
-      templateKey: 'email_verification',
+      templateKey: 'welcome',
     })
 
     expect(await canResendAs(token, message.id)).toBe(true)
@@ -447,9 +444,9 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
   it('re-renders the stored template with the link masked on the stored frontend', async () => {
     const { token } = await createTrackedStaff('viewer')
     const message = await createTrackedMessage({
-      templateKey: 'password_reset',
+      templateKey: 'sign_in_link',
       linkApp: 'web',
-      variables: { firstName: 'Ada', appName: 'Acme' },
+      variables: { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15', reason: 'self' },
     })
 
     const preview = dataOf<{ subject: string; html: string; text: string; partial: boolean }>(
@@ -460,14 +457,14 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
     expect(preview.subject).toContain('Acme')
     expect(preview.text).toContain('Ada')
     const origin = new URL(getEnv().WEB_URL).origin
-    expect(preview.text).toContain(`${origin}/reset-password?token=${TOKEN_MASK}`)
+    expect(preview.text).toContain(`${origin}/auth/link?token=${TOKEN_MASK}`)
     expect(preview.html).not.toMatch(HEX_TOKEN)
     expect(preview.text).not.toMatch(HEX_TOKEN)
   })
 
   it('marks a legacy row with no stored variables partial', async () => {
     const { token } = await createTrackedStaff('viewer')
-    const legacy = await createTrackedMessage({ templateKey: 'password_changed', variables: {} })
+    const legacy = await createTrackedMessage({ templateKey: 'step_up_link', variables: {} })
 
     const preview = dataOf<{ partial: boolean; text: string }>(
       await get(token, `/emails/${legacy.id}/preview`)
@@ -506,7 +503,11 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
     const response = await get(token, `/emails/${message.id}/preview`)
 
     expect(response.status).toBe(409)
-    expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
+    expect(response.body).toMatchObject({
+      code: 'template_unavailable',
+      message:
+        "This email's template is retired, so it can't be shown. Check its status and delivery events on this page instead.",
+    })
   })
 })
 

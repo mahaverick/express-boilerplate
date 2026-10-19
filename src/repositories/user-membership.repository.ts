@@ -39,7 +39,7 @@ export interface MembershipWithUser {
    */
   membership: UserMembership
   /**
-   * The member's public identity — never `passwordHash` — and `active`:
+   * The member's public identity and `active`:
    * false for a deactivated account, which cannot sign in and which
    * `countActiveOwners` does not count.
    * `listMembers` (tenant.service.ts) drops `active` on a customer tenant.
@@ -231,8 +231,8 @@ export class UserMembershipRepository {
   /**
    * Every member of one tenant, with each member's safe user info attached,
    * for `GET /tenants/:slug/members`. The user columns are an explicit
-   * projection, never the full row, so `passwordHash` cannot reach the
-   * response. A soft-deleted user is excluded: nothing prunes their membership
+   * projection, never the full row, so a column added to `users` cannot
+   * reach the response. A soft-deleted user is excluded: nothing prunes their membership
    * row, so this filter keeps them out of the member list.
    * @param tenantId - The tenant whose members to list.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -349,7 +349,7 @@ export class UserMembershipRepository {
       return row
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError('This user is already a member of this tenant', 409)
+        throw new HttpError('This person is already a member of this workspace.', 409)
       }
       throw error
     }

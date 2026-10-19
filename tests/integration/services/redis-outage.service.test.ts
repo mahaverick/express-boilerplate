@@ -24,6 +24,7 @@ import {
   isRedisReachable,
   RECONNECT_DELAY_CAP_MS,
   REDIS_CONNECT_TIMEOUT_MS,
+  redisKey,
 } from '@/services/redis.service'
 import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
@@ -189,25 +190,36 @@ describe('Redis clients survive an outage', () => {
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
   }, 10_000)
 
-  it('keeps the login limiter counting, never answering 500, while Redis is down', async () => {
+  it('keeps the sign-in link limiter counting, never answering 500, while Redis is down', async () => {
     const app = express()
     app.use(express.json())
-    // Stands in for the login handler: every attempt is a wrong password.
-    app.post('/login', createRateLimiter(RATE_LIMITS.login, { limit: 2 }), (_request, response) => {
-      response.status(401).json({ success: false })
-    })
+    // Stands in for the link verify handler: every attempt presents a dead link.
+    app.post(
+      '/link/verify',
+      createRateLimiter(RATE_LIMITS.signInLinkVerify, { limit: 2 }),
+      (_request, response) => {
+        response.status(401).json({ success: false })
+      }
+    )
     app.use(errorHandler)
-    const body = { email: `outage-${randomUUID()}@example.test`, password: 'wrong' }
+    const body = { token: `dead-link-${randomUUID()}` }
+    // The budget is per IP and per worker: an earlier file's link verifies would count against this limit of 2.
+    const redis = await getRedis()
+    const spent: string[] = []
+    const keyPattern = `${redisKey('rl', RATE_LIMITS.signInLinkVerify.name)}:*`
+    const batches = redis.scanIterator({ MATCH: keyPattern })
+    for await (const batch of batches) spent.push(...batch)
+    if (spent.length > 0) await redis.del(spent)
 
     // Counted in Redis (the store switches to Redis on this first request).
-    const counted = await request(app).post('/login').send(body)
+    const counted = await request(app).post('/link/verify').send(body)
     expect(counted.status).toBe(401)
 
     proxy.goDown()
     await waitUntil(hasRedisClientLeftReady, { message: 'node-redis sees the outage' })
     const statuses: number[] = []
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await request(app).post('/login').send(body)
+      const response = await request(app).post('/link/verify').send(body)
       statuses.push(response.status)
     }
     // Per-process memory counting: a fresh count of 2 allowed, then 429.

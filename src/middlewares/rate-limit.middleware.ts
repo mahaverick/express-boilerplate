@@ -15,6 +15,7 @@ import {
 } from '@/constants/rate-limit.constants'
 import { HttpError } from '@/errors/http-error'
 import { redisKey } from '@/services/redis.service'
+import { formatWait, MS_PER_SECOND } from '@/utilities/duration.utilities'
 
 /**
  * Build one limiter's store under its own `rl:<name>` keyspace.
@@ -23,6 +24,20 @@ import { redisKey } from '@/services/redis.service'
  */
 function limiterStore(name: string): SharedRateLimitStore {
   return new SharedRateLimitStore(`${redisKey('rl', name)}:`)
+}
+
+/**
+ * The 429's message: the spec's sentence, then when to try again, read from
+ * the `Retry-After` express-rate-limit has just set, so the two always agree.
+ * Without that header the whole window is the wait.
+ * @param spec - The limiter that refused the request.
+ * @param response - The response, carrying `Retry-After` in seconds.
+ * @returns For example "Too many attempts. Try again in 42 seconds."
+ */
+function limitedMessage(spec: RateLimiterSpec, response: Response): string {
+  const header = Number(response.getHeader('Retry-After'))
+  const seconds = Number.isFinite(header) ? header : spec.windowMs / MS_PER_SECOND
+  return `${spec.message} Try again in ${formatWait(seconds)}.`
 }
 
 /**
@@ -84,8 +99,8 @@ export function createRateLimiter(
     skipFailedRequests: spec.counts === 'accepted',
     skipSuccessfulRequests: spec.counts === 'rejected',
     ...(spec.skip && { skip: spec.skip }),
-    handler: (_request: Request, _response: Response, next: NextFunction) => {
-      next(new HttpError(spec.message, 429, RATE_LIMITED_CODE))
+    handler: (_request: Request, response: Response, next: NextFunction) => {
+      next(new HttpError(limitedMessage(spec, response), 429, RATE_LIMITED_CODE))
     },
   })
   Object.assign(handler, { [RATE_LIMITER_MARK]: spec.name })

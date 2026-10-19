@@ -43,8 +43,8 @@ export function membershipRoleRank(role: AnyPgColumn | SQL): SQL<number> {
  * that user's role within that tenant. `TenantRepository.create()` inserts
  * the creator's `'owner'` row with the tenant; an accepted invitation adds
  * one through `insertIfAbsent` (tenant-invitation.service.ts), and
- * platform.service.ts adds platform-tenant rows by auto-join
- * (`insertIfAbsent`) and by explicit grant (`create`). Removing a member is
+ * platform.service.ts adds platform-tenant rows by explicit grant
+ * (`create`). Removing a member is
  * a hard delete, so `UserMembershipRepository` does not extend
  * `BaseRepository`.
  */

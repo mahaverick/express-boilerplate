@@ -3,38 +3,49 @@
  * google-auth.service, and shape the reply (cookies, redirects, status and
  * envelope). The enumeration and timing rules live in auth.service.ts.
  */
-import type { CookieOptions, NextFunction, Request, RequestHandler, Response } from 'express'
+import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import passport from 'passport'
-import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
-import {
-  GOOGLE_STRATEGY_NAME,
-  refreshCookieSpec,
-  type RefreshCookieSpec,
-} from '@/constants/auth.constants'
+import { getEnv } from '@/configs/env.config'
+import type { GoogleCallbackResult, StepUpAuthenticateOptions } from '@/configs/passport.config'
+import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
-import { authenticatedUserId, oauthAppOf } from '@/controllers/helpers.controller'
+import {
+  authenticatedUserId,
+  clearHostOnlyPlainRefreshCookie,
+  currentRefreshCookie,
+  oauthIntentOf,
+  readRefreshTokenCookie,
+  refreshCookieOptions,
+  revokePresentedSession,
+  setRefreshTokenCookie,
+} from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
+import { frontendUrl } from '@/services/frontend-links.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
-import { revokeOtherSessions, revokeRefreshToken } from '@/services/session.service'
-import { frontendUrl } from '@/services/verification.service'
-import { messageResponse, successResponse } from '@/utilities/response.utilities'
+import { revokeOtherSessions } from '@/services/session.service'
+import { requestSignInLink, verifySignInLink } from '@/services/sign-in-link.service'
 import {
-  changePasswordSchema,
-  forgotPasswordSchema,
-  loginSchema,
-  reauthenticateSchema,
-  registerSchema,
-  resetPasswordSchema,
-  revokeOtherSessionsSchema,
-} from '@/validators/auth.validators'
+  confirmGoogleStepUp,
+  confirmStepUpLink,
+  isStepUpIntentFresh,
+  requestStepUpLink,
+  startGoogleStepUp,
+  type StepUpIntent,
+} from '@/services/step-up.service'
+import { messageResponse, successResponse } from '@/utilities/response.utilities'
+import { revokeOtherSessionsSchema } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'
+import {
+  signInLinkRequestSchema,
+  signInLinkVerifySchema,
+} from '@/validators/sign-in-link.validators'
+import { stepUpEmptyBodySchema, stepUpLinkVerifySchema } from '@/validators/step-up.validators'
 
 /**
  * A URL without any trailing slashes, so `${base}/path` never doubles one.
@@ -47,164 +58,6 @@ function withoutTrailingSlashes(url: string): string {
     end -= 1
   }
   return url.slice(0, end)
-}
-
-/**
- * The refresh cookie's name, path and domain for this deployment.
- * @param env - The validated environment.
- * @returns The current cookie's spec.
- */
-function currentRefreshCookie(env: Env): RefreshCookieSpec {
-  return refreshCookieSpec({ COOKIE_SECURE: isCookieSecure(env), COOKIE_DOMAIN: env.COOKIE_DOMAIN })
-}
-
-/**
- * Cookie options for one refresh-cookie spec. A clear must repeat the path
- * and domain it was set with, or the browser keeps the original.
- * @param spec - The cookie.
- * @param env - The validated environment.
- * @param sameSite - The cookie's `SameSite` attribute.
- * @returns Options for `response.cookie` or `response.clearCookie`.
- */
-function refreshCookieOptions(
-  spec: RefreshCookieSpec,
-  env: Env,
-  sameSite: 'strict' | 'lax'
-): CookieOptions {
-  return {
-    httpOnly: true,
-    secure: isCookieSecure(env),
-    sameSite,
-    path: spec.path,
-    ...(spec.domain !== undefined && { domain: spec.domain }),
-  }
-}
-
-/**
- * The value of the last cookie named `name` in the request, read off the raw
- * `Cookie` header because this API reads only its own refresh cookie and so
- * needs no cookie-parser.
- *
- * Takes the LAST value of that name. A browser can hold two, one per domain
- * scope, after `COOKIE_DOMAIN` is changed. It sends same-path cookies oldest
- * first (RFC 6265 §5.4, by creation time), so the last is the most recently
- * created one. That is the one set under the current scope, except after
- * `COOKIE_DOMAIN` is reverted to an earlier value: overwriting a cookie keeps
- * its original creation time (RFC 6265 §5.3 step 11.3), so the other scope's
- * cookie reads as newer, and refresh fails until the user logs in again or it
- * expires (REFRESH_TOKEN_TTL). Reading the first cookie instead would hand
- * the stale token to reuse detection after every domain change, which
- * revokes the live session.
- * @param request - The incoming request.
- * @param name - The cookie name.
- * @returns The value decoded as Express's `response.cookie` encoded it (`encodeURIComponent`), the raw value when it does not decode, or undefined when no cookie of that name was sent.
- */
-function readCookie(request: Request, name: string): string | undefined {
-  const header = request.headers.cookie
-  if (!header) return undefined
-
-  const prefix = `${name}=`
-  const match = header
-    .split(';')
-    .map((part) => part.trim())
-    .findLast((part) => part.startsWith(prefix))
-  if (!match) return undefined
-
-  const rawValue = match.slice(prefix.length)
-  try {
-    return decodeURIComponent(rawValue)
-  } catch {
-    return rawValue
-  }
-}
-
-/**
- * The refresh token to redeem: the current cookie's only, by the
- * newest-cookie rule (`readCookie`). Under COOKIE_SECURE the unprefixed
- * `refreshToken` is never read: a sibling subdomain or an on-path
- * attacker on plain http can plant it. The `__Host-` prefix stops both;
- * `__Secure-` (used with COOKIE_DOMAIN) stops only the plain-http planter,
- * since COOKIE_DOMAIN already trusts its subdomains. Without COOKIE_SECURE
- * the current name is the unprefixed one.
- * @param request - The incoming request.
- * @returns The raw refresh token, or undefined when the current cookie was not sent.
- */
-function readRefreshTokenCookie(request: Request): string | undefined {
-  return readCookie(request, currentRefreshCookie(getEnv()).name)
-}
-
-/**
- * Revoke the session of the refresh token the request carries, if any.
- * Logout's revoke, and also run after a sign-in: a session the browser's
- * cookie pointed at would otherwise stay refreshable after the new cookie
- * replaces it, outlive the next logout, and never trip reuse detection. The
- * new session's token is never the one revoked: it is only in the response.
- * @param request - The request whose cookie names the session.
- * @param options - How the revoke is reported.
- * @param options.emitSignedOut - Whether a live revoke emits `user_signed_out`; default true. A sign-in passes false, since it is not the user signing out.
- * @returns Resolves once the presented token's session, if any, is revoked.
- */
-async function revokePresentedSession(
-  request: Request,
-  options: { emitSignedOut?: boolean } = {}
-): Promise<void> {
-  const rawToken = readRefreshTokenCookie(request)
-  if (rawToken === undefined) return
-  await revokeRefreshToken(rawToken, options)
-}
-
-/**
- * Without COOKIE_SECURE but with COOKIE_DOMAIN, when the request carried a
- * `refreshToken` cookie, clear its host-only form too: the browser may hold
- * that scope beside the current one, and either may be the one it sent.
- * `setRefreshTokenCookie` calls it before adding the new cookie, so a browser
- * that treats two scopes as one cookie keeps the new one. Under COOKIE_SECURE
- * it clears nothing.
- * @param request - The incoming request.
- * @param response - The response to add the clearing Set-Cookie line to.
- * @param env - The validated environment.
- */
-function clearHostOnlyPlainRefreshCookie(request: Request, response: Response, env: Env): void {
-  if (isCookieSecure(env) || env.COOKIE_DOMAIN === undefined) return
-  const hostOnly = refreshCookieSpec({ COOKIE_SECURE: false })
-  if (readCookie(request, hostOnly.name) === undefined) return
-  response.clearCookie(hostOnly.name, refreshCookieOptions(hostOnly, env, 'strict'))
-}
-
-/**
- * Attach a freshly issued refresh token to the response as an httpOnly
- * cookie, named and scoped by `refreshCookieSpec`, after
- * `clearHostOnlyPlainRefreshCookie`.
- *
- * `sameSite: 'strict'` is the cookie half of this API's CSRF position
- * (SECURITY.md: Bearer access tokens plus `SameSite` cookies, no CSRF
- * middleware). It assumes the frontend and this API share a registrable
- * domain (eTLD+1). A deployment that splits them across different registrable
- * domains would need `SameSite=None; Secure` plus a CSRF token: refresh and
- * logout would then be cross-site `fetch` POSTs, and a browser sends a `'lax'`
- * cookie only on top-level safe navigations, so `'lax'` withholds it just as
- * `'strict'` does. `setOAuthRefreshTokenCookie` is the one caller that passes
- * `'lax'`.
- * @param request - The request, checked for a host-only plain cookie to clear.
- * @param response - The response to set the cookie on.
- * @param rawToken - The raw refresh token.
- * @param expiresAt - When the token expires.
- * @param sameSite - The cookie's `SameSite` attribute. Defaults to `'strict'`.
- */
-function setRefreshTokenCookie(
-  request: Request,
-  response: Response,
-  rawToken: string,
-  expiresAt: Date,
-  sameSite: 'strict' | 'lax' = 'strict'
-): void {
-  const env = getEnv()
-  clearHostOnlyPlainRefreshCookie(request, response, env)
-  const spec = currentRefreshCookie(env)
-  response.cookie(spec.name, rawToken, {
-    ...refreshCookieOptions(spec, env, sameSite),
-    expires: expiresAt,
-  })
 }
 
 /**
@@ -284,44 +137,78 @@ async function refreshOrClearCookie(
   }
 }
 
-const REGISTER_RESPONSE_MESSAGE =
-  'If that address can be registered, a verification email has been sent.'
-
-const FORGOT_PASSWORD_RESPONSE_MESSAGE =
-  'If that address has an account, a password reset email has been sent.'
+const SIGN_IN_LINK_REQUEST_MESSAGE = 'Check your inbox for a sign-in link.'
 
 /**
- * Handlers for `/api/v1/auth`, except email verification (`VerificationController`).
+ * The query a Google callback's success redirect carries: the stored
+ * redirect, then `new=1` for an account this sign-in created.
+ * @param redirect - The same-origin path the start stored, if any.
+ * @param isNewUser - Whether the sign-in created the account.
+ * @returns `?…`, or '' when there is nothing to carry.
+ */
+function callbackQuery(redirect: string | undefined, isNewUser: boolean): string {
+  const query = new URLSearchParams()
+  if (redirect !== undefined) query.set('redirect', redirect)
+  if (isNewUser) query.set('new', '1')
+  const text = query.toString()
+  return text === '' ? '' : `?${text}`
+}
+
+/**
+ * Where a Google step-up popup lands: Apex's confirm page, with
+ * `result=confirmed` or `error=step_up_failed`.
+ * @param query - The page's query, without the `?`.
+ * @returns The absolute URL.
+ */
+function stepUpConfirmPage(query: 'result=confirmed' | 'error=step_up_failed'): string {
+  return `${withoutTrailingSlashes(frontendUrl('apex'))}/auth/confirm?${query}`
+}
+
+/**
+ * The Google authorization a step-up asks for: `openid` for the ID token,
+ * `max_age=0` for a fresh login whose `auth_time` the callback checks, and
+ * `prompt=select_account`, which Google documents, for the account choice.
+ */
+const STEP_UP_GOOGLE_OPTIONS: StepUpAuthenticateOptions = {
+  scope: ['openid', 'email', 'profile'],
+  prompt: 'select_account',
+  maxAge: 0,
+}
+
+/**
+ * Handlers for `/api/v1/auth`.
  */
 class AuthController extends BaseController {
   /**
-   * `POST /auth/register`: register a new user with an email and password.
+   * `POST /auth/link/request`: ask for a sign-in link by email.
    *
-   * A free and a taken address answer an identical 202 with `data: null`
-   * (a 201/409 split would be an enumeration oracle). The reply goes out
-   * BEFORE the follow-up work (the sign-up event and the mail), so the two
-   * branches do not differ by that work's cost.
+   * One identical 202 with `data: null` for every address, new, existing or
+   * deactivated. The handler is synchronous on purpose: the reply goes out
+   * before the lookup, the cooldown or the mail, so no branch differs by
+   * their cost, and the follow-up runs after it.
    */
-  register = this.handle(async (request, response) => {
-    const input = parseBody(registerSchema, request.body)
-    const sendFollowUpMail = await authService.register(input)
+  requestSignInLink = this.handle((request, response) => {
+    const input = parseBody(signInLinkRequestSchema, request.body)
+    const followUp = requestSignInLink(input)
 
-    messageResponse(response, REGISTER_RESPONSE_MESSAGE, 202)
+    messageResponse(response, SIGN_IN_LINK_REQUEST_MESSAGE, 202)
     // Never rejects: the service logs its own failure.
-    void sendFollowUpMail()
+    void followUp()
   })
 
   /**
-   * `POST /auth/login`: log in with an email and password. See
-   * auth.service.ts for why every credential failure is one identical,
-   * equally costly 401. A refresh cookie the browser still presented has its
-   * session revoked once the new one is issued. `no-store`, as every token
-   * response (RFC 6749 §5.1).
+   * `POST /auth/link/verify`: sign in with the token from a mailed link,
+   * creating the account on the first click (`isNewUser`). Every link that
+   * signs nobody in answers one 400 `LINK_INVALID`, as does an `email` that
+   * is not the link's address, which spends nothing. A refresh cookie the
+   * browser still presented has its session revoked once the new one is
+   * issued; the reply carries the redirect stored with the
+   * link. `no-store`, as every token response (RFC 6749 §5.1).
    */
-  login = this.handle(async (request, response) => {
+  verifySignInLink = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
-    const input = parseBody(loginSchema, request.body)
-    const session = await authService.login(input)
+    const input = parseBody(signInLinkVerifySchema, request.body)
+    const session = await verifySignInLink(input.token, input.email)
     await revokePresentedSession(request, { emitSignedOut: false })
 
     setRefreshTokenCookie(
@@ -335,8 +222,10 @@ class AuthController extends BaseController {
       {
         user: toProfileResponse(session.user, session.platformRole),
         accessToken: session.accessToken,
+        isNewUser: session.isNewUser,
+        redirect: session.redirect,
       },
-      'Login successful.'
+      'Signed in.'
     )
   })
 
@@ -362,7 +251,7 @@ class AuthController extends BaseController {
    * Inside the grace window a replay into a live session gets a sibling and a
    * fresh cookie, so a 401 racing a successful rotation of the same token
    * comes from a branch that also kills or refuses the fresh cookie's session.
-   * The one exception: a login or Google sign-in in another tab that lands
+   * The one exception: a link or Google sign-in in another tab that lands
    * while a dead-cookie refresh is in flight loses its own fresh cookie too,
    * since the clear is by name — that user just signs in again.
    * A current cookie sent with an empty value answers 401 and is cleared the
@@ -410,74 +299,81 @@ class AuthController extends BaseController {
   })
 
   /**
-   * `POST /auth/forgot-password`: request a password-reset email.
-   *
-   * An identical 202 for every address. Unlike register, nothing is shared
-   * between branches to hide behind, so the reply goes out before the lookup
-   * starts and the rest is fire-and-forget. The handler is synchronous on
-   * purpose: nothing in it is awaited.
+   * `POST /auth/step-up/link/request`: mail a "confirm it's you" link for the
+   * caller's session, behind `requireAuth` and `requirePlatformRole('viewer')`.
+   * Takes `{}` or no body. Answers 202 with when the next request may mail
+   * again; inside the cooldown a 429 `STEP_UP_LINK_COOLDOWN` with
+   * `Retry-After`.
    */
-  forgotPassword = this.handle((request, response) => {
-    const input = parseBody(forgotPasswordSchema, request.body)
+  requestStepUpLink = this.handle(async (request, response) => {
+    // A body-less POST leaves request.body undefined; it means the same as `{}`.
+    parseBody(stepUpEmptyBodySchema, request.body ?? {})
+    const result = await requestStepUpLink(authenticatedUserId(request), request.sessionId)
 
-    messageResponse(response, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
-    // Never rejects: the service logs its own failure.
-    void authService.requestPasswordReset(input.email, input.app)
+    successResponse(response, result, 'Check your inbox for a confirmation link.', 202)
   })
 
   /**
-   * `POST /auth/reset-password`: reset a password with a token from the
-   * mailed link.
-   *
-   * A weak password gets `parseBody`'s field-level 400 before the token is
-   * looked at. That is safe here, unlike verify-email: the token is the only
-   * secret in play, so "too short" leaks nothing about it.
+   * `POST /auth/step-up/link/verify`: confirm a step-up link for the caller's
+   * session, behind `requireAuth` and `requirePlatformRole('viewer')`, and
+   * reply with a new access token carrying the new `auth_time`. The refresh
+   * cookie is untouched: the session is the same. A link this session cannot
+   * use answers 400 `LINK_INVALID`, never a 401. `no-store`, as every token
+   * response (RFC 6749 §5.1).
    */
-  resetPassword = this.handle(async (request, response) => {
-    const input = parseBody(resetPasswordSchema, request.body)
-    await authService.resetPassword(input)
-
-    messageResponse(response, 'Password has been reset.')
-  })
-
-  /**
-   * `POST /auth/change-password`: change the authenticated caller's own
-   * password, behind `requireAuth`. The session making this request is spared
-   * (`request.sessionId`): only the chain its refresh cookie names, when the
-   * browser sent a live one (`readRefreshTokenCookie`, current name only), or
-   * else the whole session. A token without a session id spares nothing. See
-   * `changePassword` in auth.service.ts for the order and the failure design.
-   */
-  changePassword = this.handle(async (request, response) => {
-    const input = parseBody(changePasswordSchema, request.body)
-    await authService.changePassword(
+  verifyStepUpLink = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    const input = parseBody(stepUpLinkVerifySchema, request.body)
+    const result = await confirmStepUpLink(
       authenticatedUserId(request),
       request.sessionId,
-      input,
-      readRefreshTokenCookie(request)
-    )
-
-    messageResponse(response, 'Password has been changed.')
-  })
-
-  /**
-   * `POST /auth/reauthenticate`: step-up for staff, behind `requireAuth` and
-   * `requirePlatformRole('viewer')`. Checks the password against the caller's
-   * own account, marks the session named by the token's `sid` as just
-   * authenticated, and replies with a new access token. The refresh cookie
-   * is untouched: the session is the same. See `reauthenticate` in
-   * auth.service.ts for why a wrong password is a 400.
-   */
-  reauthenticate = this.handle(async (request, response) => {
-    const input = parseBody(reauthenticateSchema, request.body)
-    const result = await authService.reauthenticate(
-      authenticatedUserId(request),
-      request.sessionId,
-      input
+      input.token
     )
 
     successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
   })
+
+  /**
+   * `POST /auth/step-up/google/start`: record a Google step-up for the
+   * caller's session in the OAuth session, behind `requireAuth`,
+   * `requirePlatformRole('viewer')` and the OAuth session middleware, and
+   * answer 204 with the OAuth session cookie. The Apex popup then opens
+   * `GET /auth/step-up/google`, a navigation, which carries that cookie but
+   * no bearer: that is why the start is a call of its own. Takes `{}` or no
+   * body.
+   */
+  startGoogleStepUp = this.handle(async (request, response) => {
+    parseBody(stepUpEmptyBodySchema, request.body ?? {})
+    const intent = await startGoogleStepUp(authenticatedUserId(request), request.sessionId)
+    request.session.oauthIntent = intent
+
+    response.status(204).end()
+  })
+
+  /**
+   * `GET /auth/step-up/google`: the Apex popup's navigation to Google for a
+   * step-up the start recorded, no older than the OAuth session lasts. It
+   * asks Google for a fresh login (`STEP_UP_GOOGLE_OPTIONS`). With no such
+   * intent the popup lands on Apex's confirm page with
+   * `error=step_up_failed`. Not wrapped in `handle()`: it answers with a
+   * redirect, never the JSON envelope.
+   * @param request - The popup's request, after the OAuth session middleware and `passport.initialize()`.
+   * @param response - The response.
+   * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
+   */
+  openGoogleStepUp = (request: Request, response: Response, next: NextFunction): void => {
+    const intent = oauthIntentOf(request)
+    if (intent.kind !== 'step_up' || !isStepUpIntentFresh(intent)) {
+      response.redirect(stepUpConfirmPage('error=step_up_failed'))
+      return
+    }
+    // Cast for the same reason as the `/google` route in auth.routes.ts: @types/passport types authenticate() as any.
+    const authenticate = passport.authenticate(
+      GOOGLE_STRATEGY_NAME,
+      STEP_UP_GOOGLE_OPTIONS
+    ) as RequestHandler
+    authenticate(request, response, next)
+  }
 
   /**
    * `POST /auth/sessions/revoke-others`: sign the caller out of every other
@@ -500,18 +396,17 @@ class AuthController extends BaseController {
   })
 
   /**
-   * `GET /auth/providers`: which methods can sign this account in, and
-   * whether it has a password. Read-only: unlinking a method would need its own
+   * `GET /auth/providers`: which methods can sign this account in, as
+   * `{ providers }`. Every account has its `email` row, since an emailed link
+   * signs any account in. Read-only: unlinking a method would need its own
    * guard against removing the last way in.
    */
   getAuthProviders = this.handle(async (request, response) => {
-    const { providers, hasPassword } = await authService.getAuthProviders(
-      authenticatedUserId(request)
-    )
+    const providers = await authService.getAuthProviders(authenticatedUserId(request))
 
     successResponse(
       response,
-      { providers: toPublicAuthProviders(providers), hasPassword },
+      { providers: toPublicAuthProviders(providers) },
       'Auth providers retrieved.'
     )
   })
@@ -519,6 +414,12 @@ class AuthController extends BaseController {
   /**
    * `GET /auth/google/callback`: handle Google's redirect back to this API
    * once the user completes (or abandons) Google's consent screen.
+   *
+   * The stored intent picks the branch. A step-up goes to
+   * `completeGoogleStepUp`, which never
+   * sets a cookie or issues a session; a stored step-up whose fields do not
+   * check out is refused as a failed step-up, never read as a sign-in.
+   * Everything below describes the sign-in branch.
    *
    * `session: false`: the OAuth express-session exists only to carry the CSRF
    * `state`; letting Passport call `req.login()` would serialize the profile
@@ -528,7 +429,11 @@ class AuthController extends BaseController {
    *
    * A refresh cookie the request carried (a Lax one from an earlier Google
    * sign-in; the cross-site hop withholds a Strict one) has its session
-   * revoked once the new one is issued, as `login` does.
+   * revoked once the new one is issued, as a link sign-in does.
+   *
+   * A success redirects to `/auth/callback` on the frontend that started the
+   * sign-in, carrying the redirect the start stored (`redirect=`) and `new=1`
+   * when the sign-in created the account.
    *
    * Every failure of the async body redirects to `/login?error=...` on the
    * frontend that started the sign-in, never this API's JSON envelope (the
@@ -542,25 +447,41 @@ class AuthController extends BaseController {
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
    */
   handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
-    const frontend = withoutTrailingSlashes(frontendUrl(oauthAppOf(request)))
+    const intent = oauthIntentOf(request)
+    if (intent.kind === 'invalid_step_up') {
+      // A tampered step-up never reads as a sign-in: refuse before Google's answer is even read.
+      delete request.session.oauthIntent
+      response.redirect(stepUpConfirmPage('error=step_up_failed'))
+      return
+    }
+    if (intent.kind === 'step_up') {
+      this.completeGoogleStepUp(intent, request, response, next)
+      return
+    }
+    const frontend = withoutTrailingSlashes(frontendUrl(intent.app))
 
     const authenticate = passport.authenticate(
       GOOGLE_STRATEGY_NAME,
       { session: false },
-      (error: unknown, profile: GoogleProfile | false | null) => {
+      (error: unknown, result: GoogleCallbackResult | false | null) => {
         void (async () => {
-          if (error || !profile) {
+          if (error || !result) {
             logger.error('Google OAuth callback failed', { error })
             response.redirect(`${frontend}/login?error=google_auth_failed`)
             return
           }
 
           try {
-            const refreshToken = await completeGoogleSignIn(profile)
+            const { refreshToken, isNewUser } = await completeGoogleSignIn(
+              result.profile,
+              intent.app
+            )
             await revokePresentedSession(request, { emitSignedOut: false })
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
-            response.redirect(`${frontend}/auth/callback`)
+            response.redirect(
+              `${frontend}/auth/callback${callbackQuery(intent.redirect, isNewUser)}`
+            )
           } catch (innerError) {
             if (!(innerError instanceof MaintenanceModeError)) {
               logger.error('Google OAuth callback failed', { error: redactedForLog(innerError) })
@@ -570,6 +491,54 @@ class AuthController extends BaseController {
                 ? innerError.code
                 : 'processing_failed'
             response.redirect(`${frontend}/login?error=${code}`)
+          }
+        })()
+      }
+      // Cast for the same reason as the `/google` route in auth.routes.ts: @types/passport types authenticate() as any.
+    ) as RequestHandler
+
+    authenticate(request, response, next)
+  }
+
+  /**
+   * The callback's step-up branch: the intent is removed from the OAuth
+   * session first, so the round-trip confirms at most once, then
+   * `confirmGoogleStepUp` checks the ID token and the linked identity and
+   * marks the session. The popup lands on Apex's confirm page, with
+   * `result=confirmed` or `error=step_up_failed`. This branch sets no cookie,
+   * issues no token and revokes nothing: the session that asked is the one
+   * confirmed, and the popup's own cookies are left as they are.
+   * @param intent - The stored step-up intent.
+   * @param request - The callback request.
+   * @param response - The response.
+   * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
+   */
+  private completeGoogleStepUp(
+    intent: StepUpIntent,
+    request: Request,
+    response: Response,
+    next: NextFunction
+  ): void {
+    delete request.session.oauthIntent
+    const authenticate = passport.authenticate(
+      GOOGLE_STRATEGY_NAME,
+      { session: false },
+      (error: unknown, result: GoogleCallbackResult | false | null) => {
+        void (async () => {
+          if (error || !result) {
+            logger.warn('Google step-up callback failed', { error })
+            response.redirect(stepUpConfirmPage('error=step_up_failed'))
+            return
+          }
+          try {
+            await confirmGoogleStepUp(intent, result.profile, result.idToken)
+            response.redirect(stepUpConfirmPage('result=confirmed'))
+          } catch (innerError) {
+            // A refusal is logged where its reason is known; anything else is a fault.
+            if (!(innerError instanceof HttpError && innerError.code === 'step_up_failed')) {
+              logger.error('Google step-up callback failed', { error: redactedForLog(innerError) })
+            }
+            response.redirect(stepUpConfirmPage('error=step_up_failed'))
           }
         })()
       }

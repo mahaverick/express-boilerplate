@@ -1,9 +1,10 @@
 /**
- * @file The `user_tokens` table: refresh, email-verification and
- * password-reset tokens, stored only as SHA-256 hashes. SHA-256, not bcrypt:
- * the token is 256 random bits, so a slow salted hash buys nothing, bcrypt
- * would truncate it at 72 bytes, and a deterministic hash is what makes a
- * lookup by hash possible.
+ * @file The `user_tokens` table: refresh tokens, and the single-use links a
+ * mail carries for signing in, confirming a step-up and confirming an
+ * invitation, stored only as
+ * SHA-256 hashes. A fast deterministic hash, not a slow salted one: the
+ * token is 256 random bits, so a slow hash buys nothing, and a deterministic
+ * hash is what makes a lookup by hash possible.
  */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
@@ -15,14 +16,17 @@ import {
   varchar,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
+import { MAX_EMAIL_LENGTH, MAX_REDIRECT_PATH_LENGTH } from '@/constants/auth.constants'
+import { FRONTEND_APPS, type FrontendApp } from '@/constants/frontend.constants'
+import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { userModel } from '@/database/models/user.model'
 
 /**
- * The three things a `user_tokens` row can be for. `TokenPurpose` and the
+ * The things a `user_tokens` row can be for. `TokenPurpose` and the
  * `user_tokens_purpose_check` constraint are both built from it, so the
  * type and the constraint that stops a raw SQL insert cannot drift.
  */
-const TOKEN_PURPOSES = ['refresh', 'email_verification', 'password_reset'] as const
+const TOKEN_PURPOSES = ['refresh', 'sign_in_link', 'step_up_link', 'invitation_link'] as const
 
 /**
  * `TOKEN_PURPOSES` as a literal SQL value list, outside the CHECK's template
@@ -31,15 +35,54 @@ const TOKEN_PURPOSES = ['refresh', 'email_verification', 'password_reset'] as co
 const TOKEN_PURPOSE_SQL_LIST = TOKEN_PURPOSES.map((purpose) => `'${purpose}'`).join(', ')
 
 /**
+ * `FRONTEND_APPS` as a literal SQL value list, for `user_tokens_app_check`.
+ */
+const APP_SQL_LIST = FRONTEND_APPS.map((app) => `'${app}'`).join(', ')
+
+/**
  * What a `user_tokens` row is for. Every claim (`UserTokenRepository.
- * claimOnce`) is scoped to exactly one purpose, so a password-reset token
- * can never be spent as an email verification, or the other way around.
+ * claimOnce`) is scoped to exactly one purpose, so a sign-in link can never
+ * be spent as a step-up confirmation or a refresh, or the other way around.
  */
 export type TokenPurpose = (typeof TOKEN_PURPOSES)[number]
 
 /**
+ * What an emailed link can do: sign in, confirm a step-up, or confirm an
+ * invitation (sign in and join in one click). Each maps to one
+ * `user_tokens` purpose (`LINK_TOKEN_PURPOSES`).
+ */
+export const LINK_TOKEN_INTENTS = ['sign_in', 'step_up', 'invitation'] as const
+
+/**
+ * One of LINK_TOKEN_INTENTS.
+ */
+export type LinkTokenIntent = (typeof LINK_TOKEN_INTENTS)[number]
+
+/**
+ * The `user_tokens` purpose each link intent is stored under. A claim is
+ * scoped to one purpose, so a sign-in link never confirms a step-up or an
+ * invitation.
+ */
+export const LINK_TOKEN_PURPOSES = {
+  sign_in: 'sign_in_link',
+  step_up: 'step_up_link',
+  invitation: 'invitation_link',
+} as const satisfies Record<LinkTokenIntent, TokenPurpose>
+
+/**
+ * A purpose an emailed link is stored under.
+ */
+export type LinkTokenPurpose = (typeof LINK_TOKEN_PURPOSES)[LinkTokenIntent]
+
+/**
  * The `user_tokens` table: one row per issued or rotated-to token, for any
- * of the three purposes above.
+ * of the purposes above. `user_tokens_shape_check` holds each purpose's
+ * columns: a `sign_in_link` row names an address and no user, since the
+ * click looks the account up by address; an `invitation_link` row names an
+ * address and the invitation it joins, and no user, for the same reason; a
+ * `step_up_link` row names the user and the session it elevates; a `refresh`
+ * row names a user and no address. Only an `invitation_link` row has an
+ * `invitation_id`.
  *
  * Rotation is append-only: reuse detection (`rotateRefreshToken`,
  * session.service.ts) needs the revoked row to recognise a replay, and
@@ -57,9 +100,14 @@ export const userTokenModel = pgTable(
     id: varchar('id', { length: 36 })
       .primaryKey()
       .default(sql`uuidv7()`),
-    userId: varchar('user_id', { length: 36 })
-      .notNull()
-      .references(() => userModel.id, { onDelete: 'cascade' }),
+    /**
+     * Null only on a `sign_in_link` or `invitation_link` row, whose address
+     * may have no account yet. The refresh paths read it through
+     * `refreshTokenOf`, which narrows it.
+     */
+    userId: varchar('user_id', { length: 36 }).references(() => userModel.id, {
+      onDelete: 'cascade',
+    }),
     /**
      * No default, so omitting `purpose` fails to compile rather than minting
      * a refresh-capable row (tests/unit/database/models/user-token.model.test.ts
@@ -69,8 +117,10 @@ export const userTokenModel = pgTable(
     purpose: varchar('purpose', { length: 32 }).$type<TokenPurpose>().notNull(),
     /**
      * The session family for a `'refresh'` token, shared by every rotation, so
-     * one write revokes a session's whole chain (`revokeAllForSession`). Null
-     * for the other purposes.
+     * one write revokes a session's whole chain (`revokeAllForSession`). On
+     * a `step_up_link` row, the session the link elevates, so a sign-out
+     * revokes a pending link with the chain. Null on a `sign_in_link` and an
+     * `invitation_link` row.
      */
     sessionId: varchar('session_id', { length: 36 }),
     /**
@@ -123,6 +173,30 @@ export const userTokenModel = pgTable(
      * path sets it, and the retention purge ignores it.
      */
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /**
+     * The address a link was mailed to, lowercased by link-token.service.ts.
+     * Null on a `refresh` row.
+     */
+    email: varchar('email', { length: MAX_EMAIL_LENGTH }),
+    /**
+     * The frontend a link opens. Verify reads it from this row, never from the
+     * request. Null on a `refresh` row.
+     */
+    app: varchar('app', { length: 8 }).$type<FrontendApp>(),
+    /**
+     * Where a `sign_in_link` lands after verifying: a same-origin path checked
+     * by `redirectPathSchema` before it is stored. Null otherwise.
+     */
+    redirect: varchar('redirect', { length: MAX_REDIRECT_PATH_LENGTH }),
+    /**
+     * The invitation an `invitation_link` joins: its id only, never its raw
+     * token. Null on every other purpose. Deleting the invitation deletes its
+     * links.
+     */
+    invitationId: varchar('invitation_id', { length: 36 }).references(
+      () => tenantInvitationModel.id,
+      { onDelete: 'cascade' }
+    ),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -134,7 +208,15 @@ export const userTokenModel = pgTable(
     // The self-reference's ON DELETE SET NULL looks rows up by this column on every delete.
     index('user_tokens_replaced_by_id_idx').on(table.replacedById),
     index('user_tokens_expires_at_idx').on(table.expiresAt),
-    // Retention: explicitly revoked, never used (logout, reuse, password change).
+    // A newly issued sign-in link revokes the live ones of its address.
+    index('user_tokens_live_email_idx')
+      .on(table.email, table.purpose)
+      .where(sql`${table.email} is not null and ${table.revokedAt} is null`),
+    // The invitation foreign key's ON DELETE CASCADE looks rows up by this column.
+    index('user_tokens_invitation_id_idx')
+      .on(table.invitationId)
+      .where(sql`${table.invitationId} is not null`),
+    // Retention: explicitly revoked, never used (logout, reuse, sign-out of other sessions).
     index('user_tokens_revoked_unconsumed_idx')
       .on(table.revokedAt)
       .where(sql`${table.revokedAt} is not null and ${table.consumedAt} is null`),
@@ -142,6 +224,11 @@ export const userTokenModel = pgTable(
     check(
       'user_tokens_purpose_check',
       sql`${table.purpose} in (${sql.raw(TOKEN_PURPOSE_SQL_LIST)})`
+    ),
+    check('user_tokens_app_check', sql`${table.app} in (${sql.raw(APP_SQL_LIST)})`),
+    check(
+      'user_tokens_shape_check',
+      sql`(${table.purpose} = 'refresh' and ${table.userId} is not null and ${table.email} is null and ${table.app} is null and ${table.redirect} is null and ${table.invitationId} is null) or (${table.purpose} = 'sign_in_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null and ${table.invitationId} is null) or (${table.purpose} = 'step_up_link' and ${table.userId} is not null and ${table.sessionId} is not null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null and ${table.invitationId} is null) or (${table.purpose} = 'invitation_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null and ${table.invitationId} is not null)`
     ),
   ]
 )
@@ -155,3 +242,28 @@ export type UserToken = InferSelectModel<typeof userTokenModel>
  * A user_token row as written to the database.
  */
 export type NewUserToken = InferInsertModel<typeof userTokenModel>
+
+/**
+ * A `'refresh'` row with the columns its purpose always fills, narrowed by
+ * `refreshTokenOf`, so the session paths never handle a null user or session.
+ */
+export type RefreshUserToken = UserToken & {
+  purpose: 'refresh'
+  userId: string
+  sessionId: string
+  sessionStartedAt: Date
+}
+
+/**
+ * Narrow a row to a refresh token, or nothing. `issueRefreshToken` and
+ * rotation always fill the narrowed columns, so a refresh row that lacks one
+ * breaks an invariant and is treated as unknown, never as a crash.
+ * @param row - Any `user_tokens` row, or undefined.
+ * @returns The row as a `RefreshUserToken`, or undefined when it is missing, of another purpose, or incomplete.
+ */
+export function refreshTokenOf(row: UserToken | undefined): RefreshUserToken | undefined {
+  if (row?.purpose !== 'refresh') return undefined
+  const { userId, sessionId, sessionStartedAt } = row
+  if (userId === null || sessionId === null || sessionStartedAt === null) return undefined
+  return { ...row, purpose: 'refresh', userId, sessionId, sessionStartedAt }
+}

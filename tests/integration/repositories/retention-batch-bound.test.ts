@@ -176,7 +176,7 @@ const cases: BoundCase[] = [
       await seedRows(
         () => sql`
           insert into notifications (user_id, type, title, body, created_at, read_at)
-          values (${userId}, 'verify_email', 'Title', 'Body', ${ROWS_AT}::timestamptz, ${ROWS_AT}::timestamptz)
+          values (${userId}, 'tenant_invitation', 'Title', 'Body', ${ROWS_AT}::timestamptz, ${ROWS_AT}::timestamptz)
         `
       )
     },
@@ -189,7 +189,7 @@ const cases: BoundCase[] = [
       await seedRows(
         () => sql`
           insert into notifications (user_id, type, title, body, created_at)
-          values (${userId}, 'verify_email', 'Title', 'Body', ${ROWS_AT}::timestamptz)
+          values (${userId}, 'tenant_invitation', 'Title', 'Body', ${ROWS_AT}::timestamptz)
         `
       )
     },

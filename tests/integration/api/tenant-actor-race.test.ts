@@ -20,7 +20,12 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql, type DbExecutor } from '@/services/database.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -37,6 +42,7 @@ const HOUR_MS = 60 * 60 * 1000
 afterAll(async () => {
   // Clear anything a regression lets these requests enqueue.
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -190,7 +196,10 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
         .send({ role: 'editor' })
 
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
@@ -225,7 +234,10 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     expect(await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)).toBeDefined()
@@ -241,7 +253,10 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
         .send({ email: uniqueEmail(), role: 'viewer' })
 
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     const rows = await sql`select id from tenant_invitations where tenant_id = ${tenant.id}`
@@ -258,7 +273,10 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     expect(await invitationState(invitation.id)).toEqual({
@@ -278,7 +296,10 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
 
     const state = await invitationState(invitation.id)

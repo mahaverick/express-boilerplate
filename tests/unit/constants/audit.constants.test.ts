@@ -30,7 +30,6 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'invitation.resent': { role: 'viewer', emailDomain: 'example.test' },
   'invitation.revoked': { role: 'viewer', emailDomain: 'example.test' },
   'invitation.accepted': { role: 'viewer', invitationId: 'invitation-1' },
-  'platform.member.auto_joined': { userId: 'user-1', emailDomain: 'staff.example.test' },
   'platform.member.granted': { userId: 'user-1', role: 'admin', via: 'script' },
   'tenant.accessed_by_platform': { platformRole: 'viewer' },
   'user.created': { emailDomain: 'example.test' },
@@ -38,8 +37,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'user.deactivated': { reason: 'Chargeback fraud, ticket 4411' },
   'user.reactivated': { reason: 'Cleared by support' },
   'user.signed_out': { reason: 'Lost laptop' },
-  'user.password_setup_sent': { kind: 'setup' },
-  'user.verification_resent': {},
+  'user.sign_in_link_sent': { app: 'web' },
   'user.deleted': { reason: 'Erasure request' },
   'tenant.suspended': { reason: 'Unpaid invoice' },
   'tenant.reactivated': { reason: 'Invoice paid' },
@@ -49,13 +47,14 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     inviteeUserId: 'user-2',
     reason: 'Customer asked us to resend',
   },
-  'auth.reauthenticated': { outcome: 'success' },
+  'auth.step_up_confirmed': { method: 'link' },
+  'auth.step_up_refused': { method: 'google' },
   'user.purged': { reason: 'Erasure request, ticket 9001', emailDomain: 'example.test' },
   'tenant.purged': { reason: 'Contract ended', name: 'Acme Inc', slug: 'acme', memberCount: 3 },
   'email.resent': {
     reason: 'Customer never got the link',
     emailDomain: 'example.test',
-    templateKey: 'email_verification',
+    templateKey: 'sign_in_link',
   },
   'email.suppression_lifted': { reason: 'Mailbox fixed, ticket 812', emailDomain: 'example.test' },
   'onboarding.dismissed': {},
@@ -91,7 +90,8 @@ const ACTIONS_WITH_METADATA_KEYS = ACTIONS.filter(
 describe('AUDIT_ACTIONS', () => {
   it('lists exactly the actions of the API contract', () => {
     expect(ACTIONS.toSorted((a, b) => a.localeCompare(b))).toEqual([
-      'auth.reauthenticated',
+      'auth.step_up_confirmed',
+      'auth.step_up_refused',
       'email.resent',
       'email.suppression_lifted',
       'invitation.accepted',
@@ -106,7 +106,6 @@ describe('AUDIT_ACTIONS', () => {
       'onboarding.step_completed',
       'onboarding.undismissed',
       'platform.maintenance_mode_changed',
-      'platform.member.auto_joined',
       'platform.member.granted',
       'tenant.accessed_by_platform',
       'tenant.archived',
@@ -121,12 +120,11 @@ describe('AUDIT_ACTIONS', () => {
       'user.deactivated',
       'user.deleted',
       'user.flags_evaluated',
-      'user.password_setup_sent',
       'user.purged',
       'user.reactivated',
+      'user.sign_in_link_sent',
       'user.signed_out',
       'user.updated',
-      'user.verification_resent',
     ])
   })
 
@@ -202,25 +200,33 @@ describe('AUDIT_ACTIONS', () => {
     expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
   })
 
-  it('pins the closed value sets of user.password_setup_sent and auth.reauthenticated', () => {
+  it('pins the closed value sets of user.sign_in_link_sent and the step-up actions', () => {
     expect(
-      AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'reset' }).success
+      AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({ app: 'apex' }).success
     ).toBe(true)
     expect(
-      AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'invite' }).success
+      AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({ app: 'mobile' }).success
+    ).toBe(false)
+    expect(AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({}).success).toBe(false)
+    expect(
+      AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'google' }).success
+    ).toBe(true)
+    expect(
+      AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'password' }).success
     ).toBe(false)
     expect(
-      AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'failure' }).success
+      AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'link' }).success
     ).toBe(true)
     expect(
-      AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'maybe' }).success
+      AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'password' }).success
     ).toBe(false)
   })
 
   it('records only a known template key on email.resent', () => {
     const schema = AUDIT_ACTIONS['email.resent'].metadata
     const valid = VALID_METADATA['email.resent']
-    expect(schema.safeParse({ ...valid, templateKey: 'account_setup' }).success).toBe(true)
+    expect(schema.safeParse({ ...valid, templateKey: 'welcome' }).success).toBe(true)
+    expect(schema.safeParse({ ...valid, templateKey: 'account_setup' }).success).toBe(false)
     expect(schema.safeParse({ ...valid, templateKey: 'not_a_template' }).success).toBe(false)
   })
 
@@ -255,7 +261,8 @@ describe('AUDIT_ACTIONS', () => {
 
   it('targets users, tenants and invitations as the plan says', () => {
     expect(AUDIT_ACTIONS['user.deleted'].target).toBe('user')
-    expect(AUDIT_ACTIONS['auth.reauthenticated'].target).toBe('user')
+    expect(AUDIT_ACTIONS['auth.step_up_confirmed'].target).toBe('user')
+    expect(AUDIT_ACTIONS['auth.step_up_refused'].target).toBe('user')
     expect(AUDIT_ACTIONS['tenant.archived'].target).toBe('tenant')
     expect(AUDIT_ACTIONS['tenant.owner_invited'].target).toBe('invitation')
     expect(AUDIT_ACTIONS['user.purged'].target).toBe('user')
@@ -297,12 +304,6 @@ describe('emailDomain shape', () => {
     }
   )
 
-  it('keeps the auto-join domain required', () => {
-    const autoJoined = AUDIT_ACTIONS['platform.member.auto_joined'].metadata
-    // eslint-disable-next-line unicorn/no-null -- proving null is refused here
-    expect(autoJoined.safeParse({ userId: 'user-1', emailDomain: null }).success).toBe(false)
-  })
-
   it.each([
     ['a hex token with no dot', 'a1b2c3d4'.repeat(8)],
     ['a full address', 'a@b.com'],
@@ -342,6 +343,13 @@ describe('audit value sets', () => {
     expect(schema.safeParse('not.an.action').success).toBe(false)
   })
 
+  it('lets invitation.resent name the sign-in request that triggered it, and nothing else', () => {
+    const resent = AUDIT_ACTIONS['invitation.resent'].metadata
+    const base = { role: 'viewer', emailDomain: 'example.test' }
+    expect(resent.safeParse({ ...base, trigger: 'sign_in_request' }).success).toBe(true)
+    expect(resent.safeParse({ ...base, trigger: 'staff' }).success).toBe(false)
+  })
+
   describe('retired actions', () => {
     it('are stored and filterable but not written', () => {
       expect(RETIRED_AUDIT_ACTIONS).toEqual([
@@ -349,6 +357,10 @@ describe('audit value sets', () => {
         'tenant.timeline_viewed',
         'user.errors_viewed',
         'tenant.errors_viewed',
+        'platform.member.auto_joined',
+        'auth.reauthenticated',
+        'user.password_setup_sent',
+        'user.verification_resent',
       ])
       for (const action of RETIRED_AUDIT_ACTIONS) {
         expect(Object.hasOwn(AUDIT_ACTIONS, action)).toBe(false)

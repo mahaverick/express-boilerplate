@@ -12,7 +12,12 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql, withTransaction, type DbTransaction } from '@/services/database.service'
 import { createTenant, reissueOwnerInvitation } from '@/services/platform-tenant.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { hashToken } from '@/services/session.service'
 import { accept, createOwnerInvitation } from '@/services/tenant-invitation.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -32,6 +37,7 @@ const slugs: string[] = []
 // The owner invitations this file queues must not linger under the worker's key prefix for the next file.
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })

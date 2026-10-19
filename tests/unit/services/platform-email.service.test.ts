@@ -52,10 +52,11 @@ describe('buildPreviewMessage', () => {
   })
 
   it.each<[EmailTemplateKey, string]>([
-    ['email_verification', '/verify-email?token='],
-    ['password_reset', '/reset-password?token='],
-    ['account_setup', '/reset-password?token='],
     ['tenant_invitation', '/invitations/accept?token='],
+    ['sign_in_link', '/auth/link?token='],
+    ['welcome', '/auth/link?token='],
+    ['step_up_link', '/auth/confirm?token='],
+    ['invitation_confirm', '/invitations/confirm?token='],
   ])('%s keeps the real page and frontend and masks the token', (templateKey, path) => {
     const { message } = buildPreviewMessage(templateKey, {}, ORIGIN)
     const rendered = renderForMessage(message)
@@ -67,8 +68,8 @@ describe('buildPreviewMessage', () => {
 
   it('uses the stored first name and product name and is not partial', () => {
     const { message, isPartial } = buildPreviewMessage(
-      'password_reset',
-      { firstName: 'Ada', appName: 'Acme' },
+      'step_up_link',
+      { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15' },
       ORIGIN
     )
     const rendered = renderForMessage(message)
@@ -79,17 +80,17 @@ describe('buildPreviewMessage', () => {
   })
 
   it('is partial when a stored variable is missing (a legacy row), filling it with the mask', () => {
-    const { message, isPartial } = buildPreviewMessage('password_changed', {}, ORIGIN)
+    const { message, isPartial } = buildPreviewMessage('step_up_link', {}, ORIGIN)
 
     expect(isPartial).toBe(true)
     expect(renderForMessage(message).text).toContain(TOKEN_MASK)
   })
 
   it('never uses a stored secret, even one that reached the row', () => {
-    const leaked = `${ORIGIN}/reset-password?token=${'ab'.repeat(32)}`
+    const leaked = `${ORIGIN}/auth/confirm?token=${'ab'.repeat(32)}`
     const { message } = buildPreviewMessage(
-      'password_reset',
-      { firstName: 'Ada', appName: 'Acme', resetUrl: leaked },
+      'step_up_link',
+      { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15', confirmUrl: leaked },
       ORIGIN
     )
     const rendered = renderForMessage(message)
@@ -131,8 +132,8 @@ describe('buildPreviewMessage', () => {
 
   it('ignores a non-string stored value', () => {
     const { isPartial } = buildPreviewMessage(
-      'registration_attempt',
-      { firstName: 42, appName: 'Acme' },
+      'step_up_link',
+      { firstName: 42, appName: 'Acme', expiresInMinutes: '15' },
       ORIGIN
     )
     expect(isPartial).toBe(true)
@@ -150,7 +151,7 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
   return {
     id: randomUUID(),
     recipient: 'Ada@Example.test',
-    templateKey: 'account_setup',
+    templateKey: 'sign_in_link',
     status: 'sent',
     senderClass: 'transactional',
     linkApp: 'web',
@@ -199,9 +200,12 @@ function context(overrides: Partial<ResendContext> = {}): ResendContext {
 }
 
 describe('canResendFor', () => {
-  it('is true for an admin resending a non-staff user their set-password mail', () => {
-    expect(canResendFor(ACTOR, message(), context())).toBe(true)
-  })
+  it.each(['sign_in_link', 'welcome'])(
+    'is true for an admin resending a non-staff user a %s mail',
+    (templateKey) => {
+      expect(canResendFor(ACTOR, message({ templateKey }), context())).toBe(true)
+    }
+  )
 
   // eslint-disable-next-line unicorn/no-null -- null is an actor with no platform role
   it.each<MembershipRole | null>(['viewer', 'editor', 'manager', null])(
@@ -211,12 +215,18 @@ describe('canResendFor', () => {
     }
   )
 
-  it.each(['password_changed', 'registration_attempt', 'onboarding_reminder', 'retired_template'])(
-    'is false for %s (no resend action)',
-    (templateKey) => {
-      expect(canResendFor(ACTOR, message({ templateKey }), context())).toBe(false)
-    }
-  )
+  it.each([
+    'password_changed',
+    'registration_attempt',
+    'onboarding_reminder',
+    'step_up_link',
+    'email_verification',
+    'password_reset',
+    'account_setup',
+    'retired_template',
+  ])('is false for %s (no resend action)', (templateKey) => {
+    expect(canResendFor(ACTOR, message({ templateKey }), context())).toBe(false)
+  })
 
   it('is false for a suppressed address, matched case-insensitively', () => {
     const suppressed = context({ suppressedAddresses: new Set(['ada@example.test']) })
@@ -232,27 +242,17 @@ describe('canResendFor', () => {
     expect(canResendFor(ACTOR, gone, context())).toBe(false)
   })
 
-  it('is false for a verification resend to an already-verified user, true while unverified', () => {
-    const verified = message({ templateKey: 'email_verification' })
-    expect(canResendFor(ACTOR, verified, context())).toBe(false)
-    const unverified = message({ templateKey: 'email_verification' })
+  it.each(['sign_in_link', 'welcome'])('is false for %s to a deactivated user', (templateKey) => {
+    const inactive = message({ templateKey })
+    if (inactive.user) inactive.user.isActive = false
+    expect(canResendFor(ACTOR, inactive, context())).toBe(false)
+  })
+
+  it('is true for an unverified user: the link verifies the address', () => {
+    const unverified = message()
     if (unverified.user) unverified.user.isVerified = false
     expect(canResendFor(ACTOR, unverified, context())).toBe(true)
   })
-
-  it('is true for a set-password resend to a verified user', () => {
-    expect(canResendFor(ACTOR, message({ templateKey: 'password_reset' }), context())).toBe(true)
-  })
-
-  it.each(['email_verification', 'account_setup', 'password_reset'])(
-    'is false for %s to a deactivated user',
-    (templateKey) => {
-      const inactive = message({ templateKey })
-      // Unverified too, so only `isActive` can refuse
-      if (inactive.user) Object.assign(inactive.user, { isActive: false, isVerified: false })
-      expect(canResendFor(ACTOR, inactive, context())).toBe(false)
-    }
-  )
 
   it('is false when the target outranks the actor, true for an owner', () => {
     const staffOwner = message()

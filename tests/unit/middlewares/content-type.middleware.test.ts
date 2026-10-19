@@ -33,7 +33,7 @@ describe('requireJsonContentType', () => {
     const response = await request(buildApp())
       .post('/endpoint')
       .type('form')
-      .send({ email: 'victim@example.com', password: 'attacker-chosen' })
+      .send({ token: 'attacker-chosen-link' })
 
     expect(response.status).toBe(415)
     expect(response.body).toMatchObject({ success: false, code: UNSUPPORTED_MEDIA_TYPE_CODE })

@@ -2,17 +2,14 @@
  * @file Staff management of users, behind `/platform/users`. The routes check
  * the caller's platform role before any of this runs.
  */
-import { getEnv } from '@/configs/env.config'
 import { AUTH_PROVIDERS, type AuthProvider } from '@/constants/auth-provider.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
-import { JobPriority } from '@/constants/queue.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
-import { addEmailJob } from '@/jobs/email.job'
 import {
   canPlatformActorModifyTarget,
   canStaffMailTarget,
@@ -28,25 +25,21 @@ import {
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
-import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
-import { sendPasswordResetMail } from '@/services/auth.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
-import { denySessionsAfterCommit, issueToken, revokeSessionRows } from '@/services/session.service'
 import {
-  buildPasswordResetUrl,
-  frontendUrl,
-  MISSING_FIRST_NAME_FALLBACK,
-  sendVerificationMail,
-} from '@/services/verification.service'
-import { ACCOUNT_SETUP_TEMPLATE_KEY } from '@/templates/email/account-setup.template'
+  denySessionsAfterCommit,
+  revokeSessionRows,
+  revokeSignInLinksOf,
+} from '@/services/session.service'
+import { sendSignInLink } from '@/services/sign-in-link.service'
+import { resendAvailableAt } from '@/services/tenant-invitation.service'
 import type { Actor } from '@/types/actor'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
-import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
@@ -61,7 +54,6 @@ const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
-const userTokenRepository = new UserTokenRepository()
 
 /**
  * One user as the staff directory returns it. `membershipCount` counts live
@@ -74,10 +66,9 @@ export type PlatformUserRow = PlatformUserRecord
  * One user with everything the staff detail page shows.
  */
 export interface PlatformUserDetail extends PlatformUserRow {
-  hasPassword: boolean
   authProviders: AuthProvider[]
   memberships: PlatformUserMembership[]
-  pendingInvitations: PlatformUserPendingInvitation[]
+  pendingInvitations: (PlatformUserPendingInvitation & { resendAvailableAt: Date | null })[]
 }
 
 /**
@@ -102,9 +93,7 @@ export async function listUsers(query: PlatformUserListQuery): Promise<ListPage<
 export async function getUserDetail(userId: string): Promise<PlatformUserDetail> {
   const record = await platformUserRepository.findRecord(userId, { includeDeleted: true })
   if (!record) throw new HttpError('User not found', 404)
-  const [stored, providers, memberships, pendingInvitations] = await Promise.all([
-    // includeDeleted: a soft-deleted user's page still says whether a password was set.
-    userRepository.findById(userId, { includeDeleted: true }),
+  const [providers, memberships, pendingInvitations] = await Promise.all([
     authProviderRepository.findByUser(userId),
     platformUserRepository.listMemberships(userId),
     record.deletedAt === null ? platformUserRepository.listPendingInvitations(record.email) : [],
@@ -112,15 +101,23 @@ export async function getUserDetail(userId: string): Promise<PlatformUserDetail>
   const present = new Set(providers.map((provider) => provider.provider))
   return {
     ...record,
-    hasPassword: stored?.passwordHash !== null && stored?.passwordHash !== undefined,
     authProviders: AUTH_PROVIDERS.filter((provider) => present.has(provider)),
     memberships,
-    pendingInvitations,
+    pendingInvitations: pendingInvitations.map((invitation) => ({
+      ...invitation,
+      resendAvailableAt: resendAvailableAt(invitation.lastSentAt),
+    })),
   }
 }
 
 const DUPLICATE_EMAIL_MESSAGE = 'An account already uses that email address'
-const STAFF_TARGET_MESSAGE = 'Insufficient permissions to act on this staff member'
+const STAFF_TARGET_MESSAGE =
+  "Your platform role can't act on this staff member. Ask a platform owner."
+
+/**
+ * The 403 for a staff member editing their own account, which no role allows.
+ */
+const SELF_EDIT_MESSAGE = "You can't edit your own account here. Ask another platform admin."
 
 /**
  * The platform tenant: where every `user.*` audit entry is written.
@@ -149,7 +146,7 @@ async function requireRecord(userId: string): Promise<PlatformUserRow> {
 /**
  * Run a mail send after the write committed, reporting instead of throwing a
  * failure: the write stands whatever happens to the mail.
- * @param send - Issues the token and queues the job.
+ * @param send - Issues the link and queues the job.
  * @param what - A label for the log line.
  * @param userId - The user the mail is for.
  * @returns Whether the mail was queued.
@@ -166,40 +163,6 @@ async function trySend(
     logger.error(`${what} failed`, { error: redactedForLog(error), userId })
     return { emailSent: false }
   }
-}
-
-/**
- * Issue a set-password token (a `password_reset` token with
- * ACCOUNT_SETUP_TTL) and queue the `account_setup` mail. Redeeming the link
- * on /reset-password stores the password and verifies the address.
- * @param user - The account.
- * @param app - The frontend the link opens, recorded on the message row.
- * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.
- * @returns Resolves once the job is queued.
- */
-async function sendAccountSetupMail(
-  user: User,
-  app: FrontendApp,
-  options: EmailResendOptions = {}
-): Promise<void> {
-  const issued = await issueToken(
-    user.id,
-    'password_reset',
-    requireDurationMs(getEnv().ACCOUNT_SETUP_TTL)
-  )
-  await addEmailJob(
-    {
-      to: user.email,
-      templateKey: ACCOUNT_SETUP_TEMPLATE_KEY,
-      variables: {
-        firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        setupUrl: buildPasswordResetUrl(issued.raw, frontendUrl(app)),
-        appName: getEnv().APP_NAME,
-      },
-    },
-    user.id,
-    { priority: JobPriority.high, context: { linkApp: app, ...options } }
-  )
 }
 
 /**
@@ -256,7 +219,7 @@ async function lockStaffPair(
 
   const target = await userRepository.lockById(targetUserId, 'no key update', tx)
   if (!target) throw new HttpError('User not found', 404)
-  // Read again after the user-row wait: a platform invitation accepted meanwhile held that row first and has committed. Only auto-join can still add a role now (viewer, under neither lock), and any admin may act on a viewer.
+  // Read again after the user-row wait: a platform invitation accepted meanwhile held that row first and has committed.
   const targetRole = await userMembershipRepository.findPlatformRole(targetUserId, tx)
   // The rule never covers oneself: a caller that must refuse a self-action does so before this, and one that allows it relies on this skip.
   if (
@@ -272,8 +235,8 @@ async function lockStaffPair(
 /**
  * Mail-only actions need an admin actor of at least a staff target's rank
  * (`canStaffMailTarget`). Unlocked: the roles are read once, and the writes
- * that follow (token revocation, the audit entry) do not depend on them
- * staying unchanged.
+ * that follow (the audit entry, the link) do not depend on them staying
+ * unchanged.
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user to mail.
  * @returns The target's platform role, or null when not staff.
@@ -301,16 +264,18 @@ async function assertMayMail(actor: Actor, targetUserId: string): Promise<Member
 async function requireMailableUser(userId: string): Promise<User> {
   const user = await userRepository.findById(userId)
   if (!user) throw new HttpError('User not found', 404)
-  if (!user.active) throw new HttpError('This account is deactivated; reactivate it first', 409)
+  if (!user.active)
+    throw new HttpError('This account is deactivated. Reactivate it, then try again.', 409)
   return user
 }
 
 /**
- * Create a passwordless, unverified user and mail them a set-password link.
- * The row, its `email` provider row and the audit entry commit together;
- * the mail goes after commit and never undoes the create. The link opens the
- * web app: the new user holds no platform role, and the frontend is chosen
- * from that role, as for the other staff mail actions.
+ * Create an unverified user and mail them the `welcome` message, which
+ * carries a sign-in link; its first click verifies the address. The row,
+ * its `email` provider row and the audit entry commit together; the mail
+ * goes after commit and never undoes the create. The link opens the web
+ * app: the new user holds no platform role, and the frontend is chosen from
+ * that role, as for the staff-sent sign-in link.
  * @param actor - The signed-in staff admin.
  * @param input - The validated body.
  * @returns The new user and whether the mail was queued.
@@ -360,8 +325,9 @@ export async function createUser(
   }
 
   const delivery = await trySend(
-    () => sendAccountSetupMail(created, 'web'),
-    'Account setup mail',
+    () =>
+      sendSignInLink({ email: created.email, app: 'web', userId: created.id, reason: 'welcome' }),
+    'Welcome mail',
     created.id
   )
   return { user: await requireRecord(created.id), emailSent: delivery.emailSent }
@@ -382,7 +348,7 @@ export async function updateUser(
   input: UpdatePlatformUserInput
 ): Promise<PlatformUserRow> {
   // Editing oneself is refused whatever the role: the self-skip in lockStaffPair would otherwise allow it.
-  if (userId === actor.userId) throw new HttpError(STAFF_TARGET_MESSAGE, 403)
+  if (userId === actor.userId) throw new HttpError(SELF_EDIT_MESSAGE, 403)
   await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     const changes: { firstName?: string | null; lastName?: string | null } = {}
@@ -405,98 +371,45 @@ export async function updateUser(
 }
 
 /**
- * Mail a set-password link (no password yet) or a reset link (has one),
- * revoking the user's earlier unredeemed links first. A staff target gets an
- * Apex link; anyone else a web link. The attempt is audited before the mail.
+ * Mail a user a staff-sent sign-in link: the `sign_in_link` mail with the
+ * sentence saying a team admin sent it. Issuing it revokes the address's
+ * earlier live sign-in links. A staff target gets an Apex link; anyone else
+ * a web link. The attempt is audited, with the app, before the mail.
  * @param actor - The signed-in staff admin.
  * @param userId - The user to mail.
  * @param options - `resentFromId` when a staff resend re-runs this action for an earlier message.
  * @returns Whether the mail was queued.
  * @throws {HttpError} 404 unknown user; 409 deactivated; 403 when the target outranks the actor.
  */
-export async function sendPasswordSetup(
+export async function sendSignInLinkByStaff(
   actor: Actor,
   userId: string,
   options: EmailResendOptions = {}
 ): Promise<EmailDelivery> {
   const target = await requireMailableUser(userId)
   const targetRole = await assertMayMail(actor, userId)
-  const kind = target.passwordHash === null ? 'setup' : 'reset'
   const app: FrontendApp = targetRole === null ? 'web' : 'apex'
   const platform = await platformTenantOrThrow()
 
   await withTransaction(async (tx) => {
-    // Purpose-scoped: revokeAllForUser would also end the user's sessions.
-    await userTokenRepository.revokeAllForUserAndPurpose(userId, 'password_reset', tx)
     await record(
       {
-        action: 'user.password_setup_sent',
+        action: 'user.sign_in_link_sent',
         actor,
         access: 'platform',
         tenantId: platform.id,
         targetId: userId,
-        metadata: { kind },
+        metadata: { app },
       },
       tx
     )
   })
 
-  const delivery = await trySend(
-    () =>
-      kind === 'setup'
-        ? sendAccountSetupMail(target, app, options)
-        : sendPasswordResetMail(target, app, options),
-    'Password setup mail',
+  return trySend(
+    () => sendSignInLink({ email: target.email, app, userId, reason: 'staff' }, options),
+    'Staff sign-in link mail',
     userId
   )
-  return delivery
-}
-
-/**
- * Mail a fresh verification link, revoking the earlier ones first.
- * @param actor - The signed-in staff admin.
- * @param userId - The user to mail.
- * @param options - `resentFromId` when a staff resend re-runs this action for an earlier message.
- * @returns Whether the mail was queued.
- * @throws {HttpError} 404 unknown user; 409 deactivated; 403 target outranks the actor; 409 already verified, or no password (a verification link needs one; send a set-password link instead).
- */
-export async function resendUserVerification(
-  actor: Actor,
-  userId: string,
-  options: EmailResendOptions = {}
-): Promise<EmailDelivery> {
-  const target = await requireMailableUser(userId)
-  const targetRole = await assertMayMail(actor, userId)
-  if (target.emailVerifiedAt !== null) {
-    throw new HttpError('Email address already verified', 409)
-  }
-  if (target.passwordHash === null) {
-    throw new HttpError('This account has no password yet; send a set-password link instead', 409)
-  }
-  const platform = await platformTenantOrThrow()
-
-  await withTransaction(async (tx) => {
-    await userTokenRepository.revokeAllForUserAndPurpose(userId, 'email_verification', tx)
-    await record(
-      {
-        action: 'user.verification_resent',
-        actor,
-        access: 'platform',
-        tenantId: platform.id,
-        targetId: userId,
-        metadata: {},
-      },
-      tx
-    )
-  })
-
-  const app: FrontendApp = targetRole === null ? 'web' : 'apex'
-  const delivery = await trySend(
-    () => sendVerificationMail(target, app, options),
-    'Verification mail',
-    userId
-  )
-  return delivery
 }
 
 /**
@@ -515,7 +428,10 @@ export function assertPlatformOwnerRemains(
   verb: 'deactivate' | 'delete'
 ): void {
   if (targetRole === 'owner' && otherActiveOwners < 1) {
-    throw new HttpError(`Cannot ${verb} the last platform owner`, 409)
+    throw new HttpError(
+      `Make another staff member a platform owner before you ${verb} this one.`,
+      409
+    )
   }
 }
 
@@ -564,8 +480,9 @@ function refuseSelf(actor: Actor, userId: string, message: string): void {
 }
 
 /**
- * Deactivate a user: `active = false`, every token row revoked and every
- * pending invitation they sent revoked in the same transaction, the revoked
+ * Deactivate a user: `active = false`, every token row, every live sign-in
+ * link mailed to their address and every pending invitation they sent
+ * revoked in the same transaction, the revoked
  * sessions denied after commit. A racing login either committed first and
  * loses its session here, or waits on the user row lock (its FOR SHARE
  * re-read conflicts with this FOR NO KEY UPDATE) and sees the inactive account.
@@ -583,7 +500,11 @@ export async function deactivateUser(
   refuseSelf(actor, userId, 'You cannot deactivate your own account')
   const revoked = await withTransaction(async (tx) => {
     const { target, targetRole, platform } = await lockStaffPair(actor, userId, 'admin', tx)
-    if (!target.active) throw new HttpError('User is already inactive', 409)
+    if (!target.active)
+      throw new HttpError(
+        'This user is already deactivated. Refresh the page to see their status.',
+        409
+      )
     assertPlatformOwnerRemains(
       targetRole,
       await userMembershipRepository.countActiveOwners(platform.id, tx, target.id),
@@ -591,6 +512,7 @@ export async function deactivateUser(
     )
     await userRepository.update(target.id, { active: false }, {}, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    await revokeSignInLinksOf(target.email, tx)
     // Invitations they sent would still admit people on their authority.
     await revokeInvitationsSentBy(actor, target.id, tx)
     await record(
@@ -625,7 +547,8 @@ export async function reactivateUser(
 ): Promise<PlatformUserRow> {
   await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
-    if (target.active) throw new HttpError('User is already active', 409)
+    if (target.active)
+      throw new HttpError('This user is already active. Refresh the page to see their status.', 409)
     await userRepository.update(target.id, { active: true }, {}, tx)
     await record(
       {
@@ -643,7 +566,8 @@ export async function reactivateUser(
 }
 
 /**
- * End every session a user has, everywhere.
+ * End every session a user has, everywhere, and revoke the live sign-in
+ * links mailed to their address, which would start a new one.
  * @param actor - The signed-in staff admin.
  * @param userId - The user.
  * @param reason - Why, for the audit log.
@@ -655,6 +579,7 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
   const revoked = await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    await revokeSignInLinksOf(target.email, tx)
     await record(
       {
         action: 'user.signed_out',
@@ -724,7 +649,10 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       blocking.push(platform.name)
     }
     if (blocking.length > 0) {
-      throw new HttpError(`Cannot delete the last owner of: ${blocking.join(', ')}`, 409)
+      throw new HttpError(
+        `This user is the last owner of ${blocking.join(', ')}. Make someone else an owner there first.`,
+        409
+      )
     }
 
     await userRepository.softDelete(target.id, tx)

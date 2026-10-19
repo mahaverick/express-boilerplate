@@ -14,15 +14,15 @@ the next release; a project generated from it owns its own patch cadence, and
 
 ## The threat model
 
-| Actor                                                         | Trusted with                                                                         | Main defences                                                                                          |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| An anonymous caller                                           | Nothing. It can register, sign in, ask for links and preview an invitation it holds. | Identical replies and timing, per-IP and per-address limits, single-use hashed tokens                  |
-| A signed-in user                                              | Their own account, and each tenant at the role their membership grants               | `requireAuth` on every request, `resolveTenant` and `requireRole`, service policies re-read under lock |
-| A page on another site                                        | Nothing                                                                              | Bearer access tokens, `SameSite` cookies, the JSON content-type gate, CORS                             |
-| A page on a sibling subdomain (same site, other origin)       | Nothing                                                                              | The Origin check on the two routes the refresh cookie authenticates, cookie prefixes                   |
-| Platform staff (members of the platform tenant)               | Reading every user and tenant; acting in customer tenants at their platform role     | Per-route role gates answering 404, step-up, a stated reason, the audit log                            |
-| Whoever holds a stolen refresh cookie or access token         | What the token grants, until it is revoked or expires                                | Rotation with reuse detection, an absolute session lifetime, the session denylist                      |
-| An operator who can read Redis, logs, job payloads or PostHog | Operating the service, not reading passwords, tokens or addresses                    | Hashed tokens, keyed digests in Redis key names, redacted logs and job data, scrubbed error events     |
+| Actor                                                         | Trusted with                                                                                                 | Main defences                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| An anonymous caller                                           | Nothing. It can ask for a sign-in link, sign in with one or with Google, and preview an invitation it holds. | One reply before any lookup, per-IP and per-address limits, single-use hashed links                    |
+| A signed-in user                                              | Their own account, and each tenant at the role their membership grants                                       | `requireAuth` on every request, `resolveTenant` and `requireRole`, service policies re-read under lock |
+| A page on another site                                        | Nothing                                                                                                      | Bearer access tokens, `SameSite` cookies, the JSON content-type gate, CORS                             |
+| A page on a sibling subdomain (same site, other origin)       | Nothing                                                                                                      | The Origin check on the two routes the refresh cookie authenticates, cookie prefixes                   |
+| Platform staff (members of the platform tenant)               | Reading every user and tenant; acting in customer tenants at their platform role                             | Per-route role gates answering 404, step-up, a stated reason, the audit log                            |
+| Whoever holds a stolen refresh cookie or access token         | What the token grants, until it is revoked or expires                                                        | Rotation with reuse detection, an absolute session lifetime, the session denylist                      |
+| An operator who can read Redis, logs, job payloads or PostHog | Operating the service, not reading tokens or addresses                                                       | Hashed tokens, keyed digests in Redis key names, redacted logs and job data, scrubbed error events     |
 
 Out of scope: an attacker who controls the database, the Redis server, the
 process environment (and so `JWT_ACCESS_SECRET` and `SESSION_SECRET`), or a
@@ -31,113 +31,130 @@ frontend origin the deployment trusts (`WEB_URL`, `APEX_URL`,
 
 ## Authentication
 
-### Password hashing: bcrypt at cost 12
+### Sign-in links: one answer, one reply before the lookup
 
-`src/utilities/password.utilities.ts` is the one module that imports bcrypt.
-It hashes at `BCRYPT_COST` (12, `src/constants/auth.constants.ts`), and
-`tests/unit/utilities/password.utilities.test.ts` checks the cost in every hash
-and the number in this heading against that constant.
+A person signs in by a single-use link mailed to their address, or by Google
+([Google sign-in](#google-sign-in)).
 
-bcrypt ignores everything after a password's 72nd byte, so two passwords
-sharing that prefix would match each other's hash. `hashPassword` throws for a
-password over `MAX_PASSWORD_BYTES` (72, counted in UTF-8 bytes), and
-`isPasswordValid` answers "no match" for one, instead of truncating. A stored
-hash bcrypt cannot read is also "no match", logged at `error` without the
-password or the hash, so a corrupt row looks like a wrong password to the
-caller.
+`POST /auth/link/request` takes `{ email, app, redirect? }` and answers every
+well-formed request with the same `202`, `Check your inbox for a sign-in link.`
+and `data: null`. It replies before it reads anything: the controller sends the
+reply, then starts the follow-up that `requestSignInLink` returns
+(`src/services/sign-in-link.service.ts`), so neither the body nor the timing
+depends on the address. The follow-up never rejects, and it stops silently at
+the first check that says no:
 
-OWASP prefers argon2id to bcrypt. `users.password_hash` is sized for bcrypt's
-60-character output, and switching algorithms once real passwords are stored
-needs a dual-verify path or a reset for everyone, so a project that wants
-argon2id switches before it has users.
+1. the per-address mail cooldown, one link per `SIGN_IN_LINK_MAIL_COOLDOWN`
+   (default `1m`), which sends when Redis is down, because the owner must be
+   able to sign in;
+2. the per-address daily budget of `SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT` links
+   (default 10) in a fixed 24-hour window, which fails open the same way
+   (`src/services/sign-in-link-limit.service.ts`);
+3. the lookup: an inactive account gets nothing, and in `full` maintenance an
+   address that is not staff gets nothing;
+4. on Apex, an address that is not staff gets its pending staff invitation
+   again, unless that invitation is inside its own resend cooldown, and
+   otherwise nothing (`resendPlatformInvitationForSignIn`);
+5. the mail. On web an address with no account gets a link too: its click
+   creates the account ([Account creation on click](#account-creation-on-click)).
 
-**Rehash on login.** A hash keeps the cost it was written with. After a
-successful login, `rehashIfOutdated` (`src/services/auth.service.ts`) rewrites
-a hash made below `BCRYPT_COST` (`isHashCostOutdated`). The write is a
-compare-and-set: `replacePasswordHash` (`src/repositories/user.repository.ts`)
-updates the row only while it holds the exact hash the login verified, so a
-password change or reset that committed in between is never undone. It runs
-after the login's token transaction, and a failure is logged at `warn` and
-never fails the login.
+Issuing a link revokes the address's earlier live links, so at most one is
+live. It lasts `SIGN_IN_LINK_TTL` (default `15m`). The link opens
+`<app origin>/auth/link?token=…&email=…`, plus `&redirect=…` when the request
+stored one. Its `redirect` is a display hint the server never reads; its
+`email` is read only when the client sends it back for the mismatch check
+below ([Email links](#email-links)).
 
-### Password policy: a 15-character floor, no composition rules
+`POST /auth/link/verify` takes `{ token, email? }` and signs in the account the
+link's address holds (`verifySignInLink`):
 
-Every password a user sets (`registerSchema`, `resetPasswordSchema` and
-`changePasswordSchema`'s `newPassword`, all through `registrationPasswordSchema`
-in `src/validators/auth.validators.ts`) must be at least `MIN_PASSWORD_LENGTH`
-(15) and at most `MAX_PASSWORD_BYTES` (72) bytes. The floor counts Unicode code
-points (zod's `.min()`), which the error message calls characters: 15 emoji
-pass, 14 do not. There are no composition rules. 15 is the NIST SP 800-63B
-revision 4 minimum for a password used as a single factor, and that guidance
-holds that required character classes push people toward more predictable
-passwords.
+- **Every dead link gets one answer.** An unknown, used, expired, revoked or
+  malformed link, a deactivated account, an Apex link to an account that is not
+  staff and a mismatched `email` all answer `400 LINK_INVALID`, `This link has
+expired or was already used.` It is a 400, never a 401, because the clients
+  sign out on a 401.
+- **One presentation is one attempt.** The claim spends the row before its
+  expiry is judged, so of two concurrent verifies of one link exactly one gets
+  a session.
+- **The frontend and the redirect come from the row.** Verify reads `app` and
+  `redirect` from the link's `user_tokens` row, never from the request. The
+  redirect passed `redirectPathSchema` (a same-origin path of at most 2048
+  characters) when it was stored. An Apex link signs in only an existing staff
+  account; a web link signs a staff member in to the web app.
+- **The address on the page must be the link's.** This is the login CSRF
+  defence. The frontends show the link's `email` param ("This link is for …"),
+  and anyone who forwards a link can edit it. An attacker could send their own
+  token under the victim's address, and the victim, reading their own address,
+  would then work inside the attacker's account. So the client sends the
+  address it shows, and verify compares it, trimmed and lowercased, with the
+  row's on a read-only peek before the claim (`assertLinkShowsItsAddress`). A
+  mismatch answers `LINK_INVALID` and spends nothing, so the owner's link still
+  works. Neither address is logged. A client that sends no `email` skips the
+  check, so a frontend sends it whenever the link carries one.
+- **Maintenance decides before the claim.** In `full` and `read_only`, verify
+  reads the row without spending it first, so a refused link still works once
+  the mode ends ([Maintenance mode](#maintenance-mode)).
+- **The reply** is `Cache-Control: no-store` and sets the refresh cookie. The
+  route runs the Origin check before its limiter ([CSRF](#csrf)), and a refresh
+  cookie the request still carried has its session revoked once the new one is
+  issued.
 
-The floor applies only where a password is set. `loginSchema`,
-`reauthenticateSchema` and change-password's `currentPassword` only require a
-non-empty string, so an account whose password was set under a shorter floor
-still signs in, and a too-short or too-long login password fails with the same
-401 as a wrong one rather than a 400 that would tell the two apart.
+**Accepted:** the cooldown and the budget are silent by design, so a second
+request inside a minute mails nothing. The frontends show a 60-second
+countdown after every send instead.
 
-### Login: one answer, one cost
+**Accepted:** the daily budget can lock an owner out of email links. Anyone
+who knows an address can spend its 10 links with requests spaced past the
+1-minute cooldown, and the owner then gets no link for up to 24 hours. The
+bound: every one of those links reaches the owner's own mailbox, the newest
+stays live for 15 minutes, and Google sign-in, where it is set up, still works.
 
-`login` (`src/services/auth.service.ts`) runs one bcrypt comparison and then
-one guard, whether or not the address has an account. A password over 72 bytes
-skips the comparison as "no match", and a hash that changed since the first read
-is compared again under the lock; neither depends on whether the account
-exists. An unknown address, a wrong password, a deactivated account, an
-account with no password (Google only) and an unverified account all get
-`401 Invalid email or password`. For an unknown address the comparison runs
-against `getDummyHash()`, a hash at the current `BCRYPT_COST`, so the reply
-costs the same.
+### Account creation on click
 
-- **The unverified case answers falsely on purpose.** A truthful "not verified
-  yet" would confirm that the address is registered and the password right. The
-  cost is a user who has not clicked their link seeing "wrong password".
-- **Timing is equal only while stored hashes use the current cost.** After
-  `BCRYPT_COST` is raised, an account whose hash is at the old cost answers a
-  wrong password faster than an unknown address does, until its next successful
-  login rehashes it (`BCRYPT_COST`'s comment in `src/constants/auth.constants.ts`).
-- **Rows written outside this API** (an import, for example) are refused by
-  `login` while their `email_verified_at` is null. Set it for accounts whose
-  addresses the source system already trusted, before they sign in:
+A web link to an address with no account creates a verified account when it is
+clicked (`createLinkedAccount`, `src/services/account-claim.service.ts`): the
+user row, its `email` provider row and its verification, in one transaction.
+The click proves the mailbox, so a request writes no account, and an address
+nobody clicks for never holds one. A `sign_in_link` row never carries a user
+id: the click looks the account up by address, so a soft-deleted user's
+address gets a fresh account, never the deleted one. When two clicks race on
+one address, the loser's insert hits `users_email_unique`, and it signs in to
+the winner's account as an existing one (`isNewUser: false`). In `read_only` a
+click that would create an account answers `503 READ_ONLY_MODE` before the
+claim, and a click to an existing account signs in. A web Google sign-in
+follows the same rule ([Maintenance mode](#maintenance-mode)).
 
-  ```sql
-  UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;
-  ```
+**A never-verified account is claimed.** An account with a null
+`email_verified_at` may hold a squatter's credentials. One function takes such
+an account over, `claimNeverVerifiedAccount`, and four proofs of the mailbox
+call it: a sign-in link, an invitation link, `pnpm platform:grant` and an
+address Google verified. The first three pass `clearSquatterCredentials`, which
+deletes the account's federated links; the Google claim deletes every other
+Google link and links its own. The claim revokes every session in a committed
+transaction of its own, then locks the user row, runs those writes, marks the
+address verified and revokes again, so a session created between the two ends
+too. A claim that finds the row verified under the lock writes nothing: a
+concurrent claim won, and the account belongs to the mailbox owner.
 
-After the guard, `assertSignInAllowed` refuses a non-staff user in `full`
-maintenance (see [Maintenance mode](#maintenance-mode)), and only then is
-anything written. The token is issued in a transaction that re-reads the user
-row `FOR SHARE`: a deactivation or deletion that committed since the first read
-answers the same 401, and a hash that changed is compared again (see
-[Password change and reset against a concurrent login](#password-change-and-reset-against-a-concurrent-login)).
+**Rows written outside this API** (an import, for example) with a null
+`email_verified_at` are claimed on their owner's first sign-in: their sessions
+end and their federated links go. When the source system already trusted the
+addresses, set it before they sign in:
 
-### Registration and forgot-password
-
-`POST /auth/register` answers every request with the same `202`,
-`If that address can be registered, a verification email has been sent.`, and
-`data: null`. Both branches hash the password first. A free address gets a
-verification mail; a taken one gets a "someone tried to register with your
-address" notice that greets the account's stored name, never the submitted
-one, at most once per `REGISTRATION_ATTEMPT_NOTICE_COOLDOWN` (default `1h`) per
-address, skipped when Redis is down. Nothing on the taken branch overwrites the
-existing row. The reply is sent before either mail is queued. After the same
-bcrypt hash, the two branches differ by one rolled-back insert against two more
-statements and a commit; that residual timing is accepted.
-
-`POST /auth/forgot-password` answers the same `202` for every address before it
-looks the address up. It mails a reset link only to an existing, active account,
-at most once per `PASSWORD_RESET_MAIL_COOLDOWN` (default `5m`) per address. The
-cooldown is claimed for any address, registered or not, and the mail is sent
-when Redis is down, because the owner must be able to reset.
+```sql
+UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;
+```
 
 ### Google sign-in
 
 Google sign-in is mounted only when `GOOGLE_CLIENT_ID` is set, and boot refuses
 it without `GOOGLE_CLIENT_SECRET` (`src/configs/passport.config.ts`). The OAuth
 `state` is checked against the one kept in a Redis-backed session that lasts 5
-minutes and exists only on `/auth/google` and its callback.
-`resolveGoogleUser` (`src/services/google-auth.service.ts`) decides the account:
+minutes and exists only on the Google routes and their callback.
+`GET /auth/google` takes `app` and an optional `redirect`, which the session
+keeps; a `redirect` that fails `redirectPathSchema` is dropped
+(`rememberOAuthApp`). `resolveGoogleUser` (`src/services/google-auth.service.ts`)
+decides the account:
 
 - A Google address that Google has not verified never creates an account and
   never links to one (`403 email_not_verified`): anyone can add any address to a
@@ -145,10 +162,13 @@ minutes and exists only on `/auth/google` and its callback.
   status, code and message whether or not an account has it, so the answer
   does not tell whether the address is registered.
 - A verified Google address that matches a verified account links to it.
-- A verified Google address that matches a never-verified account takes it
-  over (`claimUnverifiedAccount`): the password and any other Google link are
-  removed, the address is marked verified, and every session is revoked. The
-  unverified row may be a squatter's.
+- A verified Google address that matches a never-verified account claims it
+  (`claimUnverifiedAccount`, through `claimNeverVerifiedAccount`): any other
+  Google link is removed, the address is marked verified, and every session is
+  revoked. The unverified row may be a squatter's.
+- A verified Google address with no account gets a new one on web. On Apex,
+  Google signs in only an existing, active staff account and creates nothing:
+  any other profile gets the same `google_auth_failed` (`assertApexStaff`).
 
 ## Sessions and tokens
 
@@ -210,19 +230,19 @@ Every form is `HttpOnly`, and `Secure` when `isCookieSecure` says so
 - **The newest cookie wins.** Within one name the API reads the last value
   sent, the most recently created one, so a stale cookie from an older
   `COOKIE_DOMAIN` never reaches reuse detection (`readCookie`,
-  `src/controllers/auth.controller.ts`). After `COOKIE_DOMAIN` is reverted to
+  `src/controllers/helpers.controller.ts`). After `COOKIE_DOMAIN` is reverted to
   an earlier value the browser keeps the overwritten cookie's original creation
   time, so the other scope's cookie reads as newer and refresh fails until the
   user signs in again or the cookie expires (`REFRESH_TOKEN_TTL`).
-- **Signing in again ends the presented session, for a password login.** Login
-  revokes the session of the refresh cookie the request carries once the new
-  session is issued, so an overwritten cookie's session does not stay
-  refreshable. The Google callback does the same, but it is reached by a
-  cross-site navigation, which withholds a `Strict` cookie, and every rotation
-  re-sets the cookie `Strict`. So the callback usually sees no cookie, and the
-  session the new cookie overwrites in the browser stays refreshable until it
-  goes unused for `REFRESH_TOKEN_TTL` or reaches `SESSION_ABSOLUTE_TTL`, unless
-  something else ends it.
+- **Signing in again ends the presented session.** A link verify and an
+  invitation verify revoke the session of the refresh cookie the request
+  carries once the new session is issued, so an overwritten cookie's session
+  does not stay refreshable. The Google callback does the same, but it is
+  reached by a cross-site navigation, which withholds a `Strict` cookie, and
+  every rotation re-sets the cookie `Strict`. So the callback usually sees no
+  cookie, and the session the new cookie overwrites in the browser stays
+  refreshable until it goes unused for `REFRESH_TOKEN_TTL` or reaches
+  `SESSION_ABSOLUTE_TTL`, unless something else ends it.
 - **The Google callback sets the cookie `SameSite=Lax`.** `Lax` costs nothing
   here. It is still withheld from cross-site `POST`s and from subresource
   requests. The two routes that act on the cookie are `POST`s behind the Origin
@@ -246,8 +266,8 @@ without `COOKIE_SECURE` (`src/configs/passport.config.ts`). A planted
 `POST /auth/refresh` reads the token from the cookie only, never the body, and
 rotates it (`rotateRefreshToken`). The claim is one `UPDATE … RETURNING` that
 matches the hash, `purpose = 'refresh'` and an unrevoked row, so of two requests
-presenting the same token exactly one wins, and a reset or verification token
-can never be redeemed as a refresh token.
+presenting the same token exactly one wins, and a sign-in or step-up link can
+never be redeemed as a refresh token.
 
 - **Reuse kills the session.** Presenting a token that is already revoked
   revokes every token of its session (the rotation chain from one sign-in) and
@@ -296,113 +316,197 @@ The denylist is best-effort, and both halves of that are deliberate:
   write still in flight at the deadline lands when Redis answers.
 - A Redis flush, or a restart without persistence, drops every entry.
 
-What revokes sessions: logout, reuse, the absolute lifetime, a password change
-(every session but the caller's), a password reset and a Google account claim
-(every session), `POST /auth/sessions/revoke-others` (every session but the
-caller's, 10 an hour per user), and a staff deactivation, sign-out or deletion
-(every session). A password change and revoke-others spare only the caller's own
-row when the request presents the caller's refresh cookie and that cookie is not
-revoked, so a grace-window sibling in the caller's session ends too; with no
-such cookie they spare the caller's whole session.
+What revokes sessions: logout, reuse, the absolute lifetime, a claim of a
+never-verified account (every session;
+[Account creation on click](#account-creation-on-click)),
+`POST /auth/sessions/revoke-others` (every session but the caller's, 10 an hour
+per user), and a staff deactivation, sign-out or deletion (every session).
+Revoke-others spares only the caller's own row when the request presents the
+caller's refresh cookie and that cookie is not revoked, so a grace-window
+sibling in the caller's session ends too; with no such cookie it spares the
+caller's whole session. A `sign_in_link` row has no user id, so these user-wide
+revocations never reach one: revoke-others, a staff sign-out and a deactivation
+also revoke the address's live sign-in links in their own transaction
+(`revokeSignInLinksOf`, `src/services/session.service.ts`). A sign-out
+(`revokeAllForSession`) revokes the session's live step-up link with its chain.
 
-### Password change and reset against a concurrent login
+### Deactivation against a concurrent sign-in
 
-A login that checked the old password never keeps a session once a password
-change or reset commits.
+A sign-in that read an active account never keeps a session once a
+deactivation or a deletion commits.
 
-- A change and a reset each lock the user row `FOR NO KEY UPDATE`, write the
-  hash and revoke sessions in one transaction, then deny the revoked sessions
-  after commit.
-- A reset, and a Google account claim, first run `revokeAllSessions`
-  (`src/services/session.service.ts`) in a transaction of its own that takes the
-  same lock and commits before the main transaction starts. It fails closed: if
-  it throws, the reset never stores the new password and the claim never changes
-  the account (the reset token is already spent by then). If the main
-  transaction then fails, every session that existed, and the successor of a
-  rotation that was in flight, stays revoked. The main transaction revokes
-  again, for a session created between the two.
-- A login re-reads the user row `FOR SHARE` before it issues its token, and
-  a rotation holds the same lock while it claims. So either the login or
-  rotation commits first and the password write revokes its session, or it waits
-  and sees the new state: a changed hash is compared again, and only a password
-  that matches the stored one (another login's rehash, or a reset to the same
-  password) gets a session.
+- A link, invitation or Google sign-in issues its refresh token in a
+  transaction that re-reads the user row `FOR SHARE` and refuses an account
+  that is inactive or gone by then, with that surface's own generic answer
+  (`LINK_INVALID`, `invitation_invalid`, `google_auth_failed`). A rotation
+  holds the same lock while it claims.
+- A staff deactivation, sign-out or deletion locks the user row
+  `FOR NO KEY UPDATE` (`lockStaffPair`, `src/services/platform-user.service.ts`),
+  writes and revokes the sessions in one transaction, then denies the revoked
+  sessions after commit. A deactivation and a sign-out also revoke the
+  address's live sign-in links there. A deletion leaves them: a later click
+  re-proves the mailbox and creates a fresh account for its owner
+  ([Account creation on click](#account-creation-on-click)), never the deleted
+  one, and a user purge deletes them (`deleteForEmail`).
+- So either the sign-in commits first and the deactivation revokes its
+  session, or it waits for the lock and finds the account inactive.
 - A write that makes the user a tenant owner or staff takes the same
   `FOR SHARE` lock before its write, so a staff delete holding the row
   `FOR NO KEY UPDATE` either waits for the grant and sees it, or wins and the
   grant finds the account gone ([Platform staff](#platform-staff)).
-  Single-statement updates of the row on the pool (the last-login time, a
+  Single-statement updates of the row on the pool (the last sign-in time, a
   profile edit, email verification) queue behind a grant for its few
   statements.
 
-A correct password still updates `last_logged_in_at` and runs the platform
-auto-join before that re-read, even when the re-read then answers 401.
+A link or Google sign-in stamps `last_logged_in_at` before that re-read,
+outside the lock, so a sign-in the re-read refuses has still stamped it. An
+invitation verify stamps it after its transaction commits, best effort.
 
 ## Email links
 
-Verification, password-reset, account-setup and invitation mails carry a link to
-a frontend page, never to this API: the page `POST`s the token, so the token
-never sits in an API request URL that tracing or proxy logs record, and a mail
-scanner that follows links does not spend it (`buildTokenUrl`,
-`src/services/verification.service.ts`). The token does sit in the frontend
-page's URL (`?token=`), so the frontend's access logs and its `Referrer-Policy`
-are part of this defence. Which frontend a link opens is an enum (`app: 'web' |
-'apex'`), never a URL, so a request can only choose between `WEB_URL` and
-`APEX_URL`.
+Sign-in, step-up and invitation mails carry a link to a frontend page, never
+to this API: the page `POST`s the token, so the token never sits in an API
+request URL that tracing or proxy logs record, and a mail scanner that follows
+links does not spend it (`src/services/link-token.service.ts`). The token does
+sit in the frontend page's URL (`?token=`), so the frontend's access logs and
+its `Referrer-Policy` are part of this defence, and the frontends strip `token`
+and `email` from every URL they report to analytics. Which frontend a link
+opens is an enum (`app: 'web' | 'apex'`), never a URL, so a request can only
+choose between `WEB_URL` and `APEX_URL`.
 
-| Link               | Token                                      | Lifetime                         | Claimed by                                                      |
-| ------------------ | ------------------------------------------ | -------------------------------- | --------------------------------------------------------------- |
-| Email verification | 32 random bytes, SHA-256 stored            | `EMAIL_VERIFICATION_TTL` (`24h`) | `claimToken`, single use                                        |
-| Password reset     | 32 random bytes, SHA-256 stored            | `PASSWORD_RESET_TTL` (`1h`)      | `claimToken`, single use                                        |
-| Account setup      | a password-reset token                     | `ACCOUNT_SETUP_TTL` (`24h`)      | `claimToken`, single use                                        |
-| Tenant invitation  | 32 random bytes, base64url, SHA-256 stored | `INVITATION_TTL` (`7d`)          | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
+| Link               | Token                                                                      | Lifetime                   | Claimed by                                                      |
+| ------------------ | -------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------- |
+| Sign-in            | 32 random bytes, base64url, SHA-256 stored (`user_tokens`, `sign_in_link`) | `SIGN_IN_LINK_TTL` (`15m`) | `claimLinkToken`, single use                                    |
+| Step-up confirm    | The same, as `step_up_link`, bound to one user and session                 | `STEP_UP_LINK_TTL` (`15m`) | `claimLinkToken` with that binding, single use                  |
+| Tenant invitation  | 32 random bytes, base64url, SHA-256 stored                                 | `INVITATION_TTL` (`3d`)    | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
+| Invitation confirm | The same, as `invitation_link`, naming the invitation by id                | `SIGN_IN_LINK_TTL` (`15m`) | `claimLinkToken` inside the joining transaction, single use     |
 
-`claimToken` spends a token before it judges its expiry, so presenting an
-expired token also spends it: one presentation is one attempt. `claimToken` also
-matches the token's purpose, so a reset or account-setup token never verifies an
-address and a verification token never resets a password. The reset link is
-shorter-lived than the verification link because redeeming it takes the account
-over. Staff never set a user's password: a staff-created account gets a
-set-password link.
+`claimLinkToken` spends a link before it judges its expiry, so presenting an
+expired link also spends it: one presentation is one attempt. It matches the
+purpose too, so a step-up link never signs anyone in, a sign-in link never
+confirms a step-up, and neither joins an invitation. Staff never choose a user's credential: an account staff
+create gets a `welcome` mail with a sign-in link, and a staff-sent sign-in link
+(`POST /platform/users/:id/sign-in-link`) is an ordinary sign-in link, mailed
+to the account's own address.
 
-### Verification needs the password
+**UTM parameters.** Every link a user receives carries `utm_source`,
+`utm_medium`, `utm_campaign` and `utm_content`, added by one helper, `withUtm`
+(`src/utilities/utm.utilities.ts`), which every link builder calls. The values
+are code constants: the channel, the template key or notification type, and
+which link in the message was clicked. None is an address, a name, an id or a
+token. The helper writes only those four pairs, after the link's own query, so
+`token`, `email` and `redirect` stay byte for byte, and no parameter goes
+inside `redirect`. The frontends' analytics URL sanitizer keeps a `utm_*` key
+only while its value matches `/^[a-z0-9_-]{1,64}$/`, so an address or a token
+pasted into one is dropped; the server never reads them.
 
-`POST /auth/verify-email` takes `{ token, password }`. Without the password, an
-attacker who registers someone else's address with a password of their own would
-have the account verified by the owner's own click on the mailed link. The
-attacker knows the password but never sees the token; the owner sees the token
-but not the password.
+### Invitation links are single-use
 
-`verifyEmail` claims the token before it compares the password, so a wrong
-password spends the link and the user asks for another. Every failure answers
-the same 400, with one exception: a link that was used while valid, for an
-account that is verified, answers `409 email_already_verified` ("This email is
-already verified. Sign in to continue."), writes nothing and never applies the
-submitted password. A successful verification revokes the account's other
-verification links.
+An invitation link lives 3 days and is forwardable, so one click on it
+(`POST /invitations/verify`, `verifyInvitation`,
+`src/services/tenant-invitation.service.ts`) joins in one step only where
+there is nothing to take over: a customer invitation to an address with no
+account (a soft-deleted account released its address). Every other click
+answers `202` "Check your inbox", and the server mails the invited address a
+15-minute, single-use confirm link. That covers an address that has an
+account, verified or not, and every staff (platform-tenant) invitation, even
+to a new address. The confirm link's click (`POST /invitations/confirm`,
+`confirmInvitation`) signs in and joins in one step. A forwarded invitation
+therefore gets no session on an existing account and no staff role: only the
+invitee's mailbox receives the confirm link.
 
-The owner recovers a squatted address through a password reset: a completed
-reset proves the mailbox, so on a never-verified account it removes any Google
-link, sets the new password, marks the address verified and revokes every
-session, in one transaction.
+- **The link is checked before any account is touched.**
+  `findValidByTokenHash` runs first, outside a transaction, so a used, expired,
+  revoked, suspended-tenant or archived-tenant link creates nothing. A one-click
+  join is then one transaction that creates the account, claims the
+  invitation, joins, audits the join and issues the session. When two clicks
+  race, the loser's transaction rolls back, the new account included, and it
+  answers `404 invitation_invalid` with no cookie.
+- **The `202` writes nothing.** It sets no cookie, leaves the browser's
+  session alone, spends neither the invitation nor any account, and replies
+  before the mail work. A second click on the invitation is the resend.
+- **The confirm link carries no invitation token.** It is a `user_tokens` row
+  of purpose `invitation_link` that holds the invitation's id, the address and
+  the frontend (Apex for a platform invitation, web otherwise), stored as a
+  SHA-256 hash like every link. A new one revokes the address's earlier confirm
+  link for that invitation, never another invitation's. Deleting the
+  invitation deletes its links.
+- **Its mail is bounded.** At most one confirm mail per address and
+  invitation per `SIGN_IN_LINK_MAIL_COOLDOWN` (default `1m`), on a cooldown of
+  its own, so a sign-in request a moment earlier does not hold it, and a click
+  on one workspace's invitation does not hold back another's. The daily
+  budget, per address, is the one sign-in links spend (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), not the
+  invitation budget, so a token holder cannot burn an admin's resends. Inside
+  the cooldown, or once the budget is spent, the reply is the same `202` and
+  nothing is mailed.
+- **One answer on the confirm.** An unknown, used, expired or malformed link,
+  an `email` that is not the link's address, an invitation revoked, accepted
+  or expired since, a suspended or archived workspace and a deactivated
+  account all answer `404 invitation_invalid`. Each refusal spends nothing:
+  the link is claimed inside the joining transaction, after the user row is
+  locked, and the invitation is re-checked atomically by
+  `claimForAcceptById`, so a refusal rolls the claim back. A never-verified
+  account is claimed before the transaction, as a sign-in link claims one;
+  that claim stands even if the join is then refused. Neither address is
+  logged. The answer's message names both next steps: select Join again in
+  the invitation email, or ask for a new invite.
+- **The confirm session is a recent sign-in; the one-click session is not.**
+  The confirm click proves the mailbox within 15 minutes with a single-use
+  link, the proof a sign-in link gives. The one-click session starts with
+  `authenticated_at` NULL, so every `requireRecentAuth` route answers
+  `401 REAUTH_REQUIRED` until the user confirms it's them. Sessions are not
+  bound to an app: Apex access follows the platform role, which a staff
+  invitation grants only through the confirm link.
+- **Once accepted, it signs nobody in,** the invitee included. A signed-in
+  invitee who opens it again goes through `POST /invitations/accept`, which
+  answers `alreadyMember: true`.
+- **The gates of a link sign-in.** Both routes run `assertSignInAllowed` and
+  the maintenance check on the account they resolve, as `verifySignInLink`
+  does. A never-verified account is claimed only by the confirm click, which
+  clears the squatter's sessions and federated links.
+- **Revocation.** A deactivation, a staff sign-out and a sign-out of the other
+  sessions revoke the address's live confirm links with its sign-in links
+  (`revokeSignInLinksOf`). Revoking or resending the invitation revokes no
+  link: the confirm re-checks the invitation itself, and a resent invitation is
+  the same invitation.
+- **Both routes are maintenance `write`s.** In `read_only` and `full` they
+  answer 503 for everyone, staff invitees included, and a link still works
+  after the mode ends.
+- **Accepted:** on a customer invitation, `200` or `202` tells the holder of
+  the invitation token whether the invited address has an account. The split
+  requires it, the token reaches only the invited mailbox, and the preview
+  shows the address anyway; a staff invitation always answers `202`. Signing
+  out everywhere revokes no invitation: invitations belong to the admins who
+  sent them.
+- **Accepted:** on Apex, a staff invitee who asks for a sign-in link is mailed
+  the invitation again, and its click mails the confirm link: two mails
+  before they can sign in.
 
 ### Invitations
 
 A user joins a customer tenant only by creating it or by accepting an
-invitation; the platform tenant also admits staff by auto-join and
-`pnpm platform:grant` ([Platform staff](#platform-staff)). No route adds a
+invitation; the platform tenant also admits staff by
+`pnpm platform:grant` ([Platform staff](#platform-staff)). An Apex sign-in
+request from a staff invitee mails them their invitation again (outside its
+resend cooldown), never a sign-in link. No route adds a
 registered address to a tenant directly
 (`src/services/tenant-invitation.service.ts`).
 
 - **No enumeration.** Inviting answers the same `202` whether or not the
   address has an account. The one distinct answer is `409 already_member`,
   which tells an owner or admin who is already in their own tenant.
-- **Consent.** Accepting needs a signed-in user whose verified address is the
+- **Consent.** The link was mailed to the invited address, so one click on it
+  proves the mailbox
+  ([Invitation links are single-use](#invitation-links-are-single-use)). A
+  never-verified account is claimed as a sign-in link claims one
+  ([Account creation on click](#account-creation-on-click)). Accepting signed
+  in (`POST /invitations/accept`) needs a user whose verified address is the
   invited one: a different address gets `403 invitation_email_mismatch`, the
   right one unverified gets `403 invitation_email_unverified`, and nothing is
-  claimed. A second accept by the same user succeeds; anyone else's fails.
-- **The token travels in bodies only.** `POST /invitations/preview` and
-  `POST /invitations/accept` take it as JSON. The API answers with
+  claimed. A second accept by the same user succeeds with
+  `alreadyMember: true`; anyone else's fails.
+- **The token travels in bodies only.** `POST /invitations/preview`,
+  `POST /invitations/verify` and `POST /invitations/accept` take it as JSON. The API answers with
   `Referrer-Policy: no-referrer`; the accept page's own header is the
   frontend's (`react-boilerplate/nginx.conf`).
 - **The grant is re-checked.** Invite, resend and revoke apply
@@ -485,27 +589,29 @@ Roles rank `owner > admin > manager > editor > viewer`
 Staff are the members of one seeded tenant, the row with `is_platform = true`;
 their role there is their platform role (`src/services/platform.service.ts`).
 
-- **Gated per route, not by prefix.** Every staff route but
-  `POST /auth/reauthenticate` lives under `/api/v1/platform`, and each names its
-  own `requirePlatformRole`, which reads the role on every request with no cache
-  across requests (`src/middlewares/platform.middleware.ts`). The prefix secures
-  nothing, and neither does serving Apex from its own host. A signed-in caller
-  the route refuses (non-staff, or staff below the route's role) gets exactly
-  what an unknown path on the same router gets: same status, body and headers.
-  On a `/platform` route the role gate answers the app's own `404 Not found`
-  before the JSON gate, the step-up check and the limiter, so a refused caller
-  sees no `415` and no `RateLimit-*` headers. On `POST /auth/reauthenticate`
-  the auth router's JSON gate runs first, as on every auth path, so a form body
-  gets the same `415` an unknown `/auth/*` path gets; then the role gate's 404
-  comes before the limiter. Every error response is `no-store`, so no header
-  tells the gates apart. An anonymous caller can tell
-  `POST /auth/reauthenticate` exists, since `requireAuth` must run before the
-  role gate and answers 401, as on every `/platform` route; the route table is
-  public anyway. `cors` answers an `OPTIONS` with no `Origin` or an allowed one
-  itself, with the same 204 for every path; any other authenticated `OPTIONS`
-  that reaches the platform router, and any other `OPTIONS` on
-  `/auth/reauthenticate`, gets the same 404 (`refusePlatformOptions`). Either
-  way Express's automatic `Allow` answer never lists a route's methods.
+- **Gated per route, not by prefix.** Every staff route but the step-up routes
+  under `/api/v1/auth/step-up` lives under `/api/v1/platform`, and each names
+  its own `requirePlatformRole`, which reads the role on every request with no
+  cache across requests (`src/middlewares/platform.middleware.ts`). The prefix
+  secures nothing, and neither does serving Apex from its own host. A signed-in
+  caller the route refuses (non-staff, or staff below the route's role) gets
+  exactly what an unknown path on the same router gets: same status, body and
+  headers. On a `/platform` route the role gate answers the app's own
+  `404 Not found` before the JSON gate, the step-up check and the limiter, so a
+  refused caller sees no `415` and no `RateLimit-*` headers. On the step-up
+  routes the auth router's JSON gate runs first, as on every auth path, so a
+  form body gets the same `415` an unknown `/auth/*` path gets; then the role
+  gate's 404 comes before the limiter. Every error response is `no-store`, so
+  no header tells the gates apart. An anonymous caller can tell the step-up
+  routes exist, since `requireAuth` must run before the role gate and answers
+  401, as on every `/platform` route; the route table is public anyway. The
+  popup's `GET /auth/step-up/google` carries no bearer: it needs the intent the
+  staff-only start wrote, and without one it redirects to Apex's confirm page
+  with `error=step_up_failed`. `cors` answers an `OPTIONS` with no `Origin` or
+  an allowed one itself, with the same 204 for every path; any other
+  authenticated `OPTIONS` that reaches the platform router, and any other
+  `OPTIONS` under `/auth/step-up`, gets the same 404 (`refusePlatformOptions`).
+  Either way Express's automatic `Allow` answer never lists a route's methods.
 - **In a customer tenant, staff act at their platform role.** With no
   membership there, `resolveTenant` uses the platform role
   (`access: 'platform'`) and audits the visit (`tenant.accessed_by_platform`,
@@ -513,12 +619,9 @@ their role there is their platform role (`src/services/platform.service.ts`).
   service policies apply to it as to a member's role, so a platform viewer reads
   but cannot write. Where a staff user is also a member, only the membership
   counts. The platform tenant itself is members-only.
-- **Joining.** A verified address whose domain is exactly one listed in
-  `PLATFORM_EMAIL_DOMAINS` (no subdomains) joins as `viewer` when it is verified
-  and at each successful sign-in. It never changes an existing platform role;
-  anything above viewer takes an invitation or `pnpm platform:grant`. Every
-  platform role reads every user, tenant and address, so list only domains
-  whose mailboxes you control.
+- **Joining.** Staff join only by an invitation to the platform tenant or
+  `pnpm platform:grant`; no address joins by its domain. Apex sign-in, by link
+  or by Google, reaches only an existing staff account and never creates one.
 - **Deleting a user never leaves a tenant ownerless.** The delete refuses
   while the user is the last live owner of a customer tenant or the last
   active platform owner, re-counting under the owner-row locks, and holds the
@@ -544,13 +647,11 @@ their role there is their platform role (`src/services/platform.service.ts`).
 `requireRecentAuth` (`src/middlewares/auth.middleware.ts`) refuses a session
 that last authenticated more than `STEP_UP_MAX_AGE_MS` (10 minutes) ago with
 `401 REAUTH_REQUIRED`. The time comes from the token's `auth_time`, which the
-refresh row records at sign-in and rotation carries forward; a token without it
-counts as stale. `POST /auth/reauthenticate`, for staff only, checks the
-password and moves the session's authentication time forward. A wrong password
-there is a 400, never a 401, so a typo does not sign the user out, and success
-and failure are both audited (`auth.reauthenticated`). Step-up is
-password-only: a Google-only account is asked to set a password first. A client
-must not sign out on `REAUTH_REQUIRED`.
+refresh row records at sign-in (a one-click invitation join records none) and
+rotation carries forward; a token without it counts as stale. Staff move it forward by confirming it's them, by an emailed
+link or by Google
+([Step-up by link and by Google](#step-up-by-link-and-by-google)).
+A client must not sign out on `REAUTH_REQUIRED`.
 
 Step-up guards:
 
@@ -575,6 +676,54 @@ access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
 Staff acting in a customer tenant through their platform role send it in the
 body or get `400 REASON_REQUIRED`, and the services check it again under the
 lock.
+
+### Step-up by link and by Google
+
+Both ways are for staff only (`requirePlatformRole('viewer')` on each route),
+and both move the calling session's `authenticated_at` to now without minting a
+session (`src/services/step-up.service.ts`).
+
+- **By link, bound to the session.** `POST /auth/step-up/link/request` mails a
+  link to the account's own address and answers `202` with
+  `resendAvailableAt`. Another request by the same staff member, from any of
+  their sessions, inside `STEP_UP_LINK_COOLDOWN` (default `1m`) answers
+  `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
+  `step_up_link` row names the user and the session (the token's `sid`) that
+  asked: a new link revokes that session's earlier one, and a sign-out revokes
+  it. `POST /auth/step-up/link/verify` claims it only for that user and
+  session, so a bearer from another session, the same user's included, gets
+  `400 LINK_INVALID` and leaves the link unspent. The confirm is one
+  transaction: it locks the user row, claims the link, re-checks the platform
+  role, moves the session's `authenticated_at` and audits
+  `auth.step_up_confirmed { method: 'link' }`, so a refusal after the claim
+  rolls the claim back. A caller who lost the role since the gate gets the
+  gate's 404, audited `auth.step_up_refused`. A dead link writes no audit
+  entry: it is not attributable beyond the bearer, and the limiter bounds it.
+  The reply is a new access token carrying the new `auth_time`.
+- **By Google, a fresh login of the linked identity.** A popup carries no
+  bearer, so the start takes two calls. `POST /auth/step-up/google/start`
+  (bearer, staff, a linked Google account, else `409 google_not_linked`) writes
+  `{ kind: 'step_up', userId, sessionId, startedAt }` into the OAuth session
+  and answers `204`. The popup's `GET /auth/step-up/google` needs that intent,
+  no older than the 5-minute OAuth session, and redirects to Google with
+  `prompt=select_account` and `max_age=0`. The callback decodes the ID token
+  without a signature check, which OIDC Core §3.1.3.7 (step 6) allows for a
+  token received straight from Google's token endpoint over TLS. It checks
+  `iss` (`accounts.google.com`, with or without `https://`), `aud`
+  (`GOOGLE_CLIENT_ID`), `sub` against the profile, and `auth_time` no earlier
+  than the start less 60 seconds of clock skew; a missing `auth_time` fails
+  closed. The profile's `sub` must be the account's linked Google identity: an
+  address match is not enough. On success one transaction moves the session's
+  `authenticated_at` under the user-row lock, re-checks the platform role
+  there, as the link confirm does, and audits
+  `auth.step_up_confirmed { method: 'google' }`; the callback then
+  redirects the popup to `<apex>/auth/confirm?result=confirmed`, setting no
+  cookie. Every refusal redirects to `?error=step_up_failed` and is audited
+  `auth.step_up_refused { method: 'google' }`.
+- **`max_age=0`, not `prompt=login`.** Google documents only `none`, `consent`
+  and `select_account` for `prompt`, so the forced login comes from
+  `max_age=0` and the `auth_time` check. If Google omits `auth_time`, every
+  Google step-up fails closed and staff confirm by link.
 
 ### The audit log
 
@@ -648,7 +797,7 @@ PostHog, describes what stays there.
   phrase. `errorId` grants nothing: it names a log line and an error event.
 - **Logged errors lose their bound query values.** A failed query's error
   message embeds its bound parameters, which for a failed `insert into users`
-  are the address and the bcrypt hash. The logger replaces every query error
+  are the address and the row's other values. The logger replaces every query error
   logged as an `Error` field, through a five-deep `cause` chain, with its SQL
   text, driver code, parameter count and stack frames (`redactedForLog`,
   `src/errors/postgres-errors.ts`; `src/services/logger.service.ts`). It cannot
@@ -671,27 +820,30 @@ on other routes, this reasoning does not cover it.
 
 - **Forced login.** `SameSite` governs when a cookie is sent, not whether a
   cross-site response may set one. Without a gate, an attacker's page could
-  auto-submit a form to `POST /auth/login` with the attacker's credentials and
-  sign the victim into the attacker's account. `requireJsonContentType`
+  auto-submit a form to `POST /auth/link/verify` with the attacker's own link
+  and sign the victim into the attacker's account. `requireJsonContentType`
   (`src/middlewares/content-type.middleware.ts`) refuses any content type but
   `application/json` with `415`: a form can only send the other three, and JSON
   from a script on another origin needs a preflight that a disallowed origin
   fails. It needs no configuration, so it holds on a same-origin deployment with
   no allow-list. It is mounted on the whole auth router and on the writes of the
   tenant, invitation, platform and flags routers. A request with no content type
-  passes, because an untyped body is never parsed.
+  passes, because an untyped body is never parsed. A link opened in the
+  victim's own browser is the other route in; the address binding answers it
+  ([Sign-in links](#sign-in-links-one-answer-one-reply-before-the-lookup)).
 - **Same-site is not same-origin.** A page on a sibling subdomain is the same
   site, so a body-less `POST` from it carries a `Strict` cookie with no
   preflight. `POST /auth/refresh` and `POST /auth/logout`, the two routes the
-  cookie authenticates, run `requireAllowedOriginWhenPresent`
-  (`src/middlewares/origin.middleware.ts`) before their limiters: an `Origin`
-  that is not `WEB_URL`, `APEX_URL` or listed in `CORS_ALLOWED_ORIGINS` gets
-  `403 ORIGIN_NOT_ALLOWED`, unless the browser marks the request
-  `Sec-Fetch-Site: same-origin`. A request with no `Origin` passes. A browser
-  without Fetch Metadata on an origin that is not configured is refused, so a
-  deployment lists its frontend's origin. `/auth/change-password` and
-  `/auth/sessions/revoke-others` read the cookie too, but only to narrow what
-  they spare; they authenticate with the bearer token, so they need no Origin
+  cookie authenticates, and `POST /auth/link/verify` and
+  `POST /invitations/verify`, the two that set it, run
+  `requireAllowedOriginWhenPresent` (`src/middlewares/origin.middleware.ts`)
+  before their limiters: an `Origin` that is not `WEB_URL`, `APEX_URL` or
+  listed in `CORS_ALLOWED_ORIGINS` gets `403 ORIGIN_NOT_ALLOWED`, unless the
+  browser marks the request `Sec-Fetch-Site: same-origin`. A request with no
+  `Origin` passes. A browser without Fetch Metadata on an origin that is not
+  configured is refused, so a deployment lists its frontend's origin.
+  `/auth/sessions/revoke-others` reads the cookie too, but only to narrow what
+  it spares; it authenticates with the bearer token, so it needs no Origin
   check.
 
 ### CORS
@@ -828,7 +980,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 30 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 24 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -838,9 +990,9 @@ own limiter carries, and `flagExposure`. A 429 carries `code: RATE_LIMITED` and
 the standard `RateLimit-*` headers. `tests/unit/routes/route-limiters.test.ts`
 fails a write route with no limiter.
 
-- **No address is a key name.** Wherever an address keys a counter (the
-  email-keyed limiters, the login composite, the mail cooldowns, the invitation
-  recipient ceiling) the key is `hashRateLimitIdentity`: HMAC-SHA256 under a key
+- **No address is a key name.** Wherever an address keys a counter (the mail
+  cooldowns, and the sign-in link and invitation recipient ceilings) the key is
+  `hashRateLimitIdentity`: HMAC-SHA256 under a key
   derived from `SESSION_SECRET` by HKDF (`src/utilities/rate-limit-key.utilities.ts`).
   An operator cannot read an address off a key, and nobody without the secret
   can test a guess against one. Rotating `SESSION_SECRET` restarts those
@@ -854,7 +1006,7 @@ fails a write route with no limiter.
   builds from its `RATE_LIMITS` spec; windows and keys stay as they are. Not
   scaled: an explicit override (`flag-evaluate`, through
   `FLAG_EVALUATE_REQUESTS_PER_MINUTE`) and the counters outside `RATE_LIMITS` (mail
-  cooldowns, the invitation recipient ceiling, the SSE stream cap). It exists because an end-to-end run sends every request from one IP
+  cooldowns, the sign-in link and invitation recipient ceilings, the SSE stream cap). It exists because an end-to-end run sends every request from one IP
   and spends the per-IP budgets of several suites at once. Boot refuses any
   value but 1 unless `APP_ENV` is `local` (`assertEnvConsistent`,
   `src/configs/env-consistency.config.ts`), and `rateLimitScale`
@@ -863,22 +1015,19 @@ fails a write route with no limiter.
 
 The auth limiters each answer a specific threat:
 
-- **Login** counts the IP and the submitted address together (5 in 15 minutes):
-  the address alone would let anyone lock a victim out, and the IP alone would
-  share five attempts across an office. `login-ip` (100 in 15 minutes) bounds
-  one IP spraying many accounts, and `login-account` (100 an hour) bounds many
-  IPs against one account. `login-account` counts only well-formed attempts
-  that were refused, so malformed requests and the owner's own sign-ins spend
-  nothing. **Accepted:** 100 well-formed wrong passwords an hour still lock an
-  account.
-- **Register** counts by IP alone (100 an hour): enumeration changes the address
-  on every request, so only an IP key bounds it, and it bounds bcrypt CPU and
-  outbound mail.
-- **Forgot-password** has only a per-IP limiter (5 an hour). A per-address
-  limiter would let anyone who knows an address deny its owner their reset mail;
-  the silent per-address mail cooldown bounds one inbox instead.
-- **Change-password and reauthenticate** compare a submitted password, so each
-  gets login's budget (5 in 15 minutes), per user.
+- **Sign-in link request** counts by IP alone (10 in 15 minutes). A
+  per-address limiter on the request would let anyone who knows an address
+  deny its owner their link; the silent mail cooldown and the daily budget
+  bound one inbox instead, after the reply. The budget itself can lock an
+  owner out for up to 24 hours, which is accepted under
+  [Sign-in links](#sign-in-links-one-answer-one-reply-before-the-lookup).
+- **Sign-in link verify and invitation verify** count by IP (20 in 15 minutes
+  each). A link carries 256 random bits, so they bound a client working through
+  dead links, not guessing.
+- **Step-up** counts per staff member: one `step-up-link` budget shared by the
+  link request and its verify (10 in 15 minutes; a normal confirm spends two),
+  and `step-up-google` for the Google start (10 in 15 minutes), each of which
+  writes an OAuth session to Redis.
 - **Refresh and logout** are volume protection (300 in 5 minutes per IP): a
   refresh token is 256 random bits. Logout's budget is generous because a 429
   leaves the cookie uncleared.
@@ -896,29 +1045,44 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 `src/constants/maintenance-mode.constants.ts`), before any router runs. In
 `read_only` it refuses writes outside a short allowlist; in `full` it refuses
 everything but health, the email webhook, the collect proxy, the public status,
-`/platform`, sign-in, refresh, logout, reauthenticate, `GET /auth/providers`
-and `GET /profile`. On the customer routes Apex calls, the
-refusal is decided in `requireAuth`, which lets platform staff through. The
-let-through list is visible during maintenance: a route on it reaches its
-router while an unknown path gets the 503, which is accepted, since the list
-names only routes the frontends already call.
+`/platform`, the sign-in link routes, Google sign-in, the step-up routes,
+refresh, logout, `GET /auth/providers` and `GET /profile`. On the customer
+routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
+staff through. The let-through list is visible during maintenance: a route on
+it reaches its router while an unknown path gets the 503, which is accepted,
+since the list names only routes the frontends already call.
 
-- In `full`, password login refuses a user with no platform role
-  (`503 MAINTENANCE_MODE`) after the credentials pass and before anything is
-  written (`assertSignInAllowed`). A Google callback that starts in `full`
-  runs the same check on a read-only account lookup before
-  `resolveGoogleUser`, so a non-staff Google sign-in that starts in `full`
-  creates, links and claims nothing
+- In `full`, a sign-in refuses a user with no platform role
+  (`503 MAINTENANCE_MODE`) before anything is written (`assertSignInAllowed`).
+  A link verify runs the check on a read-only peek of the link, so a refused
+  link still works after the mode ends, and a link request for an address that
+  is not staff mails nothing. In `read_only` a link click that would create an
+  account answers `503 READ_ONLY_MODE` on the same peek. An invitation verify
+  is a maintenance `write`, so both modes refuse it.
+- A web Google callback that starts in `full` runs the same check on a
+  read-only account lookup before `resolveGoogleUser`, so a non-staff Google
+  sign-in that starts in `full` creates, links and claims nothing
   (`completeGoogleSignIn`, `src/services/google-auth.service.ts`). The lookup
   matches an email only when Google verified it, as `resolveGoogleUser` does.
   A profile that reaches no account cannot be staff, so it is refused too:
-  every refused Google caller gets the same 503 after the same role read,
+  every refused web Google caller gets the same 503 after the same role read,
   whether the address is unknown, a customer's or staff's, ahead of the 400
   (no email), 403 (unverified email) or 401 (a link to a deleted account, or
   an inactive account) it would otherwise get. The check runs again on the
   resolved account: a switch to `full`, or a platform role revoked, while a
   callback is between the two checks is refused there, after
-  `resolveGoogleUser` has written.
+  `resolveGoogleUser` has written. On Apex a profile that is not staff gets
+  `google_auth_failed` in every mode.
+- In `read_only` a web Google sign-in creates no account, as a link click
+  does not: a profile that reaches no account answers `503 READ_ONLY_MODE` on
+  the same read-only lookup, before `resolveGoogleUser`, and the creation
+  re-checks the mode just before its insert. An existing account signs in
+  without its Google link being written; a never-verified one is still
+  claimed, as a link click claims it.
+- Auth mail keeps flowing. `full` pauses every queue but `auth-email`, which
+  carries the sign-in, step-up, welcome and invitation mail
+  (`AUTH_EMAIL_TEMPLATE_KEYS`, `src/jobs/email.job.ts`), so staff can still
+  sign in to switch the mode off.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
   limiter (10 a minute), and, to switch on or escalate, a `confirm` equal to
   `APP_ENV`. A stale `expectedVersion` answers 409. The change and its audit
@@ -931,18 +1095,18 @@ reload and the queue pause.
 
 ## What this boilerplate does not implement
 
-| Control                                               | Status              | What it means for you                                                                                                                          |
-| ----------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. The one step-up is a password re-check before staff actions.                                                       |
-| CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                         |
-| Global rate limiting                                  | **Partial**         | 30 limiters, and every write route has one. Most authenticated reads have none.                                                                |
-| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`). |
-| Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                         |
-| Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                         |
-| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                   |
-| HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                             |
-| Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                   |
-| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role to an existing verified user.                     |
+| Control                                               | Status              | What it means for you                                                                                                                                                                   |
+| ----------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. The one step-up is a fresh emailed link or a fresh Google login before staff actions.                                                                       |
+| CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                  |
+| Global rate limiting                                  | **Partial**         | 24 limiters, and every write route has one. Most authenticated reads have none.                                                                                                         |
+| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`) and each staff step-up (`auth.step_up_confirmed`, `auth.step_up_refused`). |
+| Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                  |
+| Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                  |
+| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                                                            |
+| HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                                                                      |
+| Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                                                            |
+| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role, creating a verified account when needed.                                                  |
 
 ## Reporting a vulnerability
 

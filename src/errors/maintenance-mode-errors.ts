@@ -16,7 +16,7 @@ import type { MaintenanceModeSnapshot } from '@/types/maintenance-mode'
  * The message a refusal carries when the stored one is missing, which the
  * table's CHECK allows only while `off`.
  */
-const FALLBACK_MESSAGE = 'The service is down for maintenance. Please try again shortly.'
+const FALLBACK_MESSAGE = `The service is down for maintenance. Try again in ${MAINTENANCE_MODE_RETRY_AFTER_SECONDS} seconds.`
 
 /**
  * A 503 with `code` `MAINTENANCE_MODE` or `READ_ONLY_MODE`, the owner's
@@ -34,7 +34,7 @@ export class MaintenanceModeError extends HttpError {
   /**
    * The `Retry-After` value, in seconds.
    */
-  readonly retryAfterSeconds = MAINTENANCE_MODE_RETRY_AFTER_SECONDS
+  override readonly retryAfterSeconds = MAINTENANCE_MODE_RETRY_AFTER_SECONDS
 
   /**
    * @param code - `MAINTENANCE_MODE` or `READ_ONLY_MODE`.

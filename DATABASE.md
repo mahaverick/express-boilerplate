@@ -44,8 +44,8 @@ glob is picked up by `drizzle.config.ts` with no config change.
 | Table                      | Model file                        | Holds                                                                                                                                           |
 | -------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `users`                    | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
-| `user_tokens`              | `user-token.model.ts`             | Refresh, email-verification and password-reset tokens, as hashes; see below.                                                                    |
-| `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for a password, `'google'` for a linked account).                                              |
+| `user_tokens`              | `user-token.model.ts`             | Refresh tokens and emailed sign-in, step-up and invitation confirm links, as hashes; see below.                                                 |
+| `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                  |
 | `tenants`                  | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
 | `tenant_settings`          | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
 | `user_memberships`         | `user-membership.model.ts`        | One row per (user, tenant) pair, with the user's role in it.                                                                                    |
@@ -69,26 +69,29 @@ Drizzle's own bookkeeping table is separate from these.
 `id` is a `uuidv7()` primary key. `email` is unique case-insensitively among
 rows that are not soft-deleted, through a partial `lower(email)` index
 (`users_email_unique`), not a plain unique constraint, so a soft-deleted user's
-address can register again. `password_hash` is null for a user who signs in
-only with Google. The rest: `first_name`, `last_name`, `active`,
+address can sign up again. The rest: `first_name`, `last_name`, `active`,
 `email_verified_at`, `last_logged_in_at`, `analytics_opt_out` (the user turned
 off browser analytics; server events ignore it) and the
 `deleted_at`/`created_at`/`updated_at` trio every soft-deletable table carries.
 
 ### `user_tokens`
 
-One table holds all three token purposes (`purpose`: `'refresh'`,
-`'email_verification'`, `'password_reset'`), since they share hashing, lookup,
-expiry and revocation. The `user_tokens_purpose_check` constraint enforces the
-list in the database, not only through TypeScript's `$type<TokenPurpose>()`.
+One table holds every token purpose (`purpose`: `'refresh'`,
+`'sign_in_link'`, `'step_up_link'`, `'invitation_link'`), since they share
+hashing, lookup, expiry and revocation.
+The `user_tokens_purpose_check` constraint enforces the list in the database,
+not only through TypeScript's `$type<TokenPurpose>()`.
 
 - `token_hash` is a SHA-256 digest of the raw token, never the token.
 - `session_id`, `session_started_at` and `authenticated_at` are meaningful only
-  for `'refresh'`. `session_id` groups every token descended from one login
-  into a rotation family. `session_started_at` is copied forward unchanged by
-  every rotation, which makes `SESSION_ABSOLUTE_TTL` an absolute ceiling.
-  `authenticated_at` is when the session last proved who its user is, and is
-  the source of the access token's `auth_time`.
+  for `'refresh'`, except that `session_id` is meaningful on a
+  `'step_up_link'` too (see Emailed links). `session_id` groups every token
+  descended from one login into a rotation family. `session_started_at` is
+  copied forward unchanged by every rotation, which makes
+  `SESSION_ABSOLUTE_TTL` an absolute ceiling. `authenticated_at` is when the
+  session last proved who its user is, and is the source of the access
+  token's `auth_time`. NULL for a session a one-click invitation join
+  started, or one from before 0018.
 - `consumed_at` is set only by `UserTokenRepository.claimOnce`, so it
   separates a row spent through its single-use path from one revoked unused.
 - `replaced_by_id` points at the row a token rotated into. Nothing reads it; it
@@ -97,11 +100,63 @@ list in the database, not only through TypeScript's `$type<TokenPurpose>()`.
 - `deleted_at` exists only to satisfy `SoftDeletableTableConfig`. No path sets
   it, and the retention purge ignores it.
 
+#### Emailed links
+
+The three link purposes are the links a mail carries to sign someone in, to
+confirm a step-up, or to confirm an invitation (sign in and join), 32 random
+bytes each, stored as a SHA-256 hash. They use columns no `refresh` row
+fills: `email` (the address, lowercased), `app` (`'web'` or `'apex'`, the
+frontend the link opens; verify reads it from the row, never from the
+request; `user_tokens_app_check`), `redirect` (a same-origin path checked by
+`redirectPathSchema`) and `invitation_id`. `user_tokens_shape_check` holds
+each purpose's shape:
+
+- A `refresh` row names a user and none of the link columns.
+- A `sign_in_link` row names an address and an app, and never a `user_id` or
+  `session_id`. The click looks the account up by address, so a link can be
+  mailed to an address with no account yet, and a soft-deleted user's address
+  reaches a fresh account rather than the deleted one. `user_id` is nullable
+  for this purpose alone.
+- A `step_up_link` row names the user, the `session_id` it elevates, an
+  address and an app, and no `redirect`. Its claim matches the user and the
+  session as well as the hash, so another session of the same user neither
+  honours nor spends it, and a sign-out (`revokeAllForSession`) revokes it with
+  the session's chain.
+- An `invitation_link` row names an address, an app and the `invitation_id`
+  it joins, and never a `user_id`, `session_id` or `redirect`; only this
+  purpose has an `invitation_id`. It holds the invitation's id, never its raw
+  token. The foreign key is `ON DELETE CASCADE`, so deleting the invitation
+  deletes its links, and `user_tokens_invitation_id_idx` (partial, where
+  `invitation_id` is set) serves that cascade.
+
+A link row shares `session_id` with its session's refresh rows, so every
+reader that gives a session's rows refresh meaning is scoped to
+`purpose = 'refresh'`: `isSessionKilled` (a superseded or claimed link would
+otherwise read as a kill marker and end the session), `findRefreshByHash` (the
+rotation and sign-out lookups), `liveSessionIdsExcept` and
+`markSessionAuthenticated`.
+
+Issuing a link revokes the live links it supersedes (every `sign_in_link` of
+the address, or every `invitation_link` of the address and invitation, through
+`user_tokens_live_email_idx`, or every `step_up_link` of the session) and
+inserts the new row in one transaction, under a transaction-scoped advisory
+lock on the address, the address and invitation, or the session taken first,
+so at most one of each stays live. The claim is `claimOnce`, which checks no
+expiry; the caller judges `expires_at` on the claimed row, so an expired link is
+spent by its one presentation. A `sign_in_link` or `invitation_link` row has
+no user, so a user purge deletes the purged address's links itself (`deleteForEmail`), up to the
+deletion and only while no live account holds the address, and the user-wide
+revocations never reach one: a sign-out of the other sessions, a staff
+sign-out and a deactivation revoke the address's live links in their own
+transaction (`revokeSignInLinksOf`, both purposes), and a verify re-checks the
+account under its row lock. The retention rule
+below covers link rows as it covers the rest.
+
 Rotation is append-only, because reuse detection needs the old row to
 recognise a replay. With a 15-minute `ACCESS_TOKEN_TTL`, a client that stays
 signed in adds about 96 rows a day. The retention purge deletes a row once
 `RETENTION_TOKENS_DAYS` days have passed since its `expires_at`, or since a
-revoke that never consumed it (logout, reuse, a password change):
+revoke that never consumed it (logout, reuse, a sign-out of other sessions):
 `expires_at < cutoff or (revoked_at < cutoff and consumed_at is null)`. A
 rotated-away row carries `consumed_at`, so it stays until it expires. The
 indexes on `expires_at` and on the revoked-unconsumed partial predicate serve
@@ -126,8 +181,8 @@ PostHog keeps refusing stays. What writes, claims and deletes the rows is under
 everything in it, except the hand-added statements in these migrations, each
 marked by a comment in its file (0024's has none):
 
-- `0010` backfills an `'email'` `auth_providers` row for every user with a
-  password.
+- `0010` backfills an `'email'` `auth_providers` row for every user who could
+  sign in by email when it ran.
 - `0016` creates the `pg_trgm` extension, refuses to run while a live tenant
   holds the reserved `platform` slug, seeds the platform tenant and its
   settings row, and adds the trigger that makes `audit_logs` append-only.
@@ -141,6 +196,23 @@ marked by a comment in its file (0024's has none):
   after that backfill.
 - `0024` inserts the single `maintenance_mode_state` row (mode `off`,
   version 0).
+- `0028` has no hand-added statement, only a comment on why every existing row
+  passes the two CHECKs it adds: the new `email`, `app` and `redirect` columns
+  start null. It makes `user_tokens.user_id` nullable, for `sign_in_link` rows.
+- `0029` deletes, before it narrows `user_tokens_purpose_check` to
+  `refresh`, `sign_in_link` and `step_up_link` and drops the
+  `email_verification`/`password_reset` branch of `user_tokens_shape_check`:
+  - `DELETE FROM "user_tokens" WHERE "purpose" IN ('email_verification', 'password_reset')`;
+  - `DELETE FROM "notifications" WHERE "type" IN ('verify_email', 'password_reset_requested', 'password_changed')`;
+  - `DELETE FROM "notification_preferences" WHERE "notification_type" IN ('verify_email', 'password_reset_requested', 'password_changed')`.
+
+  Its generated statements drop both CHECKs, drop `users.password_hash`, and
+  add both CHECKs back narrowed.
+
+- `0030` has no hand-added statement, only a comment on why every existing
+  row passes the two CHECKs it re-adds: the new `invitation_id` column starts
+  null. It adds the `invitation_link` purpose, the column, its foreign key to
+  `tenant_invitations` and `user_tokens_invitation_id_idx`.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
@@ -397,8 +469,8 @@ as described so it does not build them a second time under the lock, then run
   foreign keys to `users` (`onboarding_dismissed_by`, and
   `onboarding_completions.user_id` and `completed_by`) also take
   `SHARE ROW EXCLUSIVE` on `users` until the transaction commits, so every
-  write to a user row (login's `last_logged_in_at` update, a registration, a
-  profile change) waits for the migration too; reads, including `FOR SHARE`
+  write to a user row (a sign-in's `last_logged_in_at` update, an account
+  creation, a profile change) waits for the migration too; reads, including `FOR SHARE`
   and `FOR NO KEY UPDATE` locks, do not.
 
 - **`0022` holds `users` briefly.** Its `ADD COLUMN analytics_opt_out` is
@@ -502,6 +574,32 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   ```sql
   CREATE INDEX CONCURRENTLY IF NOT EXISTS users_full_name_trgm_idx ON users USING gin (lower(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, ''))) gin_trgm_ops);
   ```
+
+- **`0028` blocks every read and write on `user_tokens` until the batch
+  commits.** Its `ALTER TABLE`s take an `ACCESS EXCLUSIVE` lock, held while
+  `user_tokens_shape_check`, `user_tokens_app_check` and the re-added
+  `user_tokens_purpose_check` scan every row, and while
+  `user_tokens_live_email_idx` builds, which scans the table too although it
+  holds no row yet. Every refresh reads that table, so on a large one
+  run the retention purge first to shorten the scans, and apply `0028` in a
+  quiet window.
+
+- **`0029` blocks every read and write on `user_tokens` and `users` until the
+  batch commits.** Its `ALTER TABLE`s take `ACCESS EXCLUSIVE` locks. Dropping
+  `users.password_hash` changes only the catalog, but the two re-added
+  `user_tokens` CHECKs scan every row, after its `DELETE`s scan `user_tokens`,
+  `notifications` and `notification_preferences`. As for `0028`, run the
+  retention purge first and apply `0029` in a quiet window.
+
+- **`0030` blocks every read and write on `user_tokens`, and writes on
+  `tenant_invitations`, until the batch commits.** Its `ALTER TABLE`s take an
+  `ACCESS EXCLUSIVE` lock on `user_tokens`, held while the two re-added CHECKs
+  scan every row and while `user_tokens_invitation_id_idx` builds. Adding the
+  foreign key takes `SHARE ROW EXCLUSIVE` on `tenant_invitations`, held until
+  the batch commits, which blocks invitation writes (invite, resend, revoke,
+  accept) but not reads. Every existing row has
+  `invitation_id` NULL, so the key's validation finds nothing to check. As for
+  `0029`, run the retention purge first and apply `0030` in a quiet window.
 
 ## The test database
 

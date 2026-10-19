@@ -1,6 +1,7 @@
 /**
- * @file The BullMQ Worker for the "email" queue defined in email.job.ts. Each
- * job sends one tracked email: it checks the suppression list first, and
+ * @file The BullMQ Workers for the "email" and "auth-email" queues
+ * (`emailQueueFor`, email.job.ts). Both run `processEmailJob`. Each job sends
+ * one tracked email: it checks the suppression list first, and
  * moves the job's `email_messages` row as the send goes.
  */
 import { Worker, type Job } from 'bullmq'
@@ -27,10 +28,10 @@ import { redisKey } from '@/services/redis.service'
 
 /**
  * The message row for a job queued by a replica without tracking, created
- * here. Keyed by the job's id and timestamp, so the job's retries get the
- * same row, and a job id reused after a Redis flush does not. The id is
- * written into the job's data, best-effort, so `recordPermanentFailure`
- * finds it.
+ * here. Keyed by the job's queue, id and timestamp, so the job's retries get
+ * the same row, and a job id reused after a Redis flush, or on the other
+ * email queue, does not. The id is written into the job's data, best-effort,
+ * so `recordPermanentFailure` finds it.
  * @param job - The email job, whose data has no `messageId`.
  * @returns The created (or, on a retry, the existing) row.
  * @throws {Error} When the job has no id, or the insert fails.
@@ -38,7 +39,8 @@ import { redisKey } from '@/services/redis.service'
 async function createMessageForUntrackedJob(job: Job<EmailJobData>): Promise<EmailMessage> {
   if (job.id === undefined) throw new Error('Email job has no id')
   const created = await createQueuedMessage(job.data, job.data.userId, {
-    jobKey: `email-job-${job.id}-${String(job.timestamp)}`,
+    // Job ids count per queue, so the queue name keeps an email and an auth-email job apart.
+    jobKey: `${job.queueName}-job-${job.id}-${String(job.timestamp)}`,
   })
   try {
     await job.updateData({ ...job.data, messageId: created.id })
@@ -120,14 +122,21 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
 }
 
 /**
- * Start the Worker for the email queue, sending up to `WORKER_CONCURRENCY`
+ * The queues an email Worker can consume.
+ */
+export type EmailQueueName = 'email' | 'auth-email'
+
+/**
+ * Start a Worker for one email queue, sending up to `WORKER_CONCURRENCY`
  * jobs at once. The 'failed' handler never rejects: a retryable failure logs a
- * warning, and the last attempt calls `recordPermanentFailure`.
+ * warning, and the last attempt calls `recordPermanentFailure`. Both report
+ * under the Worker's queue name.
+ * @param queueName - The queue to consume; `email` unless given.
  * @returns The running Worker instance (for graceful shutdown).
  */
-export function startEmailWorker(): Worker<EmailJobData> {
+export function startEmailWorker(queueName: EmailQueueName = 'email'): Worker<EmailJobData> {
   const env = getEnv()
-  const worker = new Worker<EmailJobData>('email', processEmailJob, {
+  const worker = new Worker<EmailJobData>(queueName, processEmailJob, {
     connection: getQueueConnection(),
     prefix: redisKey('bull'),
     concurrency: env.WORKER_CONCURRENCY,
@@ -136,27 +145,29 @@ export function startEmailWorker(): Worker<EmailJobData> {
 
   worker.on('completed', (job) => {
     logger.info('Email job completed', {
+      queue: queueName,
       jobId: job.id,
       templateKey: job.data.templateKey,
     })
   })
 
   worker.on('failed', (job, error) => {
-    const errorId = reportFinalJobFailure('email', job, error)
+    const errorId = reportFinalJobFailure(queueName, job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       logger.warn('Email job failed', {
         jobId: job?.id,
+        queue: queueName,
         templateKey: job?.data.templateKey,
         attempt: job?.attemptsMade,
         error,
       })
       return
     }
-    void recordPermanentFailure('email', job, error, errorId)
+    void recordPermanentFailure(queueName, job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {
-    logger.error('Email worker error', { error })
+    logger.error('Email worker error', { queue: queueName, error })
   })
 
   return worker

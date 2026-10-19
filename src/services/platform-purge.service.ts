@@ -21,6 +21,7 @@ import { PlatformUserRepository } from '@/repositories/platform-user.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
@@ -41,6 +42,7 @@ const tenantInvitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
+const userTokenRepository = new UserTokenRepository()
 
 /**
  * Lock every membership row of a user, in the order every membership write
@@ -78,8 +80,8 @@ async function lockMembershipsForPurge(
 /**
  * Permanently delete a soft-deleted user: redact them from the audit entries
  * they acted in, delete the email messages (with their attempts and events)
- * sent to their account, delete the mail log rows, email messages and
- * invitations addressed to their address up to their deletion, forget them as
+ * sent to their account, delete the mail log rows, email messages,
+ * invitations and emailed links addressed to their address up to their deletion, forget them as
  * the lifter of any email suppression, delete their memberships (locked first,
  * in the membership lock order) and then the row (the rest cascades), record
  * `user.purged` in the platform tenant, queue the deletion of their PostHog
@@ -117,6 +119,8 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
       await emailLogRepository.deleteByRecipient(found.email, deletedAt, tx)
       // Invitations addressed to the person hold the address too, pending or not.
       await tenantInvitationRepository.deleteForEmail(found.email, deletedAt, tx)
+      // Sign-in links carry the address and no user id, so the user row's cascade never reaches them.
+      await userTokenRepository.deleteForEmail(found.email, deletedAt, tx)
     }
     await emailMessageRepository.deleteForUser(
       userId,

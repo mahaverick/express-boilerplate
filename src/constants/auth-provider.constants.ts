@@ -7,7 +7,7 @@
 /**
  * Every auth method the `auth_providers` table can record a row for.
  * For `'email'`, `providerId` is the user's email address; Google sign-ups
- * get this row too, without a password. For `'google'`, it is Google's
+ * get this row too. For `'google'`, it is Google's
  * stable profile id.
  */
 export const AUTH_PROVIDERS = ['email', 'google'] as const

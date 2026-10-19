@@ -191,6 +191,9 @@ export function errorHandler(
   }
 
   const httpError = error instanceof HttpError ? error : undefined
+  if (httpError?.retryAfterSeconds !== undefined) {
+    response.setHeader('Retry-After', String(httpError.retryAfterSeconds))
+  }
   // A character Postgres cannot store came from the client: a 400, masked and unlogged like any 4xx (except a value-free warn for 22P05, below).
   const statusCode =
     httpError?.statusCode ??

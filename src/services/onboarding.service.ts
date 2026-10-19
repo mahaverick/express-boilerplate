@@ -161,7 +161,7 @@ export async function completeOnboardingStep(
     throw new HttpError('This step is done once for the tenant.', 409, SCOPE_MISMATCH_CODE)
   }
   if (input.source === 'staff' && !input.reason) {
-    throw new HttpError('A staff completion needs a reason.', 400)
+    throw new HttpError('A staff completion needs a reason. Give one of 1 to 500 characters.', 400)
   }
   const tenant = await tenantRepository.findById(input.tenantId, {}, executor)
   if (!tenant) throw new HttpError('Tenant not found', 404)
@@ -608,7 +608,11 @@ export async function dismissOnboarding(
     await lockMemberAccess(actor, tenantId, 'owner', tx)
     const tenant = await lockRunningTenant(tenantId, tx)
     if (tenant.onboardingDismissedAt !== null) {
-      throw new HttpError('Getting started is already dismissed.', 409, DISMISS_STATE_CODE)
+      throw new HttpError(
+        'Getting started is already dismissed. Refresh the page to see its current state.',
+        409,
+        DISMISS_STATE_CODE
+      )
     }
     await tenantRepository.setOnboardingDismissed(tenantId, actor.userId, new Date(), tx)
     await record(
@@ -642,7 +646,11 @@ export async function undismissOnboarding(
     await lockMemberAccess(actor, tenantId, 'owner', tx)
     const tenant = await lockRunningTenant(tenantId, tx)
     if (tenant.onboardingDismissedAt === null) {
-      throw new HttpError('Getting started is not dismissed.', 409, DISMISS_STATE_CODE)
+      throw new HttpError(
+        'Getting started is not dismissed. Refresh the page to see its current state.',
+        409,
+        DISMISS_STATE_CODE
+      )
     }
     // eslint-disable-next-line unicorn/no-null -- null clears the dismissal
     await tenantRepository.setOnboardingDismissed(tenantId, null, null, tx)

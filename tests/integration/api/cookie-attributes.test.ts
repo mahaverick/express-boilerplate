@@ -16,20 +16,21 @@ import { GOOGLE_STRATEGY_NAME, REFRESH_REUSE_GRACE_MS } from '@/constants/auth.c
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { resetPassword } from '@/services/auth.service'
-import { sql } from '@/services/database.service'
+import { sql, withTransaction } from '@/services/database.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import {
+  denySessionsAfterCommit,
   hashToken,
   issueRefreshToken,
-  issueToken,
+  revokeSessionRows,
   rotateRefreshToken,
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
-import { hashPassword } from '@/utilities/password.utilities'
+import { FakeGoogleSuccessStrategy } from '../../helpers/fake-google'
 import { isTokenRowLive, sessionWithSibling } from '../../helpers/grace-sibling'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
+import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 /**
  * getEnv() is a vi.fn over the real one, so each test hands the app
@@ -45,7 +46,6 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 
 const realEnv = getEnv()
 const userRepository = new UserRepository()
-const PASSWORD = 'correct horse battery staple'
 const OAUTH_SESSION_COOKIE = 'oauth.sid'
 
 const GOOGLE: Partial<Env> = {
@@ -85,6 +85,7 @@ const EPOCH_EXPIRY = /;\s*Expires=Thu, 01 Jan 1970/i
 const createdIds: string[] = []
 
 afterEach(async () => {
+  await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
   vi.mocked(getEnv).mockReturnValue(realEnv)
   passport.unuse(GOOGLE_STRATEGY_NAME)
   if (createdIds.length === 0) return
@@ -189,11 +190,11 @@ async function tokenState(
 }
 
 /**
- * A verified user whose password is `PASSWORD`.
+ * A verified user, signed in by a sign-in link in the tests below.
  */
 async function createVerifiedUser(): Promise<string> {
   const email = `cookie-attributes-${randomUUID()}@example.test`
-  const user = await userRepository.create({ email, passwordHash: await hashPassword(PASSWORD) })
+  const user = await userRepository.create({ email })
   createdIds.push(user.id)
   await sql`update users set email_verified_at = now() where id = ${user.id}`
   return email
@@ -222,25 +223,6 @@ function googleProfile(email: string): GoogleProfile {
       email,
       email_verified: true,
     },
-  }
-}
-
-/**
- * Skips the OAuth2 dance and succeeds with a fixed profile, so the
- * callback's own cookie-setting path runs over real HTTP. Same technique
- * as google-oauth.test.ts's FakeGoogleSuccessStrategy.
- */
-class FakeGoogleSuccessStrategy implements passport.Strategy {
-  name = GOOGLE_STRATEGY_NAME
-
-  constructor(readonly profile: GoogleProfile) {}
-
-  /**
-   * Succeed with the fixed profile without contacting Google.
-   */
-  authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
-    // eslint-disable-next-line unicorn/no-undeclared-class-members -- passport injects `success` onto the per-request instance (StrategyCreatedStatic).
-    this.success(this.profile as unknown as Express.User)
   }
 }
 
@@ -282,9 +264,9 @@ describe('refresh cookie: name, path and domain per deployment', () => {
       const email = await createVerifiedUser()
 
       const login = await request(app)
-        .post('/api/v1/auth/login')
+        .post('/api/v1/auth/link/verify')
         .set('X-Forwarded-Proto', 'https')
-        .send({ email, password: PASSWORD })
+        .send({ token: await issueTestLink(email) })
       expect(login.status).toBe(200)
       const loginLines = cookieLines(login, name)
       expect(loginLines).toHaveLength(1)
@@ -318,7 +300,9 @@ describe('refresh cookie: name, path and domain per deployment', () => {
     const app = appWith(PLAIN_SCOPED)
     const email = await createVerifiedUser()
 
-    const login = await request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
+    const login = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(email) })
     expect(login.status).toBe(200)
     const loginLines = cookieLines(login, PLAIN_COOKIE)
     expect(loginLines).toHaveLength(1)
@@ -367,7 +351,9 @@ describe('refresh cookie: name, path and domain per deployment', () => {
     const app = appWith(PLAIN_HOST_ONLY)
     const email = await createVerifiedUser()
 
-    const login = await request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
+    const login = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token: await issueTestLink(email) })
     expect(cookieLines(login, PLAIN_COOKIE)).toHaveLength(1)
     const refreshed = await request(app)
       .post('/api/v1/auth/refresh')
@@ -534,10 +520,10 @@ describe('refresh cookie: the unprefixed refreshToken under COOKIE_SECURE', () =
       const unprefixed = await sessionFor(email)
 
       const login = await request(app)
-        .post('/api/v1/auth/login')
+        .post('/api/v1/auth/link/verify')
         .set('X-Forwarded-Proto', 'https')
         .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}`)
-        .send({ email, password: PASSWORD })
+        .send({ token: await issueTestLink(email) })
 
       expect(login.status).toBe(200)
       expect(cookieLines(login, name)).toHaveLength(1)
@@ -722,8 +708,6 @@ describe('oauth.sid (express-session)', () => {
   })
 })
 
-const NEW_PASSWORD = 'a different correct horse battery staple'
-
 /**
  * The Cookie header a browser sends after `response`: each sent pair, minus
  * any the response cleared, with any it set in its place.
@@ -802,12 +786,12 @@ const DEPLOYMENTS = [
 type Deployment = (typeof DEPLOYMENTS)[number]
 
 /**
- * Log in, end every session with a password reset, then refresh with the
- * login's cookie.
+ * Sign in, end every session under the user row lock and deny it, as an
+ * account claim's first pass does, then refresh with the sign-in's cookie.
  * @param deployment - The cookie environment.
  * @returns The app, the cookie pair the refresh presented, and its response.
  */
-async function refreshAfterReset(deployment: Deployment): Promise<{
+async function refreshAfterSessionsEnd(deployment: Deployment): Promise<{
   app: ReturnType<typeof createApp>
   presented: string
   refreshed: Response
@@ -815,13 +799,17 @@ async function refreshAfterReset(deployment: Deployment): Promise<{
   const app = appWith(deployment.env)
   const email = await createVerifiedUser()
   const login = await request(app)
-    .post('/api/v1/auth/login')
+    .post('/api/v1/auth/link/verify')
     .set('X-Forwarded-Proto', 'https')
-    .send({ email, password: PASSWORD })
+    .send({ token: await issueTestLink(email) })
   expect(login.status).toBe(200)
   const presented = cookiePair(cookieLines(login, deployment.name)[0])
-  const reset = await issueToken(await userIdFor(email), 'password_reset', 60_000)
-  await resetPassword({ token: reset.raw, password: NEW_PASSWORD })
+  const userId = await userIdFor(email)
+  const sessionIds = await withTransaction(async (tx) => {
+    await userRepository.lockById(userId, 'no key update', tx)
+    return revokeSessionRows(userId, {}, tx)
+  })
+  await denySessionsAfterCommit(userId, sessionIds)
 
   const refreshed = await request(app)
     .post('/api/v1/auth/refresh')
@@ -831,12 +819,12 @@ async function refreshAfterReset(deployment: Deployment): Promise<{
 }
 
 /**
- * Assert that a refresh after a reset answers 401 with one clear of the
+ * Assert that a refresh after every session ended answers 401 with one clear of the
  * current cookie, carrying the path and domain it was set with.
  * @param deployment - The cookie environment.
  */
-async function expectResetCookieCleared(deployment: Deployment): Promise<void> {
-  const { refreshed } = await refreshAfterReset(deployment)
+async function expectEndedCookieCleared(deployment: Deployment): Promise<void> {
+  const { refreshed } = await refreshAfterSessionsEnd(deployment)
 
   expect(refreshed.status).toBe(401)
   const clears = cookieLines(refreshed, deployment.name)
@@ -850,9 +838,9 @@ async function expectResetCookieCleared(deployment: Deployment): Promise<void> {
 
 describe('refresh cookie: a refresh answered 401 clears the cookie it read', () => {
   it.each(DEPLOYMENTS)(
-    'clears $name, as it was set, once a password reset has ended the session ($label)',
+    'clears $name, as it was set, once every session has ended ($label)',
     async (deployment) => {
-      await expectResetCookieCleared(deployment)
+      await expectEndedCookieCleared(deployment)
     }
   )
 
@@ -864,22 +852,22 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
    *   pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts                    # green
    */
   it.runIf(process.env.MUTATION_PROOF === '1')(
-    'reproduces the reset-clear test with the response cookie clear disabled',
+    'reproduces the ended-session clear test with the response cookie clear disabled',
     async () => {
       const skipClear = function (this: express.Response) {
         return this
       } as express.Response['clearCookie']
       await withMutatedMethod(express.response, 'clearCookie', skipClear, async () => {
-        await expectResetCookieCleared(DEPLOYMENTS[0])
+        await expectEndedCookieCleared(DEPLOYMENTS[0])
       })
     }
   )
 
   it('leaves the next request without the cookie, and that one looks up no token', async () => {
-    const { app, presented, refreshed } = await refreshAfterReset(DEPLOYMENTS[0])
+    const { app, presented, refreshed } = await refreshAfterSessionsEnd(DEPLOYMENTS[0])
     expect(refreshed.status).toBe(401)
     const nextCookie = cookieHeaderAfter([presented], refreshed)
-    const findByHash = vi.spyOn(UserTokenRepository.prototype, 'findByHash')
+    const findByHash = vi.spyOn(UserTokenRepository.prototype, 'findRefreshByHash')
     try {
       const followUp = request(app).post('/api/v1/auth/refresh')
       const response = await (nextCookie === undefined
@@ -1121,16 +1109,21 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     const app = appWith(PLAIN_HOST_ONLY)
     const live = await sessionFor(await createVerifiedUser())
     const unavailable = (() =>
-      Promise.reject(new Error('database unavailable'))) as UserTokenRepository['findByHash']
+      Promise.reject(new Error('database unavailable'))) as UserTokenRepository['findRefreshByHash']
 
-    await withMutatedMethod(UserTokenRepository.prototype, 'findByHash', unavailable, async () => {
-      const failed = await request(app)
-        .post('/api/v1/auth/refresh')
-        .set('Cookie', `${PLAIN_COOKIE}=${live}`)
+    await withMutatedMethod(
+      UserTokenRepository.prototype,
+      'findRefreshByHash',
+      unavailable,
+      async () => {
+        const failed = await request(app)
+          .post('/api/v1/auth/refresh')
+          .set('Cookie', `${PLAIN_COOKIE}=${live}`)
 
-      expect(failed.status).toBe(500)
-      expect(cookieLines(failed, PLAIN_COOKIE)).toHaveLength(0)
-    })
+        expect(failed.status).toBe(500)
+        expect(cookieLines(failed, PLAIN_COOKIE)).toHaveLength(0)
+      }
+    )
     expect(await tokenState(live)).toEqual({ isConsumed: false, isRevoked: false })
   })
 })

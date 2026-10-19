@@ -6,6 +6,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -16,7 +17,12 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { hashToken } from '@/services/session.service'
 import {
   accept,
@@ -24,8 +30,11 @@ import {
   listPending,
   preview,
   resend,
+  resendAvailableAt,
+  resendCooldownError,
   revoke,
 } from '@/services/tenant-invitation.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
@@ -52,16 +61,19 @@ const INVALID = { statusCode: 404, code: 'invitation_invalid' }
 const MISMATCH = {
   statusCode: 403,
   code: 'invitation_email_mismatch',
-  message: 'This invitation was sent to a different email address.',
+  message:
+    'This invitation is for a different email address. Sign in with the address it was sent to.',
 }
 const UNVERIFIED = {
   statusCode: 403,
   code: 'invitation_email_unverified',
-  message: 'Verify your email address before accepting this invitation.',
+  message:
+    'Confirm your email address before you accept this invitation. Open the invitation link from your inbox.',
 }
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -191,8 +203,8 @@ describe('tenant-invitation.service', () => {
         tenantName: 'Acme Inc',
         inviterName: 'Ada Lovelace',
         role: 'editor',
-        acceptUrl: `http://localhost:5173/invitations/accept?token=${queued.token}`,
-        expiresInDays: '7',
+        acceptUrl: `http://localhost:5173/invitations/accept?token=${queued.token}&utm_source=email&utm_medium=email&utm_campaign=tenant_invitation&utm_content=primary_button`,
+        expiresInDays: '3',
         appName: queued.variables.appName,
       })
       expect(queued.token).toMatch(/^[\w-]{43}$/)
@@ -214,7 +226,7 @@ describe('tenant-invitation.service', () => {
       ).rejects.toMatchObject({
         statusCode: 409,
         code: 'already_member',
-        message: 'That person is already a member.',
+        message: 'That person is already a member of this workspace. No invitation was sent.',
       })
       expect(await pendingOf(tenant.id)).toEqual([])
     })
@@ -293,7 +305,7 @@ describe('tenant-invitation.service', () => {
         invite({ userId: admin.id }, tenant.id, member.email, 'owner')
       ).rejects.toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to grant this role',
+        message: "Your role can't grant this role. Ask a workspace owner.",
       })
     })
 
@@ -394,7 +406,7 @@ describe('tenant-invitation.service', () => {
 
       await expect(resend({ userId: admin.id }, tenant.id, invitation.id)).rejects.toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to grant this role',
+        message: "Your role can't grant this role. Ask a workspace owner.",
       })
       const unchanged = await preview(rawToken)
       expect(unchanged.role).toBe('owner')
@@ -456,7 +468,7 @@ describe('tenant-invitation.service', () => {
 
       await expect(revoke({ userId: editor.id }, tenant.id, invitation.id)).rejects.toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions',
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
       })
       const stillPending = await preview(rawToken)
       expect(stillPending.email).toBe(invitation.email)
@@ -498,7 +510,8 @@ describe('tenant-invitation.service', () => {
 
       await expect(preview(rawToken)).rejects.toMatchObject({
         ...INVALID,
-        message: 'This invitation is invalid or has expired.',
+        message:
+          'This invitation link has expired or was already used. Ask the person who invited you for a new one.',
       })
     })
   })
@@ -514,6 +527,7 @@ describe('tenant-invitation.service', () => {
       expect(accepted).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
       const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
       expect(membership?.role).toBe('editor')
@@ -533,6 +547,7 @@ describe('tenant-invitation.service', () => {
       expect(await accept(queued.token, invitee.id)).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
     })
 
@@ -574,7 +589,8 @@ describe('tenant-invitation.service', () => {
       const first = await accept(rawToken, invitee.id)
       const second = await accept(rawToken, invitee.id)
 
-      expect(second).toStrictEqual(first)
+      expect(first.alreadyMember).toBe(false)
+      expect(second).toStrictEqual({ ...first, alreadyMember: true })
     })
 
     it('answers invitation_invalid to the user who already accepted while the tenant is suspended', async () => {
@@ -631,7 +647,13 @@ describe('tenant-invitation.service', () => {
       ])
 
       const expected = { tenant: { name: 'Acme Inc', slug: tenant.slug }, role: 'editor' }
-      expect(results).toStrictEqual([expected, expected])
+      // One accept claims and joins; the other finds the join already made.
+      expect(
+        results.toSorted((a, b) => Number(a.alreadyMember) - Number(b.alreadyMember))
+      ).toStrictEqual([
+        { ...expected, alreadyMember: false },
+        { ...expected, alreadyMember: true },
+      ])
       const [row] = await sql<{ count: number }[]>`
         select count(*)::int as count from user_memberships
         where user_id = ${invitee.id} and tenant_id = ${tenant.id}
@@ -691,7 +713,7 @@ describe('tenant-invitation.service', () => {
 
         expect(claims).toEqual([undefined])
 
-        expect(second).toStrictEqual(first)
+        expect(second).toStrictEqual({ ...first, alreadyMember: true })
         const [row] = await sql<{ count: number }[]>`
           select count(*)::int as count from user_memberships
           where user_id = ${invitee.id} and tenant_id = ${tenant.id}
@@ -719,5 +741,46 @@ describe('tenant-invitation.service', () => {
         ).toBeUndefined()
       })
     })
+  })
+})
+
+/**
+ * INVITATION_RESEND_COOLDOWN in milliseconds, read per call so getEnv() runs inside a test.
+ * @returns The cooldown.
+ */
+function cooldownMs(): number {
+  return requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+}
+
+describe('the resend cooldown', () => {
+  const lastSentAt = new Date('2026-01-01T00:00:00.000Z')
+  const sentMs = lastSentAt.getTime()
+
+  it('answers the cooldown end 1 ms before it, and null exactly at it', () => {
+    const end = sentMs + cooldownMs()
+
+    expect(resendAvailableAt(lastSentAt, end - 1)?.getTime()).toBe(end)
+    expect(resendAvailableAt(lastSentAt, end)).toBeNull()
+  })
+
+  it('answers null for a row never stamped', () => {
+    // eslint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
+    expect(resendAvailableAt(null, sentMs)).toBeNull()
+  })
+
+  it('rounds the seconds left up, from the one clock reading it is given', () => {
+    const end = sentMs + cooldownMs()
+
+    expect(resendCooldownError(lastSentAt, end - 90_000).retryAfterSeconds).toBe(90)
+    expect(resendCooldownError(lastSentAt, end - 1).retryAfterSeconds).toBe(1)
+  })
+
+  it('answers Retry-After 1 when the cooldown has lapsed by the time the 429 is built', () => {
+    const end = sentMs + cooldownMs()
+
+    expect(resendCooldownError(lastSentAt, end).retryAfterSeconds).toBe(1)
+    expect(resendCooldownError(lastSentAt, end + 60_000).retryAfterSeconds).toBe(1)
+    // eslint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
+    expect(resendCooldownError(null, sentMs).retryAfterSeconds).toBe(1)
   })
 })

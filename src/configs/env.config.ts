@@ -8,7 +8,6 @@ import { randomBytes } from 'node:crypto'
 import { config } from 'dotenv'
 import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
-import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
 // Skipped under Vitest so a developer's .env never leaks into the suite; `quiet` keeps stdout clean.
 if (!process.env.VITEST) {
@@ -23,19 +22,6 @@ const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
  * The deployment an `APP_ENV` value names.
  */
 export type AppEnv = z.infer<typeof AppEnvSchema>
-
-const TOP_LEVEL_LABEL = /^[a-z]{2,}$/
-
-/**
- * Whether `value` is a lowercase domain: a dotted hostname by
- * `EMAIL_DOMAIN_PATTERN`, the shape the audit log stores for an auto-join,
- * whose last label is two or more letters.
- * @param value - One trimmed entry of PLATFORM_EMAIL_DOMAINS.
- * @returns True for a domain such as `example.com`.
- */
-function isLowercaseDomain(value: string): boolean {
-  return EMAIL_DOMAIN_PATTERN.test(value) && TOP_LEVEL_LABEL.test(value.split('.').at(-1) ?? '')
-}
 
 /**
  * Whether no entry of a comma-separated origin list has an opaque origin.
@@ -109,14 +95,14 @@ const EnvSchema = z.object({
     .url({ protocol: /^https?$/ })
     .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
     .describe(
-      'Public origin of the frontend, with no query or fragment. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
+      'Public origin of the frontend, with no query or fragment. Sign-in and invitation links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
     ),
   APEX_URL: z
     .url({ protocol: /^https?$/ })
     .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
     .optional()
     .describe(
-      'Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, and the verification, password-reset and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.'
+      'Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, step-up links, and the sign-in link and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.'
     ),
 
   DATABASE_URL: z
@@ -228,86 +214,79 @@ const EnvSchema = z.object({
       'Hard ceiling on one login session, measured from the login itself and never reset by rotation, as an ms()-parseable duration string (e.g. "30d"). Past it, refreshing fails and the user signs in again. Defaults to 30d.'
     ),
 
-  EMAIL_VERIFICATION_TTL: z
-    .string()
-    .default('24h')
-    .refine((value) => parseDurationMs(value) !== undefined, {
-      message:
-        'EMAIL_VERIFICATION_TTL must be a duration string ms() can parse, e.g. "24h" or "86400000".',
-    })
-    .describe(
-      'How long an email-verification link stays valid. Defaulted to 24h; a link the user finds the next morning should still work.'
-    ),
-
   /**
-   * Its own variable, shorter than EMAIL_VERIFICATION_TTL: redeeming the link
-   * sets a new password and revokes every session.
+   * Short: the link is a full credential, and a dead one is one click from a
+   * new one. Staff-sent and welcome links use it too.
    */
-  PASSWORD_RESET_TTL: z
+  SIGN_IN_LINK_TTL: z
     .string()
-    .default('1h')
-    .refine((value) => parseDurationMs(value) !== undefined, {
-      message:
-        'PASSWORD_RESET_TTL must be a duration string ms() can parse, e.g. "1h" or "3600000".',
-    })
-    .describe(
-      'How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.'
-    ),
-
-  /**
-   * A silent per-address cooldown (forgot-password still answers 202), not a
-   * refusing per-address limiter, which anyone who knows an address could
-   * spend to deny its owner their reset mail.
-   */
-  PASSWORD_RESET_MAIL_COOLDOWN: z
-    .string()
-    .default('5m')
+    .default('15m')
     .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
       message:
-        'PASSWORD_RESET_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "5m" or "300000".',
+        'SIGN_IN_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
     })
     .describe(
-      'Shortest gap between two password-reset mails to one address, as an ms()-parseable duration (e.g. "5m"). Forgot-password answers the same 202 to every request; a request inside the gap mails nothing, so an owner\'s own request is at most one gap late and one address gets at most 12 reset mails an hour at the default. Defaults to 5m.'
+      'How long an emailed sign-in link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because the link is a full credential and a new one is one click away; staff-sent and welcome links use it too, and so does the invitation confirm link. Defaults to 15m.'
     ),
 
   /**
-   * A notice, not a login path: it is skipped when Redis is down. No 429 on
-   * register instead, which would tell a caller the address is taken.
+   * A silent per-address cooldown (the request still answers 202), matching
+   * the client's own 60-second resend countdown.
    */
-  REGISTRATION_ATTEMPT_NOTICE_COOLDOWN: z
+  SIGN_IN_LINK_MAIL_COOLDOWN: z
     .string()
-    .default('1h')
+    .default('1m')
     .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
       message:
-        'REGISTRATION_ATTEMPT_NOTICE_COOLDOWN must be a positive duration string ms() can parse, e.g. "1h" or "3600000".',
+        'SIGN_IN_LINK_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
     })
     .describe(
-      'Shortest gap between two "someone tried to register with your address" notices to one address, as an ms()-parseable duration (e.g. "1h"). Register answers the same 202 either way; an attempt inside the gap mails nothing, so nobody can mail-bomb an account owner through register. Defaults to 1h.'
+      'Shortest gap between two sign-in link mails to one address, as an ms()-parseable duration (e.g. "1m"). A request inside the gap answers the same 202 and mails nothing. Also the gap between two invitation confirm links to one address, counted separately. Defaults to 1m, matching the sign-in page\'s 60-second resend countdown.'
+    ),
+
+  SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10)
+    .describe(
+      'Most sign-in link mails one address may receive in 24 hours. A request past it answers the same 202 and mails nothing, so nobody can mail-bomb an address through the sign-in form. Defaults to 10.'
     ),
 
   /**
-   * Longer than PASSWORD_RESET_TTL: the recipient of a staff-created account
-   * did not ask for the mail. The link is single-use either way.
+   * As short as a sign-in link, for the same reason: confirming a step-up is
+   * one click from a new link.
    */
-  ACCOUNT_SETUP_TTL: z
+  STEP_UP_LINK_TTL: z
     .string()
-    .default('24h')
-    .refine((value) => parseDurationMs(value) !== undefined, {
+    .default('15m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
       message:
-        'ACCOUNT_SETUP_TTL must be a duration string ms() can parse, e.g. "24h" or "86400000".',
+        'STEP_UP_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
     })
     .describe(
-      'How long the set-password link mailed to a staff-created account stays valid. Defaulted to 24h: the recipient did not ask for the mail, so it must last until the next working day; the link is single-use either way.'
+      'How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a staff session and a new one is one click away. Defaults to 15m.'
+    ),
+
+  STEP_UP_LINK_COOLDOWN: z
+    .string()
+    .default('1m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'STEP_UP_LINK_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
+    })
+    .describe(
+      'Shortest gap between two step-up confirmation mails for one staff member, across all their sessions, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own sessions. Defaults to 1m.'
     ),
 
   INVITATION_TTL: z
     .string()
-    .default('7d')
+    .default('3d')
     .refine((value) => parseDurationMs(value) !== undefined, {
-      message: 'INVITATION_TTL must be a duration string ms() can parse, e.g. "7d" or "604800000".',
+      message: 'INVITATION_TTL must be a duration string ms() can parse, e.g. "3d" or "259200000".',
     })
     .describe(
-      'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.'
+      'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "3d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 3d.'
     ),
   INVITATION_RESEND_COOLDOWN: z
     .string()
@@ -394,21 +373,6 @@ const EnvSchema = z.object({
       'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. POST /auth/refresh and /auth/logout also refuse a present Origin that is none of these, so list every other frontend origin (SECURITY.md, "CSRF"). Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
     ),
 
-  /**
-   * Grants viewer only, and only to a verified address. Parsed by
-   * `parsePlatformEmailDomains` (platform.service.ts).
-   */
-  PLATFORM_EMAIL_DOMAINS: z
-    .string()
-    .refine((value) => value.split(',').every((domain) => isLowercaseDomain(domain.trim())), {
-      message:
-        'PLATFORM_EMAIL_DOMAINS must be lowercase domains separated by commas, e.g. "example.com,example.org".',
-    })
-    .optional()
-    .describe(
-      'Comma-separated email domains, e.g. "example.com,example.org". A user whose verified address is on one of them joins the platform tenant as viewer, when the address is verified and at every sign-in. Only the exact domain after the last "@" matches, never a subdomain. Empty means nobody joins automatically. What viewer can see, and how to grant more, is in SECURITY.md, "Platform staff".'
-    ),
-
   OTEL_EXPORTER_OTLP_ENDPOINT: z
     .url({ protocol: /^https?$/ })
     .optional()
@@ -462,7 +426,7 @@ const EnvSchema = z.object({
     .stringbool()
     .default(true)
     .describe(
-      'Whether the BullMQ workers (email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set or POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID both are) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge, the analytics drain, the feature flag definitions fetch and the PostHog deletion of purged users run only where this is true.'
+      'Whether the BullMQ workers (email, auth-email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set or POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID both are) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge, the analytics drain, the feature flag definitions fetch and the PostHog deletion of purged users run only where this is true.'
     ),
   WORKER_CONCURRENCY: z.coerce
     .number()
@@ -470,7 +434,7 @@ const EnvSchema = z.object({
     .positive()
     .default(5)
     .describe(
-      'Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance and analytics workers always run one job at a time.'
+      'Jobs the email, auth-email and notification workers each process at once, per process. Defaults to 5. The email and auth-email workers both send mail, so a process runs up to 2 × WORKER_CONCURRENCY SMTP sends at once; size it against the mail provider rate limit. The maintenance and analytics workers always run one job at a time.'
     ),
   RETENTION_TOKENS_DAYS: z.coerce
     .number()
@@ -479,7 +443,7 @@ const EnvSchema = z.object({
     .max(36_500)
     .default(7)
     .describe(
-      'Days to keep a user_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
+      'Days to keep a user_tokens row (a refresh token, a mailed token or an emailed link) once it has expired, or once it was revoked without ever being used (logout, reuse, a sign-out of other sessions, a newer link). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
     ),
   RETENTION_INVITATIONS_DAYS: z.coerce
     .number()
@@ -750,7 +714,7 @@ const EnvSchema = z.object({
     .email()
     .default('no-reply@example.com')
     .describe(
-      'The From address of the general sender: every email whose links carry no token (password changed, registration attempt, onboarding reminder), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+      'The From address of the general sender: every email whose links carry no token (onboarding reminder, maintenance-mode notice), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
     ),
   /**
    * No schema default: it falls back to MAIL_FROM, which `.default()` cannot
@@ -760,7 +724,7 @@ const EnvSchema = z.object({
     .email()
     .optional()
     .describe(
-      'The From address of the transactional sender: every email whose link carries a token (email verification, password reset, account setup, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
+      'The From address of the transactional sender: every email whose link carries a token (sign-in link, step-up link, welcome, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
     ),
 
   APP_NAME: z
@@ -768,7 +732,7 @@ const EnvSchema = z.object({
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name in outbound email copy and notification text: verification, password reset, password changed, invitation and onboarding reminder messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts, platform-onboarding.service.ts). Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: sign-in link, step-up link, welcome, invitation, maintenance-mode and onboarding reminder messages. Defaults to "Express Boilerplate".'
     ),
 
   /**

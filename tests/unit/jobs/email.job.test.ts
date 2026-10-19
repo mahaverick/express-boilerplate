@@ -7,11 +7,18 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EmailMessage } from '@/database/models/email-message.model'
-import { addEmailJob, emailJobDefaults } from '@/jobs/email.job'
+import {
+  addEmailJob,
+  AUTH_EMAIL_TEMPLATE_KEYS,
+  emailJobDefaults,
+  emailQueueFor,
+  enqueueTrackedEmail,
+} from '@/jobs/email.job'
 import * as emailMessageService from '@/services/email-message.service'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
 import * as queueService from '@/services/queue.service'
+import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 
 vi.mock('@/services/email-message.service', () => ({
   createQueuedMessage: vi.fn(),
@@ -21,14 +28,20 @@ vi.mock('@/services/email-message.service', () => ({
 vi.mock('@/services/queue.service', () => ({
   addJob: vi.fn(),
   getEmailQueue: vi.fn(() => ({ name: 'email' })),
+  getAuthEmailQueue: vi.fn(() => ({ name: 'auth-email' })),
 }))
 
 const MESSAGE_ID = '0190a000-0000-7000-8000-000000000002'
 
 const message: MailMessage = {
   to: 'user@example.com',
-  templateKey: 'password_reset',
-  variables: { firstName: 'Ada', resetUrl: 'https://example.com/r?token=abc', appName: 'Test' },
+  templateKey: 'onboarding_reminder',
+  variables: {
+    tenantName: 'Acme',
+    appName: 'Test',
+    nextStep: 'Invite a teammate',
+    overviewLink: 'https://example.com/tenants/acme',
+  },
 }
 
 describe('addEmailJob', () => {
@@ -55,7 +68,7 @@ describe('addEmailJob', () => {
     )
     expect(queueService.addJob).toHaveBeenCalledWith(
       { name: 'email' },
-      'password_reset',
+      'onboarding_reminder',
       { ...message, userId: 'user-1', messageId: MESSAGE_ID },
       { ...emailJobDefaults, jobId: 'notification-email-7-1' }
     )
@@ -89,7 +102,7 @@ describe('addEmailJob', () => {
     try {
       const rejected = expect(addEmailJob(message, 'user-1')).rejects
       await rejected.toThrow(expect.not.stringContaining('user@example.com'))
-      await rejected.toThrow(/password_reset/)
+      await rejected.toThrow(/onboarding_reminder/)
     } finally {
       loggerError.mockRestore()
     }
@@ -116,5 +129,50 @@ describe('addEmailJob', () => {
     } finally {
       loggerError.mockRestore()
     }
+  })
+})
+
+describe('emailQueueFor', () => {
+  it('routes sign_in_link, step_up_link, welcome, tenant_invitation and invitation_confirm to auth-email and everything else to email', () => {
+    const routed = Object.fromEntries(
+      EMAIL_TEMPLATE_KEYS.map((key) => [key, (emailQueueFor(key) as { name: string }).name])
+    )
+
+    expect(routed).toEqual({
+      sign_in_link: 'auth-email',
+      step_up_link: 'auth-email',
+      welcome: 'auth-email',
+      tenant_invitation: 'auth-email',
+      invitation_confirm: 'auth-email',
+      onboarding_reminder: 'email',
+      maintenance_mode_changed: 'email',
+    })
+    expect(AUTH_EMAIL_TEMPLATE_KEYS).toEqual([
+      'sign_in_link',
+      'step_up_link',
+      'welcome',
+      'tenant_invitation',
+      'invitation_confirm',
+    ])
+  })
+
+  it('enqueues an auth template on auth-email, from addEmailJob and enqueueTrackedEmail alike', async () => {
+    vi.mocked(emailMessageService.createQueuedMessage).mockResolvedValue({
+      id: MESSAGE_ID,
+    } as EmailMessage)
+    vi.mocked(queueService.addJob)
+      .mockReset()
+      .mockResolvedValue({ id: 'job-1' } as never)
+    const signIn: MailMessage = {
+      to: 'user@example.com',
+      templateKey: 'sign_in_link',
+      variables: {} as never,
+    }
+
+    await addEmailJob(signIn, 'user-1')
+    await enqueueTrackedEmail(signIn, 'user-1', MESSAGE_ID)
+
+    const queues = vi.mocked(queueService.addJob).mock.calls.map((call) => call[0])
+    expect(queues).toEqual([{ name: 'auth-email' }, { name: 'auth-email' }])
   })
 })

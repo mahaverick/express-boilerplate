@@ -1,6 +1,7 @@
 /**
- * @file `requireAllowedOriginWhenPresent`, the Origin check on the two auth
- * routes that read the refresh cookie (`/auth/refresh`, `/auth/logout`).
+ * @file `requireAllowedOriginWhenPresent`, the Origin check on the routes
+ * that read or set the refresh cookie (`/auth/refresh`, `/auth/logout`,
+ * `/auth/link/verify`, `/invitations/verify`).
  */
 import type { NextFunction, Request, Response } from 'express'
 import { HttpError } from '@/errors/http-error'

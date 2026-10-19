@@ -55,18 +55,11 @@ export function createPlatformUserRouter(limiters: PlatformLimiters): Router {
     platformUserController.updateUser
   )
   router.post(
-    '/:id/password-setup',
+    '/:id/sign-in-link',
     requirePlatformRole('admin'),
     requireJsonContentType,
     limiters.writeLimiter,
-    platformUserController.sendPasswordSetup
-  )
-  router.post(
-    '/:id/resend-verification',
-    requirePlatformRole('admin'),
-    requireJsonContentType,
-    limiters.writeLimiter,
-    platformUserController.resendVerification
+    platformUserController.sendSignInLink
   )
   router.post(
     '/:id/deactivate',

@@ -1,5 +1,5 @@
 /**
- * @file markEmailVerified (verification.service.ts) must be the one writer
+ * @file markEmailVerified (account-claim.service.ts) must be the one writer
  * of users.email_verified_at. Scans src/ for a second writer; comment
  * lines are skipped, since prose may name the column without writing it.
  */
@@ -39,7 +39,7 @@ const RULES: readonly WriterRule[] = [
   {
     name: 'a call to the repository primitive markEmailVerified',
     pattern: /\.markEmailVerified\(/,
-    allowedIn: ['services/verification.service.ts'],
+    allowedIn: ['services/account-claim.service.ts'],
   },
 ]
 
@@ -82,7 +82,7 @@ function sourceFiles(): string[] {
 describe('users.email_verified_at has one writer', () => {
   it('flags each writer shape it exists to catch (the patterns are not vacuous)', () => {
     const bad = [
-      'await userRepository.update(id, { passwordHash, emailVerifiedAt: new Date() })',
+      'await userRepository.update(id, { firstName, emailVerifiedAt: new Date() })',
       'await sql`update users set email_verified_at = now() where id = ${id}`',
       'await userRepository.markEmailVerified(user.id)',
     ].join('\n')
@@ -97,7 +97,7 @@ describe('users.email_verified_at has one writer', () => {
   })
 
   it('still has the one allowed writer (a renamed service must update this gate)', () => {
-    const service = fs.readFileSync(path.join(SRC, 'services/verification.service.ts'), 'utf8')
+    const service = fs.readFileSync(path.join(SRC, 'services/account-claim.service.ts'), 'utf8')
     expect(service).toMatch(/\.markEmailVerified\(userId, executor\)/)
   })
 })

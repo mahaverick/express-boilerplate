@@ -135,6 +135,30 @@ describe('errorHandler', () => {
     expect(body()).toMatchObject({ statusCode: 401, code: 'ACCESS_TOKEN_EXPIRED' })
   })
 
+  it('sets Retry-After from an HttpError that carries retryAfterSeconds', () => {
+    const { response, body } = mockResponse()
+    errorHandler(
+      new HttpError('Wait a moment.', 429, 'STEP_UP_LINK_COOLDOWN', undefined, {
+        retryAfterSeconds: 42,
+      }),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
+    expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '42')
+    expect(body()).toMatchObject({ statusCode: 429, code: 'STEP_UP_LINK_COOLDOWN' })
+  })
+
+  it('sets no Retry-After on an HttpError without retryAfterSeconds', () => {
+    const { response } = mockResponse()
+    errorHandler(new HttpError('invalid', 400), {} as never, response, vi.fn())
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
+    expect(response.setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything())
+  })
+
   it('omits the code key when HttpError carries none', () => {
     const { response, body } = mockResponse()
     errorHandler(new HttpError('invalid', 422), {} as never, response, vi.fn())
@@ -282,7 +306,7 @@ describe('errorHandler', () => {
    * (for a write, the data it was trying to write). drizzle-orm builds
    * DrizzleQueryError's message as `Failed query: ${query}\nparams: ${params}` (verified
    * against node_modules/drizzle-orm/errors.js), so logging the raw error
-   * would print a registrant's email address and bcrypt hash into the log
+   * would print a new account's email address and name into the log
    * on any insert failure that is not the unique violation
    * BaseRepository turns into a 409 — an over-length email
    * (22001), for instance. The real class is constructed here, not a
@@ -293,11 +317,11 @@ describe('errorHandler', () => {
    */
   describe('a failed database query', () => {
     const email = 'victim@example.com'
-    const passwordHash = '$2b$12$abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQR'
+    const firstName = 'Ada Lovelace-Byron'
 
     /**
      * The query error drizzle throws for a failed insert, wrapping a driver
-     * error that carries a SQLSTATE code, with real credentials as bound
+     * error that carries a SQLSTATE code, with personal data as bound
      * parameters.
      */
     function failedInsert(): DrizzleQueryError {
@@ -305,8 +329,8 @@ describe('errorHandler', () => {
         code: '22001',
       })
       return new DrizzleQueryError(
-        'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
-        [email, passwordHash],
+        'insert into "users" ("email", "first_name") values ($1, $2) returning *',
+        [email, firstName],
         cause
       )
     }
@@ -318,7 +342,7 @@ describe('errorHandler', () => {
 
       const logged = JSON.stringify(loggerError.mock.calls)
       expect(logged).not.toContain(email)
-      expect(logged).not.toContain(passwordHash)
+      expect(logged).not.toContain(firstName)
       expect(logged).not.toContain('params:')
     })
 
@@ -330,7 +354,7 @@ describe('errorHandler', () => {
       // Not a nested expect.objectContaining: vitest/jest types that matcher's return as `any`, and assigning it as an object-literal property (rather than passing it directly as an argument) trips @typescript-eslint/no-unsafe-assignment; reading the actual call arguments back and asserting with toMatchObject keeps this typed.
       const [, meta] = loggerError.mock.calls[0] ?? []
       expect(meta?.error).toMatchObject({
-        query: 'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
+        query: 'insert into "users" ("email", "first_name") values ($1, $2) returning *',
         driverCode: '22001',
       })
     })

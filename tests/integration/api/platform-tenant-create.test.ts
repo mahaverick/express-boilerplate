@@ -12,13 +12,20 @@ import {
   type MembershipRole,
 } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
+import { emailQueueFor } from '@/jobs/email.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { reissueOwnerInvitation } from '@/services/platform-tenant.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAuthEmailQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { signAccessToken } from '@/services/session.service'
+import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
@@ -47,6 +54,7 @@ const userRepository = new UserRepository()
 // The owner invitations this file queues must not linger under the worker's key prefix for the next file.
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
@@ -189,7 +197,7 @@ describe('staff-created tenants', () => {
 
       expect(response.status).toBe(409)
       expect(response.body as { message: string; code?: string }).toMatchObject({
-        message: 'That account is deactivated',
+        message: 'This account is deactivated. Reactivate it before you invite it as owner.',
         code: INVITEE_DEACTIVATED_CODE,
       })
     })
@@ -382,7 +390,7 @@ describe('staff-created tenants', () => {
       const response = await reissue(token, tenantId, 'y@example.test')
       expect(response.status).toBe(409)
       expect((response.body as { message: string }).message).toBe(
-        'Cannot invite an owner to a suspended tenant.'
+        'This tenant is suspended. Reactivate it, then invite an owner.'
       )
       const response2 = await reissue(token, platform.id, 'y@example.test')
       expect(response2.status).toBe(409)
@@ -404,7 +412,7 @@ describe('staff-created tenants', () => {
       const response = await reissue(token, tenantId, 'z@example.test')
       expect(response.status).toBe(409)
       expect((response.body as { message: string }).message).toBe(
-        'Cannot invite an owner to an archived tenant.'
+        "This tenant is archived, so it can't get an owner invitation."
       )
 
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
@@ -433,7 +441,7 @@ describe('staff-created tenants', () => {
             reissueOwnerInvitation({ userId: admin.id }, tenantId, 'z@example.test', 'Resend')
           ).rejects.toMatchObject({
             statusCode: 409,
-            message: 'Cannot invite an owner to an archived tenant.',
+            message: "This tenant is archived, so it can't get an owner invitation.",
           })
       )
       expect(calls).toBe(2)
@@ -468,7 +476,7 @@ describe('staff-created tenants', () => {
 
       expect(response.status).toBe(409)
       expect(response.body as { message: string; code?: string }).toMatchObject({
-        message: 'That account is deactivated',
+        message: 'This account is deactivated. Reactivate it before you invite it as owner.',
         code: INVITEE_DEACTIVATED_CODE,
       })
       const pending = await sql<{ email: string }[]>`select email from tenant_invitations
@@ -488,7 +496,7 @@ describe('staff-created tenants', () => {
 
       let response: Response | undefined
       await withMutatedMethod(
-        getEmailQueue(),
+        emailQueueFor(TENANT_INVITATION_TEMPLATE_KEY),
         'add',
         (): Promise<never> => Promise.reject(new Error('queue unavailable')),
         async () => {

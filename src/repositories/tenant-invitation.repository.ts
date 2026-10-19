@@ -3,7 +3,7 @@
  * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
  * soft-deleted tenant.
  */
-import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
@@ -98,6 +98,10 @@ export interface PendingInvitationSummary {
   invitedBy: { id: string; firstName: string | null; lastName: string | null } | null
   expiresAt: Date
   createdAt: Date
+  /**
+   * When the invitation was last mailed, or null for a row never stamped.
+   */
+  lastSentAt: Date | null
 }
 
 /**
@@ -119,6 +123,7 @@ export function invitationList(tenantId: string, search: string | undefined, fil
           role: invitation.role,
           expiresAt: invitation.expiresAt,
           createdAt: invitation.createdAt,
+          lastSentAt: invitation.lastSentAt,
           inviterId: userModel.id,
           inviterFirstName: userModel.firstName,
           inviterLastName: userModel.lastName,
@@ -156,6 +161,7 @@ export function invitationList(tenantId: string, search: string | undefined, fil
           : { id: row.inviterId, firstName: row.inviterFirstName, lastName: row.inviterLastName },
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
+      lastSentAt: row.lastSentAt,
     }),
   })
 }
@@ -190,6 +196,82 @@ export interface ValidInvitation {
  */
 export class TenantInvitationRepository {
   /**
+   * The one redeemable invitation a key condition picks, for a tenant that
+   * is not soft-deleted and is active: the shared body of the two lookups.
+   * @param key - The token-hash or id condition.
+   * @param executor - Where to run the query.
+   * @returns The invitation with its tenant and inviter, or undefined.
+   */
+  private async findValidWhere(
+    key: SQL | undefined,
+    executor: DbExecutor
+  ): Promise<ValidInvitation | undefined> {
+    const [row] = await executor
+      .select({
+        invitation,
+        tenant: {
+          id: tenantModel.id,
+          name: tenantModel.name,
+          slug: tenantModel.slug,
+          lifecycleState: tenantModel.lifecycleState,
+          isPlatform: tenantModel.isPlatform,
+        },
+        inviterId: userModel.id,
+        inviterFirstName: userModel.firstName,
+        inviterLastName: userModel.lastName,
+      })
+      .from(invitation)
+      .innerJoin(
+        tenantModel,
+        and(
+          eq(invitation.tenantId, tenantModel.id),
+          isNull(tenantModel.deletedAt),
+          // A suspended tenant's invitations wait: reactivating makes an unexpired one work again.
+          eq(tenantModel.lifecycleState, 'active')
+        )
+      )
+      .leftJoin(userModel, and(eq(invitation.invitedBy, userModel.id), isNull(userModel.deletedAt)))
+      .where(and(key, redeemableCondition()))
+      .limit(1)
+    if (!row) return undefined
+    return {
+      invitation: row.invitation,
+      tenant: row.tenant,
+      invitedBy:
+        row.inviterId === null
+          ? NO_INVITER
+          : { firstName: row.inviterFirstName, lastName: row.inviterLastName },
+    }
+  }
+
+  /**
+   * The one atomic claim both accept paths share, for the invitation a key
+   * condition picks.
+   * @param key - The token-hash or id condition.
+   * @param userId - The accepting user.
+   * @param executor - Where to run the query.
+   * @returns The claimed row, or undefined when it was not redeemable at that instant.
+   */
+  private async claimForAcceptWhere(
+    key: SQL | undefined,
+    userId: string,
+    executor: DbExecutor
+  ): Promise<TenantInvitation | undefined> {
+    const [row] = await executor
+      .update(invitation)
+      .set({ acceptedAt: sql`now()`, acceptedBy: userId, updatedAt: sql`now()` })
+      .where(
+        and(
+          key,
+          redeemableCondition(),
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null and ${tenantModel.lifecycleState} = 'active')`
+        )
+      )
+      .returning()
+    return row
+  }
+
+  /**
    * Revoke any pending invitation for this tenant and address, then insert a
    * new one, stamped as mailed now. Call it inside a transaction so the two
    * writes commit together.
@@ -222,7 +304,7 @@ export class TenantInvitationRepository {
     } catch (error) {
       if (isUniqueViolation(error, PENDING_UNIQUE_CONSTRAINT)) {
         throw new HttpError(
-          'An invitation to that address is already being sent. Try again.',
+          'An invitation to that address is being sent. Refresh the invitation list to see it.',
           409,
           'invitation_conflict'
         )
@@ -271,6 +353,34 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * The redeemable (pending, unexpired) invitation one tenant holds for an
+   * address, compared case-insensitively. A tenant holds at most one pending
+   * invitation per address (`tenant_invitations_pending_unique`).
+   * @param tenantId - The tenant.
+   * @param email - The address, in any case.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The invitation, or undefined.
+   */
+  async findRedeemableForEmail(
+    tenantId: string,
+    email: string,
+    executor: DbExecutor = db
+  ): Promise<TenantInvitation | undefined> {
+    const [row] = await executor
+      .select()
+      .from(invitation)
+      .where(
+        and(
+          eq(invitation.tenantId, tenantId),
+          sql`lower(${invitation.email}) = lower(${email})`,
+          redeemableCondition()
+        )
+      )
+      .limit(1)
+    return row
+  }
+
+  /**
    * Whether any tenant holds a redeemable (pending, unexpired) invitation
    * for an address, compared case-insensitively. For analytics only: it
    * tells whether a new account's address had been invited.
@@ -294,46 +404,23 @@ export class TenantInvitationRepository {
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The invitation with its tenant and inviter, or undefined.
    */
-  async findValidByTokenHash(
+  findValidByTokenHash(
     tokenHash: string,
     executor: DbExecutor = db
   ): Promise<ValidInvitation | undefined> {
-    const [row] = await executor
-      .select({
-        invitation,
-        tenant: {
-          id: tenantModel.id,
-          name: tenantModel.name,
-          slug: tenantModel.slug,
-          lifecycleState: tenantModel.lifecycleState,
-          isPlatform: tenantModel.isPlatform,
-        },
-        inviterId: userModel.id,
-        inviterFirstName: userModel.firstName,
-        inviterLastName: userModel.lastName,
-      })
-      .from(invitation)
-      .innerJoin(
-        tenantModel,
-        and(
-          eq(invitation.tenantId, tenantModel.id),
-          isNull(tenantModel.deletedAt),
-          // A suspended tenant's invitations wait: reactivating makes an unexpired one work again.
-          eq(tenantModel.lifecycleState, 'active')
-        )
-      )
-      .leftJoin(userModel, and(eq(invitation.invitedBy, userModel.id), isNull(userModel.deletedAt)))
-      .where(and(eq(invitation.tokenHash, tokenHash), redeemableCondition()))
-      .limit(1)
-    if (!row) return undefined
-    return {
-      invitation: row.invitation,
-      tenant: row.tenant,
-      invitedBy:
-        row.inviterId === null
-          ? NO_INVITER
-          : { firstName: row.inviterFirstName, lastName: row.inviterLastName },
-    }
+    return this.findValidWhere(eq(invitation.tokenHash, tokenHash), executor)
+  }
+
+  /**
+   * A redeemable invitation by its id, with the same predicate as
+   * `findValidByTokenHash`: for the confirm link, which names the invitation
+   * by id and never carries its token.
+   * @param id - The invitation id.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The invitation with its tenant and inviter, or undefined.
+   */
+  findValidById(id: string, executor: DbExecutor = db): Promise<ValidInvitation | undefined> {
+    return this.findValidWhere(eq(invitation.id, id), executor)
   }
 
   /**
@@ -393,23 +480,28 @@ export class TenantInvitationRepository {
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The claimed row, or undefined when it was not redeemable at that instant.
    */
-  async claimForAccept(
+  claimForAccept(
     tokenHash: string,
     userId: string,
     executor: DbExecutor = db
   ): Promise<TenantInvitation | undefined> {
-    const [row] = await executor
-      .update(invitation)
-      .set({ acceptedAt: sql`now()`, acceptedBy: userId, updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(invitation.tokenHash, tokenHash),
-          redeemableCondition(),
-          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null and ${tenantModel.lifecycleState} = 'active')`
-        )
-      )
-      .returning()
-    return row
+    return this.claimForAcceptWhere(eq(invitation.tokenHash, tokenHash), userId, executor)
+  }
+
+  /**
+   * `claimForAccept` by the invitation's id, with the same predicate: for
+   * the confirm link, which names the invitation by id.
+   * @param id - The invitation id.
+   * @param userId - The accepting user.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The claimed row, or undefined when it was not redeemable at that instant.
+   */
+  claimForAcceptById(
+    id: string,
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<TenantInvitation | undefined> {
+    return this.claimForAcceptWhere(eq(invitation.id, id), userId, executor)
   }
 
   /**

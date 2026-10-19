@@ -1,30 +1,45 @@
 /**
  * @file The account-linking policy for Google Sign-In: from the raw profile
  * passport.config.ts hands over, decide between a returning user, a link to an
- * existing account, a new account, or a rejection.
+ * existing account, a new account, or a rejection. On Apex, Google signs in
+ * only an existing, active staff account and never creates one.
  */
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
+import type { FrontendApp } from '@/constants/frontend.constants'
+import { READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import {
+  claimNeverVerifiedAccount,
+  isClaimedAccountGone,
+  markEmailVerified,
+} from '@/services/account-claim.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
-import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
-import { autoJoinSafely } from '@/services/platform.service'
 import {
-  denySessionsAfterCommit,
-  issueRefreshToken,
-  revokeAllSessions,
-  revokeSessionRows,
-  type IssuedRefreshToken,
-} from '@/services/session.service'
-import { markEmailVerified } from '@/services/verification.service'
+  assertCreationAllowedByMode,
+  assertSignInAllowed,
+} from '@/services/maintenance-mode/maintenance-mode.service'
+import { getPlatformMembership } from '@/services/platform.service'
+import { issueRefreshToken, type IssuedRefreshToken } from '@/services/session.service'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
+
+/**
+ * The one answer for a Google sign-in that reaches no account it may sign
+ * in: the callback redirects with its code, `google_auth_failed`.
+ * @param message - What went wrong, for the log only.
+ * @returns A 401 `google_auth_failed`.
+ */
+function googleAuthFailed(message: string): HttpError {
+  return new HttpError(message, 401, 'google_auth_failed')
+}
 
 /**
  * The primary email a Google profile carries, lowercased, and whether Google
@@ -53,7 +68,11 @@ function googleEmailClaim(
 function verifiedGoogleEmail(profile: GoogleProfile): { email: string; isVerified: boolean } {
   const claim = googleEmailClaim(profile)
   if (!claim) {
-    throw new HttpError('Google did not share an email address', 400, 'google_email_missing')
+    throw new HttpError(
+      "Google didn't share your email address. Sign in with an emailed link instead.",
+      400,
+      'google_email_missing'
+    )
   }
   return claim
 }
@@ -75,51 +94,28 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
 }
 
 /**
- * A verified Google identity takes over a never-verified account: a
- * squatter's password and any OTHER Google link are removed, the email is
- * marked verified, and every session revoked.
+ * A verified Google identity takes over a never-verified account
+ * (`claimNeverVerifiedAccount`): inside its locked transaction, any OTHER
+ * Google link is removed and this identity is linked; the email is then
+ * marked verified and every session revoked.
  *
  * Precondition: the caller has checked that Google verified the profile's
  * email, that it matches this account's address, and that the account's email
  * was never verified (checked before the lock). Nothing here checks any of it.
- *
- * Sessions are revoked first, in a committed transaction of their own under
- * the user row lock (`revokeAllSessions`), so every refresh token that
- * existed, and the successor of a rotation that was in flight, is already
- * revoked if the claim fails. The claim's transaction revokes again under
- * the same lock: a session created between the two either commits before
- * the lock and is revoked there, or waits and finds its token revoked. The
- * revoked sessions' access tokens are denied after the commit, best effort
- * (`denySessionsAfterCommit`), so they can stay valid for up to
- * `ACCESS_TOKEN_TTL` when Redis refuses.
  * @param userId - The unverified account's id.
  * @param googleId - Google's stable profile id of the claiming identity.
- * @returns The account, now verified, federated-only and linked.
+ * @returns The account, now verified and linked.
  * @throws {HttpError} 500 when the account vanished mid-claim.
  */
-export async function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
-  await revokeAllSessions(userId)
-
-  const { claimed, revokedSessionIds } = await withTransaction(async (tx) => {
-    await userRepository.lockById(userId, 'no key update', tx)
-
+function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
+  return claimNeverVerifiedAccount(userId, async (tx) => {
     // Cleared first, or resolveGoogleUser's first lookup would still resolve that other Google id here.
     await authProviderRepository.deleteGoogleLinksExcept(userId, googleId, tx)
     await authProviderRepository.createIfAbsent(
       { userId, provider: 'google', providerId: googleId },
       tx
     )
-
-    // The caller checked that Google verified this address (see the precondition above).
-    await markEmailVerified(userId, tx)
-
-    // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
-    const updated = await userRepository.update(userId, { passwordHash: null }, {}, tx)
-    if (!updated) throw new HttpError('Update returned no row', 500)
-    return { claimed: updated, revokedSessionIds: await revokeSessionRows(userId, {}, tx) }
   })
-  await denySessionsAfterCommit(userId, revokedSessionIds)
-  return claimed
 }
 
 /**
@@ -148,8 +144,8 @@ async function findReachableGoogleUser(profile: GoogleProfile): Promise<User | u
 }
 
 /**
- * Resolve the user a Google Sign-In resolves to, linking or creating one
- * when needed.
+ * Resolve the user a Google Sign-In resolves to, linking one when needed and
+ * creating one when `allowCreate` says so.
  *
  * 1. `(google, profile.id)` first: the OIDC `sub` is a stable account id, so
  *    a returning user stays correct whatever happened to their inbox.
@@ -158,23 +154,30 @@ async function findReachableGoogleUser(profile: GoogleProfile): Promise<User | u
  *    `victim@example.com` to a Google account could sign in as its owner,
  *    or learn whether the address has an account.
  * 3. A never-verified match is taken over (`claimUnverifiedAccount`); a
- *    verified one is linked untouched.
- * 4. A new account gets its 'email' and 'google' rows in one transaction.
+ *    verified one is linked untouched. An account deleted during the claim
+ *    is the generic `google_auth_failed`, never the claim's 500.
+ * 4. With `allowCreate`, a new account gets its 'email' and 'google' rows in
+ *    one transaction, refused in `read_only` and `full`; without it, an
+ *    address with no account is the generic `google_auth_failed`.
+ *
+ * In `read_only` a verified match signs in without the Google link being
+ * written; a never-verified one is still claimed, as a link click claims it.
  * @param profile - The raw Google profile.
+ * @param options - Whether an address with no account gets one.
+ * @param options.allowCreate - True to create an account for an unknown verified address.
  * @returns The existing, newly linked, or newly created user, and whether it is new.
- * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted), 403 `email_not_verified`, 500 when a row it just wrote cannot be read back, or a database error.
+ * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted, account gone mid-claim, or no account and no creation), 403 `email_not_verified`, 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` instead of a creation, 500 when a row it just wrote cannot be read back, or a database error.
  */
-async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogleUser> {
+async function resolveGoogleUser(
+  profile: GoogleProfile,
+  options: { allowCreate: boolean }
+): Promise<ResolvedGoogleUser> {
   const existingLink = await authProviderRepository.findByProviderAndId('google', profile.id)
   if (existingLink) {
     const user = await userRepository.findById(existingLink.userId)
     if (!user) {
       // Reachable: deletes are soft, so a deleted user keeps their provider rows.
-      throw new HttpError(
-        'This Google account is no longer linked to an active user',
-        401,
-        'google_auth_failed'
-      )
+      throw googleAuthFailed('This Google account is no longer linked to an active user')
     }
     return { user, isNew: false }
   }
@@ -182,28 +185,32 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
   const { email, isVerified } = verifiedGoogleEmail(profile)
   // Before the email lookup, so a registered and an unknown address get one answer at one cost (step 2 above).
   if (!isVerified) {
-    throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
+    throw new HttpError(
+      "Google hasn't verified this email address. Sign in with an emailed link instead.",
+      403,
+      'email_not_verified'
+    )
   }
   const existingUser = await userRepository.findByEmail(email)
 
   if (existingUser) {
     if (existingUser.emailVerifiedAt === null) {
-      return { user: await claimUnverifiedAccount(existingUser.id, profile.id), isNew: false }
+      return { user: await claimForGoogle(existingUser.id, profile.id), isNew: false }
     }
 
-    await linkGoogleProvider(existingUser.id, profile.id)
+    // read_only writes no link; the sign-in goes ahead and a later one links the identity.
+    if (getMaintenanceMode().mode !== 'read_only') {
+      await linkGoogleProvider(existingUser.id, profile.id)
+    }
     return { user: existingUser, isNew: false }
   }
 
+  if (!options.allowCreate) throw googleAuthFailed('No account uses this Google address')
+  // Again here, as a link click checks after its claim: a mode that began since completeGoogleSignIn's check creates nothing.
+  assertCreationAllowedByMode()
+
   const created = await withTransaction(async (tx) => {
-    const createdUser = await userRepository.create(
-      {
-        email,
-        // eslint-disable-next-line unicorn/no-null -- passwordHash is nullable specifically for a federated-only user (user.model.ts) — this account IS that case
-        passwordHash: null,
-      },
-      tx
-    )
+    const createdUser = await userRepository.create({ email }, tx)
 
     await authProviderRepository.releaseEmailOfDeletedUsers(email, tx)
 
@@ -225,16 +232,64 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
 }
 
 /**
+ * `claimUnverifiedAccount`, with an account deleted since the lookup read as
+ * the generic `google_auth_failed`, as a link claim reads it as its own
+ * invalid link. A deactivated one comes back inactive, and the caller's
+ * active check refuses it.
+ * @param userId - The never-verified account.
+ * @param googleId - Google's stable profile id of the claiming identity.
+ * @returns The claimed account.
+ * @throws {HttpError} 401 `google_auth_failed` when the account is gone.
+ */
+async function claimForGoogle(userId: string, googleId: string): Promise<User> {
+  try {
+    return await claimUnverifiedAccount(userId, googleId)
+  } catch (error) {
+    if (isClaimedAccountGone(error)) throw googleAuthFailed('The claimed account is gone')
+    throw error
+  }
+}
+
+/**
+ * The account an Apex Google sign-in reaches, refused unless it is an
+ * existing, active staff account, before anything is written: a profile that
+ * reaches no account, an inactive one, or one with no platform role all get
+ * the one `google_auth_failed`, so Apex never creates, links or claims for
+ * them and says nothing about which it was.
+ * @param profile - The raw Google profile.
+ * @throws {HttpError} 401 `google_auth_failed`.
+ */
+async function assertApexStaff(profile: GoogleProfile): Promise<void> {
+  const reachable = await findReachableGoogleUser(profile)
+  if (!reachable?.active || (await getPlatformMembership(reachable.id)) === null) {
+    throw googleAuthFailed('Apex Google sign-in reached no active staff account')
+  }
+}
+
+/**
+ * A completed Google Sign-In: the new session's refresh token, for the
+ * controller to set as a cookie, and whether this sign-in created the account.
+ */
+export interface GoogleSignIn {
+  refreshToken: IssuedRefreshToken
+  isNewUser: boolean
+}
+
+/**
  * Complete a Google Sign-In: resolve the user, refuse an inactive one, stamp
  * `lastLoggedInAt`, and issue a refresh token for a fresh session.
- * A verified address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as
- * viewer if it has not already.
  *
- * The active check runs first and again under the user-row lock before the
- * session is issued, so a deactivation or deletion that committed before the
- * lock is taken gets no session; one that commits later waits for that lock
- * and revokes the session just issued (`deactivateUser`). Once the session
- * is issued, a sign-in that created the account emits `user_signed_up`, and
+ * On Apex, in every mode, the profile must first reach an existing, active
+ * staff account (`assertApexStaff`, a read-only lookup), and resolving it
+ * never creates one: an unknown, a customer, an inactive or an unverified
+ * profile all get `google_auth_failed` and no session. On web an unknown
+ * verified address gets a new account.
+ *
+ * The active check runs again under the user-row lock before the session is
+ * issued, so a deactivation or deletion that committed before the lock is
+ * taken gets no session; one that commits later waits for that lock and
+ * revokes the session just issued (`deactivateUser`). Once the session is
+ * issued, a sign-in that created the account emits `user_signed_up`, and
  * every one emits `user_signed_in`.
  *
  * In `full` maintenance a user with no platform role is refused before
@@ -244,35 +299,47 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
  * is refused the same way, so none is created, linked or claimed, and every
  * refused caller gets the same 503, ahead of any 400 or 403
  * `resolveGoogleUser` would give. The controller redirects with
- * `error=MAINTENANCE_MODE`. In any other mode the lookup is skipped: that
- * check would allow the sign-in without reading it.
+ * `error=MAINTENANCE_MODE`. In `read_only` a web profile that reaches no
+ * account is refused with `READ_ONLY_MODE` on the same lookup, before
+ * anything is written, as a link click that would create an account is.
+ * While off that lookup is skipped on web: no check needs it.
  * @param profile - The raw Google profile from the callback.
- * @returns The new session's refresh token, for the controller to set as a cookie.
- * @throws {HttpError} 503 `MAINTENANCE_MODE` in `full` unless the account is staff (checked before `resolveGoogleUser` and again after it), any `resolveGoogleUser` error, or 401 `google_auth_failed` for an inactive or deleted account.
+ * @param app - The frontend the sign-in started from.
+ * @returns The new session's refresh token and whether the account is new.
+ * @throws {HttpError} 401 `google_auth_failed` on Apex for anything but an active staff account; 503 `MAINTENANCE_MODE` in `full` unless the account is staff (checked before `resolveGoogleUser` and again after it); 503 `READ_ONLY_MODE` in `read_only` on web for a profile that reaches no account; any `resolveGoogleUser` error; 401 `google_auth_failed` for an inactive or deleted account.
  */
-export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
-  // Before any write: in `full` only staff get a session, and a profile that reaches no account cannot be staff.
-  if (getMaintenanceMode().mode === 'full') {
+export async function completeGoogleSignIn(
+  profile: GoogleProfile,
+  app: FrontendApp
+): Promise<GoogleSignIn> {
+  const snapshot = getMaintenanceMode()
+  if (app === 'apex') {
+    await assertApexStaff(profile)
+  } else if (snapshot.mode === 'full') {
+    // Before any write: in `full` only staff get a session, and a profile that reaches no account cannot be staff.
     const reachable = await findReachableGoogleUser(profile)
     await assertSignInAllowed(reachable?.id)
+  } else if (snapshot.mode === 'read_only' && !(await findReachableGoogleUser(profile))) {
+    // Before any write, as a link click to an address with no account is refused: read_only creates no account.
+    throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
   }
 
-  const { user, isNew } = await resolveGoogleUser(profile)
+  const { user, isNew } = await resolveGoogleUser(profile, { allowCreate: app !== 'apex' })
 
-  if (!user.active) {
-    throw new HttpError('Account is inactive', 401, 'google_auth_failed')
-  }
+  if (!user.active) throw googleAuthFailed('Account is inactive')
   // Again on the resolved account: the mode, or the account a lookup finds, can change between the two checks.
   await assertSignInAllowed(user.id)
+  // Again on Apex: the role the first check read may have been revoked since.
+  if (app === 'apex' && (await getPlatformMembership(user.id)) === null) {
+    throw googleAuthFailed('Apex Google sign-in reached no staff account')
+  }
 
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
-  // Covers users verified before their domain was listed; it logs a failure instead of throwing.
-  await autoJoinSafely(user)
 
-  const issued = await withTransaction(async (tx) => {
+  const refreshToken = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
-    // Re-checked under the lock, as login does: a deactivation that committed since the lookup wins.
-    if (!locked?.active) throw new HttpError('Account is inactive', 401, 'google_auth_failed')
+    // Re-checked under the lock, as a link verify does: a deactivation that committed since the lookup wins.
+    if (!locked?.active) throw googleAuthFailed('Account is inactive')
     return issueRefreshToken(user.id, randomUUID(), tx)
   })
   if (isNew) {
@@ -289,5 +356,5 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
     method: 'google',
     at: new Date(),
   })
-  return issued
+  return { refreshToken, isNewUser: isNew }
 }

@@ -9,6 +9,7 @@
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import * as repository from '@/repositories/maintenance-mode.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
@@ -21,7 +22,12 @@ import {
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getMaintenanceModeStatus } from '@/services/maintenance-mode/maintenance-mode.service'
-import { closeQueue, getAllQueues } from '@/services/queue.service'
+import {
+  closeQueue,
+  getAllQueues,
+  getAuthEmailQueue,
+  getPausableQueues,
+} from '@/services/queue.service'
 import type { PlatformMaintenanceModeView } from '@/types/maintenance-mode'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
@@ -32,6 +38,7 @@ import {
 import { platformTenant } from '../../helpers/platform-staff'
 import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { clearRateLimiter } from '../../helpers/sign-in'
 
 const app = createApp()
 const ENVIRONMENT = 'local'
@@ -126,6 +133,7 @@ describe('GET /platform/maintenance-mode', () => {
     })
     expect(viewOf(response).queues.map((queue) => queue.name)).toEqual([
       'email',
+      'auth-email',
       'notification',
       'maintenance',
       'analytics',
@@ -270,7 +278,10 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(viewOf(await request(app).get(PATH).set('Authorization', `Bearer ${token}`)).since).toBe(
       began.toISOString()
     )
+    // Other files in this worker read the route under the same IP; start its per-IP budget afresh.
+    await clearRateLimiter(RATE_LIMITS.maintenanceStatus.name)
     const status = await request(app).get('/api/v1/status/maintenance')
+    expect(status.status).toBe(200)
     expect((status.body as { data: { since: string } }).data.since).toBe(began.toISOString())
     const refused = await request(app).get('/api/v1/tenants')
     expect(refused.status).toBe(503)
@@ -867,8 +878,9 @@ describe('a failure after the change committed', () => {
     })
 
     expect(response.status).toBe(200)
-    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
     expect(flags).toEqual([true, true, true, true])
+    expect(await getAuthEmailQueue().isPaused()).toBe(false)
   })
 
   it('answers the committed state built from the committed row when the final read fails', async () => {
@@ -890,7 +902,7 @@ describe('a failure after the change committed', () => {
       environment: ENVIRONMENT,
     })
     expect(viewOf(response).since).toEqual(expect.any(String))
-    expect(viewOf(response).queues).toHaveLength(4)
+    expect(viewOf(response).queues).toHaveLength(5)
     const fallbackWarns = warn.mock.calls.filter(([text]) => text.includes('read back'))
     expect(fallbackWarns).toHaveLength(1)
     expectLoggedAsErrorObjectOnly(fallbackWarns)

@@ -1,37 +1,40 @@
 /**
  * @file Exercises `platform.service` against the real per-worker Postgres.
- * The domain list is passed in: the suite's environment leaves
- * `PLATFORM_EMAIL_DOMAINS` unset, which is itself the "nobody joins" case.
  */
 import { randomUUID } from 'node:crypto'
-import { sql as drizzleSql } from 'drizzle-orm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { db, sql } from '@/services/database.service'
-import { logger } from '@/services/logger.service'
-import {
-  autoJoin,
-  autoJoinSafely,
-  bootstrapGrant,
-  getPlatformMembership,
-} from '@/services/platform.service'
-import { hashToken } from '@/services/session.service'
+import { sql, type DbTransaction } from '@/services/database.service'
+import { subscribeDomainEvent } from '@/services/domain-events.service'
+import { bootstrapGrant, getPlatformMembership } from '@/services/platform.service'
+import { hashToken, issueRefreshToken } from '@/services/session.service'
+import { accept as acceptInvitation } from '@/services/tenant-invitation.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const tenantRepository = new TenantRepository()
 const invitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
+const authProviderRepository = new AuthProviderRepository()
 
 const STAFF_DOMAIN = 'staff.example.test'
-const DOMAINS = [STAFF_DOMAIN]
+
+/**
+ * The user ids of every `email_verified` event emitted while this file runs, in order.
+ */
+const verifiedEvents: string[] = []
+subscribeDomainEvent('email_verified', (event) => {
+  verifiedEvents.push(event.userId)
+})
 
 /**
  * One audit_logs row, as the assertions below read it.
@@ -68,7 +71,7 @@ async function platformTenant(): Promise<Tenant> {
 }
 
 /**
- * A unique address on the staff domain.
+ * A unique address for one test.
  */
 function staffEmail(): string {
   return `platform-service-${randomUUID()}@${STAFF_DOMAIN}`
@@ -84,11 +87,29 @@ async function grantPlatformRole(userId: string, role: MembershipRole): Promise<
 }
 
 /**
- * An insertIfAbsent stand-in that always rejects with a real SQL error, so
- * Postgres aborts the transaction that ran it.
+ * The real `findByEmail`, bound before any test replaces it on the prototype.
  */
-const failingInsert: UserMembershipRepository['insertIfAbsent'] = async (_data, executor = db) => {
-  await executor.execute(drizzleSql`select 1 / 0`)
+const originalFindByEmail: UserRepository['findByEmail'] =
+  UserRepository.prototype.findByEmail.bind(userRepository)
+
+/**
+ * Stand in for `findByEmail` so that each read inside the grant's
+ * transaction first marks the account unverified again, as a write landing
+ * between the claim's commit and the grant would.
+ * @param userId - The account to unverify.
+ * @param times - How many in-transaction reads unverify it.
+ * @returns The stand-in.
+ */
+function unverifyingFindByEmail(userId: string, times: number): UserRepository['findByEmail'] {
+  let remaining = times
+  return async (email, options, executor) => {
+    // Only the grant's in-transaction read passes an executor; the claim's read before it does not.
+    if (executor !== undefined && remaining > 0) {
+      remaining -= 1
+      await sql`update users set email_verified_at = null where id = ${userId}`
+    }
+    return originalFindByEmail(email, options, executor)
+  }
 }
 
 describe('platform.service', () => {
@@ -119,112 +140,87 @@ describe('platform.service', () => {
     return stored
   }
 
-  describe('autoJoin', () => {
-    it('joins a verified address on a listed domain as viewer, and audits it once as a system action', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      const platform = await platformTenant()
-
-      const joined = await db.transaction((tx) => autoJoin(user, tx, DOMAINS))
-
-      expect(joined?.role).toBe('viewer')
-      expect(joined?.tenantId).toBe(platform.id)
-      if (!joined) throw new Error('unreachable: asserted above')
-      expect(await auditRowsFor(joined.id)).toEqual([
-        {
-          action: 'platform.member.auto_joined',
-          actorKind: 'system',
-          // eslint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
-          actorUserId: null,
-          access: 'system',
-          tenantId: platform.id,
-          targetType: 'membership',
-          targetId: joined.id,
-          metadata: { userId: user.id, emailDomain: STAFF_DOMAIN },
-        },
-      ])
+  /**
+   * Run a grant and a platform-invitation accept for one address in the
+   * interleaving that deadlocked when the grant locked the user row `FOR NO
+   * KEY UPDATE` after its membership insert: the grant inserts the
+   * membership and pauses; the accept takes the user row `FOR SHARE` and
+   * queues behind that uncommitted insert; the grant then goes on.
+   * @param options - `oldLockOrder` restores that order, for the mutation proof.
+   * @param options.oldLockOrder - Skip the grant's share lock and take `FOR NO KEY UPDATE` after the insert.
+   * @returns How the grant and the accept settled.
+   */
+  async function grantBesideAccept(options: { oldLockOrder?: boolean } = {}): Promise<{
+    granted: PromiseSettledResult<unknown>
+    accepted: PromiseSettledResult<unknown>
+    userId: string
+  }> {
+    const inviter = await createUser(`grant-inviter-${randomUUID()}@example.test`, {
+      isVerified: true,
     })
-
-    it('does not join a subdomain of a listed domain', async () => {
-      const user = await createUser(`platform-service-${randomUUID()}@eu.${STAFF_DOMAIN}`, {
-        isVerified: true,
-      })
-
-      expect(await db.transaction((tx) => autoJoin(user, tx, DOMAINS))).toBeUndefined()
-      expect(await getPlatformMembership(user.id)).toBeNull()
+    await grantPlatformRole(inviter.id, 'owner')
+    const user = await createUser(`grant-accept-${randomUUID()}@example.test`, {
+      isVerified: true,
     })
-
-    it('does not join an unverified address', async () => {
-      const user = await createUser(staffEmail(), { isVerified: false })
-
-      expect(await db.transaction((tx) => autoJoin(user, tx, DOMAINS))).toBeUndefined()
-      expect(await getPlatformMembership(user.id)).toBeNull()
+    const platform = await platformTenant()
+    const rawToken = randomUUID()
+    await invitationRepository.createPending({
+      tenantId: platform.id,
+      email: user.email,
+      role: 'viewer',
+      tokenHash: hashToken(rawToken),
+      invitedBy: inviter.id,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     })
+    const reachedInsert = deferred<number>()
+    const release = deferred()
+    const realCreate = UserMembershipRepository.prototype.create.bind(userMembershipRepository)
+    const realLockById = UserRepository.prototype.lockById.bind(userRepository)
+    /**
+     * The grant's membership insert, then report its backend and hold its
+     * transaction open; with `oldLockOrder`, then the late `FOR NO KEY UPDATE`.
+     */
+    const heldCreate: UserMembershipRepository['create'] = async (values, executor) => {
+      const created = await realCreate(values, executor)
+      if (executor && values.userId === user.id && values.tenantId === platform.id) {
+        reachedInsert.resolve(await backendPid(executor))
+        await release.promise
+        // The grant's create runs in its transaction, so the executor is one.
+        if (options.oldLockOrder) {
+          await realLockById(user.id, 'no key update', executor as DbTransaction)
+        }
+      }
+      return created
+    }
+    const accepting: { started: boolean } = { started: false }
+    /**
+     * With `oldLockOrder`, the grant's own share lock read without a lock.
+     */
+    const grantLock: UserRepository['lockById'] = (id, mode, tx) =>
+      mode === 'share' && !accepting.started && options.oldLockOrder === true && id === user.id
+        ? userRepository.findById(id, {}, tx)
+        : realLockById(id, mode, tx)
 
-    it('leaves an existing platform membership alone: no demotion, no second audit row', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      await grantPlatformRole(user.id, 'admin')
-
-      expect(await db.transaction((tx) => autoJoin(user, tx, DOMAINS))).toBeUndefined()
-
-      expect(await getPlatformMembership(user.id)).toBe('admin')
-      const rows = await sql`
-        select id from audit_logs
-        where action = 'platform.member.auto_joined' and metadata->>'userId' = ${user.id}
-      `
-      expect(rows).toHaveLength(0)
-    })
-  })
-
-  describe('autoJoinSafely', () => {
-    it('joins nobody when PLATFORM_EMAIL_DOMAINS is unset (the suite default)', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-
-      await autoJoinSafely(user)
-
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-
-    it('logs a failure at warn instead of throwing it', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
-
+    let outcome: [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>] | undefined
+    await withMutatedMethod(UserRepository.prototype, 'lockById', grantLock, async () => {
       await withMutatedMethod(
         UserMembershipRepository.prototype,
-        'insertIfAbsent',
-        () => Promise.reject(new Error('insert failed')),
+        'create',
+        heldCreate,
         async () => {
-          await expect(autoJoinSafely(user, db, DOMAINS)).resolves.toBeUndefined()
+          const granting = bootstrapGrant(user.email, 'admin')
+          const grantPid = await untilSignalled(reachedInsert.promise, granting, 'the grant')
+          accepting.started = true
+          const acceptance = acceptInvitation(rawToken, user.id)
+          expect(await waitForWaiter(grantPid, acceptance)).toBe(true)
+          release.resolve()
+          outcome = await Promise.allSettled([granting, acceptance])
         }
       )
-
-      expect(warn).toHaveBeenCalledWith(
-        'Platform auto-join failed',
-        expect.objectContaining({ userId: user.id })
-      )
-      expect(await getPlatformMembership(user.id)).toBeNull()
     })
-
-    it('rolls back only its own savepoint when it fails inside a caller transaction', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      vi.spyOn(logger, 'warn').mockImplementation(() => {})
-      await withMutatedMethod(
-        UserMembershipRepository.prototype,
-        'insertIfAbsent',
-        failingInsert,
-        async () => {
-          await db.transaction(async (tx) => {
-            await autoJoinSafely(user, tx, DOMAINS)
-            // Fails with "current transaction is aborted" unless the join ran in a savepoint.
-            await userRepository.update(user.id, { firstName: 'Still usable' }, {}, tx)
-          })
-        }
-      )
-
-      const updated = await userRepository.findById(user.id)
-      expect(updated?.firstName).toBe('Still usable')
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-  })
+    if (!outcome) throw new Error('the race did not run')
+    return { granted: outcome[0], accepted: outcome[1], userId: user.id }
+  }
 
   describe('getPlatformMembership', () => {
     it('returns the platform role for staff and null for everyone else', async () => {
@@ -270,19 +266,184 @@ describe('platform.service', () => {
       expect(await getPlatformMembership(user.id)).toBe('admin')
     })
 
-    it('refuses an address with no account', async () => {
-      await expect(
-        bootstrapGrant(`nobody-${randomUUID()}@example.test`, 'owner')
-      ).rejects.toMatchObject({
-        statusCode: 404,
+    it('creates a verified user when platform:grant names an unknown address', async () => {
+      const email = `Grant-New-${randomUUID()}@example.test`
+      const platform = await platformTenant()
+      const verifiedBefore = verifiedEvents.length
+
+      const membership = await bootstrapGrant(email, 'owner')
+
+      const [created] = await sql<{ id: string; email: string; verified: boolean }[]>`
+        select id, email, email_verified_at is not null as verified
+        from users where email = ${email.toLowerCase()} and deleted_at is null`
+      expect(created).toBeDefined()
+      createdUserIds.push(created?.id ?? '')
+      expect(created).toMatchObject({ email: email.toLowerCase(), verified: true })
+      expect(membership).toMatchObject({
+        userId: created?.id,
+        tenantId: platform.id,
+        role: 'owner',
       })
+      const providers =
+        await sql`select provider from auth_providers where user_id = ${created?.id ?? ''}`
+      expect(providers).toEqual([{ provider: 'email' }])
+      expect(await auditRowsFor(created?.id ?? '')).toEqual([
+        {
+          action: 'user.created',
+          actorKind: 'system',
+          // eslint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
+          actorUserId: null,
+          access: 'system',
+          tenantId: platform.id,
+          targetType: 'user',
+          targetId: created?.id,
+          metadata: { emailDomain: 'example.test' },
+        },
+      ])
+      const grantRows = await auditRowsFor(membership.id)
+      expect(grantRows.map((row) => row.action)).toEqual(['platform.member.granted'])
+      expect(verifiedEvents.slice(verifiedBefore)).toEqual([created?.id])
     })
 
-    it('refuses an unverified account, and grants nothing', async () => {
+    it('verifies and grants an existing unverified user', async () => {
       const user = await createUser(`grant-${randomUUID()}@example.test`, { isVerified: false })
+      const verifiedBefore = verifiedEvents.length
 
-      await expect(bootstrapGrant(user.email, 'owner')).rejects.toMatchObject({ statusCode: 409 })
+      const membership = await bootstrapGrant(user.email, 'admin')
+
+      expect(membership).toMatchObject({ userId: user.id, role: 'admin' })
+      const [row] = await sql<{ verified: boolean }[]>`
+        select email_verified_at is not null as verified from users where id = ${user.id}`
+      expect(row?.verified).toBe(true)
+      expect(verifiedEvents.slice(verifiedBefore)).toEqual([user.id])
+      expect(await auditRowsFor(user.id)).toEqual([])
+    })
+
+    it("clears a squatter's Google link and revokes their sessions before granting", async () => {
+      const user = await createUser(`grant-squat-${randomUUID()}@example.test`, {
+        isVerified: false,
+      })
+      await authProviderRepository.create({
+        userId: user.id,
+        provider: 'email',
+        providerId: user.email,
+      })
+      await authProviderRepository.create({
+        userId: user.id,
+        provider: 'google',
+        providerId: `squatter-google-${randomUUID()}`,
+      })
+      await issueRefreshToken(user.id, randomUUID())
+
+      await bootstrapGrant(user.email, 'owner')
+
+      const [row] = await sql<{ verified: boolean }[]>`
+        select email_verified_at is not null as verified from users where id = ${user.id}`
+      expect(row).toEqual({ verified: true })
+      const providers = await sql`select provider from auth_providers where user_id = ${user.id}`
+      expect(providers).toEqual([{ provider: 'email' }])
+      const sessions = await sql<{ revoked: boolean }[]>`
+        select revoked_at is not null as revoked from user_tokens
+        where user_id = ${user.id} and purpose = 'refresh'`
+      expect(sessions.length).toBeGreaterThan(0)
+      expect(sessions.every((session) => session.revoked)).toBe(true)
+      expect(await getPlatformMembership(user.id)).toBe('owner')
+    })
+
+    it('claims again and grants when the account turns unverified once before the grant', async () => {
+      const user = await createUser(`grant-toctou-${randomUUID()}@example.test`, {
+        isVerified: false,
+      })
+
+      await withMutatedMethod(
+        UserRepository.prototype,
+        'findByEmail',
+        unverifyingFindByEmail(user.id, 1),
+        async () => {
+          await bootstrapGrant(user.email, 'admin')
+        }
+      )
+
+      const [row] = await sql<{ verified: boolean }[]>`
+        select email_verified_at is not null as verified from users where id = ${user.id}`
+      expect(row?.verified).toBe(true)
+      expect(await getPlatformMembership(user.id)).toBe('admin')
+    })
+
+    it('answers 409 and grants nothing when the account stays unverified past the retry', async () => {
+      const user = await createUser(`grant-toctou-${randomUUID()}@example.test`, {
+        isVerified: false,
+      })
+
+      await withMutatedMethod(
+        UserRepository.prototype,
+        'findByEmail',
+        unverifyingFindByEmail(user.id, Infinity),
+        async () => {
+          await expect(bootstrapGrant(user.email, 'owner')).rejects.toMatchObject({
+            statusCode: 409,
+            message: 'The account for that address is unverified. Run the grant again.',
+          })
+        }
+      )
+
       expect(await getPlatformMembership(user.id)).toBeNull()
+      const platform = await platformTenant()
+      const grants = await sql`
+        select 1 from audit_logs
+        where tenant_id = ${platform.id} and action = 'platform.member.granted'
+          and metadata->>'userId' = ${user.id}`
+      expect(grants).toHaveLength(0)
+    })
+
+    it('finishes a grant and a platform-invitation accept for the same address together, with no deadlock', async () => {
+      const { granted, accepted, userId } = await grantBesideAccept()
+
+      expect(granted.status).toBe('fulfilled')
+      expect(accepted.status).toBe('fulfilled')
+      expect(await getPlatformMembership(userId)).toBe('admin')
+    })
+
+    /**
+     * Deliberately red under MUTATION_PROOF=1: with the old lock order one
+     * side is aborted with 40P01.
+     *
+     *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/platform.service.test.ts   # red
+     */
+    it.runIf(process.env.MUTATION_PROOF === '1')(
+      'reproduces the grant and accept race with the old lock order',
+      async () => {
+        const { granted, accepted } = await grantBesideAccept({ oldLockOrder: true })
+
+        // toEqual, not .status: the diff shows the rejection's 40P01.
+        expect([granted, accepted]).toEqual([
+          expect.objectContaining({ status: 'fulfilled' }),
+          expect.objectContaining({ status: 'fulfilled' }),
+        ])
+      }
+    )
+
+    it('emits no email_verified for a user verified already', async () => {
+      const user = await createUser(`grant-${randomUUID()}@example.test`, { isVerified: true })
+      const verifiedBefore = verifiedEvents.length
+
+      await bootstrapGrant(user.email, 'viewer')
+
+      expect(verifiedEvents.slice(verifiedBefore)).toEqual([])
+    })
+
+    it('creates nothing when the grant fails', async () => {
+      const email = `grant-fail-${randomUUID()}@example.test`
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'lockOwners',
+        () => Promise.reject(new Error('grant failed')),
+        async () => {
+          await expect(bootstrapGrant(email, 'owner')).rejects.toThrow('grant failed')
+        }
+      )
+      expect(await sql`select 1 from users where email = ${email}`).toHaveLength(0)
     })
 
     it('refuses to demote the last platform owner', async () => {
@@ -290,16 +451,24 @@ describe('platform.service', () => {
       await grantPlatformRole(user.id, 'owner')
 
       // Other files may leave platform owners in this worker's database; pin the count.
+      let ownerCounts = 0
       await withMutatedMethod(
         UserMembershipRepository.prototype,
         'countOwners',
-        () => Promise.resolve(1),
+        () => {
+          ownerCounts += 1
+          return Promise.resolve(1)
+        },
         async () => {
           await expect(bootstrapGrant(user.email, 'viewer')).rejects.toMatchObject({
             statusCode: 409,
+            message:
+              "Make another staff member a platform owner before you change this owner's role.",
           })
         }
       )
+      // The refusal surfaces from the first attempt: only an address race is retried.
+      expect(ownerCounts).toBe(1)
       expect(await getPlatformMembership(user.id)).toBe('owner')
     })
 

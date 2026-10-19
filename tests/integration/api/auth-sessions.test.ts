@@ -269,17 +269,19 @@ async function plantForeignUsersRefresh(caller: SessionWithSibling): Promise<str
 }
 
 /**
- * A live password-reset token of the caller that carries the caller's
- * session id, which no application path writes.
+ * A live step-up link of the caller, which carries the caller's session id
+ * but is not a refresh token.
  * @param caller - The caller's session.
  * @returns The planted token's raw value.
  */
-async function plantResetRowInSession(caller: SessionWithSibling): Promise<string> {
+async function plantStepUpLinkInSession(caller: SessionWithSibling): Promise<string> {
   const raw = randomUUID()
   await new UserTokenRepository().create({
     userId: caller.head.userId,
-    purpose: 'password_reset',
+    purpose: 'step_up_link',
     sessionId: caller.head.sessionId,
+    email: `step-up-${randomUUID()}@example.test`,
+    app: 'apex',
     tokenHash: hashToken(raw),
     expiresAt: new Date(Date.now() + 60_000),
   })
@@ -401,7 +403,7 @@ describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
   // Rows built so that exactly one check fails: each carries the caller's session id and is unrevoked.
   it.each([
     ['another user’s refresh row in the caller’s session', plantForeignUsersRefresh],
-    ['a password-reset row of the caller carrying the caller’s session id', plantResetRowInSession],
+    ['a step-up link of the caller carrying the caller’s session id', plantStepUpLinkInSession],
   ])('spares the caller’s whole session for %s', async (_label, plant) => {
     const user = await createTrackedUser()
     const caller = await sessionWithSibling(user)

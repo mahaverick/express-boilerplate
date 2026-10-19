@@ -57,3 +57,24 @@ export function requireDurationMs(value: string): number {
   }
   return parsed
 }
+
+/**
+ * Seconds in a minute, for `formatWait`.
+ */
+const SECONDS_PER_MINUTE = 60
+
+/**
+ * A wait as a person reads it in an error message: whole seconds under a
+ * minute, else whole minutes rounded up, so the text never promises less
+ * than the `Retry-After` it describes.
+ * @param seconds - The wait in seconds; anything below 1 reads as 1 second.
+ * @returns "1 second", "42 seconds", "1 minute" or "15 minutes".
+ */
+export function formatWait(seconds: number): string {
+  const wholeSeconds = Math.max(1, Math.ceil(seconds))
+  if (wholeSeconds < SECONDS_PER_MINUTE) {
+    return wholeSeconds === 1 ? '1 second' : `${wholeSeconds} seconds`
+  }
+  const minutes = Math.ceil(wholeSeconds / SECONDS_PER_MINUTE)
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`
+}

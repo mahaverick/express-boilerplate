@@ -7,10 +7,8 @@
 import { randomUUID } from 'node:crypto'
 import { Job, type Queue, type Worker } from 'bullmq'
 import { expect, type MockInstance } from 'vitest'
-import type { EmailJobData } from '@/jobs/email.job'
-import type { NotificationJobData } from '@/jobs/notification.job'
-import { addJob, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
+import { addJob } from '@/services/queue.service'
 import {
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
@@ -108,7 +106,7 @@ function acceptTokenOf(data: EmailJobData): string {
 }
 
 /**
- * An invitation email as it sits on the email queue.
+ * An invitation email as it sits on its queue.
  */
 export interface QueuedInvitationEmail {
   /**
@@ -126,7 +124,7 @@ export interface QueuedInvitationEmail {
 }
 
 /**
- * Poll the email queue for an invitation email to `to` whose token is not one already seen.
+ * Poll the invitation template's queue (auth-email) for an invitation email to `to` whose token is not one already seen.
  * @param to - The recipient address.
  * @param excludedTokens - Tokens from earlier emails to skip (e.g. before a resend).
  * @returns The queued email.
@@ -136,7 +134,7 @@ export async function waitForInvitationEmail(
   excludedTokens: readonly string[] = []
 ): Promise<QueuedInvitationEmail> {
   const { data } = await waitForJob<EmailJobData>(
-    getEmailQueue(),
+    emailQueueFor(TENANT_INVITATION_TEMPLATE_KEY),
     (candidate) =>
       candidate.to === to &&
       candidate.templateKey === TENANT_INVITATION_TEMPLATE_KEY &&
@@ -146,26 +144,6 @@ export async function waitForInvitationEmail(
     throw new Error('waitForInvitationEmail: matched a job of another template')
   }
   return { userId: data.userId, variables: data.variables, token: acceptTokenOf(data) }
-}
-
-/**
- * Poll the notification queue for the `verify_email` job registration
- * enqueues for `userId`, and return the raw token from its verification link.
- * @param userId - The registered user.
- * @returns The raw email-verification token.
- */
-export async function waitForVerificationToken(userId: string): Promise<string> {
-  const job = await waitForJob<NotificationJobData>(
-    getNotificationQueue(),
-    (data) => data.userId === userId && data.type === 'verify_email'
-  )
-  const { email } = job.data
-  if (email?.templateKey !== EMAIL_VERIFICATION_TEMPLATE_KEY) {
-    throw new Error('waitForVerificationToken: the job carries no verification email')
-  }
-  const token = new URL(email.variables.verificationUrl).searchParams.get('token')
-  if (!token) throw new Error('waitForVerificationToken: the link carries no token')
-  return token
 }
 
 /**

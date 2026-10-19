@@ -41,7 +41,7 @@ export async function withMutatedMethod<TTarget extends object, TMethod extends 
  * real module is restored in a `finally`, so a synchronous throw or a
  * rejection from `run` still restores it. Use it only when
  * `withMutatedMethod` does not apply: a function captured by value at another
- * module's load time (e.g. `loginRateLimitKey`, which `createRateLimiter` in
+ * module's load time (e.g. a key generator `createRateLimiter` in
  * rate-limit.middleware.ts hands to express-rate-limit as `keyGenerator`) has
  * no shared mutable object a property assignment can reach.
  *

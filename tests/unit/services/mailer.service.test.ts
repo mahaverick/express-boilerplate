@@ -130,9 +130,10 @@ describe('redactedMailErrorForLog', () => {
  * tests/unit/database/models/user-token.model.test.ts.
  */
 describe('MailMessage', () => {
-  const validPasswordResetVariables = {
+  const validStepUpLinkVariables = {
     firstName: 'Ada',
-    resetUrl: 'https://example.test/reset',
+    confirmUrl: 'https://example.test/auth/confirm',
+    expiresInMinutes: '15',
     appName: 'Test App',
   }
 
@@ -140,33 +141,38 @@ describe('MailMessage', () => {
     const invalid: MailMessage = {
       to: 'user@example.test',
       // @ts-expect-error — templateKey is closed to EmailTemplateKey's literals; a typo (hyphen instead of underscore) must fail to compile, not silently build a message logged under a key no template ever renders. TS reports the error on the property's own line, so the directive sits directly above it.
-      templateKey: 'password-reset',
-      variables: validPasswordResetVariables,
+      templateKey: 'step-up-link',
+      variables: validStepUpLinkVariables,
     }
     // A real assertion, not a throwaway: see the comment in tests/unit/database/models/user-token.model.test.ts on why a compile-time check needs one genuine read of the value.
-    expect(invalid.templateKey).toBe('password-reset')
+    expect(invalid.templateKey).toBe('step-up-link')
   })
 
-  // `variables` shaped for a different template (RegistrationAttemptVariables: firstName and appName, no resetUrl) paired with `templateKey: 'password_reset'` must not compile, so a caller cannot construct that mismatch.
+  // `variables` shaped for a different template (WelcomeVariables: a signInUrl, no confirmUrl) paired with `templateKey: 'step_up_link'` must not compile, so a caller cannot construct that mismatch.
   it('variables shaped for a different template than the declared templateKey is a compile error', () => {
-    // @ts-expect-error — PasswordResetVariables requires `resetUrl`; the `variables` object below is RegistrationAttemptVariables-shaped instead. TS reports the mismatched-union-member error on the object literal's own declaration line, so the directive sits directly above it.
     const invalid: MailMessage = {
       to: 'user@example.test',
-      templateKey: 'password_reset',
-      variables: { firstName: 'Ada', appName: 'Test App' },
+      templateKey: 'step_up_link',
+      variables: {
+        firstName: 'Ada',
+        // @ts-expect-error — StepUpLinkVariables has no `signInUrl` and requires `confirmUrl`: this object is WelcomeVariables-shaped. TS reports the excess property on its own line, so the directive sits directly above it.
+        signInUrl: 'https://example.test/auth/link',
+        expiresInMinutes: '15',
+        appName: 'Test App',
+      },
     }
-    expect(invalid.templateKey).toBe('password_reset')
+    expect(invalid.templateKey).toBe('step_up_link')
   })
 
   // MailMessage has no subject, text or html field, so a caller has no message field to put a token into; a caller-supplied `subject` alongside an otherwise valid message must not compile.
   it('a caller-supplied subject is a compile error — there is no field to reopen the old token-in-subject risk', () => {
     const invalid: MailMessage = {
       to: 'user@example.test',
-      templateKey: 'password_reset',
-      variables: validPasswordResetVariables,
+      templateKey: 'step_up_link',
+      variables: validStepUpLinkVariables,
       // @ts-expect-error — MailMessage carries no subject/text/html field at all; every message's content comes from renderForMessage (mailer.service.ts), never from a caller.
       subject: 'a caller-chosen subject',
     }
-    expect(invalid.templateKey).toBe('password_reset')
+    expect(invalid.templateKey).toBe('step_up_link')
   })
 })

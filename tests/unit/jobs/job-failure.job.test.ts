@@ -309,6 +309,18 @@ describe('recordPermanentFailure', () => {
     expect(order).toEqual(['mark message-1', 'job failed permanently'])
   })
 
+  it("marks an auth-email job's message failed too", async () => {
+    vi.mocked(emailMessageService.markMessageSendFailed).mockClear()
+    vi.spyOn(logger, 'error').mockImplementation(() => {
+      // Only the mark is asserted.
+    })
+    const job = fakeJob({ attemptsMade: 5, attempts: 5, data: { messageId: 'message-2' } })
+
+    await recordPermanentFailure('auth-email', job, new Error('x'))
+
+    expect(emailMessageService.markMessageSendFailed).toHaveBeenCalledWith('message-2')
+  })
+
   it('marks nothing for an email job with no message, or for another queue', async () => {
     vi.mocked(emailMessageService.markMessageSendFailed).mockClear()
     vi.spyOn(logger, 'error').mockImplementation(() => {

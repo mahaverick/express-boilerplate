@@ -25,7 +25,7 @@ const trackedSuppressionIds: string[] = []
 
 /**
  * Insert one message and track it. Defaults: a random `@example.test`
- * recipient, an `account_setup` mail with no user, status `sent`, stored
+ * recipient, a `sign_in_link` mail with no user, status `sent`, stored
  * variables `{ firstName: 'Ada', appName: 'Acme' }`, linked to the web app.
  * @param overrides - Columns to set instead.
  * @returns The inserted row.
@@ -39,7 +39,7 @@ export async function createTrackedMessage(
     .values({
       id,
       recipient: `em-${randomUUID()}@example.test`,
-      templateKey: 'account_setup',
+      templateKey: 'sign_in_link',
       senderClass: 'transactional',
       messageIdHeader: `<${id}@example.test>`,
       status: 'sent',

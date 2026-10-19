@@ -1,6 +1,6 @@
 /**
- * @file The gate for staff routes (every `/platform` route and
- * `POST /auth/reauthenticate`), the OPTIONS refusal that keeps Express's
+ * @file The gate for staff routes (every `/platform` route and the auth
+ * router's step-up routes under `/auth/step-up`), the OPTIONS refusal that keeps Express's
  * automatic `Allow` answer from revealing them, and the log line
  * each successful staff write leaves. The platform role is read on every
  * request, with no cross-request cache, so a revocation takes effect on the
@@ -58,7 +58,7 @@ export function requirePlatformRole(
  * routers, so only one with another `Origin` reaches it. The platform router
  * mounts it after `requireAuth`, which refuses an OPTIONS without a bearer
  * token with 401, as it does every `/platform` request. The auth router mounts
- * it on `/reauthenticate` alone, right after its router-wide JSON gate and
+ * it on `/step-up` alone, right after its router-wide JSON gate and
  * with no `requireAuth`, so an OPTIONS there gets what one on an unknown auth
  * path gets. Mount it after any gate the router shares with an unknown path,
  * and before every route on the staff path.

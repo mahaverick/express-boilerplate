@@ -6,7 +6,7 @@ import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 
 // frontendUrl is mocked, so this test proves only the trailing-slash stripping.
-vi.mock('@/services/verification.service', () => ({
+vi.mock('@/services/frontend-links.service', () => ({
   frontendUrl: () => 'https://admin.example.com//',
 }))
 vi.mock('passport', () => ({
@@ -24,7 +24,7 @@ describe('handleGoogleCallback', () => {
     const { authController } = await import('@/controllers/auth.controller')
     const redirect = vi.fn()
     authController.handleGoogleCallback(
-      { session: { oauthApp: 'apex' } } as unknown as Request,
+      { session: { oauthIntent: { kind: 'sign_in', app: 'apex' } } } as unknown as Request,
       { redirect } as unknown as Response,
       vi.fn() as NextFunction
     )

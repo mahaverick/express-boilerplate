@@ -158,7 +158,7 @@ describe('UserRepository', () => {
 
   describe('markEmailVerified', () => {
     it('sets email_verified_at and bumps updated_at', async () => {
-      const user = await userRepository.create({ email: uniqueEmail(), passwordHash: 'x' })
+      const user = await userRepository.create({ email: uniqueEmail() })
       createdIds.push(user.id)
       const backdatedAt = await backdateUpdatedAt('users', { column: 'id', value: user.id })
 
@@ -169,7 +169,7 @@ describe('UserRepository', () => {
     })
 
     it('leaves an already-verified timestamp untouched and returns undefined', async () => {
-      const user = await userRepository.create({ email: uniqueEmail(), passwordHash: 'x' })
+      const user = await userRepository.create({ email: uniqueEmail() })
       createdIds.push(user.id)
       const first = await userRepository.markEmailVerified(user.id)
       // Must prove the first call actually verified the row: otherwise first?.emailVerifiedAt below is undefined, and comparing it against a second undefined would pass without proving anything.
@@ -177,7 +177,7 @@ describe('UserRepository', () => {
 
       const second = await userRepository.markEmailVerified(user.id)
 
-      // undefined is success here, not failure: `verifyEmail` (verification.service.ts) answers success, not 400, when a valid link is redeemed for an account that is already verified.
+      // undefined is success here, not failure: an account claim reads it as "already verified by a concurrent claim" and verifies nothing again.
       expect(second).toBeUndefined()
       const reread = await userRepository.findById(user.id)
       expect(reread?.emailVerifiedAt?.getTime()).toBe(first?.emailVerifiedAt?.getTime())
@@ -185,31 +185,6 @@ describe('UserRepository', () => {
 
     it('returns undefined for a user that does not exist', async () => {
       expect(await userRepository.markEmailVerified(randomUUID())).toBeUndefined()
-    })
-  })
-  describe('replacePasswordHash', () => {
-    // Fixed strings stand in for bcrypt hashes: the method compares and stores them as text.
-    const H1 = 'hash-the-login-verified'
-    const H2 = 'hash-a-password-change-wrote'
-    const H3 = 'hash-the-rehash-would-write'
-
-    it('replaces the hash while it still equals the expected one', async () => {
-      const created = await userRepository.create({ email: uniqueEmail(), passwordHash: H1 })
-      createdIds.push(created.id)
-
-      expect(await userRepository.replacePasswordHash(created.id, H1, H3)).toBe(true)
-      const stored = await userRepository.findById(created.id)
-      expect(stored?.passwordHash).toBe(H3)
-    })
-
-    it('writes nothing once a password change replaced the expected hash', async () => {
-      const created = await userRepository.create({ email: uniqueEmail(), passwordHash: H1 })
-      createdIds.push(created.id)
-      await sql`update users set password_hash = ${H2} where id = ${created.id}`
-
-      expect(await userRepository.replacePasswordHash(created.id, H1, H3)).toBe(false)
-      const stored = await userRepository.findById(created.id)
-      expect(stored?.passwordHash).toBe(H2)
     })
   })
 })
