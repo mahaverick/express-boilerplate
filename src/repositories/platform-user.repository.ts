@@ -61,6 +61,7 @@ export interface PlatformUserRecord {
 export interface PlatformUserFilters {
   status: ('active' | 'inactive' | 'deleted')[]
   verified?: boolean | undefined
+  signedIn?: boolean | undefined
   staff?: boolean | undefined
 }
 
@@ -180,6 +181,16 @@ function verifiedCondition(verified: boolean | undefined): SQL | undefined {
 }
 
 /**
+ * The signed-in filter: users with (or without) a recorded sign-in.
+ * @param signedIn - The asked value, or undefined for no filter.
+ * @returns The condition, or undefined.
+ */
+function signedInCondition(signedIn: boolean | undefined): SQL | undefined {
+  if (signedIn === undefined) return undefined
+  return signedIn ? isNotNull(userModel.lastLoggedInAt) : isNull(userModel.lastLoggedInAt)
+}
+
+/**
  * The staff filter: users with (or without) a platform role.
  * @param staff - The asked value, or undefined for no filter.
  * @param platformRoleQuery - The correlated platform-role subquery.
@@ -196,7 +207,7 @@ function staffCondition(
 /**
  * The staff user list, searched by email, first and last name, and full name.
  * @param search - The parsed search, or undefined.
- * @param filters - Status, verified and staff.
+ * @param filters - Status, verified, signed in and staff.
  * @returns The list definition.
  */
 export function platformUserList(search: string | undefined, filters: PlatformUserFilters) {
@@ -222,6 +233,7 @@ export function platformUserList(search: string | undefined, filters: PlatformUs
             statusCondition(filters.status),
             searchCondition(search, searchExpressions),
             verifiedCondition(filters.verified),
+            signedInCondition(filters.signedIn),
             staffCondition(filters.staff, platformRoleQuery),
             seek
           )
@@ -259,7 +271,7 @@ export class PlatformUserRepository {
   /**
    * One page of the staff user list.
    * @param params - The parsed shared list params.
-   * @param filters - Status, verified and staff.
+   * @param filters - Status, verified, signed in and staff.
    * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The page.
    * @throws {InvalidCursorError} When the cursor does not verify.
