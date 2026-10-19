@@ -167,7 +167,7 @@ services:
     volumes:
       - .:/app
       # A named volume over node_modules, so the container installs and keeps
-      # Linux binaries (bcrypt is native) and never sees or writes the host's.
+      # Linux binaries (esbuild ships one per platform) and never sees or writes the host's.
       - express-node-modules:/app/node_modules
     env_file: .env
     environment:

@@ -71,8 +71,6 @@ const NOT_STAFF = null
 // The longest backoff (600 s) plus the lease: past it, every leased row is claimable again.
 const PAST_LEASE_AND_BACKOFF_MS = (ANALYTICS_LEASE_SECONDS + 600 + 1) * 1000
 const TRACKING_PREFIX = `analytics-events-${randomUUID()}-`
-// Six bcrypt operations at cost 12 (two hashes, four compares) and nine requests: three times a single-login test's work, so three times the suite's 20 s.
-const FLOW_TIMEOUT_MS = 60_000
 
 const { name: REFRESH_TOKEN_COOKIE_NAME } = testRefreshCookie()
 const userRepository = new UserRepository()
@@ -220,274 +218,256 @@ afterAll(async () => {
 })
 
 describe('sign up, sign in, create a tenant, invite, sign up through the invitation, accept', () => {
-  it(
-    'sends exactly the expected events, each carrying its request’s trace_id and the right $groups',
-    async () => {
-      const { app, posthog } = running()
-      const ownerEmail = `analytics-owner-${randomUUID()}@example.test`
-      const inviteeEmail = `analytics-invitee-${randomUUID()}@example.test`
+  it('sends exactly the expected events, each carrying its request’s trace_id and the right $groups', async () => {
+    const { app, posthog } = running()
+    const ownerEmail = `analytics-owner-${randomUUID()}@example.test`
+    const inviteeEmail = `analytics-invitee-${randomUUID()}@example.test`
 
-      const owner = await signUpVerifyAndSignIn(ownerEmail)
-      const slug = `analytics-${randomUUID().slice(0, 8)}`
-      const tenantCreation = await traced(
-        request(app)
-          .post('/api/v1/tenants')
-          .set('Authorization', `Bearer ${owner.accessToken}`)
-          .send({ name: 'Analytics Workspace', slug })
-      )
-      expect(tenantCreation.status).toBe(201)
-      const tenantId = (tenantCreation.body as { data: { id: string } }).data.id
-      state.tenantIds.push(tenantId)
+    const owner = await signUpVerifyAndSignIn(ownerEmail)
+    const slug = `analytics-${randomUUID().slice(0, 8)}`
+    const tenantCreation = await traced(
+      request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ name: 'Analytics Workspace', slug })
+    )
+    expect(tenantCreation.status).toBe(201)
+    const tenantId = (tenantCreation.body as { data: { id: string } }).data.id
+    state.tenantIds.push(tenantId)
 
-      const invite = await traced(
-        request(app)
-          .post(`/api/v1/tenants/${slug}/invitations`)
-          .set('Authorization', `Bearer ${owner.accessToken}`)
-          .send({ email: inviteeEmail, role: 'editor' })
-      )
-      expect(invite.status).toBe(202)
-      const invitation = await waitForInvitationEmail(inviteeEmail)
+    const invite = await traced(
+      request(app)
+        .post(`/api/v1/tenants/${slug}/invitations`)
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ email: inviteeEmail, role: 'editor' })
+    )
+    expect(invite.status).toBe(202)
+    const invitation = await waitForInvitationEmail(inviteeEmail)
 
-      const invitee = await signUpVerifyAndSignIn(inviteeEmail)
-      const accept = await traced(
-        request(app)
-          .post('/api/v1/invitations/accept')
-          .set('Authorization', `Bearer ${invitee.accessToken}`)
-          .send({ token: invitation.token })
-      )
-      expect(accept.status).toBe(200)
+    const invitee = await signUpVerifyAndSignIn(inviteeEmail)
+    const accept = await traced(
+      request(app)
+        .post('/api/v1/invitations/accept')
+        .set('Authorization', `Bearer ${invitee.accessToken}`)
+        .send({ token: invitation.token })
+    )
+    expect(accept.status).toBe(200)
 
-      const events = await drainAll()
+    const events = await drainAll()
 
-      // One click creates, verifies and signs the account in, so the three share its trace; the sign-up is stamped with the account's creation time, so it sorts first.
-      expect(namesOf(events, owner.traces.signIn)).toEqual([
-        'user_signed_up',
-        'email_verified',
-        'user_signed_in',
-      ])
-      // The tenant's group row is built in the same savepoint as its audit event, so it shares the trace.
-      expect(namesOf(events, tenantCreation.traceId)).toEqual(['tenant_created', '$groupidentify'])
-      expect(namesOf(events, invite.traceId)).toEqual([
-        'invitation_created',
-        'onboarding_step_completed',
-      ])
-      expect(namesOf(events, invitee.traces.signIn)).toEqual([
-        'user_signed_up',
-        'email_verified',
-        'user_signed_in',
-      ])
-      expect(namesOf(events, accept.traceId)).toEqual([
-        'invitation_accepted',
-        'onboarding_step_completed',
-      ])
+    // One click creates, verifies and signs the account in, so the three share its trace; the sign-up is stamped with the account's creation time, so it sorts first.
+    expect(namesOf(events, owner.traces.signIn)).toEqual([
+      'user_signed_up',
+      'email_verified',
+      'user_signed_in',
+    ])
+    // The tenant's group row is built in the same savepoint as its audit event, so it shares the trace.
+    expect(namesOf(events, tenantCreation.traceId)).toEqual(['tenant_created', '$groupidentify'])
+    expect(namesOf(events, invite.traceId)).toEqual([
+      'invitation_created',
+      'onboarding_step_completed',
+    ])
+    expect(namesOf(events, invitee.traces.signIn)).toEqual([
+      'user_signed_up',
+      'email_verified',
+      'user_signed_in',
+    ])
+    expect(namesOf(events, accept.traceId)).toEqual([
+      'invitation_accepted',
+      'onboarding_step_completed',
+    ])
 
-      // Who each event is about, and its tenant group: user-level events carry none.
-      expect(eventNamed(events, owner.traces.signIn, 'user_signed_up')).toMatchObject({
-        distinct_id: owner.userId,
-        properties: {
-          source: 'product',
-          app: 'api',
-          method: 'link',
-          via_invitation: false,
-          $set: { is_staff: false, platform_role: NOT_STAFF, email_verified: true },
-        },
-      })
-      expect(eventNamed(events, invitee.traces.signIn, 'user_signed_up')).toMatchObject({
-        distinct_id: invitee.userId,
-        properties: { via_invitation: true },
-      })
-      expect(eventNamed(events, owner.traces.signIn, 'user_signed_in')).toMatchObject({
-        distinct_id: owner.userId,
-        properties: { method: 'link', $set: { is_staff: false, email_verified: true } },
-      })
-      for (const traceId of [owner.traces.signIn, invitee.traces.signIn]) {
-        expect(eventsOf(events, traceId)[0]?.properties.$groups).toBeUndefined()
-      }
-      expect(eventsOf(events, tenantCreation.traceId)[0]).toMatchObject({
+    // Who each event is about, and its tenant group: user-level events carry none.
+    expect(eventNamed(events, owner.traces.signIn, 'user_signed_up')).toMatchObject({
+      distinct_id: owner.userId,
+      properties: {
+        source: 'product',
+        app: 'api',
+        method: 'link',
+        via_invitation: false,
+        $set: { is_staff: false, platform_role: NOT_STAFF, email_verified: true },
+      },
+    })
+    expect(eventNamed(events, invitee.traces.signIn, 'user_signed_up')).toMatchObject({
+      distinct_id: invitee.userId,
+      properties: { via_invitation: true },
+    })
+    expect(eventNamed(events, owner.traces.signIn, 'user_signed_in')).toMatchObject({
+      distinct_id: owner.userId,
+      properties: { method: 'link', $set: { is_staff: false, email_verified: true } },
+    })
+    for (const traceId of [owner.traces.signIn, invitee.traces.signIn]) {
+      expect(eventsOf(events, traceId)[0]?.properties.$groups).toBeUndefined()
+    }
+    expect(eventsOf(events, tenantCreation.traceId)[0]).toMatchObject({
+      distinct_id: owner.userId,
+      properties: {
+        source: 'audit',
+        access: 'member',
+        target_type: 'tenant',
+        target_id: tenantId,
+        $groups: { tenant: tenantId },
+      },
+    })
+    expect(eventsOf(events, tenantCreation.traceId)[0]?.properties).not.toHaveProperty('name')
+    expect(eventsOf(events, tenantCreation.traceId)[0]?.properties).not.toHaveProperty('slug')
+    expect(eventsOf(events, invite.traceId)).toMatchObject([
+      {
         distinct_id: owner.userId,
         properties: {
           source: 'audit',
-          access: 'member',
-          target_type: 'tenant',
-          target_id: tenantId,
+          role: 'editor',
+          email_domain: 'example.test',
           $groups: { tenant: tenantId },
         },
-      })
-      expect(eventsOf(events, tenantCreation.traceId)[0]?.properties).not.toHaveProperty('name')
-      expect(eventsOf(events, tenantCreation.traceId)[0]?.properties).not.toHaveProperty('slug')
-      expect(eventsOf(events, invite.traceId)).toMatchObject([
-        {
-          distinct_id: owner.userId,
-          properties: {
-            source: 'audit',
-            role: 'editor',
-            email_domain: 'example.test',
-            $groups: { tenant: tenantId },
-          },
+      },
+      {
+        distinct_id: owner.userId,
+        properties: {
+          source: 'product',
+          step_key: 'invite_teammate',
+          how: 'auto',
+          required: true,
+          $groups: { tenant: tenantId },
         },
-        {
-          distinct_id: owner.userId,
-          properties: {
-            source: 'product',
-            step_key: 'invite_teammate',
-            how: 'auto',
-            required: true,
-            $groups: { tenant: tenantId },
-          },
+      },
+    ])
+    expect(eventsOf(events, accept.traceId)).toMatchObject([
+      {
+        distinct_id: invitee.userId,
+        properties: { source: 'audit', role: 'editor', $groups: { tenant: tenantId } },
+      },
+      {
+        distinct_id: invitee.userId,
+        properties: {
+          step_key: 'teammate_joined',
+          how: 'auto',
+          required: false,
+          $groups: { tenant: tenantId },
         },
-      ])
-      expect(eventsOf(events, accept.traceId)).toMatchObject([
-        {
-          distinct_id: invitee.userId,
-          properties: { source: 'audit', role: 'editor', $groups: { tenant: tenantId } },
-        },
-        {
-          distinct_id: invitee.userId,
-          properties: {
-            step_key: 'teammate_joined',
-            how: 'auto',
-            required: false,
-            $groups: { tenant: tenantId },
-          },
-        },
-      ])
+      },
+    ])
 
-      // The tenant's group properties, read from the tenant row when the drainer sent the marker.
-      expect(events.filter((event) => event.event === '$groupidentify')).toMatchObject([
-        {
-          properties: {
-            $group_type: 'tenant',
-            $group_key: tenantId,
-            $group_set: { name: 'Analytics Workspace', status: 'active' },
-          },
+    // The tenant's group properties, read from the tenant row when the drainer sent the marker.
+    expect(events.filter((event) => event.event === '$groupidentify')).toMatchObject([
+      {
+        properties: {
+          $group_type: 'tenant',
+          $group_key: tenantId,
+          $group_set: { name: 'Analytics Workspace', status: 'active' },
         },
-      ])
+      },
+    ])
 
-      // Every traced event but a group marker (which carries the trace only) has the server span's own id beside the client's trace id.
-      const tracedEvents = events.filter(
-        (sent) => sent.properties.trace_id !== undefined && sent.event !== '$groupidentify'
-      )
-      expect(tracedEvents.length).toBeGreaterThan(0)
-      for (const event of tracedEvents) expect(event.properties.span_id).toMatch(HEX_16)
+    // Every traced event but a group marker (which carries the trace only) has the server span's own id beside the client's trace id.
+    const tracedEvents = events.filter(
+      (sent) => sent.properties.trace_id !== undefined && sent.event !== '$groupidentify'
+    )
+    expect(tracedEvents.length).toBeGreaterThan(0)
+    for (const event of tracedEvents) expect(event.properties.span_id).toMatch(HEX_16)
 
-      // Nothing that names a person left the process.
-      const sentBodies = posthog.requests
-        .map((received) => received.body.toString('utf8'))
-        .join('\n')
-      for (const pii of [ownerEmail, inviteeEmail, PROBE_FIRST_NAME, PROBE_LAST_NAME]) {
-        expect(sentBodies).not.toContain(pii)
-      }
-    },
-    FLOW_TIMEOUT_MS
-  )
+    // Nothing that names a person left the process.
+    const sentBodies = posthog.requests.map((received) => received.body.toString('utf8')).join('\n')
+    for (const pii of [ownerEmail, inviteeEmail, PROBE_FIRST_NAME, PROBE_LAST_NAME]) {
+      expect(sentBodies).not.toContain(pii)
+    }
+  })
 })
 
 describe('browser session attribution', () => {
-  it(
-    'puts $session_id on the user’s own events, including the sign-in, and never on the tenant group row',
-    async () => {
-      const { app } = running()
-      const signInSession = randomUUID()
-      const apiSession = randomUUID()
-      const owner = await signUpVerifyAndSignIn(
-        `analytics-session-${randomUUID()}@example.test`,
-        signInSession
-      )
-      const tenantCreation = await traced(
-        request(app)
-          .post('/api/v1/tenants')
-          .set('Authorization', `Bearer ${owner.accessToken}`)
-          .set('X-POSTHOG-SESSION-ID', apiSession)
-          .send({ name: 'Session Workspace', slug: `session-${randomUUID().slice(0, 8)}` })
-      )
-      expect(tenantCreation.status).toBe(201)
-      state.tenantIds.push((tenantCreation.body as { data: { id: string } }).data.id)
+  it('puts $session_id on the user’s own events, including the sign-in, and never on the tenant group row', async () => {
+    const { app } = running()
+    const signInSession = randomUUID()
+    const apiSession = randomUUID()
+    const owner = await signUpVerifyAndSignIn(
+      `analytics-session-${randomUUID()}@example.test`,
+      signInSession
+    )
+    const tenantCreation = await traced(
+      request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .set('X-POSTHOG-SESSION-ID', apiSession)
+        .send({ name: 'Session Workspace', slug: `session-${randomUUID().slice(0, 8)}` })
+    )
+    expect(tenantCreation.status).toBe(201)
+    state.tenantIds.push((tenantCreation.body as { data: { id: string } }).data.id)
 
-      const events = await drainAll()
-      // The sign-in has no authenticated user yet, so its session is the user's own.
-      expect(
-        eventNamed(events, owner.traces.signIn, 'user_signed_in')?.properties.$session_id
-      ).toBe(signInSession)
-      const [created, groupIdentify] = eventsOf(events, tenantCreation.traceId)
-      expect(created?.event).toBe('tenant_created')
-      expect(created?.properties.$session_id).toBe(apiSession)
-      expect(groupIdentify?.event).toBe('$groupidentify')
-      expect(groupIdentify?.properties).not.toHaveProperty('$session_id')
-      expect(groupIdentify?.properties).not.toHaveProperty('$process_person_profile')
-    },
-    FLOW_TIMEOUT_MS
-  )
+    const events = await drainAll()
+    // The sign-in has no authenticated user yet, so its session is the user's own.
+    expect(eventNamed(events, owner.traces.signIn, 'user_signed_in')?.properties.$session_id).toBe(
+      signInSession
+    )
+    const [created, groupIdentify] = eventsOf(events, tenantCreation.traceId)
+    expect(created?.event).toBe('tenant_created')
+    expect(created?.properties.$session_id).toBe(apiSession)
+    expect(groupIdentify?.event).toBe('$groupidentify')
+    expect(groupIdentify?.properties).not.toHaveProperty('$session_id')
+    expect(groupIdentify?.properties).not.toHaveProperty('$process_person_profile')
+  })
 
-  it(
-    'keeps the session through a :slug route and on the user’s own sign-out',
-    async () => {
-      const { app } = running()
-      const owner = await signUpVerifyAndSignIn(`analytics-slug-${randomUUID()}@example.test`)
-      const slug = `slug-${randomUUID().slice(0, 8)}`
-      const tenantCreation = await traced(
-        request(app)
-          .post('/api/v1/tenants')
-          .set('Authorization', `Bearer ${owner.accessToken}`)
-          .send({ name: 'Slug Workspace', slug })
-      )
-      expect(tenantCreation.status).toBe(201)
-      state.tenantIds.push((tenantCreation.body as { data: { id: string } }).data.id)
+  it('keeps the session through a :slug route and on the user’s own sign-out', async () => {
+    const { app } = running()
+    const owner = await signUpVerifyAndSignIn(`analytics-slug-${randomUUID()}@example.test`)
+    const slug = `slug-${randomUUID().slice(0, 8)}`
+    const tenantCreation = await traced(
+      request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ name: 'Slug Workspace', slug })
+    )
+    expect(tenantCreation.status).toBe(201)
+    state.tenantIds.push((tenantCreation.body as { data: { id: string } }).data.id)
 
-      // resolveTenant replaces the request store with enterWith; the user must survive it.
-      const slugSession = randomUUID()
-      const invite = await traced(
-        request(app)
-          .post(`/api/v1/tenants/${slug}/invitations`)
-          .set('Authorization', `Bearer ${owner.accessToken}`)
-          .set('X-POSTHOG-SESSION-ID', slugSession)
-          .send({ email: `analytics-slug-invitee-${randomUUID()}@example.test`, role: 'editor' })
-      )
-      expect(invite.status).toBe(202)
+    // resolveTenant replaces the request store with enterWith; the user must survive it.
+    const slugSession = randomUUID()
+    const invite = await traced(
+      request(app)
+        .post(`/api/v1/tenants/${slug}/invitations`)
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .set('X-POSTHOG-SESSION-ID', slugSession)
+        .send({ email: `analytics-slug-invitee-${randomUUID()}@example.test`, role: 'editor' })
+    )
+    expect(invite.status).toBe(202)
 
-      // Logout has no access token: the refresh cookie identifies the user.
-      const signOutSession = randomUUID()
-      const signOut = await traced(
-        request(app)
-          .post('/api/v1/auth/logout')
-          .set('Cookie', owner.refreshCookie)
-          .set('X-POSTHOG-SESSION-ID', signOutSession)
-      )
-      expect(signOut.status).toBe(200)
+    // Logout has no access token: the refresh cookie identifies the user.
+    const signOutSession = randomUUID()
+    const signOut = await traced(
+      request(app)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', owner.refreshCookie)
+        .set('X-POSTHOG-SESSION-ID', signOutSession)
+    )
+    expect(signOut.status).toBe(200)
 
-      const events = await drainAll()
-      const [invitationCreated] = eventsOf(events, invite.traceId)
-      expect(invitationCreated?.event).toBe('invitation_created')
-      expect(invitationCreated?.distinct_id).toBe(owner.userId)
-      expect(invitationCreated?.properties.$session_id).toBe(slugSession)
-      const [signedOut] = eventsOf(events, signOut.traceId)
-      expect(signedOut?.event).toBe('user_signed_out')
-      expect(signedOut?.distinct_id).toBe(owner.userId)
-      expect(signedOut?.properties.$session_id).toBe(signOutSession)
-    },
-    FLOW_TIMEOUT_MS
-  )
+    const events = await drainAll()
+    const [invitationCreated] = eventsOf(events, invite.traceId)
+    expect(invitationCreated?.event).toBe('invitation_created')
+    expect(invitationCreated?.distinct_id).toBe(owner.userId)
+    expect(invitationCreated?.properties.$session_id).toBe(slugSession)
+    const [signedOut] = eventsOf(events, signOut.traceId)
+    expect(signedOut?.event).toBe('user_signed_out')
+    expect(signedOut?.distinct_id).toBe(owner.userId)
+    expect(signedOut?.properties.$session_id).toBe(signOutSession)
+  })
 
-  it(
-    'ends the session a second sign-in presents without a user_signed_out',
-    async () => {
-      const { app } = running()
-      const email = `analytics-relogin-${randomUUID()}@example.test`
-      const first = await signUpVerifyAndSignIn(email)
+  it('ends the session a second sign-in presents without a user_signed_out', async () => {
+    const { app } = running()
+    const email = `analytics-relogin-${randomUUID()}@example.test`
+    const first = await signUpVerifyAndSignIn(email)
 
-      const second = await traced(
-        request(app)
-          .post('/api/v1/auth/link/verify')
-          .set('Cookie', first.refreshCookie.split(';', 1)[0] as string)
-          .send({ token: await issueTestLink(email) })
-      )
-      expect(second.status).toBe(200)
+    const second = await traced(
+      request(app)
+        .post('/api/v1/auth/link/verify')
+        .set('Cookie', first.refreshCookie.split(';', 1)[0] as string)
+        .send({ token: await issueTestLink(email) })
+    )
+    expect(second.status).toBe(200)
 
-      const events = await drainAll()
-      expect(namesOf(events, second.traceId)).toEqual(['user_signed_in'])
-      expect(events.filter((event) => event.event === 'user_signed_out')).toEqual([])
-    },
-    FLOW_TIMEOUT_MS
-  )
+    const events = await drainAll()
+    expect(namesOf(events, second.traceId)).toEqual(['user_signed_in'])
+    expect(events.filter((event) => event.event === 'user_signed_out')).toEqual([])
+  })
 })
 
 describe('email webhook events', () => {
