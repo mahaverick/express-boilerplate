@@ -11,6 +11,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { dropScratchDatabase } from '../../helpers/scratch-database'
 import { baseDatabaseUrl } from '../../helpers/worker-database'
 
 const MIGRATIONS_FOLDER = path.resolve(process.cwd(), 'src/database/migrations')
@@ -85,7 +86,7 @@ const FAILED_AT = '2026-01-03T00:00:00.000Z'
 
 beforeAll(async () => {
   // The scratch name is fixed per worker, so a run that died mid-file may have left the database behind.
-  await admin.unsafe(`drop database if exists "${scratchName}" with (force)`)
+  await dropScratchDatabase(admin, scratchName)
   await admin.unsafe(`create database "${scratchName}"`)
   await migrateScratch(legacyFolder)
   const legacy = postgres(scratchUrl, { max: 1 })
@@ -106,7 +107,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await scratch.end({ timeout: 5 })
-  await admin.unsafe(`drop database if exists "${scratchName}" with (force)`)
+  await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(legacyFolder, { recursive: true, force: true })
 })
