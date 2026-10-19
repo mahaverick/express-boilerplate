@@ -98,6 +98,10 @@ export interface PendingInvitationSummary {
   invitedBy: { id: string; firstName: string | null; lastName: string | null } | null
   expiresAt: Date
   createdAt: Date
+  /**
+   * When the invitation was last mailed, or null for a row never stamped.
+   */
+  lastSentAt: Date | null
 }
 
 /**
@@ -119,6 +123,7 @@ export function invitationList(tenantId: string, search: string | undefined, fil
           role: invitation.role,
           expiresAt: invitation.expiresAt,
           createdAt: invitation.createdAt,
+          lastSentAt: invitation.lastSentAt,
           inviterId: userModel.id,
           inviterFirstName: userModel.firstName,
           inviterLastName: userModel.lastName,
@@ -156,6 +161,7 @@ export function invitationList(tenantId: string, search: string | undefined, fil
           : { id: row.inviterId, firstName: row.inviterFirstName, lastName: row.inviterLastName },
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
+      lastSentAt: row.lastSentAt,
     }),
   })
 }

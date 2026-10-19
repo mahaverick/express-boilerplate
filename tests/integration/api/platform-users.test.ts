@@ -176,6 +176,29 @@ describe('GET /api/v1/platform/users/:id', () => {
     expect(JSON.stringify(response.body)).not.toContain('passwordHash')
   })
 
+  it('gives each pending invitation lastSentAt and resendAvailableAt', async () => {
+    const { token } = await createTrackedStaff('viewer')
+    const invitee = await createTrackedUser()
+    const owner = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Resend Co',
+      slug: `pu-${randomUUID()}`,
+      ownerId: owner.id,
+    })
+    createdTenantIds.push(tenant.id)
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at, last_sent_at)
+      values (${tenant.id}, ${invitee.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day', now())`
+
+    const response = await detail(token, invitee.id)
+
+    const [pending] = dataOf<{
+      pendingInvitations: { lastSentAt: string | null; resendAvailableAt: string | null }[]
+    }>(response).pendingInvitations
+    expect(typeof pending?.lastSentAt).toBe('string')
+    expect(Date.parse(pending?.resendAvailableAt ?? '')).toBeGreaterThan(Date.now())
+  })
+
   it('answers 404 for a malformed id and an unknown id', async () => {
     const { token } = await createTrackedStaff('viewer')
 

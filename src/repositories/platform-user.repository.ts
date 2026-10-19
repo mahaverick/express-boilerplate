@@ -95,6 +95,10 @@ export interface PlatformUserPendingInvitation {
   tenantName: string
   role: MembershipRole
   expiresAt: Date
+  /**
+   * When the invitation was last mailed, or null for a row never stamped.
+   */
+  lastSentAt: Date | null
 }
 
 /**
@@ -340,6 +344,7 @@ export class PlatformUserRepository {
         tenantName: tenantModel.name,
         role: tenantInvitationModel.role,
         expiresAt: tenantInvitationModel.expiresAt,
+        lastSentAt: tenantInvitationModel.lastSentAt,
       })
       .from(tenantInvitationModel)
       .innerJoin(tenantModel, eq(tenantModel.id, tenantInvitationModel.tenantId))

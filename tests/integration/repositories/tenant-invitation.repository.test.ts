@@ -332,6 +332,7 @@ describe('TenantInvitationRepository', () => {
         invitedBy: { id: owner.id, firstName: 'Ada', lastName: 'Lovelace' },
         expiresAt: newer.expiresAt,
         createdAt: newer.createdAt,
+        lastSentAt: newer.lastSentAt,
       })
     })
 

@@ -41,6 +41,7 @@ import {
   revokeSessionRows,
   revokeSignInLinksOf,
 } from '@/services/session.service'
+import { resendAvailableAt } from '@/services/tenant-invitation.service'
 import {
   buildPasswordResetUrl,
   frontendUrl,
@@ -82,7 +83,7 @@ export interface PlatformUserDetail extends PlatformUserRow {
   hasPassword: boolean
   authProviders: AuthProvider[]
   memberships: PlatformUserMembership[]
-  pendingInvitations: PlatformUserPendingInvitation[]
+  pendingInvitations: (PlatformUserPendingInvitation & { resendAvailableAt: Date | null })[]
 }
 
 /**
@@ -120,7 +121,10 @@ export async function getUserDetail(userId: string): Promise<PlatformUserDetail>
     hasPassword: stored?.passwordHash !== null && stored?.passwordHash !== undefined,
     authProviders: AUTH_PROVIDERS.filter((provider) => present.has(provider)),
     memberships,
-    pendingInvitations,
+    pendingInvitations: pendingInvitations.map((invitation) => ({
+      ...invitation,
+      resendAvailableAt: resendAvailableAt(invitation.lastSentAt),
+    })),
   }
 }
 

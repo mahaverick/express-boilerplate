@@ -319,15 +319,46 @@ async function assertRecipientBudget(email: string, tenantId: string): Promise<v
 }
 
 /**
+ * When a resend of an invitation last mailed at `lastSentAt` is allowed.
+ * @param lastSentAt - When it was last mailed, or null for a row never stamped.
+ * @returns The instant the cooldown ends, or null when it is over or never began.
+ */
+export function resendAvailableAt(lastSentAt: Date | null): Date | null {
+  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no cooldown applies
+  if (lastSentAt === null) return null
+  const availableAt = new Date(
+    lastSentAt.getTime() + requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+  )
+  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null once the cooldown is over
+  return availableAt.getTime() > Date.now() ? availableAt : null
+}
+
+/**
+ * The 429 for a resend inside the cooldown, carrying `Retry-After`.
+ * @param lastSentAt - When the invitation was last mailed.
+ * @returns The error to throw; `retryAfterSeconds` is the whole seconds left, at least 1.
+ */
+function resendCooldownError(lastSentAt: Date | null): HttpError {
+  const availableAt = resendAvailableAt(lastSentAt)
+  const secondsLeft =
+    availableAt === null ? 1 : Math.ceil((availableAt.getTime() - Date.now()) / 1000)
+  return new HttpError(
+    INVITATION_RESEND_COOLDOWN_MESSAGE,
+    429,
+    INVITATION_RESEND_COOLDOWN_CODE,
+    undefined,
+    { retryAfterSeconds: Math.max(1, secondsLeft) }
+  )
+}
+
+/**
  * Refuse a resend sooner than `INVITATION_RESEND_COOLDOWN` after the
  * invitation's last send. A row never stamped is let through.
  * @param invitation - The pending invitation.
- * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown.
+ * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown, with `Retry-After`.
  */
 function assertResendCooldownOver(invitation: TenantInvitation): void {
-  if (isInsideResendCooldown(invitation)) {
-    throw new HttpError(INVITATION_RESEND_COOLDOWN_MESSAGE, 429, INVITATION_RESEND_COOLDOWN_CODE)
-  }
+  if (isInsideResendCooldown(invitation)) throw resendCooldownError(invitation.lastSentAt)
 }
 
 /**
@@ -636,6 +667,11 @@ export async function sendOwnerInvitation(
 }
 
 /**
+ * One pending invitation as the list returns it: the stored summary and when a resend opens up.
+ */
+export type PendingInvitationItem = PendingInvitationSummary & { resendAvailableAt: Date | null }
+
+/**
  * One page of a tenant's pending, unexpired invitations.
  * @param tenantId - The tenant.
  * @param query - The parsed list query.
@@ -645,8 +681,17 @@ export async function sendOwnerInvitation(
 export async function listPending(
   tenantId: string,
   query: InvitationListQuery
-): Promise<ListPage<PendingInvitationSummary>> {
-  return invitationRepository.listPending(tenantId, query.params, { roles: query.filters.role })
+): Promise<ListPage<PendingInvitationItem>> {
+  const page = await invitationRepository.listPending(tenantId, query.params, {
+    roles: query.filters.role,
+  })
+  return {
+    ...page,
+    items: page.items.map((item) => ({
+      ...item,
+      resendAvailableAt: resendAvailableAt(item.lastSentAt),
+    })),
+  }
 }
 
 /**
@@ -660,7 +705,7 @@ export async function listPending(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,
@@ -693,11 +738,7 @@ export async function resend(
     if (!updated) {
       const stillPending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
       if (hasCooldown && stillPending) {
-        throw new HttpError(
-          INVITATION_RESEND_COOLDOWN_MESSAGE,
-          429,
-          INVITATION_RESEND_COOLDOWN_CODE
-        )
+        throw resendCooldownError(stillPending.lastSentAt)
       }
       throw invitationNotFound()
     }

@@ -29,6 +29,7 @@ import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -209,6 +210,27 @@ function recipientBudgetKey(email: string): string {
 async function recipientBudgetSpent(email: string): Promise<number> {
   const redis = await getRedis()
   return Number((await redis.get(recipientBudgetKey(email))) ?? 0)
+}
+
+/**
+ * The origin the CORS config allows.
+ */
+const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
+
+/**
+ * One page of a tenant's invitations over HTTP, as `bearer`.
+ */
+async function listVia(
+  slug: string,
+  bearer: string
+): Promise<{
+  items: { id: string; lastSentAt: string | null; resendAvailableAt: string | null }[]
+}> {
+  const response = await request(app)
+    .get(`/api/v1/tenants/${slug}/invitations`)
+    .set('Authorization', `Bearer ${bearer}`)
+  expect(response.status).toBe(200)
+  return envelopeOf<Awaited<ReturnType<typeof listVia>>>(response).data ?? { items: [] }
 }
 
 /**
@@ -500,6 +522,8 @@ describe('invitations API', () => {
         'expiresAt',
         'id',
         'invitedBy',
+        'lastSentAt',
+        'resendAvailableAt',
         'role',
       ])
       expect(items[0]).toMatchObject({
@@ -688,6 +712,57 @@ describe('invitations API', () => {
       expect(stillValid.status).toBe(200)
     })
 
+    it('reports resendAvailableAt inside the cooldown and null after it', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const cooldownMs = requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+
+      const inside = await listVia(tenant.slug, ownerToken)
+      const [fresh] = inside.items
+      expect(typeof fresh?.lastSentAt).toBe('string')
+      expect(Date.parse(fresh?.resendAvailableAt ?? '')).toBe(
+        Date.parse(fresh?.lastSentAt ?? '') + cooldownMs
+      )
+
+      await backdateInvitationSend(fresh?.id ?? '')
+      const after = await listVia(tenant.slug, ownerToken)
+      const [sent] = after.items
+      // eslint-disable-next-line unicorn/no-null -- JSON null: the cooldown is over
+      expect(sent).toMatchObject({ resendAvailableAt: null })
+      expect(typeof sent?.lastSentAt).toBe('string')
+    })
+
+    it('answers the early resend 429 invitation_resend_cooldown with Retry-After of the seconds left', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const { items } = await listVia(tenant.slug, ownerToken)
+      const [pending] = items
+      const cooldownSeconds = requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) / 1000
+
+      const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
+
+      expect(resent.status).toBe(429)
+      const retryAfter = Number(resent.headers['retry-after'])
+      expect(retryAfter).toBeGreaterThanOrEqual(1)
+      expect(retryAfter).toBeLessThanOrEqual(cooldownSeconds)
+      const secondsLeft = (Date.parse(pending?.resendAvailableAt ?? '') - Date.now()) / 1000
+      expect(Math.abs(retryAfter - secondsLeft)).toBeLessThanOrEqual(2)
+    })
+
+    it('exposes Retry-After to the browser', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const { items } = await listVia(tenant.slug, ownerToken)
+      const [pending] = items
+
+      const resent = await request(app)
+        .post(`/api/v1/tenants/${tenant.slug}/invitations/${pending?.id ?? ''}/resend`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('Origin', allowedOrigin)
+
+      expect(resent.headers['access-control-expose-headers']).toContain('Retry-After')
+    })
+
     it('resends once the cooldown has passed', async () => {
       const { ownerToken, tenant } = await setup()
       await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
@@ -734,6 +809,7 @@ describe('invitations API', () => {
 
       expect(resent?.status).toBe(429)
       expect(resent?.body).toMatchObject({ code: 'invitation_resend_cooldown' })
+      expect(Number(resent?.headers['retry-after'])).toBeGreaterThanOrEqual(1)
       const stillValid = await previewVia(rawToken)
       expect(stillValid.status).toBe(200)
     })
