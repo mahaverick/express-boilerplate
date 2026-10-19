@@ -426,7 +426,7 @@ const EnvSchema = z.object({
     .stringbool()
     .default(true)
     .describe(
-      'Whether the BullMQ workers (email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set or POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID both are) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge, the analytics drain, the feature flag definitions fetch and the PostHog deletion of purged users run only where this is true.'
+      'Whether the BullMQ workers (email, auth-email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set or POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID both are) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge, the analytics drain, the feature flag definitions fetch and the PostHog deletion of purged users run only where this is true.'
     ),
   WORKER_CONCURRENCY: z.coerce
     .number()
@@ -434,7 +434,7 @@ const EnvSchema = z.object({
     .positive()
     .default(5)
     .describe(
-      'Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance and analytics workers always run one job at a time.'
+      'Jobs the email, auth-email and notification workers each process at once, per process. Defaults to 5. The email and auth-email workers both send mail, so a process runs up to 2 × WORKER_CONCURRENCY SMTP sends at once; size it against the mail provider rate limit. The maintenance and analytics workers always run one job at a time.'
     ),
   RETENTION_TOKENS_DAYS: z.coerce
     .number()

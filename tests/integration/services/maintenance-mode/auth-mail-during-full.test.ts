@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import type { EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
@@ -26,6 +26,7 @@ import {
   getPausableQueues,
 } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
+import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import { requestSignInLink } from '@/services/sign-in-link.service'
 import { startEmailWorker } from '@/workers/email.worker'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
@@ -37,6 +38,12 @@ import {
 } from '../../../helpers/platform-users'
 import { request } from '../../../helpers/request'
 import { waitUntil } from '../../../helpers/timing'
+
+// Wrapped, not replaced: a call shows the follow-up won the mail cooldown and reached the lookup.
+vi.mock('@/services/sign-in-link-limit.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/sign-in-link-limit.service')>()
+  return { ...actual, spendSignInLinkBudget: vi.fn(actual.spendSignInLinkBudget) }
+})
 
 const app = createApp()
 
@@ -83,6 +90,19 @@ async function messageStatuses(email: string): Promise<string[]> {
     where recipient = ${email.toLowerCase()} and template_key = 'sign_in_link'
   `
   return rows.map((row) => row.status)
+}
+
+/**
+ * How many sign-in link rows one address holds.
+ * @param email - The address.
+ * @returns The count of `user_tokens` rows with purpose `sign_in_link`.
+ */
+async function linkRowCount(email: string): Promise<number> {
+  const [row] = await sql<{ count: number }[]>`
+    select count(*)::int as count from user_tokens
+    where email = ${email.toLowerCase()} and purpose = 'sign_in_link'
+  `
+  return row?.count ?? 0
 }
 
 /**
@@ -161,15 +181,23 @@ describe('auth mail during full maintenance', () => {
   })
 
   it('mails nothing to a non-staff address in full and answers the same 202', async () => {
+    const answered = await createTrackedUser({ email: uniqueEmail('answered') })
+    const response = await request(app)
+      .post('/api/v1/auth/link/request')
+      .send({ email: answered.email })
+    expect(response.status).toBe(202)
+    expect(response.body).toEqual(REQUEST_ACCEPTED_BODY)
+
+    // Fresh addresses no request touched, so the awaited follow-up wins the cooldown and its absence of mail is final.
     const customer = await createTrackedUser({ email: uniqueEmail('customer') })
     const unknown = uniqueEmail('unknown')
-
     for (const email of [customer.email, unknown]) {
-      const response = await request(app).post('/api/v1/auth/link/request').send({ email })
-      expect(response.status).toBe(202)
-      expect(response.body).toEqual(REQUEST_ACCEPTED_BODY)
-      // The follow-up the request ran after replying, awaited here so its absence of mail is final.
+      vi.mocked(spendSignInLinkBudget).mockClear()
+
       await requestSignInLink({ email, app: 'web' })()
+
+      expect(spendSignInLinkBudget).toHaveBeenCalledWith(email)
+      expect(await linkRowCount(email)).toBe(0)
       expect(await messageStatuses(email)).toEqual([])
     }
   })

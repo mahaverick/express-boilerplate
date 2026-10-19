@@ -497,12 +497,13 @@ Runbook:
    after maintenance ends, with the same link while it is unexpired.
 3. **Use `read_only` for data fixes where reads are safe.** Customers keep
    reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
-4. **Before database work, check "0 running" on every queue** on the
-   Maintenance page. `full` pauses every queue but `auth-email`, which carries
-   sign-in, step-up and invitation mail. Jobs already running finish first.
+4. **Before database work, check "0 running" on every paused queue** on the
+   Maintenance page. `full` pauses every queue but `auth-email`, which keeps
+   sending sign-in, step-up and invitation mail. Jobs already running finish
+   first.
 5. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
    working and writing during maintenance.
-6. **Switch off from Apex.** Leaving `full` resumes every queue; notices that
+6. **Switch off from Apex.** Leaving `full` resumes the paused queues; notices that
    were still queued go out then.
 7. **Restart every replica after restoring the database during maintenance.**
    A replica ignores a row whose version is not above the one it holds, so a
