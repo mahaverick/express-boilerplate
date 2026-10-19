@@ -129,8 +129,8 @@ class GrantAddressTakenError extends HttpError {
 }
 
 /**
- * A grant found its account unverified under the row lock: a write landed
- * between the claim's commit and the grant. `bootstrapGrant` claims and
+ * A grant found its account unverified, or gone, under the row lock: a
+ * write landed between the claim's commit and the grant. `bootstrapGrant` claims and
  * grants once more; a second one is its answer.
  */
 class GrantAccountUnverifiedError extends HttpError {
@@ -186,7 +186,7 @@ export async function bootstrapGrant(email: string, role: MembershipRole): Promi
  * @param role - The platform role to hold.
  * @returns The membership after the change.
  * @throws {GrantAddressTakenError} When a concurrent create won the address.
- * @throws {GrantAccountUnverifiedError} When the account is unverified under the row lock; the transaction rolls the grant back.
+ * @throws {GrantAccountUnverifiedError} When the account is unverified or gone under the row lock; the transaction rolls the grant back.
  * @throws {HttpError} 409 from the last-owner check; 500 when the platform tenant is missing or a claimed account vanished.
  */
 async function grantOnce(email: string, role: MembershipRole): Promise<UserMembership> {

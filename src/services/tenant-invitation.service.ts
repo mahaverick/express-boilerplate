@@ -1059,7 +1059,7 @@ function assertJoinAllowedByMode(): void {
  * the account is inactive or `assertSignInAllowed` refuses it, both before
  * anything is written; claimed when it was never verified, as a sign-in link
  * claims one (the click proves the mailbox, so a squatter's sessions and
- * credentials go). An account deleted or deactivated during the claim is the
+ * federated links go). An account deleted or deactivated during the claim is the
  * generic invalid link, never the claim's 500.
  * @param email - The invitation's stored (lowercased) address.
  * @returns The account, or undefined when the click should create one.
