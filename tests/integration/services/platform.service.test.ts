@@ -11,7 +11,7 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
+import { sql, type DbTransaction } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { bootstrapGrant, getPlatformMembership } from '@/services/platform.service'
 import { hashToken, issueRefreshToken } from '@/services/session.service'
@@ -185,7 +185,10 @@ describe('platform.service', () => {
       if (executor && values.userId === user.id && values.tenantId === platform.id) {
         reachedInsert.resolve(await backendPid(executor))
         await release.promise
-        if (options.oldLockOrder) await realLockById(user.id, 'no key update', executor)
+        // The grant's create runs in its transaction, so the executor is one.
+        if (options.oldLockOrder) {
+          await realLockById(user.id, 'no key update', executor as DbTransaction)
+        }
       }
       return created
     }

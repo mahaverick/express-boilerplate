@@ -14,12 +14,12 @@ import { userTokenModel } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
 import { sql, withTransaction, type DbExecutor } from '@/services/database.service'
 import { claimLinkToken, issueLinkToken } from '@/services/link-token.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import {
   issueRefreshToken,
-  revokeAllSessions,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
@@ -355,19 +355,6 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(rotatedOther.sessionId).toBe(otherSessionId)
   })
 
-  it('revokeAllSessions revokes every session belonging to a user', async () => {
-    const userId = await createUser()
-    const sessionA = randomUUID()
-    const sessionB = randomUUID()
-    const issuedA = await issueRefreshToken(userId, sessionA)
-    const issuedB = await issueRefreshToken(userId, sessionB)
-
-    await revokeAllSessions(userId)
-
-    await expect(rotateRefreshToken(issuedA.raw)).rejects.toMatchObject({ statusCode: 401 })
-    await expect(rotateRefreshToken(issuedB.raw)).rejects.toMatchObject({ statusCode: 401 })
-  })
-
   it('a claimed step-up link does not kill its session', async () => {
     const user = await createUserRow()
     const sessionId = randomUUID()
@@ -446,7 +433,7 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     expect(await isSessionDenied(untouched)).toBe(false)
   })
 
-  it('revokeAllSessions denies every session it revoked, and only those', async () => {
+  it('an account claim denies every session it revoked, and only those', async () => {
     const userId = await createUser()
     const otherUserId = await createUser()
     const sessionOne = randomUUID()
@@ -463,7 +450,7 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     })
     await issueRefreshToken(otherUserId, otherUsersSession)
 
-    await revokeAllSessions(userId)
+    await claimNeverVerifiedAccount(userId)
 
     expect(await isSessionDenied(sessionOne)).toBe(true)
     expect(await isSessionDenied(sessionTwo)).toBe(true)

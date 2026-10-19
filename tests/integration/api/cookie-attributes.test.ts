@@ -16,12 +16,13 @@ import { GOOGLE_STRATEGY_NAME, REFRESH_REUSE_GRACE_MS } from '@/constants/auth.c
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
+import { sql, withTransaction } from '@/services/database.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import {
+  denySessionsAfterCommit,
   hashToken,
   issueRefreshToken,
-  revokeAllSessions,
+  revokeSessionRows,
   rotateRefreshToken,
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
@@ -785,8 +786,8 @@ const DEPLOYMENTS = [
 type Deployment = (typeof DEPLOYMENTS)[number]
 
 /**
- * Sign in, end every session (`revokeAllSessions`, as an account claim's
- * first pass does), then refresh with the sign-in's cookie.
+ * Sign in, end every session under the user row lock and deny it, as an
+ * account claim's first pass does, then refresh with the sign-in's cookie.
  * @param deployment - The cookie environment.
  * @returns The app, the cookie pair the refresh presented, and its response.
  */
@@ -803,7 +804,12 @@ async function refreshAfterSessionsEnd(deployment: Deployment): Promise<{
     .send({ token: await issueTestLink(email) })
   expect(login.status).toBe(200)
   const presented = cookiePair(cookieLines(login, deployment.name)[0])
-  await revokeAllSessions(await userIdFor(email))
+  const userId = await userIdFor(email)
+  const sessionIds = await withTransaction(async (tx) => {
+    await userRepository.lockById(userId, 'no key update', tx)
+    return revokeSessionRows(userId, {}, tx)
+  })
+  await denySessionsAfterCommit(userId, sessionIds)
 
   const refreshed = await request(app)
     .post('/api/v1/auth/refresh')

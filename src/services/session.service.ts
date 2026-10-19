@@ -664,28 +664,6 @@ export async function revokeOtherSessions(
 }
 
 /**
- * Revoke every unrevoked token a user holds, across every session and
- * purpose, and deny each revoked session's access tokens (best-effort, see
- * `denySession`). It runs in a transaction of its own, which commits
- * whatever its caller does next, and locks the user row FOR NO KEY UPDATE
- * first: a rotation in flight holds that row FOR SHARE, so it commits before
- * the revoke and its successor token is revoked too, and a rotation that
- * starts later finds its token revoked. A caller that goes on to write
- * under the lock revokes again in its own transaction, for a session created
- * between the two; if that transaction rolls back, every session this pass
- * revoked stays revoked.
- * @param userId - The user whose sessions should all end.
- * @returns Resolves once every token is revoked and each revoked session is denied, best-effort.
- */
-export async function revokeAllSessions(userId: string): Promise<void> {
-  const sessionIds = await withTransaction(async (tx) => {
-    await userRepository.lockById(userId, 'no key update', tx)
-    return revokeSessionRows(userId, {}, tx)
-  })
-  await denySessionsAfterCommit(userId, sessionIds)
-}
-
-/**
  * Record that a session's user just proved their identity again, by step-up
  * (a confirmed link or a fresh Google login, step-up.service.ts): move
  * `authenticated_at` to the current time on every refresh row of the session
