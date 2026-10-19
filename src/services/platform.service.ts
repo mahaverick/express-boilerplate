@@ -198,9 +198,6 @@ async function grantOnce(email: string, role: MembershipRole): Promise<UserMembe
     const found = await userRepository.findByEmail(email, {}, tx)
     const user = found ?? (await createForGrant(email, tx))
     const granted = await grantInTransaction(user.id, role, tx)
-    // The user row last, after the owner and membership locks, as staff writes take it.
-    const locked = await userRepository.lockById(user.id, 'no key update', tx)
-    if (!locked?.emailVerifiedAt) throw new GrantAccountUnverifiedError()
     return {
       membership: granted,
       // eslint-disable-next-line unicorn/no-null -- the address held an account already
@@ -249,11 +246,18 @@ async function createForGrant(email: string, tx: DbTransaction): Promise<User> {
 
 /**
  * The grant's membership write and its audit entry, in the grant's
- * transaction.
+ * transaction. Before the write, the account's user row is locked `FOR
+ * SHARE`, after the owner and membership locks as staff writes take it, and
+ * an account that is unverified or gone by then is refused. `FOR SHARE`, as
+ * a platform-invitation accept takes the same row (`lockUserForOwnership`):
+ * the two coexist, so an accept that holds the row while it waits for this
+ * grant's membership insert cannot deadlock with it, and the share lock
+ * still blocks a write that would unverify the account.
  * @param userId - The account.
  * @param role - The platform role to hold.
  * @param tx - The grant's transaction.
  * @returns The membership after the change.
+ * @throws {GrantAccountUnverifiedError} When the account is unverified or gone under the row lock; the transaction rolls the grant back.
  * @throws {HttpError} 409 when the change would leave the platform tenant without an owner; 500 when the platform tenant is missing.
  */
 async function grantInTransaction(
@@ -271,6 +275,8 @@ async function grantInTransaction(
     'no key update',
     tx
   )
+  const locked = await userRepository.lockById(userId, 'share', tx)
+  if (!locked?.emailVerifiedAt) throw new GrantAccountUnverifiedError()
   const membership = existing
     ? await regrant(existing, role, tx)
     : await userMembershipRepository.create({ userId, tenantId: platform.id, role }, tx)

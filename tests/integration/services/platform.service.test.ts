@@ -15,7 +15,9 @@ import { sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { bootstrapGrant, getPlatformMembership } from '@/services/platform.service'
 import { hashToken, issueRefreshToken } from '@/services/session.service'
+import { accept as acceptInvitation } from '@/services/tenant-invitation.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const tenantRepository = new TenantRepository()
@@ -136,6 +138,85 @@ describe('platform.service', () => {
     const stored = await userRepository.findById(user.id)
     if (!stored) throw new Error('setup: user vanished')
     return stored
+  }
+
+  /**
+   * Run a grant and a platform-invitation accept for one address in the
+   * interleaving that deadlocked when the grant locked the user row `FOR NO
+   * KEY UPDATE` after its membership insert: the grant inserts the
+   * membership and pauses; the accept takes the user row `FOR SHARE` and
+   * queues behind that uncommitted insert; the grant then goes on.
+   * @param options - `oldLockOrder` restores that order, for the mutation proof.
+   * @param options.oldLockOrder - Skip the grant's share lock and take `FOR NO KEY UPDATE` after the insert.
+   * @returns How the grant and the accept settled.
+   */
+  async function grantBesideAccept(options: { oldLockOrder?: boolean } = {}): Promise<{
+    granted: PromiseSettledResult<unknown>
+    accepted: PromiseSettledResult<unknown>
+    userId: string
+  }> {
+    const inviter = await createUser(`grant-inviter-${randomUUID()}@example.test`, {
+      isVerified: true,
+    })
+    await grantPlatformRole(inviter.id, 'owner')
+    const user = await createUser(`grant-accept-${randomUUID()}@example.test`, {
+      isVerified: true,
+    })
+    const platform = await platformTenant()
+    const rawToken = randomUUID()
+    await invitationRepository.createPending({
+      tenantId: platform.id,
+      email: user.email,
+      role: 'viewer',
+      tokenHash: hashToken(rawToken),
+      invitedBy: inviter.id,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    })
+    const reachedInsert = deferred<number>()
+    const release = deferred()
+    const realCreate = UserMembershipRepository.prototype.create.bind(userMembershipRepository)
+    const realLockById = UserRepository.prototype.lockById.bind(userRepository)
+    /**
+     * The grant's membership insert, then report its backend and hold its
+     * transaction open; with `oldLockOrder`, then the late `FOR NO KEY UPDATE`.
+     */
+    const heldCreate: UserMembershipRepository['create'] = async (values, executor) => {
+      const created = await realCreate(values, executor)
+      if (executor && values.userId === user.id && values.tenantId === platform.id) {
+        reachedInsert.resolve(await backendPid(executor))
+        await release.promise
+        if (options.oldLockOrder) await realLockById(user.id, 'no key update', executor)
+      }
+      return created
+    }
+    const accepting: { started: boolean } = { started: false }
+    /**
+     * With `oldLockOrder`, the grant's own share lock read without a lock.
+     */
+    const grantLock: UserRepository['lockById'] = (id, mode, tx) =>
+      mode === 'share' && !accepting.started && options.oldLockOrder === true && id === user.id
+        ? userRepository.findById(id, {}, tx)
+        : realLockById(id, mode, tx)
+
+    let outcome: [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>] | undefined
+    await withMutatedMethod(UserRepository.prototype, 'lockById', grantLock, async () => {
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'create',
+        heldCreate,
+        async () => {
+          const granting = bootstrapGrant(user.email, 'admin')
+          const grantPid = await untilSignalled(reachedInsert.promise, granting, 'the grant')
+          accepting.started = true
+          const acceptance = acceptInvitation(rawToken, user.id)
+          expect(await waitForWaiter(grantPid, acceptance)).toBe(true)
+          release.resolve()
+          outcome = await Promise.allSettled([granting, acceptance])
+        }
+      )
+    })
+    if (!outcome) throw new Error('the race did not run')
+    return { granted: outcome[0], accepted: outcome[1], userId: user.id }
   }
 
   describe('getPlatformMembership', () => {
@@ -298,6 +379,7 @@ describe('platform.service', () => {
         async () => {
           await expect(bootstrapGrant(user.email, 'owner')).rejects.toMatchObject({
             statusCode: 409,
+            message: 'The account for that address is unverified. Run the grant again.',
           })
         }
       )
@@ -310,6 +392,33 @@ describe('platform.service', () => {
           and metadata->>'userId' = ${user.id}`
       expect(grants).toHaveLength(0)
     })
+
+    it('finishes a grant and a platform-invitation accept for the same address together, with no deadlock', async () => {
+      const { granted, accepted, userId } = await grantBesideAccept()
+
+      expect(granted.status).toBe('fulfilled')
+      expect(accepted.status).toBe('fulfilled')
+      expect(await getPlatformMembership(userId)).toBe('admin')
+    })
+
+    /**
+     * Deliberately red under MUTATION_PROOF=1: with the old lock order one
+     * side is aborted with 40P01.
+     *
+     *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/platform.service.test.ts   # red
+     */
+    it.runIf(process.env.MUTATION_PROOF === '1')(
+      'reproduces the grant and accept race with the old lock order',
+      async () => {
+        const { granted, accepted } = await grantBesideAccept({ oldLockOrder: true })
+
+        // toEqual, not .status: the diff shows the rejection's 40P01.
+        expect([granted, accepted]).toEqual([
+          expect.objectContaining({ status: 'fulfilled' }),
+          expect.objectContaining({ status: 'fulfilled' }),
+        ])
+      }
+    )
 
     it('emits no email_verified for a user verified already', async () => {
       const user = await createUser(`grant-${randomUUID()}@example.test`, { isVerified: true })
