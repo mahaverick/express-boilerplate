@@ -198,7 +198,7 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The tenant after the update.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access or the tenant is gone; 403 `Insufficient permissions` when the actor is below admin.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access or the tenant is gone; 403 (`requireRole`'s answer) when the actor is below admin.
  */
 export async function updateTenant(
   actor: Actor,
@@ -298,7 +298,7 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The settings after the update.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 `Insufficient permissions` when the actor is below admin; 404 when no settings row exists.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 (`requireRole`'s answer) when the actor is below admin; 404 when no settings row exists.
  */
 export async function updateSettings(
   actor: Actor,

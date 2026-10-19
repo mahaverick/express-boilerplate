@@ -120,8 +120,13 @@ export async function createTenant(
  */
 function assertOwnerInvitable(tenant: Tenant): void {
   if (tenant.lifecycleState === 'active') return
-  const article = tenant.lifecycleState === 'archived' ? 'an' : 'a'
-  throw new HttpError(`Cannot invite an owner to ${article} ${tenant.lifecycleState} tenant.`, 409)
+  // Only a suspended tenant can be reactivated; an archived one ends in a purge.
+  throw new HttpError(
+    tenant.lifecycleState === 'suspended'
+      ? 'This tenant is suspended. Reactivate it, then invite an owner.'
+      : "This tenant is archived, so it can't get an owner invitation.",
+    409
+  )
 }
 
 /**
@@ -226,7 +231,7 @@ async function transition(
       if (!current) throw new HttpError('Tenant not found', 404)
       const message = current.isPlatform
         ? 'The platform tenant cannot be suspended, reactivated or archived.'
-        : `This tenant is ${current.lifecycleState}.`
+        : `This tenant is ${current.lifecycleState}. Refresh the page to see its current state.`
       throw new HttpError(message, 409, TENANT_STATE_CONFLICT_CODE)
     }
     if (to === 'archived') await invitationRepository.revokeAllPending(tenantId, tx)

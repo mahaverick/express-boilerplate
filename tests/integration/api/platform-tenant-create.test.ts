@@ -390,7 +390,7 @@ describe('staff-created tenants', () => {
       const response = await reissue(token, tenantId, 'y@example.test')
       expect(response.status).toBe(409)
       expect((response.body as { message: string }).message).toBe(
-        'Cannot invite an owner to a suspended tenant.'
+        'This tenant is suspended. Reactivate it, then invite an owner.'
       )
       const response2 = await reissue(token, platform.id, 'y@example.test')
       expect(response2.status).toBe(409)
@@ -412,7 +412,7 @@ describe('staff-created tenants', () => {
       const response = await reissue(token, tenantId, 'z@example.test')
       expect(response.status).toBe(409)
       expect((response.body as { message: string }).message).toBe(
-        'Cannot invite an owner to an archived tenant.'
+        "This tenant is archived, so it can't get an owner invitation."
       )
 
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
@@ -441,7 +441,7 @@ describe('staff-created tenants', () => {
             reissueOwnerInvitation({ userId: admin.id }, tenantId, 'z@example.test', 'Resend')
           ).rejects.toMatchObject({
             statusCode: 409,
-            message: 'Cannot invite an owner to an archived tenant.',
+            message: "This tenant is archived, so it can't get an owner invitation.",
           })
       )
       expect(calls).toBe(2)

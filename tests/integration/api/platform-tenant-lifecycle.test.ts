@@ -154,7 +154,9 @@ describe('tenant lifecycle', () => {
     await act(token, tenant.id, 'suspend')
     const response = await act(token, tenant.id, 'suspend')
     expect(response.status).toBe(409)
-    expect((response.body as { message?: string }).message).toBe('This tenant is suspended.')
+    expect((response.body as { message?: string }).message).toBe(
+      'This tenant is suspended. Refresh the page to see its current state.'
+    )
   })
 
   it('lets exactly one of two racing suspends win, with one audit row', async () => {
