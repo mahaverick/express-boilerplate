@@ -63,7 +63,7 @@ export interface IssueLinkTokenInput {
 /**
  * The live links a new one supersedes, from its input.
  * @param input - The link being issued, its address already lowercased.
- * @returns The address's sign-in links or invitation confirm links, or the session's step-up links.
+ * @returns The address's sign-in links, its confirm links for the same invitation, or the session's step-up links.
  * @throws {Error} When a `step_up` link names no user or session, or an `invitation` link no invitation: a caller's bug, refused before any write.
  */
 function supersededBy(input: IssueLinkTokenInput): LiveLinkMatch {
@@ -72,7 +72,8 @@ function supersededBy(input: IssueLinkTokenInput): LiveLinkMatch {
     if (input.invitationId === undefined) {
       throw new Error('An invitation link needs its invitation')
     }
-    return { email: input.email, intent: 'invitation' }
+    // Per invitation: a link for one workspace never revokes another's.
+    return { email: input.email, invitationId: input.invitationId, intent: 'invitation' }
   }
   if (input.userId === undefined || input.sessionId === undefined) {
     throw new Error('A step_up link needs its user and session')
@@ -81,10 +82,10 @@ function supersededBy(input: IssueLinkTokenInput): LiveLinkMatch {
 }
 
 /**
- * Issue a link: revoke the live links it supersedes (every sign-in link or
- * every invitation confirm link of the address, or every step-up link of the
- * session) and insert the new
- * row, in one transaction serialised per address or session, so at most one
+ * Issue a link: revoke the live links it supersedes (every sign-in link of
+ * the address, the address's confirm links for the same invitation, or
+ * every step-up link of the session) and insert the new row, in one
+ * transaction serialised per address, invitation or session, so at most one
  * link of each stays live.
  * @param input - What the link is for. The address is stored lowercased.
  * @param ttlMs - How long the link is valid for, in milliseconds.

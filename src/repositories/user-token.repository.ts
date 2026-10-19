@@ -56,14 +56,15 @@ export interface LinkTokenBinding {
 }
 
 /**
- * Which live links a newly issued one supersedes: every sign-in link of one
- * address, every step-up link of one session, or every invitation confirm
- * link of one address.
+ * Which live links a newly issued one supersedes, or a revocation reaches:
+ * every sign-in link of one address, every step-up link of one session, or
+ * the invitation confirm links of one address, for one invitation when
+ * `invitationId` is set and for every invitation otherwise.
  */
 export type LiveLinkMatch =
   | { email: string; intent: 'sign_in' }
   | { userId: string; sessionId: string; intent: 'step_up' }
-  | { email: string; intent: 'invitation' }
+  | { email: string; invitationId?: string; intent: 'invitation' }
 
 /**
  * The predicate for one `LiveLinkMatch`, live rows only. The address is
@@ -77,7 +78,11 @@ function liveLinkMatch(match: LiveLinkMatch): SQL {
     return sql`${userTokenModel.email} = lower(${match.email}) and ${userTokenModel.purpose} = 'sign_in_link' and ${userTokenModel.revokedAt} is null`
   }
   if (match.intent === 'invitation') {
-    return sql`${userTokenModel.email} = lower(${match.email}) and ${userTokenModel.purpose} = 'invitation_link' and ${userTokenModel.revokedAt} is null`
+    const invitation =
+      match.invitationId === undefined
+        ? sql``
+        : sql` and ${userTokenModel.invitationId} = ${match.invitationId}`
+    return sql`${userTokenModel.email} = lower(${match.email}) and ${userTokenModel.purpose} = 'invitation_link' and ${userTokenModel.revokedAt} is null${invitation}`
   }
   return sql`${userTokenModel.userId} = ${match.userId} and ${userTokenModel.sessionId} = ${match.sessionId} and ${userTokenModel.purpose} = 'step_up_link' and ${userTokenModel.revokedAt} is null`
 }
@@ -557,15 +562,19 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Serialise issuing links of one intent for one address or one session until `tx` ends,
-   * with a transaction-scoped advisory lock: without it two concurrent issues
-   * each revoke before the other's insert commits, and both links stay live.
-   * The caller takes it first, in a transaction holding no other lock, so it
+   * Serialise issuing links of one intent for one address (and, for a
+   * confirm link, one invitation) or one session until `tx` ends, with a
+   * transaction-scoped advisory lock: without it two concurrent issues each
+   * revoke before the other's insert commits, and both links stay live. The
+   * caller takes it first, in a transaction holding no other lock, so it
    * joins no lock-order cycle. The insert that follows takes `FOR KEY SHARE`
-   * on an invitation link's invitation row, which only a purge's delete of a
-   * long-settled invitation conflicts with. The key is a 64-bit hash; an
-   * unrelated match that collides only waits.
-   * @param match - The address or the session being issued for.
+   * on an invitation link's invitation row, which the accept and revoke
+   * UPDATEs (`FOR NO KEY UPDATE`) do not conflict with. A resend, which
+   * rewrites the unique `token_hash` and so takes `FOR UPDATE`, and the
+   * retention purge's delete do. Each only waits: neither takes a
+   * `user_tokens` row or the issue's advisory lock, so no cycle forms. The
+   * key is a 64-bit hash; an unrelated match that collides only waits.
+   * @param match - The address, the address and invitation, or the session being issued for.
    * @param tx - The issuing transaction; the lock is released when it ends.
    * @returns Resolves once the lock is held.
    */
@@ -573,9 +582,10 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     let key: string
     if (match.intent === 'step_up') {
       key = `user_tokens:step_up_link:${match.userId}:${match.sessionId}`
+    } else if (match.intent === 'sign_in') {
+      key = `user_tokens:sign_in_link:${match.email.toLowerCase()}`
     } else {
-      const purpose = match.intent === 'sign_in' ? 'sign_in_link' : 'invitation_link'
-      key = `user_tokens:${purpose}:${match.email.toLowerCase()}`
+      key = `user_tokens:invitation_link:${match.email.toLowerCase()}:${match.invitationId ?? ''}`
     }
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`)
   }
@@ -583,7 +593,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Revoke every live link a newly issued one supersedes, leaving
    * `consumedAt` null. Locks its rows in id order (`lockedIds`).
-   * @param match - Every sign-in link or every invitation confirm link of one address, or every step-up link of one session.
+   * @param match - Every sign-in link of one address, the invitation confirm links of one address (for one invitation, or all of them), or every step-up link of one session.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns How many rows this call revoked.
    */

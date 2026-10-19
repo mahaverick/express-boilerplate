@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import type { LinkTokenIntent } from '@/database/models/user-token.model'
-import { sql } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
 import {
   buildInvitationConfirmUrl,
   buildSignInLinkUrl,
@@ -19,6 +19,7 @@ import {
   peekLinkToken,
   type IssueLinkTokenInput,
 } from '@/services/link-token.service'
+import { revokeSignInLinksOf } from '@/services/session.service'
 
 // Hoisted with the mock below, which reads it.
 const { APEX } = vi.hoisted(() => ({ APEX: 'https://apex.link-token.test' }))
@@ -65,6 +66,13 @@ async function insertUser(): Promise<string> {
   if (!row) throw new Error('user insert returned no row')
   userIds.push(row.id)
   return row.id
+}
+
+/**
+ * Alphabetical order, for comparing id lists.
+ */
+function byText(a: string, b: string): number {
+  return a.localeCompare(b)
 }
 
 /**
@@ -216,6 +224,33 @@ describe('issueLinkToken', () => {
     expect(await claimLinkToken(signInLink.raw, 'invitation')).toBeUndefined()
     expect(await claimedId(signInLink.raw, 'sign_in')).toBe(signInLink.row.id)
     expect(await claimedId(second.raw, 'invitation')).toBe(second.row.id)
+  })
+
+  it('keeps a live confirm link per invitation, and the address-wide revoke ends them all', async () => {
+    const email = address()
+    const first = await insertInvitation(email)
+    const second = await insertInvitation(email)
+    const linkA = await issueLinkToken(
+      { intent: 'invitation', email, app: 'web', invitationId: first },
+      TTL_MS
+    )
+    const linkB = await issueLinkToken(
+      { intent: 'invitation', email, app: 'web', invitationId: second },
+      TTL_MS
+    )
+
+    const live = await sql<{ id: string }[]>`
+      select id from user_tokens
+      where email = ${email} and purpose = 'invitation_link' and revoked_at is null
+      order by id`
+    expect(live.map((row) => row.id).toSorted(byText)).toEqual(
+      [linkA.row.id, linkB.row.id].toSorted(byText)
+    )
+
+    await db.transaction((tx) => revokeSignInLinksOf(email, tx))
+
+    expect(await claimLinkToken(linkA.raw, 'invitation')).toBeUndefined()
+    expect(await claimLinkToken(linkB.raw, 'invitation')).toBeUndefined()
   })
 
   it('refuses an invitation issue without its invitation, writing nothing', async () => {

@@ -115,14 +115,25 @@ const ALREADY_MEMBER_MESSAGE =
 export const INVITATION_INVALID_CODE = 'invitation_invalid'
 
 /**
+ * Message for `INVITATION_INVALID_CODE` on `POST /invitations/confirm`: every
+ * refusal there, a dead confirm link or a dead invitation alike. Its next
+ * step names both ways back: a new confirm link from the invitation, or a
+ * new invite.
+ */
+export const INVITATION_CONFIRM_INVALID_MESSAGE =
+  "We couldn't use this link. Open your invitation email and select Join again, or ask the person who invited you for a new invite."
+
+/**
  * The message of the `202` an invite click answers when the invitee must
  * confirm by email.
  */
 export const INVITATION_CONFIRM_MESSAGE = 'Check your inbox to finish joining.'
 
 /**
- * The cooldown key segment for confirm-link mail: its own scope, so a
- * sign-in request for the address a moment earlier does not hold it.
+ * The cooldown key segment for confirm-link mail, followed by the
+ * invitation's id: its own scope, so a sign-in request for the address a
+ * moment earlier does not hold it, and per invitation, so a click on one
+ * workspace's invitation does not hold back another's.
  */
 const CONFIRM_MAIL_COOLDOWN_SCOPE = 'invitation-confirm'
 
@@ -414,6 +425,15 @@ class RecipientBudgetSpentError extends Error {}
  */
 function invitationInvalid(): HttpError {
   return new HttpError(INVITATION_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
+}
+
+/**
+ * The one 404 for every confirm-link click that signs nobody in: the same
+ * code as `invitationInvalid`, with the confirm page's message.
+ * @returns The error to throw.
+ */
+function confirmInvalid(): HttpError {
+  return new HttpError(INVITATION_CONFIRM_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
 }
 
 /**
@@ -1092,13 +1112,17 @@ function assertJoinAllowedByMode(): void {
  * it); refused when the account is inactive or `assertSignInAllowed`
  * refuses it.
  * @param email - The invitation's stored (lowercased) address.
+ * @param refuse - The route's 404 `invitation_invalid`.
  * @returns The account, or undefined when the address has none.
  * @throws {HttpError} 404 `invitation_invalid` for an inactive account.
  * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
  */
-async function existingInvitee(email: string): Promise<User | undefined> {
+async function existingInvitee(
+  email: string,
+  refuse: () => HttpError = invitationInvalid
+): Promise<User | undefined> {
   const existing = await userRepository.findByEmail(email)
-  if (existing && !existing.active) throw invitationInvalid()
+  if (existing && !existing.active) throw refuse()
   await assertSignInAllowed(existing?.id)
   return existing
 }
@@ -1111,21 +1135,22 @@ async function existingInvitee(email: string): Promise<User | undefined> {
  * deactivated during the claim is the generic invalid link, never the
  * claim's 500.
  * @param email - The link's (lowercased) address.
+ * @param refuse - The route's 404 `invitation_invalid`.
  * @returns The account, or undefined when the click should create one.
  * @throws {HttpError} 404 `invitation_invalid` for an inactive or vanished account.
  * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
  */
-async function invitedAccount(email: string): Promise<User | undefined> {
-  const existing = await existingInvitee(email)
+async function invitedAccount(email: string, refuse: () => HttpError): Promise<User | undefined> {
+  const existing = await existingInvitee(email, refuse)
   if (existing?.emailVerifiedAt !== null) return existing
   let claimed: User
   try {
     claimed = await claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
   } catch (error) {
-    if (isClaimedAccountGone(error)) throw invitationInvalid()
+    if (isClaimedAccountGone(error)) throw refuse()
     throw error
   }
-  if (!claimed.active) throw invitationInvalid()
+  if (!claimed.active) throw refuse()
   return claimed
 }
 
@@ -1137,14 +1162,19 @@ async function invitedAccount(email: string): Promise<User | undefined> {
  * anything is claimed, so the link stays usable for the next click.
  * @param email - The invitation's address.
  * @param tx - The join's transaction.
+ * @param refuse - The route's 404 `invitation_invalid`.
  * @returns The new account.
  * @throws {HttpError} 404 `invitation_invalid` when the address was taken meanwhile.
  */
-async function createInvitedAccount(email: string, tx: DbTransaction): Promise<User> {
+async function createInvitedAccount(
+  email: string,
+  tx: DbTransaction,
+  refuse: () => HttpError = invitationInvalid
+): Promise<User> {
   try {
     return await createLinkedAccount(email, tx)
   } catch (error) {
-    if (isAddressTaken(error)) throw invitationInvalid()
+    if (isAddressTaken(error)) throw refuse()
     throw error
   }
 }
@@ -1163,7 +1193,7 @@ async function createInvitedAccount(email: string, tx: DbTransaction): Promise<U
  */
 async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<User> {
   const locked = await userRepository.lockById(userId, 'share', tx)
-  if (!locked?.active) throw invitationInvalid()
+  if (!locked?.active) throw confirmInvalid()
   return locked
 }
 
@@ -1274,11 +1304,12 @@ export type InvitationVerifyOutcome =
 /**
  * Mail the invitee a confirm link, after the reply to an invite click that
  * needs one. In order, it stops silently at the first "no": its own
- * per-address cooldown (`SIGN_IN_LINK_MAIL_COOLDOWN`, scope
- * `invitation-confirm`, sent when Redis is down), the daily budget shared
- * with sign-in links (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), then the link
- * (`SIGN_IN_LINK_TTL`, revoking the address's earlier confirm link) and the
- * mail. The link opens Apex for the platform tenant and the web app
+ * cooldown per address and invitation (`SIGN_IN_LINK_MAIL_COOLDOWN`, scope
+ * `invitation-confirm:<invitation id>`, sent when Redis is down), the daily
+ * budget per address, shared with sign-in links
+ * (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), then the link (`SIGN_IN_LINK_TTL`,
+ * revoking the address's earlier confirm link for the same invitation) and
+ * the mail. The link opens Apex for the platform tenant and the web app
  * otherwise. It writes no audit entry.
  * @param valid - The redeemable invitation the click opened.
  * @param existing - The account the address holds, already read by the click.
@@ -1293,8 +1324,9 @@ function requestInvitationConfirm(
       const env = getEnv()
       const { invitation, tenant } = valid
       const cooldownMs = requireDurationMs(env.SIGN_IN_LINK_MAIL_COOLDOWN)
+      // Per address and invitation: a click on one workspace's invitation never holds back another's mail.
       const canSend = await didClaimMailCooldown(
-        CONFIRM_MAIL_COOLDOWN_SCOPE,
+        `${CONFIRM_MAIL_COOLDOWN_SCOPE}:${invitation.id}`,
         invitation.email,
         cooldownMs,
         { whenUnavailable: 'send' }
@@ -1396,7 +1428,9 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * staff invitation reaches) and join them. The session counts as a recent
  * sign-in: the click proves the mailbox within `SIGN_IN_LINK_TTL`, as a
  * sign-in link does. Every refusal is the one `invitation_invalid` and
- * spends nothing.
+ * spends nothing, with one exception: a never-verified account is claimed
+ * before the transaction, as a sign-in link claims one, and that claim
+ * stands even if the join is then refused.
  *
  * Order: the maintenance mode; a read-only peek of the link; the address the
  * client shows, when it sends one, against the link's (neither is logged);
@@ -1422,10 +1456,10 @@ export async function confirmInvitation(
 ): Promise<InvitationSession> {
   assertJoinAllowedByMode()
   const peeked = await peekLinkToken(rawLink, 'invitation')
-  if (!peeked?.email || !peeked.app || !peeked.invitationId) throw invitationInvalid()
+  if (!peeked?.email || !peeked.app || !peeked.invitationId) throw confirmInvalid()
   const { email, app, invitationId } = peeked
   if (shownEmail !== undefined && shownEmail.trim().toLowerCase() !== email) {
-    throw invitationInvalid()
+    throw confirmInvalid()
   }
   const valid = await invitationRepository.findValidById(invitationId)
   // The last two are defence in depth: the follow-up issues links only of this shape.
@@ -1434,9 +1468,9 @@ export async function confirmInvitation(
     valid.invitation.email.toLowerCase() !== email ||
     app !== (valid.tenant.isPlatform ? 'apex' : 'web')
   ) {
-    throw invitationInvalid()
+    throw confirmInvalid()
   }
-  const account = await invitedAccount(email)
+  const account = await invitedAccount(email, confirmInvalid)
   // Again after the claim's own transactions, so a mode that began meanwhile writes no join.
   assertJoinAllowedByMode()
 
@@ -1445,12 +1479,12 @@ export async function confirmInvitation(
     // The user row first, then the link row: the order a deactivation takes.
     const user = account
       ? await lockActiveInvitee(account.id, tx)
-      : await createInvitedAccount(email, tx)
+      : await createInvitedAccount(email, tx, confirmInvalid)
     const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
-    if (link?.invitationId !== invitationId) throw invitationInvalid()
+    if (link?.invitationId !== invitationId) throw confirmInvalid()
     const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)
     // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
-    if (!claimed) throw invitationInvalid()
+    if (!claimed) throw confirmInvalid()
     return joinAndIssueSession(user, claimed, sessionId, true, tx)
   })
   return finishJoin(outcome, sessionId, account === undefined, valid.tenant)

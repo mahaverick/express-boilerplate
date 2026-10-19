@@ -61,7 +61,7 @@ const INVALID = {
   statusCode: 404,
   code: 'invitation_invalid',
   message:
-    'This invitation link has expired or was already used. Ask the person who invited you for a new one.',
+    "We couldn't use this link. Open your invitation email and select Join again, or ask the person who invited you for a new invite.",
 }
 
 /**

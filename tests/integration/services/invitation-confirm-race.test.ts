@@ -276,6 +276,42 @@ async function confirmBesideDeactivate(options: { claimFirst: boolean }): Promis
   return { confirmed: outcome[0], deactivated: outcome[1], inviteeId: invitee.id }
 }
 
+/**
+ * Stands in for `claimForAcceptById`: the invitation is gone by the time the
+ * confirm claims it, after the link claim in the same transaction.
+ * @returns Nothing claimed.
+ */
+async function deadInvitationClaim(): Promise<undefined> {
+  await Promise.resolve()
+}
+
+/**
+ * A confirm whose invitation dies after the link claim, in the same
+ * transaction, answers `invitation_invalid` and leaves the link unspent; the
+ * same link then joins.
+ */
+async function expectClaimRolledBack(): Promise<void> {
+  const invitee = await createTrackedUser({ email: uniqueEmail('rollback') })
+  const { tenant, invitationId, raw } = await invitedWithLink(invitee.email)
+  let result: PromiseSettledResult<unknown> | undefined
+  await withMutatedMethod(
+    TenantInvitationRepository.prototype,
+    'claimForAcceptById',
+    deadInvitationClaim,
+    async () => {
+      ;[result] = await Promise.allSettled([confirmInvitation(raw)])
+    }
+  )
+
+  expect(result).toMatchObject({ status: 'rejected', reason: { code: 'invitation_invalid' } })
+  expect(await isUnspent(raw)).toBe(true)
+  expect(await refreshCounts(invitee.id)).toEqual({ all: 0, live: 0 })
+  expect(await isPending(invitationId)).toBe(true)
+
+  await confirmInvitation(raw)
+  expect(await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)).toBeDefined()
+}
+
 describe('invitation confirm races', () => {
   it('two concurrent confirms of one link give one session and one membership', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('twice') })
@@ -366,7 +402,36 @@ describe('invitation confirm races', () => {
     expect(await isUnspent(raw)).toBe(true)
   })
 
-  it('two concurrent issues for one address leave one live invitation link', async () => {
+  it('rolls the link claim back when the invitation dies after the claim', async () => {
+    await expectClaimRolledBack()
+  })
+
+  /**
+   * Deliberately red under MUTATION_PROOF=1: the link's claim runs on the
+   * pool, outside the joining transaction (the `db`-for-`tx` mistake), so
+   * the refusal after it leaves the link spent.
+   *
+   *   MUTATION_PROOF=1 pnpm test tests/integration/services/invitation-confirm-race.test.ts   # red
+   */
+  it.runIf(process.env.MUTATION_PROOF === '1')(
+    'reproduces a spent link when the claim runs outside the transaction',
+    async () => {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+      const realClaim = UserTokenRepository.prototype.claimOnce
+      /**
+       * Stands in for `claimOnce`: the same claim, always on the pool.
+       */
+      const poolClaim: typeof realClaim = function (this: UserTokenRepository, ...arguments_) {
+        const [tokenHash, purpose, , bound] = arguments_
+        return realClaim.call(this, tokenHash, purpose, db, bound)
+      }
+      await withMutatedMethod(UserTokenRepository.prototype, 'claimOnce', poolClaim, async () => {
+        await expectClaimRolledBack()
+      })
+    }
+  )
+
+  it('two concurrent issues for one address and invitation leave one live invitation link', async () => {
     const email = uniqueEmail('issue-twice')
     const { tenant, owner } = await createTenant()
     const { invitationId } = await invitationWithLink(tenant, owner, email)

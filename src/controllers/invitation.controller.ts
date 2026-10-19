@@ -18,6 +18,7 @@ import { toProfileResponse } from '@/presenters/user.presenter'
 import {
   accept,
   confirmInvitation,
+  INVITATION_CONFIRM_INVALID_MESSAGE,
   INVITATION_CONFIRM_MESSAGE,
   INVITATION_INVALID_CODE,
   INVITATION_INVALID_MESSAGE,
@@ -49,7 +50,7 @@ function invitationTokenFrom(input: unknown): string {
  * The confirm body's token and displayed address. A non-string address is
  * the validation 400 (`errors.email`), checked first; every other shape
  * (a missing, non-string or malformed token, a body that is not an object)
- * is the generic 404, as `invitationTokenFrom` answers.
+ * is the confirm page's generic 404 (`INVITATION_CONFIRM_INVALID_MESSAGE`).
  * @param input - `request.body`.
  * @returns The token and the address, trimmed and lowercased, when sent.
  * @throws {HttpError} 400 `Validation failed` with `errors.email`; 404 `invitation_invalid`.
@@ -59,9 +60,13 @@ function confirmInputFrom(input: unknown): { token: string; email?: string } {
   if (!result.success) {
     const { email } = z.flattenError(result.error).fieldErrors
     if (email !== undefined) throw new HttpError('Validation failed', 400, undefined, { email })
-    throw new HttpError(INVITATION_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
+    throw new HttpError(INVITATION_CONFIRM_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
   }
-  const token = invitationTokenFrom({ token: result.data.token })
+  const shape = invitationTokenInputSchema.safeParse({ token: result.data.token })
+  if (!shape.success) {
+    throw new HttpError(INVITATION_CONFIRM_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
+  }
+  const { token } = shape.data
   return result.data.email === undefined ? { token } : { token, email: result.data.email }
 }
 

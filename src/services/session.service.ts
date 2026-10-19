@@ -582,6 +582,7 @@ export async function revokeSessionRows(
  */
 export async function revokeSignInLinksOf(email: string, tx: DbTransaction): Promise<void> {
   await userTokenRepository.revokeLiveFor({ email, intent: 'sign_in' }, tx)
+  // No invitationId: every invitation's confirm link for the address goes.
   await userTokenRepository.revokeLiveFor({ email, intent: 'invitation' }, tx)
 }
 

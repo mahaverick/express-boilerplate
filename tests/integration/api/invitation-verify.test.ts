@@ -38,7 +38,7 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deferred } from '../../helpers/lock-probe'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
 import { withMutatedMethod } from '../../helpers/mutate'
-import { platformTenant } from '../../helpers/platform-staff'
+import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
 import { queuedJobs } from '../../helpers/queue-jobs'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
@@ -319,12 +319,25 @@ async function verifyAndFollowUp(rawToken: string): Promise<string> {
 }
 
 /**
- * Release one address's confirm-mail cooldown, as its expiry would.
+ * Release one address's confirm-mail cooldown for one invitation, as its expiry would.
  * @param email - The address.
+ * @param invitationId - The invitation the cooldown is for.
  */
-async function releaseConfirmCooldown(email: string): Promise<void> {
+async function releaseConfirmCooldown(email: string, invitationId: string): Promise<void> {
   const redis = await getRedis()
-  await redis.del(redisKey('invitation-confirm', addressDigest(email)))
+  await redis.del(redisKey(`invitation-confirm:${invitationId}`, addressDigest(email)))
+}
+
+/**
+ * Delete every confirm-mail cooldown key under this worker's prefix, so a
+ * cooldown one test claimed does not hold back the next test's mail.
+ */
+async function clearConfirmCooldowns(): Promise<void> {
+  const redis = await getRedis()
+  const keys: string[] = []
+  const batches = redis.scanIterator({ MATCH: `${redisKey('invitation-confirm')}:*` })
+  for await (const batch of batches) keys.push(...batch)
+  if (keys.length > 0) await redis.del(keys)
 }
 
 /**
@@ -362,8 +375,7 @@ afterEach(async () => {
     await sql`delete from email_messages where recipient = any(${usedEmails})`
     await sql`delete from user_tokens where email = any(${usedEmails})`
     await sql`delete from users where lower(email) = any(${usedEmails})`
-    const redis = await getRedis()
-    await redis.del(usedEmails.map((email) => redisKey('invitation-confirm', addressDigest(email))))
+    await clearConfirmCooldowns()
     usedEmails.length = 0
   }
   await deleteTrackedUsers()
@@ -626,16 +638,78 @@ describe('POST /api/v1/invitations/verify', () => {
 
   it('revokes the earlier confirm link when a new one is issued', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('supersede') })
-    const { rawToken } = await customerInvitation(invitee.email)
+    const { rawToken, invitationId } = await customerInvitation(invitee.email)
 
     await verifyAndFollowUp(rawToken)
-    await releaseConfirmCooldown(invitee.email)
+    await releaseConfirmCooldown(invitee.email, invitationId)
     await verifyAndFollowUp(rawToken)
 
     const links = await confirmLinks(invitee.email)
     expect(links.map((row) => row.revoked)).toEqual([true, false])
     expect(await confirmJobs(invitee.email)).toHaveLength(2)
   })
+
+  it('mails a confirm link for each of two invitations to one address, and both join', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('two-invitations') })
+    const first = await customerInvitation(invitee.email)
+    const second = await customerInvitation(invitee.email)
+
+    // Join on B a moment after Join on A: inside A's cooldown.
+    expect(await verifyAndFollowUp(first.rawToken)).toBe('confirm')
+    expect(await verifyAndFollowUp(second.rawToken)).toBe('confirm')
+
+    const jobs = await confirmJobs(invitee.email)
+    expect(jobs).toHaveLength(2)
+    const links = await confirmLinks(invitee.email)
+    expect(links.map((row) => [row.invitationId, row.revoked])).toEqual([
+      [first.invitationId, false],
+      [second.invitationId, false],
+    ])
+    const tokens = jobs.map((job) => {
+      if (job.templateKey !== INVITATION_CONFIRM_TEMPLATE_KEY) throw new Error('wrong template')
+      return new URL(job.variables.confirmUrl).searchParams.get('token')
+    })
+    for (const token of tokens) {
+      const confirmed = await request(app).post('/api/v1/invitations/confirm').send({ token })
+      expect(confirmed.status).toBe(200)
+    }
+    for (const { tenant } of [first, second]) {
+      expect(
+        await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+      ).toBeDefined()
+    }
+  })
+
+  it.each(['customer account', 'staff account'] as const)(
+    'mails a confirm link for a staff invitation to an existing %s and grants nothing',
+    async (kind) => {
+      const platform = await platformTenant()
+      const inviter = await createTrackedUser()
+      const invitee = await createTrackedUser({ email: uniqueEmail('staff-existing') })
+      if (kind === 'staff account') await makeStaff(invitee.id, 'viewer')
+      const presented = await issueRefreshToken(invitee.id, randomUUID())
+      const { rawToken, invitationId } = await seedInvitation(
+        platform,
+        inviter,
+        invitee.email,
+        'admin'
+      )
+
+      const response = await postVerify(rawToken, `${REFRESH_COOKIE_NAME}=${presented.raw}`)
+
+      expect(response.status).toBe(202)
+      expect(response.headers['set-cookie']).toBeUndefined()
+      expect(await refreshRows(invitee.id)).toEqual([{ revoked: false }])
+      const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, platform.id)
+      expect(membership?.role).toBe(kind === 'staff account' ? 'viewer' : undefined)
+      expect(await isPending(invitationId)).toBe(true)
+      await waitForConfirmJob(invitee.email)
+      expect(await confirmLinks(invitee.email)).toEqual([
+        // eslint-disable-next-line unicorn/no-null -- an invitation_link row names no user
+        { userId: null, app: 'apex', invitationId, revoked: false },
+      ])
+    }
+  )
 
   it('replies before the mail work', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('before-mail') })

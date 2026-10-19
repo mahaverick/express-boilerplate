@@ -10,7 +10,8 @@ import { MS_PER_SECOND } from '@/utilities/duration.utilities'
 /**
  * Whether the session behind an access token authenticated within
  * `maxAgeMs` of `now`. A token with no `auth_time` claim (its session
- * predates migration 0018, or an invitation link started it) counts as stale.
+ * predates migration 0018, or a one-click invitation join started it) counts
+ * as stale.
  * @param authTime - The token's `auth_time`, in seconds since the epoch, as `requireAuth` copies it to `request.authTime`.
  * @param now - The current time, in milliseconds since the epoch.
  * @param maxAgeMs - The oldest authentication accepted. Defaults to STEP_UP_MAX_AGE_MS.
