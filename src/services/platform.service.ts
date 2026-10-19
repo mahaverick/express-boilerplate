@@ -95,7 +95,11 @@ async function regrant(
 ): Promise<UserMembership> {
   if (role !== 'owner' && existing.role === 'owner') {
     const owners = await userMembershipRepository.countOwners(existing.tenantId, tx)
-    if (owners <= 1) throw new HttpError('Cannot demote the last platform owner', 409)
+    if (owners <= 1)
+      throw new HttpError(
+        "Make another staff member a platform owner before you change this owner's role.",
+        409
+      )
   }
   const updated = await userMembershipRepository.updateRole(existing.id, role, tx)
   if (!updated) throw new HttpError('Membership not found', 404)

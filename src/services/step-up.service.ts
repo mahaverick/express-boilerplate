@@ -38,7 +38,7 @@ import { markSessionReauthenticated, signAccessToken } from '@/services/session.
 import { MISSING_FIRST_NAME_FALLBACK } from '@/services/verification.service'
 import { STEP_UP_LINK_TEMPLATE_KEY } from '@/templates/email/step-up-link.template'
 import type { OAuthIntent } from '@/types/oauth-intent'
-import { requireDurationMs } from '@/utilities/duration.utilities'
+import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'
 import { decodeIdTokenClaims, type IdTokenClaims } from '@/utilities/id-token.utilities'
 
 const userRepository = new UserRepository()
@@ -56,8 +56,6 @@ const STEP_UP_LINK_COOLDOWN_SCOPE = 'step-up-link'
  * answered 429 with `Retry-After`.
  */
 const STEP_UP_LINK_COOLDOWN_CODE = 'STEP_UP_LINK_COOLDOWN'
-
-const STEP_UP_LINK_COOLDOWN_MESSAGE = 'A confirmation link was just sent. Wait before asking again.'
 
 /**
  * Machine-readable code for a Google step-up start on an account with no
@@ -162,9 +160,14 @@ export async function requestStepUpLink(
   const cooldownMs = requireDurationMs(env.STEP_UP_LINK_COOLDOWN)
   const claim = await claimCooldown(STEP_UP_LINK_COOLDOWN_SCOPE, userId, cooldownMs)
   if (!claim.claimed) {
-    throw new HttpError(STEP_UP_LINK_COOLDOWN_MESSAGE, 429, STEP_UP_LINK_COOLDOWN_CODE, undefined, {
-      retryAfterSeconds: Math.max(1, Math.ceil(claim.retryAfterMs / MS_PER_SECOND)),
-    })
+    const retryAfterSeconds = Math.max(1, Math.ceil(claim.retryAfterMs / MS_PER_SECOND))
+    throw new HttpError(
+      `Check your inbox for the link we just sent. You can ask for another in ${formatWait(retryAfterSeconds)}.`,
+      429,
+      STEP_UP_LINK_COOLDOWN_CODE,
+      undefined,
+      { retryAfterSeconds }
+    )
   }
   const claimedAt = Date.now()
   try {
@@ -283,7 +286,7 @@ export async function startGoogleStepUp(
   const providers = await authProviderRepository.findByUser(userId)
   if (providers.every((provider) => provider.provider !== 'google')) {
     throw new HttpError(
-      'Link a Google account to confirm with Google.',
+      'Your account has no linked Google account. Confirm by email instead.',
       409,
       GOOGLE_NOT_LINKED_CODE
     )
@@ -431,6 +434,10 @@ export async function confirmGoogleStepUp(
     if (!(error instanceof GoogleStepUpRefused)) throw error
     logger.warn('Google step-up refused (step_up_refused)', { reason: error.reason, userId })
     await recordRefusal(userId, 'google')
-    throw new HttpError('Google step-up failed', 400, 'step_up_failed')
+    throw new HttpError(
+      "We couldn't confirm it's you with Google. Try again, or confirm by email.",
+      400,
+      'step_up_failed'
+    )
   }
 }

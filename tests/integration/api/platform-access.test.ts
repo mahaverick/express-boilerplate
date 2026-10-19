@@ -239,7 +239,11 @@ describe('platform access over the API', () => {
         expect(members.status).toBe(200)
         expect(settings.status).toBe(200)
         expect(rename.status).toBe(403)
-        expect(rename.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+        expect(rename.body).toMatchObject({
+          statusCode: 403,
+          message:
+            "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+        })
         expect(relocale.status).toBe(403)
         expect(invitations.status).toBe(403)
         const [row] = await sql`select name from tenants where id = ${tenant.id}`
@@ -284,7 +288,10 @@ describe('platform access over the API', () => {
         .send({ name: 'Renamed by staff' })
 
       expect(response.status).toBe(403)
-      expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
   })
 
@@ -343,7 +350,7 @@ describe('platform access over the API', () => {
         expect(response.status).toBe(403)
         expect(response.body).toMatchObject({
           statusCode: 403,
-          message: 'Insufficient permissions to grant this role',
+          message: "Your role can't grant this role. Ask a workspace owner.",
         })
       }
       const rows = await sql`select id from tenant_invitations where tenant_id = ${tenant.id}`
@@ -362,15 +369,15 @@ describe('platform access over the API', () => {
       // PATCH /members is owner-only at the route, so both changes stop at requireRole.
       expect(changeOwner.body).toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions',
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
       })
       expect(changeAdmin.body).toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions',
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
       })
       expect(ownerRemoval.body).toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to remove this member',
+        message: "Your role can't remove this member. Ask a workspace owner.",
       })
       expect(await roleOf(tenant, owner)).toBe('owner')
       expect(await roleOf(tenant, admin)).toBe('admin')
@@ -385,7 +392,10 @@ describe('platform access over the API', () => {
       const change = await changeRole(tenant, token, kept, 'viewer')
       const removal = await removeMember(tenant, token, removed)
 
-      expect(change.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(change.body).toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
       expect(removal.status).toBe(200)
       expect(await roleOf(tenant, kept)).toBe('manager')
       expect(await roleOf(tenant, removed)).toBeUndefined()
@@ -433,7 +443,7 @@ describe('platform access over the API', () => {
 
       expect(removal.body).toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to remove this member',
+        message: "Your role can't remove this member. Ask a workspace owner.",
       })
       expect(await roleOf(tenant, admin)).toBe('admin')
     })
@@ -458,11 +468,11 @@ describe('platform access over the API', () => {
 
       expect(change.body).toMatchObject({
         statusCode: 403,
-        message: "Insufficient permissions to change this member's role",
+        message: "Your role can't change this member's role. Ask a workspace owner.",
       })
       expect(removal.body).toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to remove this member',
+        message: "Your role can't remove this member. Ask a workspace owner.",
       })
       expect(await roleOf(tenant, owner)).toBe('owner')
     })

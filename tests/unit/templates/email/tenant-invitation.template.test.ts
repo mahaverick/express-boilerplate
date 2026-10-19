@@ -46,7 +46,7 @@ describe('renderTenantInvitationTemplate', () => {
 
   it('keeps the link and the user-chosen names out of the subject', () => {
     const { subject } = renderTenantInvitationTemplate(validVariables)
-    expect(subject).toBe("You've been invited to join a team on Boilerplate")
+    expect(subject).toBe('Join your team on Boilerplate')
     expect(subject).not.toContain('abc123')
     expect(subject).not.toContain('Acme Inc')
     expect(subject).not.toContain('Ada Lovelace')

@@ -200,7 +200,10 @@ export async function revokeInvitationsBeyondAuthorityElsewhere(
  */
 function assertRoleAtLeast(access: ActorAccess, minimum: MembershipRole): void {
   if (!isRoleAtLeast(access.role, minimum)) {
-    throw new HttpError('Insufficient permissions', 403)
+    throw new HttpError(
+      "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      403
+    )
   }
 }
 
@@ -405,7 +408,7 @@ export async function changeRole(
     )
     assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
-      throw new HttpError("Insufficient permissions to change this member's role", 403)
+      throw new HttpError("Your role can't change this member's role. Ask a workspace owner.", 403)
     }
     // After lockActorAndTarget's owner-row locks: a delete that holds them took them before the target's user row, so this queues there holding nothing the delete wants. The role gate only skips a redundant lock.
     if (role === 'owner' && target.role !== 'owner') {
@@ -483,7 +486,7 @@ export async function removeMember(
     )
     assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
-      throw new HttpError('Insufficient permissions to remove this member', 403)
+      throw new HttpError("Your role can't remove this member. Ask a workspace owner.", 403)
     }
     if (target.role === 'owner') {
       await assertOwnerRemainsFor(

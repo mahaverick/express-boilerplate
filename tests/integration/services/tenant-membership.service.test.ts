@@ -427,7 +427,10 @@ describe('tenant-membership.service', () => {
 
     await expect(
       changeRole({ userId: admin.id }, tenant.id, target.id, 'editor')
-    ).rejects.toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+    })
   })
 
   it('keeps the matrix messages for an actor who clears the role bar', async () => {
@@ -446,11 +449,11 @@ describe('tenant-membership.service', () => {
       changeRole({ userId: owner.id }, tenant.id, otherOwner.id, 'admin')
     ).rejects.toMatchObject({
       statusCode: 403,
-      message: "Insufficient permissions to change this member's role",
+      message: "Your role can't change this member's role. Ask a workspace owner.",
     })
     await expect(removeMember({ userId: admin.id }, tenant.id, owner.id)).rejects.toMatchObject({
       statusCode: 403,
-      message: 'Insufficient permissions to remove this member',
+      message: "Your role can't remove this member. Ask a workspace owner.",
     })
   })
 

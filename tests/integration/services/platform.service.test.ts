@@ -462,7 +462,8 @@ describe('platform.service', () => {
         async () => {
           await expect(bootstrapGrant(user.email, 'viewer')).rejects.toMatchObject({
             statusCode: 409,
-            message: 'Cannot demote the last platform owner',
+            message:
+              "Make another staff member a platform owner before you change this owner's role.",
           })
         }
       )

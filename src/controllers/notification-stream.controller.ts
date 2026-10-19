@@ -140,7 +140,11 @@ function writeNotificationEvent(response: Response, notification: Notification):
 function didRefuseStream(userId: string, response: Response): boolean {
   if (response.destroyed) return true
   if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
-    throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
+    throw new HttpError(
+      'Too many tabs are receiving notifications. Close one, then reload this page.',
+      429,
+      'too_many_streams'
+    )
   }
   if (countAllStreams() < getEnv().SSE_MAX_STREAMS_TOTAL) return false
   response.setHeader('Retry-After', String(STREAM_CAPACITY_RETRY_AFTER_SECONDS))

@@ -111,7 +111,13 @@ export async function getUserDetail(userId: string): Promise<PlatformUserDetail>
 }
 
 const DUPLICATE_EMAIL_MESSAGE = 'An account already uses that email address'
-const STAFF_TARGET_MESSAGE = 'Insufficient permissions to act on this staff member'
+const STAFF_TARGET_MESSAGE =
+  "Your platform role can't act on this staff member. Ask a platform owner."
+
+/**
+ * The 403 for a staff member editing their own account, which no role allows.
+ */
+const SELF_EDIT_MESSAGE = "You can't edit your own account here. Ask another platform admin."
 
 /**
  * The platform tenant: where every `user.*` audit entry is written.
@@ -258,7 +264,8 @@ async function assertMayMail(actor: Actor, targetUserId: string): Promise<Member
 async function requireMailableUser(userId: string): Promise<User> {
   const user = await userRepository.findById(userId)
   if (!user) throw new HttpError('User not found', 404)
-  if (!user.active) throw new HttpError('This account is deactivated; reactivate it first', 409)
+  if (!user.active)
+    throw new HttpError('This account is deactivated. Reactivate it, then try again.', 409)
   return user
 }
 
@@ -341,7 +348,7 @@ export async function updateUser(
   input: UpdatePlatformUserInput
 ): Promise<PlatformUserRow> {
   // Editing oneself is refused whatever the role: the self-skip in lockStaffPair would otherwise allow it.
-  if (userId === actor.userId) throw new HttpError(STAFF_TARGET_MESSAGE, 403)
+  if (userId === actor.userId) throw new HttpError(SELF_EDIT_MESSAGE, 403)
   await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     const changes: { firstName?: string | null; lastName?: string | null } = {}
@@ -421,7 +428,10 @@ export function assertPlatformOwnerRemains(
   verb: 'deactivate' | 'delete'
 ): void {
   if (targetRole === 'owner' && otherActiveOwners < 1) {
-    throw new HttpError(`Cannot ${verb} the last platform owner`, 409)
+    throw new HttpError(
+      `Make another staff member a platform owner before you ${verb} this one.`,
+      409
+    )
   }
 }
 
@@ -490,7 +500,11 @@ export async function deactivateUser(
   refuseSelf(actor, userId, 'You cannot deactivate your own account')
   const revoked = await withTransaction(async (tx) => {
     const { target, targetRole, platform } = await lockStaffPair(actor, userId, 'admin', tx)
-    if (!target.active) throw new HttpError('User is already inactive', 409)
+    if (!target.active)
+      throw new HttpError(
+        'This user is already deactivated. Refresh the page to see their status.',
+        409
+      )
     assertPlatformOwnerRemains(
       targetRole,
       await userMembershipRepository.countActiveOwners(platform.id, tx, target.id),
@@ -533,7 +547,8 @@ export async function reactivateUser(
 ): Promise<PlatformUserRow> {
   await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
-    if (target.active) throw new HttpError('User is already active', 409)
+    if (target.active)
+      throw new HttpError('This user is already active. Refresh the page to see their status.', 409)
     await userRepository.update(target.id, { active: true }, {}, tx)
     await record(
       {
@@ -634,7 +649,10 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       blocking.push(platform.name)
     }
     if (blocking.length > 0) {
-      throw new HttpError(`Cannot delete the last owner of: ${blocking.join(', ')}`, 409)
+      throw new HttpError(
+        `This user is the last owner of ${blocking.join(', ')}. Make someone else an owner there first.`,
+        409
+      )
     }
 
     await userRepository.softDelete(target.id, tx)

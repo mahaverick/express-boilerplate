@@ -44,7 +44,9 @@ export interface RateLimiterSpec {
    */
   skip?: (request: Request) => boolean
   /**
-   * The message carried in the 429 `HttpError`'s body.
+   * The first sentence of the 429 `HttpError`'s message, naming what was
+   * refused; `createRateLimiter`'s handler adds when to try again, from the
+   * `Retry-After` it answers with.
    */
   message: string
 }
@@ -78,7 +80,10 @@ export type RateLimitName =
   | 'stepUpLink'
   | 'stepUpGoogle'
 
-const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
+/**
+ * The first sentence of most limiters' 429 message.
+ */
+const RATE_LIMITED_MESSAGE = 'Too many attempts.'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -283,7 +288,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 60,
     keyBy: 'user',
-    message: 'Too many requests, please slow down',
+    message: 'Too many requests.',
   },
   /**
    * One shared budget for every `/platform` write, keyed on the caller's id:

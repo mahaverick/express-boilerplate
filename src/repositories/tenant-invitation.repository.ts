@@ -228,7 +228,7 @@ export class TenantInvitationRepository {
     } catch (error) {
       if (isUniqueViolation(error, PENDING_UNIQUE_CONSTRAINT)) {
         throw new HttpError(
-          'An invitation to that address is already being sent. Try again.',
+          'An invitation to that address is being sent. Refresh the invitation list to see it.',
           409,
           'invitation_conflict'
         )

@@ -101,6 +101,39 @@ describe('RATE_LIMITS.logout', () => {
   })
 })
 
+describe('the 429 message', () => {
+  it('names when to try again, matching the Retry-After it answers with', async () => {
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.logout, { limit: 1, windowMs: 15 * 60_000 })
+    )
+
+    await request(app).post('/endpoint')
+    const limited = await request(app).post('/endpoint')
+
+    expect(limited.status).toBe(429)
+    const retryAfter = Number(limited.headers['retry-after'])
+    // A 15-minute window just opened: the header is 899 or 900 seconds, both 15 minutes.
+    expect(retryAfter).toBeGreaterThan(14 * 60)
+    expect((limited.body as { message?: string }).message).toBe(
+      'Too many attempts. Try again in 15 minutes.'
+    )
+  })
+
+  it("keeps a spec's own first sentence", async () => {
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.authenticatedWrite, { limit: 1, windowMs: 30_000 })
+    )
+    const userId = randomUUID()
+
+    await request(app).post('/endpoint').set('x-test-user-id', userId)
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', userId)
+
+    expect((limited.body as { message?: string }).message).toMatch(
+      /^Too many requests\. Try again in \d+ seconds\.$/
+    )
+  })
+})
+
 describe('RATE_LIMITS.createTenant', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
     const app = buildAppBehindAsUser(

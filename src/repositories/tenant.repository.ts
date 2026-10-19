@@ -162,7 +162,11 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       return await write()
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError('A tenant with this slug already exists', 409, SLUG_TAKEN_CODE)
+        throw new HttpError(
+          'Another workspace uses this slug. Choose a different one.',
+          409,
+          SLUG_TAKEN_CODE
+        )
       }
       throw error
     }

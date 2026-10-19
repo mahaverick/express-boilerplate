@@ -575,7 +575,7 @@ describe('a delete racing a platform invitation accept', () => {
         status: 'rejected',
         reason: {
           statusCode: 403,
-          message: 'Insufficient permissions to act on this staff member',
+          message: "Your platform role can't act on this staff member. Ask a platform owner.",
         },
       })
       expect(await staffState(target.id)).toEqual({ deleted: false, role })
@@ -630,10 +630,10 @@ describe('assertPlatformOwnerRemains', () => {
   it('refuses when the target is the last active platform owner, and allows a spare owner or a non-owner', () => {
     // The second argument counts the OTHER active platform owners.
     expect(() => assertPlatformOwnerRemains('owner', 0, 'deactivate')).toThrow(
-      'Cannot deactivate the last platform owner'
+      'Make another staff member a platform owner before you deactivate this one.'
     )
     expect(() => assertPlatformOwnerRemains('owner', 0, 'delete')).toThrow(
-      'Cannot delete the last platform owner'
+      'Make another staff member a platform owner before you delete this one.'
     )
     expect(() => assertPlatformOwnerRemains('owner', 1, 'delete')).not.toThrow()
     expect(() => assertPlatformOwnerRemains('admin', 0, 'delete')).not.toThrow()

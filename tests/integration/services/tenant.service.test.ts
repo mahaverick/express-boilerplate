@@ -119,12 +119,18 @@ describe('updateTenant and updateSettings re-read the actor under lock', () => {
     await withMutatedMethod(TenantRepository.prototype, 'update', refuseWrite, async () => {
       await expect(
         updateTenant({ userId: editorId }, tenant.id, { name: 'Nope' })
-      ).rejects.toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
     await withMutatedMethod(TenantSettingsRepository.prototype, 'update', refuseWrite, async () => {
       await expect(
         updateSettings({ userId: editorId }, tenant.id, { locale: 'fr' })
-      ).rejects.toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
+      })
     })
   })
 

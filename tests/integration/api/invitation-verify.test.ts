@@ -50,7 +50,8 @@ const INVALID = {
   success: false,
   statusCode: 404,
   code: 'invitation_invalid',
-  message: 'This invitation is invalid or has expired.',
+  message:
+    'This invitation link has expired or was already used. Ask the person who invited you for a new one.',
 }
 
 /**

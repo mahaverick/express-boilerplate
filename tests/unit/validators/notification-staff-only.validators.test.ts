@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
 import { updatePreferencesSchemaFor } from '@/validators/notification.validators'
 
-const EMAIL_OFF_MESSAGE = 'Email for this notification type cannot be turned off.'
+const EMAIL_OFF_MESSAGE =
+  "You can't turn off email for this notification type. You can turn off its in-app notifications."
 
 /**
  * One preferences entry.

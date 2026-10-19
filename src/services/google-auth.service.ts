@@ -60,7 +60,11 @@ function googleEmailClaim(
 function verifiedGoogleEmail(profile: GoogleProfile): { email: string; isVerified: boolean } {
   const claim = googleEmailClaim(profile)
   if (!claim) {
-    throw new HttpError('Google did not share an email address', 400, 'google_email_missing')
+    throw new HttpError(
+      "Google didn't share your email address. Sign in with an emailed link instead.",
+      400,
+      'google_email_missing'
+    )
   }
   return claim
 }
@@ -170,7 +174,11 @@ async function resolveGoogleUser(
   const { email, isVerified } = verifiedGoogleEmail(profile)
   // Before the email lookup, so a registered and an unknown address get one answer at one cost (step 2 above).
   if (!isVerified) {
-    throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
+    throw new HttpError(
+      "Google hasn't verified this email address. Sign in with an emailed link instead.",
+      403,
+      'email_not_verified'
+    )
   }
   const existingUser = await userRepository.findByEmail(email)
 

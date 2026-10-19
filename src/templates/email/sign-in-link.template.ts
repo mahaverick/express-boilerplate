@@ -85,7 +85,7 @@ export function renderSignInLinkTemplate(variables: SignInLinkVariables): Render
     '',
     signInUrl,
     '',
-    "If you didn't ask for it, ignore this email.",
+    "If you didn't ask to sign in, ignore this email. Nothing changes unless someone opens the link.",
     '',
     `— The ${appName} team`,
   ].join('\n')
@@ -101,7 +101,7 @@ export function renderSignInLinkTemplate(variables: SignInLinkVariables): Render
     <p>Hi ${escapedFirstName},</p>
 ${isStaffSent ? `    <p>${STAFF_SENT_SENTENCE}</p>\n` : ''}    <p>Sign in to ${escapedAppName}. This link works once and expires in ${escapedMinutes} minutes.</p>
     <p><a href="${escapedSignInUrl}">${escapedSignInUrl}</a></p>
-    <p>If you didn't ask for it, ignore this email.</p>
+    <p>If you didn't ask to sign in, ignore this email. Nothing changes unless someone opens the link.</p>
     <p>— The ${escapedAppName} team</p>
   </body>
 </html>`

@@ -83,7 +83,8 @@ describe('NotificationPreferenceRepository', () => {
           preferenceRepository.upsert(userId, type, { emailEnabled: false, inAppEnabled: true })
         ).rejects.toMatchObject({
           statusCode: 400,
-          message: 'Email for this notification type cannot be turned off.',
+          message:
+            "You can't turn off email for this notification type. You can turn off its in-app notifications.",
         })
 
         expect(await preferenceRepository.findByUser(userId)).toEqual([])

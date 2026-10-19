@@ -57,12 +57,14 @@ const INVALID = { statusCode: 404, code: 'invitation_invalid' }
 const MISMATCH = {
   statusCode: 403,
   code: 'invitation_email_mismatch',
-  message: 'This invitation was sent to a different email address.',
+  message:
+    'This invitation is for a different email address. Sign in with the address it was sent to.',
 }
 const UNVERIFIED = {
   statusCode: 403,
   code: 'invitation_email_unverified',
-  message: 'Verify your email address before accepting this invitation.',
+  message:
+    'Confirm your email address before you accept this invitation. Open the invitation link from your inbox.',
 }
 
 afterAll(async () => {
@@ -220,7 +222,7 @@ describe('tenant-invitation.service', () => {
       ).rejects.toMatchObject({
         statusCode: 409,
         code: 'already_member',
-        message: 'That person is already a member.',
+        message: 'That person is already a member of this workspace. No invitation was sent.',
       })
       expect(await pendingOf(tenant.id)).toEqual([])
     })
@@ -299,7 +301,7 @@ describe('tenant-invitation.service', () => {
         invite({ userId: admin.id }, tenant.id, member.email, 'owner')
       ).rejects.toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to grant this role',
+        message: "Your role can't grant this role. Ask a workspace owner.",
       })
     })
 
@@ -400,7 +402,7 @@ describe('tenant-invitation.service', () => {
 
       await expect(resend({ userId: admin.id }, tenant.id, invitation.id)).rejects.toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions to grant this role',
+        message: "Your role can't grant this role. Ask a workspace owner.",
       })
       const unchanged = await preview(rawToken)
       expect(unchanged.role).toBe('owner')
@@ -462,7 +464,7 @@ describe('tenant-invitation.service', () => {
 
       await expect(revoke({ userId: editor.id }, tenant.id, invitation.id)).rejects.toMatchObject({
         statusCode: 403,
-        message: 'Insufficient permissions',
+        message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
       })
       const stillPending = await preview(rawToken)
       expect(stillPending.email).toBe(invitation.email)
@@ -504,7 +506,8 @@ describe('tenant-invitation.service', () => {
 
       await expect(preview(rawToken)).rejects.toMatchObject({
         ...INVALID,
-        message: 'This invitation is invalid or has expired.',
+        message:
+          'This invitation link has expired or was already used. Ask the person who invited you for a new one.',
       })
     })
   })

@@ -65,7 +65,7 @@ import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
-import { requireDurationMs } from '@/utilities/duration.utilities'
+import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import type { InvitationListQuery } from '@/validators/tenant.validators'
@@ -89,7 +89,8 @@ export const PLATFORM_OWNER_INVITATION_MESSAGE =
 /**
  * Message for `ALREADY_MEMBER_CODE`.
  */
-const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
+const ALREADY_MEMBER_MESSAGE =
+  'That person is already a member of this workspace. No invitation was sent.'
 
 /**
  * Error code: the token is unknown, expired, revoked, already used, or for a
@@ -100,7 +101,8 @@ export const INVITATION_INVALID_CODE = 'invitation_invalid'
 /**
  * Message for `INVITATION_INVALID_CODE`.
  */
-export const INVITATION_INVALID_MESSAGE = 'This invitation is invalid or has expired.'
+export const INVITATION_INVALID_MESSAGE =
+  'This invitation link has expired or was already used. Ask the person who invited you for a new one.'
 
 /**
  * Error code: the signed-in user's address is not the invited one.
@@ -110,7 +112,8 @@ const INVITATION_EMAIL_MISMATCH_CODE = 'invitation_email_mismatch'
 /**
  * Message for `INVITATION_EMAIL_MISMATCH_CODE`.
  */
-const INVITATION_EMAIL_MISMATCH_MESSAGE = 'This invitation was sent to a different email address.'
+const INVITATION_EMAIL_MISMATCH_MESSAGE =
+  'This invitation is for a different email address. Sign in with the address it was sent to.'
 
 /**
  * Error code: the signed-in user's address is the invited one, but unverified.
@@ -121,7 +124,7 @@ const INVITATION_EMAIL_UNVERIFIED_CODE = 'invitation_email_unverified'
  * Message for `INVITATION_EMAIL_UNVERIFIED_CODE`.
  */
 const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
-  'Verify your email address before accepting this invitation.'
+  'Confirm your email address before you accept this invitation. Open the invitation link from your inbox.'
 
 /**
  * Error code: no pending invitation with that id in this tenant.
@@ -134,16 +137,10 @@ const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
 
 /**
- * Message for `INVITATION_RESEND_COOLDOWN_CODE`.
- */
-const INVITATION_RESEND_COOLDOWN_MESSAGE =
-  'This invitation was just sent. Try again in a few minutes.'
-
-/**
  * The 429 message when an address has had its day's share of invitation mail.
  */
 const INVITATION_RECIPIENT_LIMITED_MESSAGE =
-  'This address has received too many invitations today. Try again tomorrow.'
+  'This address has reached its daily invitation limit. Try again in 24 hours.'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
 /**
@@ -151,7 +148,7 @@ const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
  */
 const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 const INVITER_NAME_FALLBACK = 'A teammate'
-const GRANT_REFUSED_MESSAGE = 'Insufficient permissions to grant this role'
+const GRANT_REFUSED_MESSAGE = "Your role can't grant this role. Ask a workspace owner."
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 /**
@@ -342,12 +339,13 @@ function resendCooldownError(lastSentAt: Date | null): HttpError {
   const availableAt = resendAvailableAt(lastSentAt)
   const secondsLeft =
     availableAt === null ? 1 : Math.ceil((availableAt.getTime() - Date.now()) / 1000)
+  const retryAfterSeconds = Math.max(1, secondsLeft)
   return new HttpError(
-    INVITATION_RESEND_COOLDOWN_MESSAGE,
+    `You can resend this invitation in ${formatWait(retryAfterSeconds)}.`,
     429,
     INVITATION_RESEND_COOLDOWN_CODE,
     undefined,
-    { retryAfterSeconds: Math.max(1, secondsLeft) }
+    { retryAfterSeconds }
   )
 }
 
@@ -605,7 +603,11 @@ export async function createOwnerInvitation(
   const rawToken = generateInvitationToken()
   const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
   if (invitee && !invitee.active) {
-    throw new HttpError('That account is deactivated', 409, INVITEE_DEACTIVATED_CODE)
+    throw new HttpError(
+      'This account is deactivated. Reactivate it before you invite it as owner.',
+      409,
+      INVITEE_DEACTIVATED_CODE
+    )
   }
   if (invitee && (await userMembershipRepository.findByUserAndTenant(invitee.id, tenantId, tx))) {
     throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)

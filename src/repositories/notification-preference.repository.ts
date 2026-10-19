@@ -103,7 +103,10 @@ export class NotificationPreferenceRepository {
     executor: DbExecutor = db
   ): Promise<NotificationPreference> {
     if (!data.emailEnabled && NON_DISABLEABLE_EMAIL_TYPES.has(notificationType)) {
-      throw new HttpError('Email for this notification type cannot be turned off.', 400)
+      throw new HttpError(
+        "You can't turn off email for this notification type. You can turn off its in-app notifications.",
+        400
+      )
     }
     const [row] = await executor
       .insert(notificationPreferenceModel)

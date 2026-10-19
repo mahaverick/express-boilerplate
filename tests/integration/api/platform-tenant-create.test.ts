@@ -197,7 +197,7 @@ describe('staff-created tenants', () => {
 
       expect(response.status).toBe(409)
       expect(response.body as { message: string; code?: string }).toMatchObject({
-        message: 'That account is deactivated',
+        message: 'This account is deactivated. Reactivate it before you invite it as owner.',
         code: INVITEE_DEACTIVATED_CODE,
       })
     })
@@ -476,7 +476,7 @@ describe('staff-created tenants', () => {
 
       expect(response.status).toBe(409)
       expect(response.body as { message: string; code?: string }).toMatchObject({
-        message: 'That account is deactivated',
+        message: 'This account is deactivated. Reactivate it before you invite it as owner.',
         code: INVITEE_DEACTIVATED_CODE,
       })
       const pending = await sql<{ email: string }[]>`select email from tenant_invitations

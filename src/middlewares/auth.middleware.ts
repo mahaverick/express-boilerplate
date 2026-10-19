@@ -175,7 +175,7 @@ export function requireRecentAuth(
       return
     }
     if (!isRecentAuth(request.authTime, Date.now(), maxAgeMs)) {
-      next(new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE))
+      next(new HttpError("Confirm it's you to continue.", 401, REAUTH_REQUIRED_CODE))
       return
     }
     next()

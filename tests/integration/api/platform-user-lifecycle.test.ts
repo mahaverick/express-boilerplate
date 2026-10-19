@@ -237,7 +237,9 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
 
     const again = await action(owner.token, inactive.id, 'deactivate')
     expect(again.status).toBe(409)
-    expect((again.body as ApiEnvelope<unknown>).message).toBe('User is already inactive')
+    expect((again.body as ApiEnvelope<unknown>).message).toBe(
+      'This user is already deactivated. Refresh the page to see their status.'
+    )
 
     // One active owner (the actor) remains; the last-owner guard is tested in platform-user-race.test.ts.
     const response = await action(owner.token, otherOwner.user.id, 'deactivate')
@@ -285,7 +287,9 @@ describe('POST /api/v1/platform/users/:id/reactivate', () => {
     const response = await action(token, target.id, 'reactivate')
 
     expect(response.status).toBe(409)
-    expect((response.body as ApiEnvelope<unknown>).message).toBe('User is already active')
+    expect((response.body as ApiEnvelope<unknown>).message).toBe(
+      'This user is already active. Refresh the page to see their status.'
+    )
   })
 })
 
@@ -376,7 +380,7 @@ describe('DELETE /api/v1/platform/users/:id', () => {
     const refused = await remove(token, target.id)
     expect(refused.status).toBe(409)
     expect((refused.body as ApiEnvelope<unknown>).message).toBe(
-      'Cannot delete the last owner of: Lonely Owner Ltd'
+      'This user is the last owner of Lonely Owner Ltd. Make someone else an owner there first.'
     )
 
     const coOwner = await createTrackedUser()

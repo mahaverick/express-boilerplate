@@ -410,7 +410,7 @@ export async function changeMaintenanceMode(
     const current = await lockMaintenanceModeState(tx)
     if (current.version !== body.expectedVersion) {
       throw new HttpError(
-        'Maintenance mode changed since it was loaded.',
+        'Someone changed maintenance mode after you opened this page. Reload it, then try again.',
         409,
         MAINTENANCE_MODE_CONFLICT_CODE
       )
@@ -436,7 +436,7 @@ export async function changeMaintenanceMode(
     )
     if (!updated) {
       throw new HttpError(
-        'Maintenance mode changed since it was loaded.',
+        'Someone changed maintenance mode after you opened this page. Reload it, then try again.',
         409,
         MAINTENANCE_MODE_CONFLICT_CODE
       )

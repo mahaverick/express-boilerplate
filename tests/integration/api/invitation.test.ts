@@ -82,19 +82,22 @@ const INVALID = {
   success: false,
   statusCode: 404,
   code: 'invitation_invalid',
-  message: 'This invitation is invalid or has expired.',
+  message:
+    'This invitation link has expired or was already used. Ask the person who invited you for a new one.',
 }
 const UNVERIFIED = {
   success: false,
   statusCode: 403,
   code: 'invitation_email_unverified',
-  message: 'Verify your email address before accepting this invitation.',
+  message:
+    'Confirm your email address before you accept this invitation. Open the invitation link from your inbox.',
 }
 const MISMATCH = {
   success: false,
   statusCode: 403,
   code: 'invitation_email_mismatch',
-  message: 'This invitation was sent to a different email address.',
+  message:
+    'This invitation is for a different email address. Sign in with the address it was sent to.',
 }
 
 /**
@@ -403,7 +406,7 @@ describe('invitations API', () => {
         success: false,
         statusCode: 409,
         code: 'already_member',
-        message: 'That person is already a member.',
+        message: 'That person is already a member of this workspace. No invitation was sent.',
       })
     })
 
@@ -707,7 +710,7 @@ describe('invitations API', () => {
       expect(resent.status).toBe(429)
       expect(resent.body).toMatchObject({
         code: 'invitation_resend_cooldown',
-        message: 'This invitation was just sent. Try again in a few minutes.',
+        message: 'You can resend this invitation in 10 minutes.',
       })
       const stillValid = await previewVia(rawToken)
       expect(stillValid.status).toBe(200)

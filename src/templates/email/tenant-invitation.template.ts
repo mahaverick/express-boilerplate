@@ -87,7 +87,7 @@ export function renderTenantInvitationTemplate(
     requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, TENANT_INVITATION_TEMPLATE_KEY)
 
   const lifetime = expiresInDays === '1' ? '1 day' : `${expiresInDays} days`
-  const subject = `You've been invited to join a team on ${appName}`
+  const subject = `Join your team on ${appName}`
 
   const text = [
     'Hi,',
@@ -100,7 +100,7 @@ export function renderTenantInvitationTemplate(
     '',
     `This link expires in ${lifetime}.`,
     '',
-    "If you weren't expecting this invitation, you can ignore this email.",
+    "If you weren't expecting this invitation, ignore this email. Nothing happens unless you open the link.",
     '',
     `— The ${appName} team`,
   ].join('\n')
@@ -120,7 +120,7 @@ export function renderTenantInvitationTemplate(
     <p><a href="${escapedAcceptUrl}">Join ${escapedTenantName}</a></p>
     <p>Or paste this link into your browser: ${escapedAcceptUrl}</p>
     <p>This link expires in ${escapedLifetime}.</p>
-    <p>If you weren't expecting this invitation, you can ignore this email.</p>
+    <p>If you weren't expecting this invitation, ignore this email. Nothing happens unless you open the link.</p>
     <p>— The ${escapedAppName} team</p>
   </body>
 </html>`

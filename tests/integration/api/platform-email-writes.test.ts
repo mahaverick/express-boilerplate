@@ -304,7 +304,7 @@ describe('POST /platform/emails/:id/resend: sign-in link messages', () => {
 
     expect(response.status).toBe(403)
     expect((response.body as ApiEnvelope<unknown>).message).toBe(
-      'Insufficient permissions to act on this staff member'
+      "Your platform role can't act on this staff member. Ask a platform owner."
     )
     expect(await auditRows(original.id)).toEqual([])
   })
@@ -326,7 +326,7 @@ describe('POST /platform/emails/:id/resend: sign-in link messages', () => {
     expect(deleted.status).toBe(404)
     expect(deactivated.status).toBe(409)
     expect((deactivated.body as ApiEnvelope<unknown>).message).toBe(
-      'This account is deactivated; reactivate it first'
+      'This account is deactivated. Reactivate it, then try again.'
     )
     expect((deactivated.body as ApiEnvelope<unknown>).code).toBeUndefined()
   })
@@ -425,7 +425,7 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
 
     expect(response.status).toBe(403)
     expect((response.body as ApiEnvelope<unknown>).message).toBe(
-      'Insufficient permissions to grant this role'
+      "Your role can't grant this role. Ask a workspace owner."
     )
   })
 

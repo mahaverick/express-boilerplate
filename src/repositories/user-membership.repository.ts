@@ -349,7 +349,7 @@ export class UserMembershipRepository {
       return row
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError('This user is already a member of this tenant', 409)
+        throw new HttpError('This person is already a member of this workspace.', 409)
       }
       throw error
     }

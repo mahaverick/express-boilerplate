@@ -290,6 +290,9 @@ describe('PATCH /api/v1/platform/users/:id', () => {
     const response = await patch(token, user.id, { firstName: 'Changed' })
 
     expect(response.status).toBe(403)
+    expect((response.body as { message?: string }).message).toBe(
+      "You can't edit your own account here. Ask another platform admin."
+    )
     const [row] = await sql`select first_name from users where id = ${user.id}`
     expect(row?.first_name).toBe('Self')
     expect(await auditRows(user.id)).toEqual([])
@@ -390,7 +393,7 @@ describe('POST /api/v1/platform/users/:id/sign-in-link', () => {
 
     expect(response.status).toBe(409)
     expect((response.body as ApiEnvelope<unknown>).message).toBe(
-      'This account is deactivated; reactivate it first'
+      'This account is deactivated. Reactivate it, then try again.'
     )
     expect(await linkRows(target.email)).toEqual([])
     expect(await auditRows(target.id)).toEqual([])

@@ -39,7 +39,7 @@ describe('MaintenanceModeError', () => {
       since: NONE,
     })
 
-    expect(error.message).toBe('The service is down for maintenance. Please try again shortly.')
+    expect(error.message).toBe('The service is down for maintenance. Try again in 30 seconds.')
     expect(error.since).toBeNull()
   })
 })

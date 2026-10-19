@@ -545,7 +545,7 @@ export async function previewEmail(id: string): Promise<EmailPreview> {
   const message = await requireMessage(id)
   if (!isKnownTemplateKey(message.templateKey)) {
     throw new HttpError(
-      'This email template is no longer available',
+      "This email's template is retired, so it can't be resent.",
       409,
       TEMPLATE_UNAVAILABLE_CODE
     )
@@ -687,7 +687,11 @@ function resendTargetOf(
   } else if (message.userId !== null) {
     return { action, userId: message.userId }
   }
-  throw new HttpError('This email cannot be resent', 409, NOT_RESENDABLE_CODE)
+  throw new HttpError(
+    "This email lacks the record its resend needs, so it can't be resent.",
+    409,
+    NOT_RESENDABLE_CODE
+  )
 }
 
 /**
@@ -728,7 +732,7 @@ export async function resendEmail(
   const message = await requireMessage(id)
   if (!isKnownTemplateKey(message.templateKey)) {
     throw new HttpError(
-      'This email template is no longer available',
+      "This email's template is retired, so it can't be resent.",
       409,
       TEMPLATE_UNAVAILABLE_CODE
     )
@@ -737,12 +741,12 @@ export async function resendEmail(
   const templateKey = message.templateKey
   const action = EMAIL_TEMPLATE_META[templateKey].resendAction
   if (action === null) {
-    throw new HttpError('This email is never resent', 409, NOT_RESENDABLE_CODE)
+    throw new HttpError('This kind of email is never resent.', 409, NOT_RESENDABLE_CODE)
   }
   const target = resendTargetOf(action, message)
   if (await emailSuppressionRepository.findActive(message.recipient)) {
     throw new HttpError(
-      'This address is suppressed; lift the suppression first',
+      'This address is suppressed. Lift the suppression, then resend.',
       409,
       RECIPIENT_SUPPRESSED_CODE
     )
@@ -759,7 +763,7 @@ export async function resendEmail(
       const tenant = await platformEmailRepository.tenantState(target.tenantId)
       if (tenant?.lifecycleState !== 'active') throw new HttpError('Tenant not found', 404)
       if (!isRecentAuth(authTime, now)) {
-        throw new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE)
+        throw new HttpError("Confirm it's you to continue.", 401, REAUTH_REQUIRED_CODE)
       }
       // The reason goes on the invitation.resent entry too, as the member route's staff path does.
       await resendInvitation(actor, target.tenantId, target.invitationId, { ...options, reason })

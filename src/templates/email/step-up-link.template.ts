@@ -76,7 +76,7 @@ export function renderStepUpLinkTemplate(variables: StepUpLinkVariables): Render
     '',
     confirmUrl,
     '',
-    "If you didn't ask for it, ignore this email and tell your team admin.",
+    "If you didn't ask for this, someone else is signed in to your account. Don't open the link, and tell your team admin.",
     '',
     `— The ${appName} team`,
   ].join('\n')
@@ -92,7 +92,7 @@ export function renderStepUpLinkTemplate(variables: StepUpLinkVariables): Render
     <p>Hi ${escapedFirstName},</p>
     <p>Confirm it's you to continue in ${escapedAppName}. Open this link in the browser you asked from. It works once and expires in ${escapedMinutes} minutes.</p>
     <p><a href="${escapedConfirmUrl}">${escapedConfirmUrl}</a></p>
-    <p>If you didn't ask for it, ignore this email and tell your team admin.</p>
+    <p>If you didn't ask for this, someone else is signed in to your account. Don't open the link, and tell your team admin.</p>
     <p>— The ${escapedAppName} team</p>
   </body>
 </html>`

@@ -32,7 +32,9 @@ describe('renderSignInLinkTemplate', () => {
     expect(rendered.text).toContain(VARIABLES.signInUrl)
     expect(rendered.text).toContain('Sign in to Acme.')
     expect(rendered.text).toContain('This link works once and expires in 15 minutes.')
-    expect(rendered.text).toContain("If you didn't ask for it, ignore this email.")
+    expect(rendered.text).toContain(
+      "If you didn't ask to sign in, ignore this email. Nothing changes unless someone opens the link."
+    )
     expect(rendered.html).toContain(
       'https://app.example.test/auth/link?token=abc&amp;email=ada%40example.test'
     )

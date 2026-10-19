@@ -668,7 +668,7 @@ describe('/api/v1/notifications', () => {
         expect(response.status).toBe(400)
         const errors = envelopeOf<PreferencesBody>(response).errors
         expect(errors?.preferences?.[0]).toBe(
-          'Email for this notification type cannot be turned off.'
+          "You can't turn off email for this notification type. You can turn off its in-app notifications."
         )
         expect(await storedEmailFlags(user.id)).toEqual([])
       }
