@@ -272,11 +272,15 @@ every subscriber has run before the request answers. A failing subscriber is
 logged and never fails the emitter or the subscribers after it. Onboarding and
 the analytics forwarder are the subscribers.
 
-**Lock order.** Issuing a sign-in or step-up link first takes a
-transaction-scoped advisory lock on the address or the session
+**Lock order.** Issuing a sign-in, step-up or invitation confirm link first
+takes a transaction-scoped advisory lock on the address or the session
 (`lockLinkIssue`, `pg_advisory_xact_lock`, `user-token.repository.ts`), alone,
 in a transaction that holds no other lock; it then locks the live link rows it
-revokes, in id order, and nothing else, so it joins no cycle. Without it two
+revokes, in id order, and nothing else, so it joins no cycle. An invitation
+confirm link's insert also takes `FOR KEY SHARE` on its invitation row (the
+foreign key), which the accept and revoke UPDATEs (`FOR NO KEY UPDATE`) do
+not conflict with; only the retention purge's delete of an invitation settled
+for the retention period does, and an issue only reaches a redeemable one. Without it two
 concurrent issues each revoke before the other's insert commits, and both
 links stay live. Every transaction that locks more than one row set takes them
 in this order:
@@ -290,9 +294,17 @@ in this order:
    none of these goes on to lock a membership or tenant row. One that also
    locks token rows takes the user row, then the link row, then the refresh
    rows: a step-up confirm locks the user row, claims its link and then moves
-   the session's refresh rows (`confirmStepUpLink`, `step-up.service.ts`), and
-   an invitation verify locks the invitee's row before it claims the
-   invitation and inserts the refresh row;
+   the session's refresh rows (`confirmStepUpLink`, `step-up.service.ts`); an
+   invitation confirm locks the invitee's row `FOR SHARE` (or inserts the new
+   account), then claims its link, then claims the invitation
+   (`claimForAcceptById`), inserts the membership and inserts the refresh row
+   (`confirmInvitation`, `tenant-invitation.service.ts`). A deactivation, a
+   staff sign-out and a sign-out of the other sessions take the user row and
+   then revoke the address's links (`revokeSignInLinksOf`), so a confirm that
+   claimed its link before the user row would deadlock against them
+   (`tests/integration/services/invitation-confirm-race.test.ts`). A one-click
+   invitation verify inserts the new account before it claims the invitation
+   and inserts the refresh row;
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);
 4. when the actor has no membership there, the actor's platform-tenant
@@ -484,16 +496,17 @@ new feature router is one more `router.use(...)` there, never a change to
 A person signs in by an emailed link or by Google; there is no other
 credential. The auth routes, all under `/api/v1`:
 
-| Route                                                          | Service                                                         | What it does                                                                                                   |
-| -------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/link/request`                                      | `requestSignInLink` (`sign-in-link.service.ts`)                 | Answers 202 before any lookup, then mails a link (or, on Apex, a staff invitee's invitation) in the follow-up. |
-| `POST /auth/link/verify`                                       | `verifySignInLink`                                              | Spends the link and signs in the account its address holds, creating a verified one on the first web click.    |
-| `POST /invitations/verify`                                     | `verifyInvitation` (`tenant-invitation.service.ts`)             | Signs the invitee in and joins them, in one transaction.                                                       |
-| `GET /auth/google`, `GET /auth/google/callback`                | `completeGoogleSignIn` (`google-auth.service.ts`)               | Google sign-in; the callback also serves the Google step-up.                                                   |
-| `POST /auth/step-up/link/request`, `/auth/step-up/link/verify` | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`) | Staff only: mails a link bound to the calling session, and confirms it for that session alone.                 |
-| `POST /auth/step-up/google/start`, `GET /auth/step-up/google`  | `startGoogleStepUp`, `confirmGoogleStepUp`                      | Staff only: writes the step-up intent into the OAuth session, then the popup goes to Google with `max_age=0`.  |
-| `POST /platform/users/:id/sign-in-link`                        | `platform-user.service.ts`                                      | Staff send a user an ordinary sign-in link: Apex for staff, `WEB_URL` for anyone else.                         |
-| `POST /auth/refresh`, `POST /auth/logout`                      | `session.service.ts`                                            | Rotate or revoke the refresh cookie's session.                                                                 |
+| Route                                                          | Service                                                         | What it does                                                                                                                                                         |
+| -------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/link/request`                                      | `requestSignInLink` (`sign-in-link.service.ts`)                 | Answers 202 before any lookup, then mails a link (or, on Apex, a staff invitee's invitation) in the follow-up.                                                       |
+| `POST /auth/link/verify`                                       | `verifySignInLink`                                              | Spends the link and signs in the account its address holds, creating a verified one on the first web click.                                                          |
+| `POST /invitations/verify`                                     | `verifyInvitation` (`tenant-invitation.service.ts`)             | A new address on a customer invitation joins in one transaction; any other click answers 202 and mails a confirm link in the follow-up (`requestInvitationConfirm`). |
+| `POST /invitations/confirm`                                    | `confirmInvitation` (`tenant-invitation.service.ts`)            | Spends the confirm link and the invitation, signs the invitee in as a recent sign-in, and joins them.                                                                |
+| `GET /auth/google`, `GET /auth/google/callback`                | `completeGoogleSignIn` (`google-auth.service.ts`)               | Google sign-in; the callback also serves the Google step-up.                                                                                                         |
+| `POST /auth/step-up/link/request`, `/auth/step-up/link/verify` | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`) | Staff only: mails a link bound to the calling session, and confirms it for that session alone.                                                                       |
+| `POST /auth/step-up/google/start`, `GET /auth/step-up/google`  | `startGoogleStepUp`, `confirmGoogleStepUp`                      | Staff only: writes the step-up intent into the OAuth session, then the popup goes to Google with `max_age=0`.                                                        |
+| `POST /platform/users/:id/sign-in-link`                        | `platform-user.service.ts`                                      | Staff send a user an ordinary sign-in link: Apex for staff, `WEB_URL` for anyone else.                                                                               |
+| `POST /auth/refresh`, `POST /auth/logout`                      | `session.service.ts`                                            | Rotate or revoke the refresh cookie's session.                                                                                                                       |
 
 **The tokens.** `user_tokens` holds three purposes: `refresh` (the session
 chain), `sign_in_link` (an address and an app, never a user) and
@@ -767,13 +780,13 @@ missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                       | Worker concurrency   | Job options                                                        |
-| -------------- | --------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `email`        | One tracked email per job (`addEmailJob`)                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome` and `tenant_invitation`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
-| `maintenance`  | The retention purge                                                                           | 1                    | 3 attempts, backoff from 60 s                                      |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
+| Queue          | Carries                                                                                                             | Worker concurrency   | Job options                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                           | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation` and `invitation_confirm`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                         | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
+| `maintenance`  | The retention purge                                                                                                 | 1                    | 3 attempts, backoff from 60 s                                      |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                          | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
@@ -1185,8 +1198,9 @@ let-through list, and the controls on changing the mode, are in
   never by a bare 502 or 503.
 - **Queues** (`maintenance-mode-queues.service.ts`). `full` pauses every queue
   in `getPausableQueues()` with BullMQ's queue-wide `pause()`. That is every
-  queue but `auth-email`, which carries the sign-in, step-up, welcome and
-  invitation mail (`AUTH_EMAIL_TEMPLATE_KEYS`, `src/jobs/email.job.ts`), so
+  queue but `auth-email`, which carries the sign-in, step-up, welcome,
+  invitation and invitation confirm mail (`AUTH_EMAIL_TEMPLATE_KEYS`,
+  `src/jobs/email.job.ts`), so
   staff can still sign in to switch maintenance off. The pause is a flag in
   Redis that every replica's Workers obey: running jobs finish, waiting ones
   stay. Every replica reconciles on every reload, which repairs a crash

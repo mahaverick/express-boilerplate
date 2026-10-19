@@ -15,9 +15,9 @@ points at the code or doc that holds the detail. How things work is in
 - **Keep the user-row lock modes and their placement.** `verifySignInLink`
   (`src/services/sign-in-link.service.ts`) and the Google sign-in stamp
   `lastLoggedInAt` before the transaction that re-reads the user `FOR SHARE`
-  and issues the token, and the invitation verify stamps it after its
-  transaction commits, so that lock covers only the re-read and the writes
-  that need it. The refresh kills run after the rotation
+  and issues the token, and the invitation verify and confirm stamp it after
+  their transaction commits, so that lock covers only the re-read and the
+  writes that need it. The refresh kills run after the rotation
   commits, never inside it. The lock each of them takes is in
   [SECURITY.md](SECURITY.md#deactivation-against-a-concurrent-sign-in).
 - **A sign-in request replies before any lookup.** `POST /auth/link/request`
@@ -25,13 +25,22 @@ points at the code or doc that holds the detail. How things work is in
   run in the follow-up `requestSignInLink` returns. A read before the reply
   makes its timing an oracle for who has an account. See
   [SECURITY.md](SECURITY.md#sign-in-links-one-answer-one-reply-before-the-lookup).
-- **`sign_in_link` rows never carry a user id.** The click looks the account up
-  by address, which is what gives a soft-deleted user's address a fresh
-  account (`user_tokens_shape_check` enforces it). A user-wide revocation
-  therefore misses them, so revoke-others, a staff sign-out and a deactivation
-  also call `revokeSignInLinksOf` (`src/services/session.service.ts`) in their
-  transaction. A deletion deliberately does not: a later click creates a fresh
-  account for the same mailbox owner.
+- **`sign_in_link` and `invitation_link` rows never carry a user id.** The
+  click looks the account up by address, which is what gives a soft-deleted
+  user's address a fresh account (`user_tokens_shape_check` enforces it). A
+  user-wide revocation therefore misses them, so revoke-others, a staff
+  sign-out and a deactivation also call `revokeSignInLinksOf`
+  (`src/services/session.service.ts`), which revokes both purposes, in their
+  transaction, after the user row lock. A deletion deliberately does not: a
+  later click creates a fresh account for the same mailbox owner.
+- **An invitation click joins in one step only for a new address on a
+  customer invitation.** An address with an account, and every staff
+  invitation, gets `202` and an emailed confirm link (`verifyInvitation`,
+  `src/services/tenant-invitation.service.ts`): a forwarded invitation must
+  never sign in to an existing account or grant staff. The confirm
+  (`confirmInvitation`) locks the user row before it claims the link, the
+  order a deactivation takes; claiming first deadlocks against it. See
+  [SECURITY.md](SECURITY.md#invitation-links-are-single-use).
 - **A dead link answers 400 `LINK_INVALID`, never 401** (sign-in and step-up
   verify): clients sign out on a 401. Keep one body for every dead link, and
   keep every check that refuses before the claim on a read-only peek, so the
@@ -226,8 +235,8 @@ points at the code or doc that holds the detail. How things work is in
   `AUTH_EMAIL_TEMPLATE_KEYS` that a full maintenance should hold.**
   `emailQueueFor` (`src/jobs/email.job.ts`) picks the queue from the template
   key, and `full` pauses every queue but `auth-email`, so the sign-in, step-up,
-  welcome and invitation mail still reaches staff who must sign in to switch
-  maintenance off. `tenant_invitation` mail goes through `addEmailJob()`
+  welcome, invitation and invitation confirm mail still reaches staff who must
+  sign in to switch maintenance off. `tenant_invitation` mail goes through `addEmailJob()`
   directly, since the invitee may have no account.
 - **Some email channels can't be switched off** (`tenant_invitation`,
   `maintenance_mode_changed`): disabling them would cut off an invitee or

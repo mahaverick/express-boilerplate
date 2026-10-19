@@ -495,14 +495,17 @@ Runbook:
 1. **Confirm staff access before `full`.** In `full` only staff can sign in,
    so make sure whoever will switch it off can request a sign-in link on Apex,
    or use Google; auth mail is never paused.
-2. **Expect invitations to wait.** In `full`, `/invitations/verify` answers 503
-   `MAINTENANCE_MODE` for everyone, staff invitees included. An invitee joins
-   after maintenance ends, with the same link while it is unexpired.
+2. **Expect invitations to wait.** In `read_only` and `full`,
+   `/invitations/verify` and `/invitations/confirm` answer 503 (`READ_ONLY_MODE`
+   or `MAINTENANCE_MODE`) for everyone, staff invitees included. An invitee
+   joins after maintenance ends, with the same link while it is unexpired: the
+   invitation lasts 3 days, its confirm link 15 minutes, and a new click on the
+   invitation mails a new confirm link.
 3. **Use `read_only` for data fixes where reads are safe.** Customers keep
    reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
 4. **Before database work, check "0 running" on every paused queue** on the
    Maintenance page. `full` pauses every queue but `auth-email`, which keeps
-   sending sign-in, step-up and invitation mail. Jobs already running finish
+   sending sign-in, step-up, invitation and invitation confirm mail. Jobs already running finish
    first.
 5. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
    working and writing during maintenance.

@@ -374,16 +374,17 @@ and `email` from every URL they report to analytics. Which frontend a link
 opens is an enum (`app: 'web' | 'apex'`), never a URL, so a request can only
 choose between `WEB_URL` and `APEX_URL`.
 
-| Link              | Token                                                                      | Lifetime                   | Claimed by                                                      |
-| ----------------- | -------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------- |
-| Sign-in           | 32 random bytes, base64url, SHA-256 stored (`user_tokens`, `sign_in_link`) | `SIGN_IN_LINK_TTL` (`15m`) | `claimLinkToken`, single use                                    |
-| Step-up confirm   | The same, as `step_up_link`, bound to one user and session                 | `STEP_UP_LINK_TTL` (`15m`) | `claimLinkToken` with that binding, single use                  |
-| Tenant invitation | 32 random bytes, base64url, SHA-256 stored                                 | `INVITATION_TTL` (`3d`)    | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
+| Link               | Token                                                                      | Lifetime                   | Claimed by                                                      |
+| ------------------ | -------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------- |
+| Sign-in            | 32 random bytes, base64url, SHA-256 stored (`user_tokens`, `sign_in_link`) | `SIGN_IN_LINK_TTL` (`15m`) | `claimLinkToken`, single use                                    |
+| Step-up confirm    | The same, as `step_up_link`, bound to one user and session                 | `STEP_UP_LINK_TTL` (`15m`) | `claimLinkToken` with that binding, single use                  |
+| Tenant invitation  | 32 random bytes, base64url, SHA-256 stored                                 | `INVITATION_TTL` (`3d`)    | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
+| Invitation confirm | The same, as `invitation_link`, naming the invitation by id                | `SIGN_IN_LINK_TTL` (`15m`) | `claimLinkToken` inside the joining transaction, single use     |
 
 `claimLinkToken` spends a link before it judges its expiry, so presenting an
 expired link also spends it: one presentation is one attempt. It matches the
-purpose too, so a step-up link never signs anyone in and a sign-in link never
-confirms a step-up. Staff never choose a user's credential: an account staff
+purpose too, so a step-up link never signs anyone in, a sign-in link never
+confirms a step-up, and neither joins an invitation. Staff never choose a user's credential: an account staff
 create gets a `welcome` mail with a sign-in link, and a staff-sent sign-in link
 (`POST /platform/users/:id/sign-in-link`) is an ordinary sign-in link, mailed
 to the account's own address.
@@ -401,41 +402,80 @@ pasted into one is dropped; the server never reads them.
 
 ### Invitation links are single-use
 
-An invitation link is a credential for its 3-day lifetime: one click on it
-signs the invitee in and joins them (`POST /invitations/verify`,
-`verifyInvitation`, `src/services/tenant-invitation.service.ts`).
+An invitation link lives 3 days and is forwardable, so one click on it
+(`POST /invitations/verify`, `verifyInvitation`,
+`src/services/tenant-invitation.service.ts`) joins in one step only where
+there is nothing to take over: a customer invitation to an address with no
+account (a soft-deleted account released its address). Every other click
+answers `202` "Check your inbox", and the server mails the invited address a
+15-minute, single-use confirm link. That covers an address that has an
+account, verified or not, and every staff (platform-tenant) invitation, even
+to a new address. The confirm link's click (`POST /invitations/confirm`,
+`confirmInvitation`) signs in and joins in one step. A forwarded invitation
+therefore gets no session on an existing account and no staff role: only the
+invitee's mailbox receives the confirm link.
 
 - **The link is checked before any account is touched.**
   `findValidByTokenHash` runs first, outside a transaction, so a used, expired,
-  revoked, suspended-tenant or archived-tenant link creates nothing. One
-  transaction then creates or locks the account, claims the invitation, joins,
-  audits the join and issues the session. When two clicks race, the loser's
-  transaction rolls back, a new account included, and it answers
-  `404 invitation_invalid` with no cookie.
+  revoked, suspended-tenant or archived-tenant link creates nothing. A one-click
+  join is then one transaction that creates the account, claims the
+  invitation, joins, audits the join and issues the session. When two clicks
+  race, the loser's transaction rolls back, the new account included, and it
+  answers `404 invitation_invalid` with no cookie.
+- **The `202` writes nothing.** It sets no cookie, leaves the browser's
+  session alone, spends neither the invitation nor any account, and replies
+  before the mail work. A second click on the invitation is the resend.
+- **The confirm link carries no invitation token.** It is a `user_tokens` row
+  of purpose `invitation_link` that holds the invitation's id, the address and
+  the frontend (Apex for a platform invitation, web otherwise), stored as a
+  SHA-256 hash like every link. A new one revokes the address's earlier confirm
+  link. Deleting the invitation deletes its links.
+- **Its mail is bounded.** At most one confirm mail per address per
+  `SIGN_IN_LINK_MAIL_COOLDOWN` (default `1m`), on a cooldown of its own, so a
+  sign-in request a moment earlier does not hold it. The daily budget is the
+  one sign-in links spend (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), not the
+  invitation budget, so a token holder cannot burn an admin's resends. Inside
+  the cooldown, or once the budget is spent, the reply is the same `202` and
+  nothing is mailed.
+- **One answer on the confirm.** An unknown, used, expired or malformed link,
+  an `email` that is not the link's address, an invitation revoked, accepted
+  or expired since, a suspended or archived workspace and a deactivated
+  account all answer `404 invitation_invalid`. Each refusal spends nothing:
+  the link is claimed inside the joining transaction, after the user row is
+  locked, and the invitation is re-checked atomically by
+  `claimForAcceptById`, so a refusal rolls the claim back. Neither address is
+  logged.
+- **The confirm session is a recent sign-in; the one-click session is not.**
+  The confirm click proves the mailbox within 15 minutes with a single-use
+  link, the proof a sign-in link gives. The one-click session starts with
+  `authenticated_at` NULL, so every `requireRecentAuth` route answers
+  `401 REAUTH_REQUIRED` until the user confirms it's them. Sessions are not
+  bound to an app: Apex access follows the platform role, which a staff
+  invitation grants only through the confirm link.
 - **Once accepted, it signs nobody in,** the invitee included. A signed-in
   invitee who opens it again goes through `POST /invitations/accept`, which
   answers `alreadyMember: true`.
-- **One answer.** A used, expired or revoked link, a suspended or archived
-  tenant and a deactivated invitee all answer `404 invitation_invalid`.
-- **The gates of a link sign-in.** Verify runs `assertSignInAllowed` and the
-  maintenance check on the account it resolved, as `verifySignInLink` does.
-- **Its session is not a recent sign-in.** Sessions are not bound to an app:
-  the session is an ordinary one, and Apex access follows from the platform
-  role the account holds or the invitation just granted. The session starts
-  with `authenticated_at` NULL, so every `requireRecentAuth` route answers
-  `401 REAUTH_REQUIRED` until the user confirms it's them, which needs the
-  invitee's mailbox or Google account. A later change routes existing accounts
-  and staff invitations through an emailed confirm link instead of the one
-  click.
-- **The route is a maintenance `write`.** In `full` it answers 503 for
-  everyone, staff invitees included, and the link still works after the mode
-  ends.
-- **Accepted:** a forwarded invitation signs the forwardee in as the invitee
-  until it is used or expires. On a platform-tenant invitation that session
-  holds the staff role it grants, short of every step-up route. The link reaches only the invitee's mailbox,
-  which can get a 15-minute sign-in link anyway, and single use bounds it.
-  Signing out everywhere revokes no invitation: invitations belong to the
-  admins who sent them.
+- **The gates of a link sign-in.** Both routes run `assertSignInAllowed` and
+  the maintenance check on the account they resolve, as `verifySignInLink`
+  does. A never-verified account is claimed only by the confirm click, which
+  clears the squatter's sessions and federated links.
+- **Revocation.** A deactivation, a staff sign-out and a sign-out of the other
+  sessions revoke the address's live confirm links with its sign-in links
+  (`revokeSignInLinksOf`). Revoking or resending the invitation revokes no
+  link: the confirm re-checks the invitation itself, and a resent invitation is
+  the same invitation.
+- **Both routes are maintenance `write`s.** In `read_only` and `full` they
+  answer 503 for everyone, staff invitees included, and a link still works
+  after the mode ends.
+- **Accepted:** on a customer invitation, `200` or `202` tells the holder of
+  the invitation token whether the invited address has an account. The split
+  requires it, the token reaches only the invited mailbox, and the preview
+  shows the address anyway; a staff invitation always answers `202`. Signing
+  out everywhere revokes no invitation: invitations belong to the admins who
+  sent them.
+- **Accepted:** on Apex, a staff invitee who asks for a sign-in link is mailed
+  the invitation again, and its click mails the confirm link: two mails
+  before they can sign in.
 
 ### Invitations
 
