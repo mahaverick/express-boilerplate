@@ -12,17 +12,20 @@ import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { createLinkedAccount, isAddressTaken } from '@/services/account-claim.service'
+import {
+  claimNeverVerifiedAccount,
+  clearSquatterCredentials,
+  createLinkedAccount,
+  isAddressTaken,
+} from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
-import { denySessionsAfterCommit, revokeSessionRows } from '@/services/session.service'
 import {
   revokeInvitationsBeyondAuthorityElsewhere,
   revokeInvitationsSentIn,
   rolesUngrantableBy,
 } from '@/services/tenant-membership.service'
-import { markEmailVerified } from '@/services/verification.service'
 import type { Actor } from '@/types/actor'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
@@ -113,17 +116,36 @@ async function regrant(
 }
 
 /**
+ * A grant's account create lost the users unique index to a concurrent
+ * write of the same address: the one failure `bootstrapGrant` retries.
+ */
+class GrantAddressTakenError extends HttpError {
+  /**
+   * The 409 the create answered, kept for the second attempt to replace.
+   */
+  constructor() {
+    super('An account already uses that email address', 409)
+  }
+}
+
+/**
  * Give the account an address holds a role in the platform tenant, creating
  * or changing their membership, audited as a system grant. For the
  * bootstrap script: nobody can invite before the first platform owner
- * exists. An address with no live account gets a verified one
- * (`createLinkedAccount`, audited `user.created` by the system); an
- * unverified account is verified, its sessions revoked as a link's claim
- * revokes them. The operator naming the address vouches for its mailbox.
- * Everything commits together, and `email_verified` is emitted after the
- * commit when this call created or verified the account. A grant whose
- * insert loses a unique index to a concurrent write (the account's address,
- * or the membership) runs again once, against the row that won.
+ * exists. The operator naming the address vouches for its mailbox, so:
+ * - an address with no live account gets a verified one
+ *   (`createLinkedAccount`, audited `user.created` by the system), created
+ *   and granted in one transaction, and `email_verified` is emitted after
+ *   its commit;
+ * - an unverified account is claimed first, as a sign-in link claims it
+ *   (`claimNeverVerifiedAccount` with `clearSquatterCredentials`): a
+ *   squatter's password and federated links go, every session is revoked,
+ *   the address is verified and `email_verified` is emitted. The claim
+ *   commits on its own, before the grant.
+ *
+ * A create that loses the users unique index to a concurrent create of the
+ * address runs again once, as a grant to the account that won; no other
+ * failure is retried.
  * @param email - The address, in any case.
  * @param role - The platform role to hold.
  * @returns The membership after the change.
@@ -133,7 +155,7 @@ export async function bootstrapGrant(email: string, role: MembershipRole): Promi
   try {
     return await grantOnce(email, role)
   } catch (error) {
-    if (!isAddressTaken(error)) throw error
+    if (!(error instanceof GrantAddressTakenError)) throw error
     return grantOnce(email, role)
   }
 }
@@ -143,27 +165,25 @@ export async function bootstrapGrant(email: string, role: MembershipRole): Promi
  * @param email - The address, in any case.
  * @param role - The platform role to hold.
  * @returns The membership after the change.
- * @throws {HttpError} 409 from `createLinkedAccount` when a concurrent create won the address, or from the last-owner check; 500 when the platform tenant is missing.
+ * @throws {GrantAddressTakenError} When a concurrent create won the address.
+ * @throws {HttpError} 409 from the last-owner check; 500 when the platform tenant is missing or a claimed account vanished.
  */
 async function grantOnce(email: string, role: MembershipRole): Promise<UserMembership> {
-  const { membership, verifiedUserId, revokedSessionIds } = await withTransaction(async (tx) => {
+  const existing = await userRepository.findByEmail(email)
+  if (existing && existing.emailVerifiedAt === null) {
+    await claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
+  }
+  const { membership, createdUserId } = await withTransaction(async (tx) => {
     const found = await userRepository.findByEmail(email, {}, tx)
     const user = found ?? (await createForGrant(email, tx))
-    const granted = await grantInTransaction(user.id, role, tx)
-    // After the membership locks, so the user row is locked last, as lockStaffPair orders them.
-    const { verifiedNow, sessionIds } = found
-      ? await verifyForGrant(found, tx)
-      : { verifiedNow: true, sessionIds: [] }
     return {
-      membership: granted,
-      // eslint-disable-next-line unicorn/no-null -- no account was created or verified
-      verifiedUserId: verifiedNow ? user.id : null,
-      revokedSessionIds: sessionIds,
+      membership: await grantInTransaction(user.id, role, tx),
+      // eslint-disable-next-line unicorn/no-null -- the address held an account already
+      createdUserId: found ? null : user.id,
     }
   })
-  if (verifiedUserId !== null) {
-    await denySessionsAfterCommit(verifiedUserId, revokedSessionIds)
-    await emitDomainEvent({ type: 'email_verified', userId: verifiedUserId, at: new Date() })
+  if (createdUserId !== null) {
+    await emitDomainEvent({ type: 'email_verified', userId: createdUserId, at: new Date() })
   }
   return membership
 }
@@ -174,10 +194,17 @@ async function grantOnce(email: string, role: MembershipRole): Promise<UserMembe
  * @param email - The address.
  * @param tx - The grant's transaction.
  * @returns The new account.
- * @throws {HttpError} 409 when a live account holds the address; 500 when the platform tenant is missing.
+ * @throws {GrantAddressTakenError} When a live account holds the address (the users unique index).
+ * @throws {HttpError} 500 when the platform tenant is missing.
  */
 async function createForGrant(email: string, tx: DbTransaction): Promise<User> {
-  const user = await createLinkedAccount(email, tx)
+  let user: User
+  try {
+    user = await createLinkedAccount(email, tx)
+  } catch (error) {
+    if (isAddressTaken(error)) throw new GrantAddressTakenError()
+    throw error
+  }
   const platform = await tenantRepository.findPlatformTenant(tx)
   if (!platform) throw new HttpError('The platform tenant is missing', 500)
   await record(
@@ -193,28 +220,6 @@ async function createForGrant(email: string, tx: DbTransaction): Promise<User> {
     tx
   )
   return user
-}
-
-/**
- * Verify an unverified account a grant names, under its row lock, and
- * revoke its sessions: a session from before the verification proved no
- * mailbox, so it gets no platform role.
- * @param found - The account the address holds.
- * @param tx - The grant's transaction.
- * @returns Whether this call verified it, and the revoked session ids.
- * @throws {HttpError} 500 when the account vanished or cannot be verified.
- */
-async function verifyForGrant(
-  found: User,
-  tx: DbTransaction
-): Promise<{ verifiedNow: boolean; sessionIds: string[] }> {
-  if (found.emailVerifiedAt !== null) return { verifiedNow: false, sessionIds: [] }
-  const locked = await userRepository.lockById(found.id, 'no key update', tx)
-  if (!locked) throw new HttpError('Granted user not found', 500)
-  if (locked.emailVerifiedAt !== null) return { verifiedNow: false, sessionIds: [] }
-  const verified = await markEmailVerified(locked.id, tx)
-  if (!verified) throw new HttpError('Granted user could not be verified', 500)
-  return { verifiedNow: true, sessionIds: await revokeSessionRows(locked.id, {}, tx) }
 }
 
 /**

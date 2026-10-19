@@ -344,9 +344,8 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
 
 /**
  * Issue a password-reset token for `user` and queue the reset mail. Rejects
- * when the token or the job cannot be written; callers decide whether that
- * is swallowed (forgot-password) or reported (staff password-setup). The
- * mail's message row records `app` as the frontend its link opens.
+ * when the token or the job cannot be written; the forgot-password caller
+ * swallows that. The mail's message row records `app` as the frontend its link opens.
  * @param user - The account to reset.
  * @param app - The frontend the reset link opens.
  * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.

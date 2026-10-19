@@ -189,8 +189,9 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 `pnpm platform:grant -- <email> <role>` gives the account at an address a role
 (`owner` to `viewer`) in the platform tenant, audited as
 `platform.member.granted`. An address with no account gets a verified one,
-audited as `user.created`; an unverified account is verified and its sessions
-end. Nobody can invite staff before a platform owner exists, so this is how
+audited as `user.created`; an unverified account is claimed as a sign-in link
+claims it: its password and Google link are removed, its sessions end and the
+address is verified. Nobody can invite staff before a platform owner exists, so this is how
 the first one is made.
 
 The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -190,6 +190,32 @@ describe('POST /api/v1/platform/users', () => {
     await sql`delete from users where id = ${userId}`
   })
 
+  it('signs the new user in and verifies the address when they click the welcome link', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const email = `welcome-click-${randomUUID()}@example.test`
+    usedEmails.push(email)
+    const created = await post(token, '', { email })
+    const userId = dataOf<{ user: { id: string } }>(created).user.id
+    const job = await mailFor(email, WELCOME_TEMPLATE_KEY)
+    const signInUrl = new URL((job.data.variables as { signInUrl: string }).signInUrl)
+
+    const verify = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token: signInUrl.searchParams.get('token') ?? '' })
+
+    expect(verify.status).toBe(200)
+    expect(dataOf<{ accessToken: string; user: { id: string } }>(verify)).toMatchObject({
+      accessToken: expect.any(String) as unknown,
+      user: { id: userId },
+    })
+    expect(verify.headers['set-cookie']).toBeDefined()
+    const [row] = await sql<{ verified: boolean }[]>`
+      select email_verified_at is not null as verified from users where id = ${userId}`
+    expect(row?.verified).toBe(true)
+    await truncateAuditLogs()
+    await sql`delete from users where id = ${userId}`
+  })
+
   it('answers 409 for a live account with the same address in another case, and creates nothing', async () => {
     const { token } = await createTrackedStaff('admin')
     const existing = await createTrackedUser()

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -13,7 +14,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { bootstrapGrant, getPlatformMembership } from '@/services/platform.service'
-import { hashToken } from '@/services/session.service'
+import { hashToken, issueRefreshToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 
@@ -21,6 +22,7 @@ const tenantRepository = new TenantRepository()
 const invitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
+const authProviderRepository = new AuthProviderRepository()
 
 const STAFF_DOMAIN = 'staff.example.test'
 
@@ -210,6 +212,40 @@ describe('platform.service', () => {
       expect(await auditRowsFor(user.id)).toEqual([])
     })
 
+    it("clears a squatter's password and Google link and revokes their sessions before granting", async () => {
+      const user = await createUser(`grant-squat-${randomUUID()}@example.test`, {
+        isVerified: false,
+      })
+      await sql`update users set password_hash = 'squatter-hash' where id = ${user.id}`
+      await authProviderRepository.create({
+        userId: user.id,
+        provider: 'email',
+        providerId: user.email,
+      })
+      await authProviderRepository.create({
+        userId: user.id,
+        provider: 'google',
+        providerId: `squatter-google-${randomUUID()}`,
+      })
+      await issueRefreshToken(user.id, randomUUID())
+
+      await bootstrapGrant(user.email, 'owner')
+
+      const [row] = await sql<{ hash: string | null; verified: boolean }[]>`
+        select password_hash as hash, email_verified_at is not null as verified
+        from users where id = ${user.id}`
+      // eslint-disable-next-line unicorn/no-null -- the squatter's password is gone
+      expect(row).toEqual({ hash: null, verified: true })
+      const providers = await sql`select provider from auth_providers where user_id = ${user.id}`
+      expect(providers).toEqual([{ provider: 'email' }])
+      const sessions = await sql<{ revoked: boolean }[]>`
+        select revoked_at is not null as revoked from user_tokens
+        where user_id = ${user.id} and purpose = 'refresh'`
+      expect(sessions.length).toBeGreaterThan(0)
+      expect(sessions.every((session) => session.revoked)).toBe(true)
+      expect(await getPlatformMembership(user.id)).toBe('owner')
+    })
+
     it('emits no email_verified for a user verified already', async () => {
       const user = await createUser(`grant-${randomUUID()}@example.test`, { isVerified: true })
       const verifiedBefore = verifiedEvents.length
@@ -238,16 +274,23 @@ describe('platform.service', () => {
       await grantPlatformRole(user.id, 'owner')
 
       // Other files may leave platform owners in this worker's database; pin the count.
+      let ownerCounts = 0
       await withMutatedMethod(
         UserMembershipRepository.prototype,
         'countOwners',
-        () => Promise.resolve(1),
+        () => {
+          ownerCounts += 1
+          return Promise.resolve(1)
+        },
         async () => {
           await expect(bootstrapGrant(user.email, 'viewer')).rejects.toMatchObject({
             statusCode: 409,
+            message: 'Cannot demote the last platform owner',
           })
         }
       )
+      // The refusal surfaces from the first attempt: only an address race is retried.
+      expect(ownerCounts).toBe(1)
       expect(await getPlatformMembership(user.id)).toBe('owner')
     })
 
