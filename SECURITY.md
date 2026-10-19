@@ -410,12 +410,21 @@ signs the invitee in and joins them (`POST /invitations/verify`,
 - **One answer.** A used, expired or revoked link, a suspended or archived
   tenant and a deactivated invitee all answer `404 invitation_invalid`.
 - **The gates of a link sign-in.** Verify runs `assertSignInAllowed` and the
-  maintenance check on the account it resolved, as `verifySignInLink` does. Its
-  session is a web session, so it grants no Apex access. The route is a
-  maintenance `write`: in `full` it answers 503 for everyone, staff invitees
-  included, and the link still works after the mode ends.
+  maintenance check on the account it resolved, as `verifySignInLink` does.
+- **Its session is not a recent sign-in.** Sessions are not bound to an app:
+  the session is an ordinary one, and Apex access follows from the platform
+  role the account holds or the invitation just granted. The session starts
+  with `authenticated_at` NULL, so every `requireRecentAuth` route answers
+  `401 REAUTH_REQUIRED` until the user confirms it's them, which needs the
+  invitee's mailbox or Google account. A later change routes existing accounts
+  and staff invitations through an emailed confirm link instead of the one
+  click.
+- **The route is a maintenance `write`.** In `full` it answers 503 for
+  everyone, staff invitees included, and the link still works after the mode
+  ends.
 - **Accepted:** a forwarded invitation signs the forwardee in as the invitee
-  until it is used or expires. The link reaches only the invitee's mailbox,
+  until it is used or expires. On a platform-tenant invitation that session
+  holds the staff role it grants, short of every step-up route. The link reaches only the invitee's mailbox,
   which can get a 15-minute sign-in link anyway, and single use bounds it.
   Signing out everywhere revokes no invitation: invitations belong to the
   admins who sent them.

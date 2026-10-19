@@ -10,6 +10,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -496,6 +497,31 @@ describe('POST /api/v1/invitations/verify', () => {
     expect(data.role).toBe('viewer')
     expect(data.tenant.slug).toBe(platform.slug)
     expect(data.user.platformRole).toBe('viewer')
+  })
+
+  it('issues a session that does not count as a recent sign-in, so a step-up route answers REAUTH_REQUIRED', async () => {
+    const platform = await platformTenant()
+    const inviter = await createTrackedUser()
+    const email = uniqueEmail('staff-stale')
+    const { rawToken } = await seedInvitation(platform, inviter, email, 'admin')
+
+    const response = await postVerify(rawToken)
+    expect(response.status).toBe(200)
+    const data = verifyData(response)
+    expect(data.user.platformRole).toBe('admin')
+
+    const [row] = await sql<{ authenticated: boolean }[]>`
+      select authenticated_at is not null as authenticated from user_tokens
+      where user_id = ${data.user.id} and purpose = 'refresh'
+    `
+    expect(row?.authenticated).toBe(false)
+
+    const refused = await request(app)
+      .post(`/api/v1/platform/users/${randomUUID()}/deactivate`)
+      .set('Authorization', `Bearer ${data.accessToken}`)
+      .send({})
+    expect(refused.status).toBe(401)
+    expect(refused.body).toMatchObject({ code: REAUTH_REQUIRED_CODE })
   })
 
   it('keeps an existing membership’s role and still signs in', async () => {

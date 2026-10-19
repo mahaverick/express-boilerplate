@@ -97,8 +97,8 @@ export interface IssuedRefreshToken {
   expiresAt: Date
   /**
    * When the session last authenticated, as stored on the token's row; the
-   * caller signs it into the access token. Null only for a session that
-   * started before migration 0018.
+   * caller signs it into the access token. Null for a session that started
+   * before migration 0018, or one an invitation link started.
    */
   authenticatedAt: Date | null
 }
@@ -130,7 +130,7 @@ function generateRawToken(): string {
  * @param session - The rotation-chain id, when the chain began, and when it last authenticated.
  * @param session.sessionId - The rotation-chain id.
  * @param session.sessionStartedAt - When that chain began.
- * @param session.authenticatedAt - When it last authenticated; null for a chain from before migration 0018.
+ * @param session.authenticatedAt - When it last authenticated; null for a chain from before migration 0018 or one an invitation link started.
  * @param executor - Where to insert. Defaults to the pool.
  * @returns The inserted row's id, the raw token to hand back, and its expiry.
  */
@@ -233,30 +233,36 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
 /**
  * Issue a new refresh token for a session. This starts the session's absolute
  * clock (`sessionStartedAt`). The session's authentication time starts at the
- * same moment. `rotateRefreshToken` copies both forward instead of calling
- * this. Calling it again for an existing sessionId would restart both clocks;
- * login always mints a fresh sessionId.
+ * same moment, unless `options.recentAuth` is false. `rotateRefreshToken`
+ * copies both forward instead of calling this. Calling it again for an
+ * existing sessionId would restart both clocks; login always mints a fresh
+ * sessionId.
  * @param userId - The user the token belongs to.
  * @param sessionId - The session (rotation-chain) id this token starts or continues.
  * @param executor - Where to insert the token row: a caller's transaction, or the pool (default).
+ * @param options - How the session counts toward step-up.
+ * @param options.recentAuth - False stores `authenticated_at` as NULL, so every step-up route asks again (`requireRecentAuth`) until the user confirms it's them. Defaults to true.
  * @returns The raw token to hand to the client, and its metadata.
  */
 export async function issueRefreshToken(
   userId: string,
   sessionId: string,
-  executor: DbExecutor = db
+  executor: DbExecutor = db,
+  options: { recentAuth?: boolean } = {}
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
   const sessionStartedAt = new Date()
+  // eslint-disable-next-line unicorn/no-null -- the stored column is null for a session that is not a recent sign-in
+  const authenticatedAt = options.recentAuth === false ? null : sessionStartedAt
 
   const { raw, expiresAt } = await createRefreshRow(
     userId,
     requireDurationMs(env.REFRESH_TOKEN_TTL),
-    { sessionId, sessionStartedAt, authenticatedAt: sessionStartedAt },
+    { sessionId, sessionStartedAt, authenticatedAt },
     executor
   )
 
-  return { raw, userId, sessionId, expiresAt, authenticatedAt: sessionStartedAt }
+  return { raw, userId, sessionId, expiresAt, authenticatedAt }
 }
 
 /**

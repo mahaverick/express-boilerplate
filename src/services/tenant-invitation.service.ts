@@ -1178,7 +1178,8 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationSess
       },
       tx
     )
-    const refreshToken = await issueRefreshToken(user.id, sessionId, tx)
+    // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
+    const refreshToken = await issueRefreshToken(user.id, sessionId, tx, { recentAuth: false })
     const settled = { user, refreshToken, role: membership.role }
     if (!inserted) return settled
     const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
