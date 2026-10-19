@@ -400,6 +400,18 @@ function signInPageUrl(rawToken: string, origin: string): string {
 }
 
 /**
+ * The Apex page a step-up link opens, carrying `rawToken`: the shape of
+ * `buildStepUpConfirmUrl`'s link.
+ * @param rawToken - The token text, empty for a preview's masked link.
+ * @param origin - The frontend origin the real link pointed at.
+ * @returns The URL.
+ */
+function stepUpConfirmPageUrl(rawToken: string, origin: string): string {
+  const base = new URL('auth/confirm', origin.endsWith('/') ? origin : `${origin}/`)
+  return `${base.href}?token=${rawToken}`
+}
+
+/**
  * The mail a preview renders, and whether a stored preview variable was
  * missing (a message migrated from an old send attempt, whose variables are
  * `{}`, or one written with empty variables) and read as the mask. The
@@ -520,6 +532,18 @@ export function buildPreviewMessage(
             expiresInMinutes: fill('expiresInMinutes'),
             appName: fill('appName'),
             reason: fill('reason') === 'staff' ? 'staff' : 'self',
+          },
+        }
+      }
+      case 'step_up_link': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            confirmUrl: maskedLink(stepUpConfirmPageUrl, origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
           },
         }
       }

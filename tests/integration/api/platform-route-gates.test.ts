@@ -5,9 +5,13 @@
  * admitted, and a stale sign-in refused on step-up routes. A completeness
  * check walks the platform router and its sub-routers, so a route added
  * without a row here fails CI (OWASP API5: every function gets an explicit
- * gate). The one staff route outside /platform, `POST /auth/reauthenticate`,
- * has its own block: a refused caller must get exactly what an unknown path
- * on the auth router gets.
+ * gate). The staff routes outside /platform, the three bearer step-up routes
+ * on the auth router (`/auth/step-up/link/request`, `/link/verify` and
+ * `/google/start`), have their own block: a refused caller must get exactly
+ * what an unknown path on the auth router gets. Google is configured for the
+ * whole file, before the app is imported, so the Google start is mounted.
+ * The popup's `GET /auth/step-up/google` carries no bearer and is pinned in
+ * step-up-google.test.ts instead.
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
@@ -32,6 +36,12 @@ import {
 } from '../../helpers/email-messages'
 import { makeStaff } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
+
+// Before any import reads the environment: getEnv() memoises its first parse, and the Google start mounts only with these set.
+vi.hoisted(() => {
+  vi.stubEnv('GOOGLE_CLIENT_ID', 'test-google-client-id')
+  vi.stubEnv('GOOGLE_CLIENT_SECRET', 'test-google-client-secret')
+})
 
 // Apex has no experiment flag, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
 vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
@@ -253,6 +263,11 @@ const ELEVEN_MINUTES_MS = 11 * 60 * 1000
 const DISALLOWED_ORIGIN = 'https://not-allowed.example'
 
 const app = createApp()
+
+afterAll(() => {
+  vi.unstubAllEnvs()
+})
+
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 
@@ -577,9 +592,11 @@ describe('/api/v1/platform route gates', () => {
     }
   )
 
-  describe('POST /api/v1/auth/reauthenticate, the staff route on the auth router', () => {
-    const REAUTH_PATH = '/api/v1/auth/reauthenticate'
-
+  describe.each([
+    { path: '/api/v1/auth/step-up/link/request', limiter: RATE_LIMITS.stepUpLink },
+    { path: '/api/v1/auth/step-up/link/verify', limiter: RATE_LIMITS.stepUpLink },
+    { path: '/api/v1/auth/step-up/google/start', limiter: RATE_LIMITS.stepUpGoogle },
+  ])('POST $path, a staff route on the auth router', ({ path: STAFF_PATH, limiter }) => {
     /**
      * Headers that differ between any two responses, whatever the route.
      */
@@ -604,17 +621,18 @@ describe('/api/v1/platform route gates', () => {
       body?: string
       origin?: string
     }
+    // An unknown key: every step-up body schema refuses it, so a staff caller gets a validation 400 and nothing is mailed or stored.
     const JSON_BODY: RequestVariant = {
       label: 'POST with a JSON body',
       method: 'post',
       contentType: 'application/json',
-      body: '{"password":"x"}',
+      body: '{"unexpected":"x"}',
     }
     const TEXT_BODY: RequestVariant = {
       label: 'POST with a text/plain body',
       method: 'post',
       contentType: 'text/plain',
-      body: 'password=x',
+      body: 'token=x',
     }
     /**
      * JSON, the three bodies a form can send, no body, and an OPTIONS from a
@@ -627,7 +645,7 @@ describe('/api/v1/platform route gates', () => {
         label: 'POST with a urlencoded body',
         method: 'post',
         contentType: 'application/x-www-form-urlencoded',
-        body: 'password=x',
+        body: 'token=x',
       },
       {
         label: 'POST with a multipart body',
@@ -687,17 +705,18 @@ describe('/api/v1/platform route gates', () => {
       token: string | undefined,
       variant: RequestVariant
     ): Promise<{ route: Response; sibling: Response }> {
-      const route = await send(REAUTH_PATH, token, variant)
-      const sibling = await send(`/api/v1/auth/${randomUUID()}`, token, variant)
+      const route = await send(STAFF_PATH, token, variant)
+      const sibling = await send(`/api/v1/auth/step-up/${randomUUID()}`, token, variant)
       return { route, sibling }
     }
 
     it.each(VARIANTS)(
-      'answers a signed-in non-staff caller exactly what an unknown auth path answers: $label',
+      'refuses a non-staff caller exactly like an unknown /auth path: $label',
       async (variant) => {
         const { route, sibling } = await againstSibling(await tokenFor(undefined), variant)
 
         expect(observable(route)).toEqual(observable(sibling))
+        expect(route.headers).not.toHaveProperty('ratelimit-limit')
       }
     )
 
@@ -723,23 +742,23 @@ describe('/api/v1/platform route gates', () => {
 
     it('answers non-staff past the limiter budget exactly what an unknown auth path answers', async () => {
       const token = await tokenFor(undefined)
-      for (let attempt = 0; attempt <= RATE_LIMITS.reauthenticate.limit; attempt += 1) {
+      for (let attempt = 0; attempt <= limiter.limit; attempt += 1) {
         const { route, sibling } = await againstSibling(token, JSON_BODY)
         expect({ attempt, ...observable(route) }).toEqual({ attempt, ...observable(sibling) })
       }
     })
 
     it('answers viewer a text/plain body with the router-wide JSON gate', async () => {
-      const response = await send(REAUTH_PATH, await tokenFor('viewer'), TEXT_BODY)
+      const response = await send(STAFF_PATH, await tokenFor('viewer'), TEXT_BODY)
 
       expect(response.status).toBe(415)
       expect((response.body as { code?: string }).code).toBe('UNSUPPORTED_MEDIA_TYPE')
     })
 
     it('admits viewer past every gate to the limiter and the handler', async () => {
-      const response = await send(REAUTH_PATH, await tokenFor('viewer'), JSON_BODY)
+      const response = await send(STAFF_PATH, await tokenFor('viewer'), JSON_BODY)
 
-      // A wrong password is the handler's own 400, under the limiter's headers.
+      // The handler's own validation 400, under the limiter's headers.
       expect(response.status).toBe(400)
       expect(response.headers).toHaveProperty('ratelimit-limit')
     })

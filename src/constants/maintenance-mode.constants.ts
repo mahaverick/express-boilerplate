@@ -223,10 +223,14 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // The link routes decide in the service: a request for a non-staff address in `full` mails nothing, and verify peeks before it claims.
   letThrough('POST', '/api/v1/auth/link/request'),
   letThrough('POST', '/api/v1/auth/link/verify'),
+  // Staff step-up, by link and by Google: the services decide, and only staff reach them.
+  letThrough('POST', '/api/v1/auth/step-up/link/request'),
+  letThrough('POST', '/api/v1/auth/step-up/link/verify'),
+  letThrough('POST', '/api/v1/auth/step-up/google/start'),
+  letThrough('GET', '/api/v1/auth/step-up/google'),
   // Session upkeep and sign-in methods: let through in both modes.
   letThrough('POST', '/api/v1/auth/refresh'),
   letThrough('POST', '/api/v1/auth/logout'),
-  letThrough('POST', '/api/v1/auth/reauthenticate'),
   letThrough('GET', '/api/v1/auth/providers'),
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),

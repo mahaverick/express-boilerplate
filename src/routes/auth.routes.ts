@@ -1,7 +1,8 @@
 /**
  * @file The `/api/v1/auth` router. Every route except `GET /providers` (a read
- * of the caller's own data) carries a rate limiter with its own store prefix:
- * an unlimited auth route is an enumeration oracle, a bcrypt or mail
+ * of the caller's own data) carries a rate limiter, and routes that share a
+ * budget share one limiter instance and its store prefix: an unlimited auth
+ * route is an enumeration oracle, a bcrypt or mail
  * amplifier, or a password oracle. `RATE_LIMITS`
  * (rate-limit.constants.ts) holds each limiter's reasoning.
  */
@@ -30,12 +31,15 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * CSRF control (see content-type.middleware.ts). A GET carries no content
  * type, which it allows, so the Google routes pass it too.
  *
- * The staff-only `POST /reauthenticate` answers a refused caller exactly what
- * an unknown auth path answers: the router-wide JSON gate's 415 for a form
- * body, as on every auth path, and otherwise the platform role gate's 404
- * before the limiter, so no `RateLimit-*` headers. An OPTIONS on it gets the
- * unknown path's 404 (`refusePlatformOptions`, right after the JSON gate), not
- * Express's automatic `Allow` answer.
+ * The staff-only step-up routes under `/step-up` that take a bearer
+ * (`/step-up/link/request`, `/step-up/link/verify`, `/step-up/google/start`)
+ * answer a refused caller exactly what an unknown auth path answers: the
+ * router-wide JSON gate's 415 for a form body, as on every auth path, and
+ * otherwise the platform role gate's 404 before the limiter, so no
+ * `RateLimit-*` headers. An OPTIONS anywhere under `/step-up` gets the
+ * unknown path's 404 (`refusePlatformOptions`, right after the JSON gate),
+ * not Express's automatic `Allow` answer. The two link routes share one
+ * limiter instance, so one budget covers a request and its confirm.
  *
  * `/refresh` and `/logout`, which the refresh cookie authenticates and which
  * take no body, also refuse a disallowed `Origin` (origin.middleware.ts): a
@@ -48,19 +52,25 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * which a browser never attaches on its own, so no other page can make it
  * send one and they need no Origin check.
  *
- * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
- * `configurePassport()` runs here, before either route can handle a request;
- * it is idempotent. On both routes the limiter runs before `oauthSession`, so
- * an over-budget caller gets a 429 before a session is written to Redis. Both
- * share one `oauthSession` instance, so the session middleware is built once.
+ * Google OAuth routes, the two Google step-up routes included, are mounted
+ * only when `isGoogleOAuthEnabled()`. `configurePassport()` runs here, before
+ * any of them can handle a request; it is idempotent. On every one the
+ * limiter runs before `oauthSession`, so an over-budget caller gets a 429
+ * before a session is written to Redis. They share one `oauthSession`
+ * instance, so the session middleware is built once, and `/google` and the
+ * step-up popup's `GET /step-up/google`, the two navigations to Google, share
+ * one `googleOAuth` limiter instance. The step-up popup's route carries no
+ * bearer: the start (`POST /step-up/google/start`, staff only) wrote the
+ * intent it needs into the OAuth session, and without one it redirects to
+ * Apex's confirm page with an error.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
 export function createAuthRouter(): Router {
   const router = Router()
   // Router-wide and first, so no route can miss the CSRF gate.
   router.use(requireJsonContentType)
-  // Express would answer OPTIONS on the staff route with an Allow header; an unknown auth path gets this 404.
-  router.use('/reauthenticate', refusePlatformOptions)
+  // Express would answer OPTIONS on the staff routes with an Allow header; an unknown auth path gets this 404.
+  router.use('/step-up', refusePlatformOptions)
   router.post('/register', createRateLimiter(RATE_LIMITS.register), authController.register)
   // ip+email 5/15min, then IP 100/15min, then account 100/h; a rejection spends no later budget.
   router.post(
@@ -133,13 +143,21 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
-  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
+  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before the limiter keys on request.user.id.
+  const stepUpLinkLimiter = createRateLimiter(RATE_LIMITS.stepUpLink)
   router.post(
-    '/reauthenticate',
+    '/step-up/link/request',
     requireAuth,
     requirePlatformRole('viewer'),
-    createRateLimiter(RATE_LIMITS.reauthenticate),
-    authController.reauthenticate
+    stepUpLinkLimiter,
+    authController.requestStepUpLink
+  )
+  router.post(
+    '/step-up/link/verify',
+    requireAuth,
+    requirePlatformRole('viewer'),
+    stepUpLinkLimiter,
+    authController.verifyStepUpLink
   )
 
   // No limiter: a read of the caller's own data, with no oracle to probe.
@@ -148,9 +166,10 @@ export function createAuthRouter(): Router {
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
+    const googleOAuthLimiter = createRateLimiter(RATE_LIMITS.googleOAuth)
     router.get(
       '/google',
-      createRateLimiter(RATE_LIMITS.googleOAuth),
+      googleOAuthLimiter,
       oauthSession,
       rememberOAuthApp,
       passport.initialize(),
@@ -165,6 +184,22 @@ export function createAuthRouter(): Router {
       oauthSession,
       passport.initialize(),
       authController.handleGoogleCallback
+    )
+    // Staff-only, as the link routes: the role gate before the limiter, and the session written last.
+    router.post(
+      '/step-up/google/start',
+      requireAuth,
+      requirePlatformRole('viewer'),
+      createRateLimiter(RATE_LIMITS.stepUpGoogle),
+      oauthSession,
+      authController.startGoogleStepUp
+    )
+    router.get(
+      '/step-up/google',
+      googleOAuthLimiter,
+      oauthSession,
+      passport.initialize(),
+      authController.openGoogleStepUp
     )
   }
 

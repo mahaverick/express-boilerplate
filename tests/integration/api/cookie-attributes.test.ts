@@ -27,6 +27,7 @@ import {
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import { hashPassword } from '@/utilities/password.utilities'
+import { FakeGoogleSuccessStrategy } from '../../helpers/fake-google'
 import { isTokenRowLive, sessionWithSibling } from '../../helpers/grace-sibling'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
@@ -222,25 +223,6 @@ function googleProfile(email: string): GoogleProfile {
       email,
       email_verified: true,
     },
-  }
-}
-
-/**
- * Skips the OAuth2 dance and succeeds with a fixed profile, so the
- * callback's own cookie-setting path runs over real HTTP. Same technique
- * as google-oauth.test.ts's FakeGoogleSuccessStrategy.
- */
-class FakeGoogleSuccessStrategy implements passport.Strategy {
-  name = GOOGLE_STRATEGY_NAME
-
-  constructor(readonly profile: GoogleProfile) {}
-
-  /**
-   * Succeed with the fixed profile without contacting Google.
-   */
-  authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
-    // eslint-disable-next-line unicorn/no-undeclared-class-members -- passport injects `success` onto the per-request instance (StrategyCreatedStatic).
-    this.success(this.profile as unknown as Express.User)
   }
 }
 

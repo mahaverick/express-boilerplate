@@ -77,7 +77,6 @@ export type RateLimitName =
   | 'platformSearch'
   | 'authenticatedWrite'
   | 'platformWrite'
-  | 'reauthenticate'
   | 'emailWebhook'
   | 'emailWebhookRejected'
   | 'analyticsProxy'
@@ -89,6 +88,8 @@ export type RateLimitName =
   | 'signInLinkRequest'
   | 'signInLinkVerify'
   | 'invitationVerify'
+  | 'stepUpLink'
+  | 'stepUpGoogle'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -467,18 +468,6 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * Budget of 5 per 15 minutes, keyed on the caller's id, as changePassword
-   * is: `POST /auth/reauthenticate` compares a caller-supplied password
-   * against the stored hash, so it gets a password oracle's budget.
-   */
-  reauthenticate: {
-    name: 'reauthenticate',
-    windowMs: 15 * 60 * 1000,
-    limit: 5,
-    keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
    * 3000 a minute per provider: volume protection for a public route that
    * verifies the provider's signature before any database work, generous so
    * a bounce storm after a bulk send is not answered 429 and retried. Keyed
@@ -631,6 +620,32 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'ip',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 10 per 15 minutes per staff member, one instance shared by
+   * `POST /auth/step-up/link/request` and `/step-up/link/verify`: a normal
+   * confirm spends two, and the request's own cooldown
+   * (`STEP_UP_LINK_COOLDOWN`) bounds the mail. The link carries 256 bits, so
+   * this bounds a client working through dead links, not guessing.
+   */
+  stepUpLink: {
+    name: 'step-up-link',
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 10 per 15 minutes per staff member for `POST /auth/step-up/google/start`,
+   * each of which writes an OAuth session to Redis. The popup's
+   * `GET /auth/step-up/google` carries no bearer and shares `googleOAuth`.
+   */
+  stepUpGoogle: {
+    name: 'step-up-google',
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    keyBy: 'user',
     message: RATE_LIMITED_MESSAGE,
   },
 }

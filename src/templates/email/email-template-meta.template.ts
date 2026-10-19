@@ -13,6 +13,7 @@ import { PASSWORD_CHANGED_TEMPLATE_META } from '@/templates/email/password-chang
 import { PASSWORD_RESET_TEMPLATE_META } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_META } from '@/templates/email/registration-attempt.template'
 import { SIGN_IN_LINK_TEMPLATE_META } from '@/templates/email/sign-in-link.template'
+import { STEP_UP_LINK_TEMPLATE_META } from '@/templates/email/step-up-link.template'
 import { TENANT_INVITATION_TEMPLATE_META } from '@/templates/email/tenant-invitation.template'
 import type { EmailTemplateKey, EmailTemplateMetaEntry } from '@/utilities/email-template.utilities'
 
@@ -56,4 +57,5 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     onboarding_reminder: ONBOARDING_REMINDER_TEMPLATE_META,
     maintenance_mode_changed: MAINTENANCE_MODE_CHANGED_TEMPLATE_META,
     sign_in_link: SIGN_IN_LINK_TEMPLATE_META,
+    step_up_link: STEP_UP_LINK_TEMPLATE_META,
   })

@@ -22,6 +22,7 @@ export const EMAIL_TEMPLATE_KEYS = [
   'onboarding_reminder',
   'maintenance_mode_changed',
   'sign_in_link',
+  'step_up_link',
 ] as const
 
 /**

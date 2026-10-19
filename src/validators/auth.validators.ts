@@ -142,19 +142,6 @@ export const changePasswordSchema = z.object({
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
 
 /**
- * Reauthenticate request body: the caller's current password. No policy, as
- * with login: it is verified, not set.
- */
-export const reauthenticateSchema = z.object({
-  password: z.string().min(1, 'Password is required.'),
-})
-
-/**
- * The validated shape of a reauthenticate request body.
- */
-export type ReauthenticateInput = z.infer<typeof reauthenticateSchema>
-
-/**
  * Sign-out-of-other-sessions request body: empty. Strict, so an unknown key
  * is a 400 rather than silently ignored.
  */

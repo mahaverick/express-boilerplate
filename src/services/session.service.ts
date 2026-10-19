@@ -763,9 +763,10 @@ export async function revokeAllSessions(userId: string): Promise<void> {
 }
 
 /**
- * Record that a session's user just proved their identity again, by
- * password (`POST /auth/reauthenticate`): move `authenticated_at` to the
- * current time on every row of the session (`markSessionAuthenticated`).
+ * Record that a session's user just proved their identity again, by step-up
+ * (a confirmed link or a fresh Google login, step-up.service.ts): move
+ * `authenticated_at` to the current time on every refresh row of the session
+ * (`markSessionAuthenticated`).
  * Holds the user row FOR NO KEY UPDATE, which waits for a rotation holding it
  * FOR SHARE, so that rotation's new row exists before the update and gets
  * the new time.

@@ -53,6 +53,11 @@ import {
   type SignInLinkVariables,
 } from '@/templates/email/sign-in-link.template'
 import {
+  renderStepUpLinkTemplate,
+  STEP_UP_LINK_TEMPLATE_KEY,
+  type StepUpLinkVariables,
+} from '@/templates/email/step-up-link.template'
+import {
   renderTenantInvitationTemplate,
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
@@ -119,6 +124,11 @@ export type MailMessage =
       templateKey: typeof SIGN_IN_LINK_TEMPLATE_KEY
       variables: SignInLinkVariables
     }
+  | {
+      to: string
+      templateKey: typeof STEP_UP_LINK_TEMPLATE_KEY
+      variables: StepUpLinkVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -172,6 +182,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case SIGN_IN_LINK_TEMPLATE_KEY: {
       return renderSignInLinkTemplate(message.variables)
+    }
+    case STEP_UP_LINK_TEMPLATE_KEY: {
+      return renderStepUpLinkTemplate(message.variables)
     }
     default: {
       throw new Error(

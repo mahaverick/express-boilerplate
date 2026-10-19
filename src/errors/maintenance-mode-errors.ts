@@ -34,7 +34,7 @@ export class MaintenanceModeError extends HttpError {
   /**
    * The `Retry-After` value, in seconds.
    */
-  readonly retryAfterSeconds = MAINTENANCE_MODE_RETRY_AFTER_SECONDS
+  override readonly retryAfterSeconds = MAINTENANCE_MODE_RETRY_AFTER_SECONDS
 
   /**
    * @param code - `MAINTENANCE_MODE` or `READ_ONLY_MODE`.

@@ -11,7 +11,6 @@
  */
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
-import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
 import { JobPriority } from '@/constants/queue.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -22,10 +21,8 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
-import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { record } from '@/services/audit.service'
-import { withTransaction, type DbTransaction } from '@/services/database.service'
+import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
@@ -36,7 +33,6 @@ import {
   denySessionsAfterCommit,
   issueRefreshToken,
   issueToken,
-  markSessionReauthenticated,
   revokeAllSessions,
   revokeSessionRows,
   rotateRefreshToken,
@@ -64,21 +60,16 @@ import {
 import type {
   ChangePasswordInput,
   LoginInput,
-  ReauthenticateInput,
   RegisterInput,
   ResetPasswordInput,
 } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
-const tenantRepository = new TenantRepository()
 
 const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
 const FEDERATED_ONLY_MESSAGE =
   'This account signs in with Google and has no password. Use forgot-password to set one.'
-const INCORRECT_PASSWORD_MESSAGE = 'Incorrect password.'
-const REAUTH_FEDERATED_MESSAGE =
-  'This account signs in with Google and has no password. Set a password to confirm sensitive actions.'
 
 /**
  * A successful login: the user row, a signed access token and a new refresh token.
@@ -587,89 +578,4 @@ export async function getAuthProviders(userId: string): Promise<AuthProvidersRes
 
   const providers = await authProviderRepository.findByUser(userId)
   return { providers, hasPassword: user.passwordHash !== null }
-}
-
-/**
- * A confirmed step-up: a new access token for the same session.
- */
-export interface ReauthenticateResult {
-  accessToken: string
-}
-
-/**
- * Audit one step-up attempt in the platform tenant: `POST
- * /auth/reauthenticate` admits staff only, so the actor is a member there.
- * @param userId - The staff member, actor and target both.
- * @param outcome - Whether the identity was confirmed.
- * @param tx - The transaction to write in.
- * @throws {HttpError} 500 when the platform tenant is missing.
- */
-async function recordReauthentication(
-  userId: string,
-  outcome: 'success' | 'failure',
-  tx: DbTransaction
-): Promise<void> {
-  const platform = await tenantRepository.findPlatformTenant(tx)
-  if (!platform) throw new HttpError('The platform tenant is missing', 500)
-  await record(
-    {
-      action: 'auth.reauthenticated',
-      actor: { userId },
-      access: 'member',
-      tenantId: platform.id,
-      targetId: userId,
-      metadata: { outcome },
-    },
-    tx
-  )
-}
-
-/**
- * Confirm a signed-in staff member's identity again with their password, for
- * step-up (`requireRecentAuth`): move the session's `authenticated_at` to now
- * and sign a new access token carrying it. The refresh token is untouched,
- * since the session is the same.
- *
- * A wrong password is a 400, never a 401: the clients sign out on a 401 that
- * carried a token unless it is an expiry or a reauth-required one, and a
- * mistyped password must not end the session. A success and a wrong password
- * are audited (`auth.reauthenticated`): a success in the transaction that
- * moves the time, a wrong password in a transaction of its own, since the
- * refusal writes nothing else. A token without a session, an account gone or
- * inactive, a passwordless account and a rate-limited attempt are refused
- * before any audit write. A correct password on a session that ended is
- * refused by `markSessionReauthenticated` before the success entry is
- * written, so it leaves none.
- * @param userId - The authenticated caller.
- * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
- * @param input - The validated `{ password }` body.
- * @returns A new access token for the same session.
- * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, an account gone or inactive, or a session that has ended; 400 for a passwordless account or a wrong password.
- */
-export async function reauthenticate(
-  userId: string,
-  sessionId: string | undefined,
-  input: ReauthenticateInput
-): Promise<ReauthenticateResult> {
-  if (sessionId === undefined) {
-    throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
-  }
-  const user = await userRepository.findById(userId)
-  if (!user || !user.active) {
-    throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
-  }
-  if (!user.passwordHash) {
-    throw new HttpError(REAUTH_FEDERATED_MESSAGE, 400)
-  }
-  if (!(await isPasswordValid(input.password, user.passwordHash))) {
-    await withTransaction((tx) => recordReauthentication(userId, 'failure', tx))
-    throw new HttpError(INCORRECT_PASSWORD_MESSAGE, 400)
-  }
-
-  const authenticatedAt = await withTransaction(async (tx) => {
-    const at = await markSessionReauthenticated(userId, sessionId, tx)
-    await recordReauthentication(userId, 'success', tx)
-    return at
-  })
-  return { accessToken: signAccessToken(user, sessionId, authenticatedAt) }
 }

@@ -48,7 +48,8 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     inviteeUserId: 'user-2',
     reason: 'Customer asked us to resend',
   },
-  'auth.reauthenticated': { outcome: 'success' },
+  'auth.step_up_confirmed': { method: 'link' },
+  'auth.step_up_refused': { method: 'google' },
   'user.purged': { reason: 'Erasure request, ticket 9001', emailDomain: 'example.test' },
   'tenant.purged': { reason: 'Contract ended', name: 'Acme Inc', slug: 'acme', memberCount: 3 },
   'email.resent': {
@@ -90,7 +91,8 @@ const ACTIONS_WITH_METADATA_KEYS = ACTIONS.filter(
 describe('AUDIT_ACTIONS', () => {
   it('lists exactly the actions of the API contract', () => {
     expect(ACTIONS.toSorted((a, b) => a.localeCompare(b))).toEqual([
-      'auth.reauthenticated',
+      'auth.step_up_confirmed',
+      'auth.step_up_refused',
       'email.resent',
       'email.suppression_lifted',
       'invitation.accepted',
@@ -200,7 +202,7 @@ describe('AUDIT_ACTIONS', () => {
     expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
   })
 
-  it('pins the closed value sets of user.password_setup_sent and auth.reauthenticated', () => {
+  it('pins the closed value sets of user.password_setup_sent and the step-up actions', () => {
     expect(
       AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'reset' }).success
     ).toBe(true)
@@ -208,10 +210,13 @@ describe('AUDIT_ACTIONS', () => {
       AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'invite' }).success
     ).toBe(false)
     expect(
-      AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'failure' }).success
+      AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'google' }).success
     ).toBe(true)
     expect(
-      AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'maybe' }).success
+      AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'password' }).success
+    ).toBe(false)
+    expect(
+      AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'link' }).success
     ).toBe(false)
   })
 
@@ -253,7 +258,8 @@ describe('AUDIT_ACTIONS', () => {
 
   it('targets users, tenants and invitations as the plan says', () => {
     expect(AUDIT_ACTIONS['user.deleted'].target).toBe('user')
-    expect(AUDIT_ACTIONS['auth.reauthenticated'].target).toBe('user')
+    expect(AUDIT_ACTIONS['auth.step_up_confirmed'].target).toBe('user')
+    expect(AUDIT_ACTIONS['auth.step_up_refused'].target).toBe('user')
     expect(AUDIT_ACTIONS['tenant.archived'].target).toBe('tenant')
     expect(AUDIT_ACTIONS['tenant.owner_invited'].target).toBe('invitation')
     expect(AUDIT_ACTIONS['user.purged'].target).toBe('user')
@@ -349,6 +355,7 @@ describe('audit value sets', () => {
         'user.errors_viewed',
         'tenant.errors_viewed',
         'platform.member.auto_joined',
+        'auth.reauthenticated',
       ])
       for (const action of RETIRED_AUDIT_ACTIONS) {
         expect(Object.hasOwn(AUDIT_ACTIONS, action)).toBe(false)

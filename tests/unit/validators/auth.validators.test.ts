@@ -4,7 +4,6 @@ import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
-  reauthenticateSchema,
   registerSchema,
   resetPasswordSchema,
 } from '@/validators/auth.validators'
@@ -93,6 +92,5 @@ describe('the password length floor', () => {
     expect(
       changePasswordSchema.safeParse({ currentPassword: 'short', newPassword: LONG_ENOUGH }).success
     ).toBe(true)
-    expect(reauthenticateSchema.safeParse({ password: 'short' }).success).toBe(true)
   })
 })

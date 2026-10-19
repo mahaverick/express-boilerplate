@@ -20,6 +20,7 @@ import type { sql as SqlType } from '@/services/database.service'
 import type { subscribeDomainEvent as SubscribeDomainEventType } from '@/services/domain-events.service'
 import type { completeGoogleSignIn as CompleteGoogleSignInType } from '@/services/google-auth.service'
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
+import { FakeGoogleSuccessStrategy } from '../../helpers/fake-google'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
@@ -41,8 +42,8 @@ function uniqueEmail(): string {
 }
 
 /**
- * A fixture Google profile shaped like what `passthroughGoogleProfile` (passport.config.ts) hands
- * `done()`, which is what `completeGoogleSignIn` (google-auth.service.ts) receives. The fields the
+ * A fixture Google profile shaped like the profile `passthroughGoogleProfile` (passport.config.ts)
+ * hands `done()`, which is what `completeGoogleSignIn` (google-auth.service.ts) receives. The fields the
  * account-linking code reads (`id`, `emails[0].value`, `emails[0].verified`,
  * `_json.email_verified`) can be overridden; every other field is a plausible constant.
  * @param overrides - Fields to replace. `jsonEmailVerified` defaults to `emailVerified`, so a test sets it only to make the two disagree; `includeEmails: false` omits `emails`, the "Google shared no email" case.
@@ -79,36 +80,6 @@ function googleProfile(
       email,
       email_verified: overrides.jsonEmailVerified ?? isEmailVerified,
     },
-  }
-}
-
-/**
- * A Passport strategy that calls `this.success(profile)` as soon as it authenticates a request, so
- * the callback's success path can be driven over real HTTP without reaching Google.
- * `configurePassport()` registers the real `GoogleStrategy` under `GOOGLE_STRATEGY_NAME` and
- * `passport.use` overwrites a registration, so a test swaps this in and the `afterEach` below calls
- * `configurePassport()` to restore the real one.
- *
- * In this file it is the only way to reach the callback's success path, where the response cookie's
- * `sameSite: 'lax'` and the `lastLoggedInAt` write can be observed: the account-linking tests call
- * `completeGoogleSignIn` directly and the failure-path tests never reach a success.
- */
-class FakeGoogleSuccessStrategy implements passport.Strategy {
-  name = GOOGLE_STRATEGY_NAME
-
-  /**
-   * `profile` is public because `authenticate`'s `this: passport.StrategyCreated<...>` type is a
-   * mapped type passport's `.d.ts` builds outside this class, which cannot see a `private` field.
-   */
-  constructor(readonly profile: GoogleProfile) {}
-
-  /**
-   * The cast mirrors `passthroughGoogleProfile`'s (passport.config.ts): `Express.User` is the JWT
-   * principal type, but a real `done(null, profile)` hands the callback a raw Google profile too.
-   */
-  authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
-    // eslint-disable-next-line unicorn/no-undeclared-class-members -- `success` is never a member of THIS class; passport injects it at runtime onto the per-request instance `this` refers to (`StrategyCreatedStatic`, passport's own `.d.ts`), which is exactly what `authenticate`'s `this: passport.StrategyCreated<...>` parameter type documents.
-    this.success(this.profile as unknown as Express.User)
   }
 }
 
@@ -281,7 +252,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(cookies?.some((cookie) => cookie.startsWith('refreshToken='))).not.toBe(true)
     })
 
-    // FakeGoogleSuccessStrategy (module scope, above) drives handleGoogleCallback's success path over real HTTP; configurePassport() restores the real Google strategy after every test here, so nothing above or below this describe block observes the swap.
+    // FakeGoogleSuccessStrategy (tests/helpers/fake-google.ts) drives handleGoogleCallback's success path over real HTTP; configurePassport() restores the real Google strategy after every test here, so nothing above or below this describe block observes the swap.
     describe('a successful sign-in (fake strategy — Google itself can never be hit)', () => {
       afterEach(async () => {
         const passportConfig = await import('@/configs/passport.config')

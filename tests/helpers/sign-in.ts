@@ -8,6 +8,7 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
 import { issueLinkToken } from '@/services/link-token.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { testRefreshCookie } from './refresh-cookie'
 import { request } from './request'
@@ -64,4 +65,20 @@ export async function signInByLink(
   if (refreshCookie === undefined) throw new Error('signInByLink: no refresh cookie was set')
   const body = response.body as { data: { accessToken: string; user: { id: string } } }
   return { accessToken: body.data.accessToken, refreshCookie, userId: body.data.user.id }
+}
+
+/**
+ * Delete every key of one rate limiter under this worker's prefix, so an
+ * IP-keyed budget a file spends (`signInByLink` spends the link verify's)
+ * does not carry from one test to the next.
+ * @param name - The limiter's name, its `RATE_LIMITS` entry's `name`.
+ */
+export async function clearRateLimiter(name: string): Promise<void> {
+  const client = await getRedis()
+  const keys: string[] = []
+  const batches = client.scanIterator({ MATCH: `${redisKey('rl', name)}:*` })
+  for await (const batch of batches) {
+    keys.push(...batch)
+  }
+  if (keys.length > 0) await client.del(keys)
 }

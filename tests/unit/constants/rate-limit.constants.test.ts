@@ -2,7 +2,7 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 32 literal strings, in order; (2) every entry's
+ * stays exactly the 34 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
  * (3) the five key-derivation functions produce byte-identical output
@@ -44,7 +44,6 @@ const EXPECTED_NAMES_IN_ORDER = [
   'platform-search',
   'authenticated-write',
   'platform-write',
-  'reauthenticate',
   'email-webhook',
   'email-webhook-rejected',
   'analytics-proxy',
@@ -56,6 +55,8 @@ const EXPECTED_NAMES_IN_ORDER = [
   'sign-in-link-request',
   'sign-in-link-verify',
   'invitation-verify',
+  'step-up-link',
+  'step-up-google',
 ]
 
 /**
@@ -142,13 +143,6 @@ const EXPECTED_RATE_LIMITS: {
   },
   { key: 'platformWrite', name: 'platform-write', windowMs: 60_000, limit: 30, keyBy: 'user' },
   {
-    key: 'reauthenticate',
-    name: 'reauthenticate',
-    windowMs: 900_000,
-    limit: 5,
-    keyBy: 'user',
-  },
-  {
     key: 'emailWebhook',
     name: 'email-webhook',
     windowMs: 60_000,
@@ -213,6 +207,8 @@ const EXPECTED_RATE_LIMITS: {
     limit: 20,
     keyBy: 'ip',
   },
+  { key: 'stepUpLink', name: 'step-up-link', windowMs: 900_000, limit: 10, keyBy: 'user' },
+  { key: 'stepUpGoogle', name: 'step-up-google', windowMs: 900_000, limit: 10, keyBy: 'user' },
 ]
 
 describe('RATE_LIMITS key stability', () => {

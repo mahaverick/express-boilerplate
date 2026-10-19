@@ -135,6 +135,30 @@ describe('errorHandler', () => {
     expect(body()).toMatchObject({ statusCode: 401, code: 'ACCESS_TOKEN_EXPIRED' })
   })
 
+  it('sets Retry-After from an HttpError that carries retryAfterSeconds', () => {
+    const { response, body } = mockResponse()
+    errorHandler(
+      new HttpError('Wait a moment.', 429, 'STEP_UP_LINK_COOLDOWN', undefined, {
+        retryAfterSeconds: 42,
+      }),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
+    expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '42')
+    expect(body()).toMatchObject({ statusCode: 429, code: 'STEP_UP_LINK_COOLDOWN' })
+  })
+
+  it('sets no Retry-After on an HttpError without retryAfterSeconds', () => {
+    const { response } = mockResponse()
+    errorHandler(new HttpError('invalid', 400), {} as never, response, vi.fn())
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
+    expect(response.setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything())
+  })
+
   it('omits the code key when HttpError carries none', () => {
     const { response, body } = mockResponse()
     errorHandler(new HttpError('invalid', 422), {} as never, response, vi.fn())

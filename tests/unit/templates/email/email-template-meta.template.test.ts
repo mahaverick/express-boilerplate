@@ -59,6 +59,12 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     reason: 'self',
   },
+  step_up_link: {
+    firstName: 'Ada',
+    confirmUrl: 'https://x.test/auth/confirm?token=t',
+    expiresInMinutes: '15',
+    appName: 'App',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -117,6 +123,12 @@ describe('EMAIL_TEMPLATE_META', () => {
       sign_in_link: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
+      },
+      step_up_link: {
+        senderClass: 'transactional',
+        previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },

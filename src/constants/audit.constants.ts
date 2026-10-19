@@ -174,9 +174,14 @@ export const AUDIT_ACTIONS = {
       reason: reason.nullable(),
     }),
   },
-  'auth.reauthenticated': {
+  // A staff step-up: confirmed by an emailed link or a fresh Google login; a refused Google confirm is audited too.
+  'auth.step_up_confirmed': {
     target: 'user',
-    metadata: z.strictObject({ outcome: z.enum(['success', 'failure']) }),
+    metadata: z.strictObject({ method: z.enum(['link', 'google']) }),
+  },
+  'auth.step_up_refused': {
+    target: 'user',
+    metadata: z.strictObject({ method: z.literal('google') }),
   },
   'user.purged': {
     target: 'user',
@@ -257,6 +262,7 @@ export const RETIRED_AUDIT_ACTIONS = [
   'user.errors_viewed',
   'tenant.errors_viewed',
   'platform.member.auto_joined',
+  'auth.reauthenticated',
 ] as const
 
 /**

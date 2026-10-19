@@ -56,6 +56,7 @@ describe('buildPreviewMessage', () => {
     ['password_reset', '/reset-password?token='],
     ['account_setup', '/reset-password?token='],
     ['tenant_invitation', '/invitations/accept?token='],
+    ['step_up_link', '/auth/confirm?token='],
   ])('%s keeps the real page and frontend and masks the token', (templateKey, path) => {
     const { message } = buildPreviewMessage(templateKey, {}, ORIGIN)
     const rendered = renderForMessage(message)
