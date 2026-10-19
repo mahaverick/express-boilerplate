@@ -302,6 +302,7 @@ describe('platform response fields', () => {
       const createdBody = dataOf<{ user: { id: string }; emailSent: boolean }>(created)
       createdUserIds.push(createdBody.user.id)
       await sql`delete from user_tokens where email = ${email}`
+      await sql`delete from email_messages where recipient = ${email}`
 
       const items = dataOf<{ items: unknown[] }>(list).items
       expect(items).toHaveLength(1)
