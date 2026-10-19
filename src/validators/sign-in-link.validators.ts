@@ -22,10 +22,14 @@ export const signInLinkRequestSchema = z.object({
 export type SignInLinkRequestInput = z.infer<typeof signInLinkRequestSchema>
 
 /**
- * A sign-in link verify: the raw token from the link. Any string is
- * accepted, so a malformed token gets the same `LINK_INVALID` as an unknown
- * one; only a missing or non-string token fails validation.
+ * A sign-in link verify: the raw token from the link, and the address the
+ * link displays when it carries one. Any string is accepted for both, so a
+ * malformed token, or an address that is not the link's, gets the same
+ * `LINK_INVALID` as an unknown token; only a missing or non-string token, or
+ * a non-string address, fails validation. The address is trimmed and
+ * lowercased here, as the link's row stores it.
  */
 export const signInLinkVerifySchema = z.object({
   token: z.string(),
+  email: z.string().trim().toLowerCase().optional(),
 })

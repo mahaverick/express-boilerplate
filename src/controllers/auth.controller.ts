@@ -199,7 +199,8 @@ class AuthController extends BaseController {
   /**
    * `POST /auth/link/verify`: sign in with the token from a mailed link,
    * creating the account on the first click (`isNewUser`). Every link that
-   * signs nobody in answers one 400 `LINK_INVALID`. A refresh cookie the
+   * signs nobody in answers one 400 `LINK_INVALID`, as does an `email` that
+   * is not the link's address, which spends nothing. A refresh cookie the
    * browser still presented has its session revoked once the new one is
    * issued; the reply carries the redirect stored with the
    * link. `no-store`, as every token response (RFC 6749 §5.1).
@@ -207,7 +208,7 @@ class AuthController extends BaseController {
   verifySignInLink = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(signInLinkVerifySchema, request.body)
-    const session = await verifySignInLink(input.token)
+    const session = await verifySignInLink(input.token, input.email)
     await revokePresentedSession(request, { emitSignedOut: false })
 
     setRefreshTokenCookie(

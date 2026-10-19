@@ -176,6 +176,29 @@ function postVerify(token: string, cookie?: string): Promise<Response> {
 }
 
 /**
+ * Post a link verify carrying the link's `email` param, as the web frontend does.
+ * @param token - The raw token.
+ * @param email - The address the link displays, sent as is.
+ * @returns The response.
+ */
+function postVerifyWithEmail(token: string, email: unknown): Promise<Response> {
+  return request(app).post('/api/v1/auth/link/verify').send({ token, email })
+}
+
+/**
+ * Whether a link row is still unspent: neither revoked nor consumed.
+ * @param token - The raw token.
+ * @returns True when the row is live.
+ */
+async function isUnspent(token: string): Promise<boolean> {
+  const [row] = await sql<{ unspent: boolean }[]>`
+    select revoked_at is null and consumed_at is null as unspent
+    from user_tokens where token_hash = ${hashToken(token)}
+  `
+  return row?.unspent === true
+}
+
+/**
  * An error body without its per-request id, for comparing two refusals.
  * @param response - The response.
  * @returns The body minus `requestId`.
@@ -817,6 +840,92 @@ describe('POST /auth/link/verify', () => {
       select count(*)::int as count from users where lower(email) = ${email}
     `
     expect(row?.count).toBe(1)
+  })
+
+  describe('the link email bound to its token', () => {
+    it('refuses a link whose email names another address, spends nothing, and the right email still signs in', async () => {
+      const attackerEmail = uniqueEmail('swap-attacker')
+      const victimEmail = uniqueEmail('swap-victim')
+      const token = await issueTestLink(attackerEmail)
+      const dead = await postVerify(randomBytes(32).toString('base64url'))
+
+      const refused = await postVerifyWithEmail(token, victimEmail)
+
+      expect(refused.status).toBe(400)
+      expect(refusalBody(refused)).toStrictEqual(refusalBody(dead))
+      const refusedCookies =
+        (refused.headers['set-cookie'] as unknown as string[] | undefined) ?? []
+      expect(refusedCookies.some((line) => line.startsWith(`${REFRESH_COOKIE_NAME}=`))).toBe(false)
+      expect(await isUnspent(token)).toBe(true)
+      expect(await userRepository.findByEmail(attackerEmail)).toBeUndefined()
+      expect(await userRepository.findByEmail(victimEmail)).toBeUndefined()
+
+      const allowed = await postVerifyWithEmail(token, attackerEmail)
+      expect(allowed.status).toBe(200)
+      expect(verifyData(allowed).user.email).toBe(attackerEmail)
+    })
+
+    it("refuses an existing account's link carrying another address and issues no session", async () => {
+      const owner = await createTrackedUser({ email: uniqueEmail('swap-owner') })
+      const token = await issueTestLink(owner.email)
+
+      const refused = await postVerifyWithEmail(token, uniqueEmail('swap-other'))
+
+      expect(refused.status).toBe(400)
+      expect(refused.body).toMatchObject({ code: LINK_INVALID_CODE })
+      expect(await refreshRows(owner.id)).toEqual([])
+      expect(eventsFor(owner.id)).toEqual([])
+      expect(await isUnspent(token)).toBe(true)
+    })
+
+    it('accepts the right address in another case and with surrounding whitespace', async () => {
+      const email = uniqueEmail('swap-case')
+      const token = await issueTestLink(email)
+
+      const response = await postVerifyWithEmail(token, `  ${email.toUpperCase()}\t`)
+
+      expect(response.status).toBe(200)
+      expect(verifyData(response).user.email).toBe(email)
+    })
+
+    it('refuses an empty email as a mismatch and spends nothing', async () => {
+      const email = uniqueEmail('swap-empty')
+      const token = await issueTestLink(email)
+
+      const refused = await postVerifyWithEmail(token, ' '.repeat(3))
+
+      expect(refused.status).toBe(400)
+      expect(refused.body).toMatchObject({ code: LINK_INVALID_CODE })
+      expect(await isUnspent(token)).toBe(true)
+    })
+
+    it('answers a non-string email with the validation 400', async () => {
+      const token = await issueTestLink(uniqueEmail('swap-type'))
+
+      const response = await postVerifyWithEmail(token, 42)
+
+      expect(response.status).toBe(400)
+      expect(response.body).not.toMatchObject({ code: LINK_INVALID_CODE })
+      expect((response.body as { errors?: Record<string, unknown> }).errors).toHaveProperty('email')
+      expect(await isUnspent(token)).toBe(true)
+    })
+
+    it('issues one session when the same link with its email is verified twice at once, and a swapped one in the race takes nothing', async () => {
+      const user = await createTrackedUser({ email: uniqueEmail('swap-race') })
+      const token = await issueTestLink(user.email)
+
+      const [swapped, ...matched] = await Promise.all([
+        postVerifyWithEmail(token, uniqueEmail('swap-race-other')),
+        postVerifyWithEmail(token, user.email),
+        postVerifyWithEmail(token, user.email),
+      ])
+
+      expect(swapped?.status).toBe(400)
+      expect(matched.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+        200, 400,
+      ])
+      expect(await refreshRows(user.id)).toEqual([{ revoked: false }])
+    })
   })
 
   it('revokes the session the browser presented', async () => {

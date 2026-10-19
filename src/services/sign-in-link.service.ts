@@ -3,7 +3,8 @@
  * every address and does its work after it (`requestSignInLink`): the
  * cooldown, the daily budget, the lookup and the mail, any of which stops it
  * silently; on Apex a staff invitee is mailed their invitation instead. A
- * verify (`verifySignInLink`) spends the link once and signs in
+ * verify (`verifySignInLink`) refuses a link displaying another address
+ * without spending it, then spends the link once and signs in
  * the account its address holds, creating a verified account on the first
  * click when there is none. Every dead link, and every account it may not
  * sign in, answers one `LINK_INVALID`.
@@ -245,6 +246,28 @@ async function assertVerifyAllowedByMode(raw: string): Promise<void> {
 }
 
 /**
+ * Refuse a link whose displayed address is not the one it was mailed to.
+ * The frontends show "Signing you in as <email>" from the link's `email`
+ * param, which anyone can edit: a link carrying one person's token and
+ * another's address would sign the visitor in to the first under the
+ * second's name. The check runs on a read-only peek, so the refusal spends
+ * nothing and the owner's link stays usable. A token's address never
+ * changes, so the claim that follows a matching peek spends the same row,
+ * and a concurrent click still wins or loses on the claim alone. A dead
+ * link falls through to the claim, which answers it as it always has.
+ * Neither address is logged.
+ * @param raw - The raw token from the link.
+ * @param shownEmail - The displayed address, trimmed and lowercased.
+ * @returns Resolves when the link is dead or shows its own address.
+ * @throws {HttpError} 400 `LINK_INVALID` when a live link shows another address.
+ */
+async function assertLinkShowsItsAddress(raw: string, shownEmail: string): Promise<void> {
+  const peeked = await peekLinkToken(raw, 'sign_in')
+  if (!peeked?.email) return
+  if (peeked.email.trim().toLowerCase() !== shownEmail) throw linkInvalid()
+}
+
+/**
  * Create the account a first click proves, in its own transaction, and emit
  * `email_verified` once it commits. When another write created an account
  * for the address first (a concurrent click, or a registration), the
@@ -339,19 +362,24 @@ async function claimForLink(userId: string): Promise<User> {
  * from the request.
  *
  * Order: the maintenance mode is checked on a read-only peek
- * (`assertVerifyAllowedByMode`), so a refused link stays usable; the link
- * is claimed (any dead link is `LINK_INVALID`); the account is resolved
+ * (`assertVerifyAllowedByMode`), so a refused link stays usable; the
+ * address the link displays, when the client sends it, is compared with the
+ * link's row on another peek (`assertLinkShowsItsAddress`), so a link whose
+ * `email` was swapped is `LINK_INVALID` and stays usable for its owner; the
+ * link is claimed (any dead link is `LINK_INVALID`); the account is resolved
  * (`resolveLinkAccount`); `assertSignInAllowed` runs on it; `lastLoggedInAt`
  * is stamped outside the lock; then one transaction re-reads the user FOR
  * SHARE and issues the session, so a deactivation or soft delete that
  * committed since is `LINK_INVALID` with no session, and one that commits
  * later waits for the lock and revokes it.
  * @param raw - The raw token from the link.
+ * @param shownEmail - The address the link displays, trimmed and lowercased, when the client sends it.
  * @returns The session.
  * @throws {HttpError} 400 `LINK_INVALID`; 503 `MAINTENANCE_MODE` or `READ_ONLY_MODE` (a `MaintenanceModeError`).
  */
-export async function verifySignInLink(raw: string): Promise<LinkSession> {
+export async function verifySignInLink(raw: string, shownEmail?: string): Promise<LinkSession> {
   await assertVerifyAllowedByMode(raw)
+  if (shownEmail !== undefined) await assertLinkShowsItsAddress(raw, shownEmail)
 
   const row = await claimLinkToken(raw, 'sign_in')
   // Every sign_in_link row has both (user_tokens_shape_check); anything else is not a link.
