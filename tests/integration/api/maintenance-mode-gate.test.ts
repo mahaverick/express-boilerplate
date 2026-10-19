@@ -92,6 +92,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
+  // The status budget is per IP and per worker: a spent one would 429 the next file's status reads.
+  await clearRateLimiter(RATE_LIMITS.maintenanceStatus.name)
   vi.restoreAllMocks()
   await resetMaintenanceMode()
   await reloadMaintenanceMode()

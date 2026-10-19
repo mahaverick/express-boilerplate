@@ -9,6 +9,7 @@
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import * as repository from '@/repositories/maintenance-mode.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
@@ -37,6 +38,7 @@ import {
 import { platformTenant } from '../../helpers/platform-staff'
 import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { clearRateLimiter } from '../../helpers/sign-in'
 
 const app = createApp()
 const ENVIRONMENT = 'local'
@@ -276,7 +278,10 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(viewOf(await request(app).get(PATH).set('Authorization', `Bearer ${token}`)).since).toBe(
       began.toISOString()
     )
+    // Other files in this worker read the route under the same IP; start its per-IP budget afresh.
+    await clearRateLimiter(RATE_LIMITS.maintenanceStatus.name)
     const status = await request(app).get('/api/v1/status/maintenance')
+    expect(status.status).toBe(200)
     expect((status.body as { data: { since: string } }).data.since).toBe(began.toISOString())
     const refused = await request(app).get('/api/v1/tenants')
     expect(refused.status).toBe(503)

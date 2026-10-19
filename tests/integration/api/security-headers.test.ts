@@ -12,10 +12,10 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
-import { getRedis, redisKey } from '@/services/redis.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -26,7 +26,7 @@ import {
 } from '../../helpers/platform-users'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
-import { issueTestLink } from '../../helpers/sign-in'
+import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 const app = createApp()
 
@@ -244,11 +244,7 @@ describe('Cache-Control', () => {
 
   it('leaves the public maintenance status at public, max-age=5', async () => {
     // Other files in this worker poll the route under the same IP; start its per-IP budget afresh.
-    const client = await getRedis()
-    const keys: string[] = []
-    const batches = client.scanIterator({ MATCH: `${redisKey('rl', 'maintenance-status')}:*` })
-    for await (const batch of batches) keys.push(...batch)
-    if (keys.length > 0) await client.del(keys)
+    await clearRateLimiter(RATE_LIMITS.maintenanceStatus.name)
 
     const response = await request(app).get('/api/v1/status/maintenance')
 
