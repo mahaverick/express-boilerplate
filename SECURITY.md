@@ -660,8 +660,10 @@ session (`src/services/step-up.service.ts`).
   (`GOOGLE_CLIENT_ID`), `sub` against the profile, and `auth_time` no earlier
   than the start less 60 seconds of clock skew; a missing `auth_time` fails
   closed. The profile's `sub` must be the account's linked Google identity: an
-  address match is not enough. On success the callback moves the session's
-  `authenticated_at`, audits `auth.step_up_confirmed { method: 'google' }` and
+  address match is not enough. On success one transaction moves the session's
+  `authenticated_at` under the user-row lock, re-checks the platform role
+  there, as the link confirm does, and audits
+  `auth.step_up_confirmed { method: 'google' }`; the callback then
   redirects the popup to `<apex>/auth/confirm?result=confirmed`, setting no
   cookie. Every refusal redirects to `?error=step_up_failed` and is audited
   `auth.step_up_refused { method: 'google' }`.

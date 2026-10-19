@@ -21,6 +21,7 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { configurePassport } from '@/configs/passport.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
+import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
@@ -31,6 +32,7 @@ import {
   fakeIdToken,
   type FakeIdTokenClaims,
 } from '../../helpers/fake-google'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff } from '../../helpers/platform-staff'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { agent, request } from '../../helpers/request'
@@ -685,6 +687,42 @@ describe('GET /api/v1/auth/google/callback after a step-up start', () => {
 
     expect(response.headers.location).toBe(STEP_UP_FAILED)
     expect(didSetRefreshCookie(response)).toBe(false)
+    expect(await refreshAuthenticatedTimes(session.sid)).toEqual(timesBefore)
+    expect(await stepUpAudits(session.userId)).toEqual([
+      { action: 'auth.step_up_refused', metadata: { method: 'google' } },
+    ])
+  })
+
+  it('refuses a caller demoted while the confirm waits for the user-row lock', async () => {
+    const session = await signedInStaff()
+    const start = await startStepUp(session)
+    expect(start.status).toBe(204)
+    await ageSession(session.sid)
+    const timesBefore = await refreshAuthenticatedTimes(session.sid)
+    googleAnswersAsLinked(session)
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realLock = UserRepository.prototype.lockById
+    const demoted = { done: false }
+    /**
+     * Stands in for `UserRepository.lockById`: the demotion commits on another connection just before the confirm's lock.
+     */
+    const demotingLock: typeof realLock = async function (this: UserRepository, ...arguments_) {
+      const [id, mode] = arguments_
+      if (mode === 'no key update' && id === session.userId && !demoted.done) {
+        demoted.done = true
+        await sql`delete from user_memberships where user_id = ${session.userId}`
+      }
+      return realLock.apply(this, arguments_)
+    }
+
+    let location: string | undefined
+    await withMutatedMethod(UserRepository.prototype, 'lockById', demotingLock, async () => {
+      const response = await session.browser.get('/api/v1/auth/google/callback')
+      location = response.headers.location
+    })
+
+    expect(demoted.done).toBe(true)
+    expect(location).toBe(STEP_UP_FAILED)
     expect(await refreshAuthenticatedTimes(session.sid)).toEqual(timesBefore)
     expect(await stepUpAudits(session.userId)).toEqual([
       { action: 'auth.step_up_refused', metadata: { method: 'google' } },

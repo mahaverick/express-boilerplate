@@ -388,9 +388,10 @@ async function recordRefusal(userId: string, method: 'link' | 'google'): Promise
 /**
  * Confirm a Google step-up from the callback: the ID token checks
  * (`iss`, `aud`, `sub`, `auth_time`), the profile's `sub` equal to the
- * account's linked Google identity (an address match is not enough), the
- * caller still staff, and then one transaction that moves the session's
- * `authenticated_at` and audits `auth.step_up_confirmed`. Nothing here
+ * account's linked Google identity (an address match is not enough), and then
+ * one transaction that moves the session's `authenticated_at`, re-reads the
+ * caller's platform role under the user-row lock, and audits
+ * `auth.step_up_confirmed`. Nothing here
  * issues a token or a session.
  *
  * The ID token is decoded without a signature check, which OIDC Core
@@ -414,7 +415,6 @@ export async function confirmGoogleStepUp(
     checkedClaims(intent, profile, idToken)
     const linked = await authProviderRepository.findByProviderAndId('google', profile.id)
     if (linked?.userId !== userId) throw new GoogleStepUpRefused('google_not_linked')
-    if ((await getPlatformMembership(userId)) === null) throw new GoogleStepUpRefused('not_staff')
     await withTransaction(async (tx) => {
       try {
         await markSessionReauthenticated(userId, sessionId, tx)
@@ -423,6 +423,10 @@ export async function confirmGoogleStepUp(
           throw new GoogleStepUpRefused('session_ended')
         }
         throw error
+      }
+      // Under the user-row lock the mark took, as the link confirm reads it: a demotion committed meanwhile refuses, and the throw rolls the mark back.
+      if ((await getPlatformMembership(userId, tx)) === null) {
+        throw new GoogleStepUpRefused('not_staff')
       }
       await recordStepUp(
         userId,
