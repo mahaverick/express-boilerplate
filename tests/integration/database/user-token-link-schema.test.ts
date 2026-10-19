@@ -1,5 +1,5 @@
 /**
- * @file What migrations 0028 and 0029 leave on `user_tokens` for emailed links,
+ * @file What migrations 0028, 0029 and 0030 leave on `user_tokens` for emailed links,
  * asserted with raw SQL inserts so no application check stands in for the
  * database's: `user_tokens_shape_check` per purpose, `user_tokens_app_check`
  * and `user_tokens_purpose_check`. Every column but the one under
@@ -13,11 +13,14 @@ import { sql } from '@/services/database.service'
 const PREFIX = `link-schema-${randomUUID()}-`
 const PREFIX_LIKE = `${PREFIX}%`
 const userIds: string[] = []
+const tenantIds: string[] = []
 // eslint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 afterEach(async () => {
   await sql`delete from user_tokens where email like ${PREFIX_LIKE}`
+  if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
+  tenantIds.length = 0
   if (userIds.length > 0) await sql`delete from users where id = any(${userIds})`
   userIds.length = 0
 })
@@ -45,6 +48,7 @@ interface TokenRowSeed {
   email?: string | null
   app?: string | null
   redirect?: string | null
+  invitationId?: string | null
 }
 
 /**
@@ -54,10 +58,10 @@ async function insertTokenRow(seed: TokenRowSeed): Promise<void> {
   const email = seed.email === undefined ? `${PREFIX}${randomUUID()}@example.test` : seed.email
   const app = seed.app === undefined ? 'web' : seed.app
   await sql`
-    insert into user_tokens (purpose, user_id, session_id, email, app, redirect, token_hash, expires_at)
+    insert into user_tokens (purpose, user_id, session_id, email, app, redirect, invitation_id, token_hash, expires_at)
     values (
       ${seed.purpose ?? 'sign_in_link'}, ${seed.userId ?? SQL_NULL}, ${seed.sessionId ?? SQL_NULL},
-      ${email}, ${app}, ${seed.redirect ?? SQL_NULL},
+      ${email}, ${app}, ${seed.redirect ?? SQL_NULL}, ${seed.invitationId ?? SQL_NULL},
       ${randomBytes(32).toString('hex')}, now() + interval '15 minutes'
     )`
 }
@@ -75,13 +79,45 @@ async function stepUpSeed(overrides: TokenRowSeed = {}): Promise<TokenRowSeed> {
   }
 }
 
+/**
+ * Inserts a tenant and a pending invitation in it with raw SQL, tracked for
+ * cleanup (the invitation goes with its tenant), and returns the invitation's id.
+ */
+async function insertInvitation(): Promise<string> {
+  const inviterId = await insertUser()
+  const tenantId = randomUUID()
+  const invitationId = randomUUID()
+  const slug = `${PREFIX}${tenantId}`
+  await sql`insert into tenants (id, name, slug) values (${tenantId}, 'Acme Inc', ${slug})`
+  tenantIds.push(tenantId)
+  await sql`
+    insert into tenant_invitations (id, tenant_id, email, role, token_hash, invited_by, expires_at)
+    values (${invitationId}, ${tenantId}, ${`${PREFIX}${invitationId}@example.test`}, 'editor',
+      ${randomBytes(32).toString('hex')}, ${inviterId}, now() + interval '3 days')`
+  return invitationId
+}
+
+/**
+ * A valid `invitation_link` seed for a fresh invitation, with `overrides` merged over it.
+ */
+async function invitationSeed(overrides: TokenRowSeed = {}): Promise<TokenRowSeed> {
+  return { purpose: 'invitation_link', invitationId: await insertInvitation(), ...overrides }
+}
+
+/**
+ * A valid seed for one link intent.
+ */
+async function seedFor(intent: (typeof LINK_TOKEN_INTENTS)[number]): Promise<TokenRowSeed> {
+  if (intent === 'sign_in') return { redirect: '/tenants' }
+  return intent === 'step_up' ? stepUpSeed() : invitationSeed()
+}
+
 const SHAPE = { code: '23514', constraint_name: 'user_tokens_shape_check' }
 
 describe('user_tokens link CHECKs', () => {
   it.each(LINK_TOKEN_INTENTS)('accepts a valid row for a %s link', async (intent) => {
     const purpose = LINK_TOKEN_PURPOSES[intent]
-    const seed = intent === 'sign_in' ? { redirect: '/tenants' } : await stepUpSeed()
-    await insertTokenRow(seed)
+    await insertTokenRow(await seedFor(intent))
     const rows = await sql`select purpose from user_tokens where email like ${PREFIX_LIKE}`
     expect(rows).toEqual([{ purpose }])
   })
@@ -132,6 +168,34 @@ describe('user_tokens link CHECKs', () => {
         sessionId: randomUUID(),
         email: SQL_NULL,
         app: SQL_NULL,
+      })
+    ).rejects.toMatchObject(SHAPE)
+  })
+
+  it('refuses an invitation_link row with a user_id, a session_id, a redirect or no invitation_id', async () => {
+    const seeds = [
+      await invitationSeed({ userId: await insertUser() }),
+      await invitationSeed({ sessionId: randomUUID() }),
+      await invitationSeed({ redirect: '/tenants' }),
+      await invitationSeed({ invitationId: SQL_NULL }),
+    ]
+    for (const seed of seeds) {
+      await expect(insertTokenRow(seed)).rejects.toMatchObject(SHAPE)
+    }
+  })
+
+  it('refuses an invitation_id on every other purpose', async () => {
+    const invitationId = await insertInvitation()
+    await expect(insertTokenRow({ invitationId })).rejects.toMatchObject(SHAPE)
+    await expect(insertTokenRow(await stepUpSeed({ invitationId }))).rejects.toMatchObject(SHAPE)
+    await expect(
+      insertTokenRow({
+        purpose: 'refresh',
+        userId: await insertUser(),
+        sessionId: randomUUID(),
+        email: SQL_NULL,
+        app: SQL_NULL,
+        invitationId,
       })
     ).rejects.toMatchObject(SHAPE)
   })

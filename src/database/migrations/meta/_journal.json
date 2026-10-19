@@ -211,6 +211,13 @@
       "when": 1792413723805,
       "tag": "0029_passwordless",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792437380961,
+      "tag": "0030_invitation_links",
+      "breakpoints": true
     }
   ]
 }
