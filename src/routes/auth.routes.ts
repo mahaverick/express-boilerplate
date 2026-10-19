@@ -42,10 +42,11 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * same-site sibling page could otherwise send them a body-less POST with the
  * cookie attached. `/link/verify` refuses one too: it sets the refresh
  * cookie and revokes the session the presented one names, so another page
- * must not be able to sign the browser in to an account of its choosing. `/change-password` and `/sessions/revoke-others` read the
- * cookie too, but only to narrow what they spare; they authenticate with the
- * bearer token, which a browser never attaches on its own, so no other page
- * can make it send one and they need no Origin check.
+ * must not be able to sign the browser in to an account of its choosing.
+ * `/change-password` and `/sessions/revoke-others` read the cookie too, but
+ * only to narrow what they spare; they authenticate with the bearer token,
+ * which a browser never attaches on its own, so no other page can make it
+ * send one and they need no Origin check.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;

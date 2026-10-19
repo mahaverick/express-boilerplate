@@ -85,12 +85,13 @@ not only through TypeScript's `$type<TokenPurpose>()`.
 
 - `token_hash` is a SHA-256 digest of the raw token, never the token.
 - `session_id`, `session_started_at` and `authenticated_at` are meaningful only
-  for `'refresh'`, except that `session_id` is meaningful on a `'step_up_link'`
-  too (see Emailed links). `session_id` groups every token descended from one login
-  into a rotation family. `session_started_at` is copied forward unchanged by
-  every rotation, which makes `SESSION_ABSOLUTE_TTL` an absolute ceiling.
-  `authenticated_at` is when the session last proved who its user is, and is
-  the source of the access token's `auth_time`.
+  for `'refresh'`, except that `session_id` is meaningful on a
+  `'step_up_link'` too (see Emailed links). `session_id` groups every token
+  descended from one login into a rotation family. `session_started_at` is
+  copied forward unchanged by every rotation, which makes
+  `SESSION_ABSOLUTE_TTL` an absolute ceiling. `authenticated_at` is when the
+  session last proved who its user is, and is the source of the access
+  token's `auth_time`.
 - `consumed_at` is set only by `UserTokenRepository.claimOnce`, so it
   separates a row spent through its single-use path from one revoked unused.
 - `replaced_by_id` points at the row a token rotated into. Nothing reads it; it

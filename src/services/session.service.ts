@@ -691,9 +691,10 @@ function absoluteLifetimeCutoff(): Date {
 /**
  * Sign a user out of every session but the one making the request: revoke
  * their other sessions' token rows (and any reset or verification token) and
- * the live sign-in links mailed to their address under the user row lock, then deny each revoked session's access tokens
- * after commit, which also ends that session's notification stream at its
- * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
+ * the live sign-in links mailed to their address under the user row lock,
+ * then deny each revoked session's access tokens after commit, which also
+ * ends that session's notification stream at its next heartbeat
+ * (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  *
  * When the request presented the caller's unrevoked refresh cookie, a sibling
  * chain a grace-window replay minted in the calling session is revoked too

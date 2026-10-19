@@ -53,7 +53,7 @@ describe('renderSignInLinkTemplate', () => {
     expect(SIGN_IN_LINK_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
       previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
-      // eslint-disable-next-line unicorn/no-null -- no staff resend re-runs this flow yet
+      // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     })
     expect(SIGN_IN_LINK_TEMPLATE_META.previewVariables).not.toContain('signInUrl')

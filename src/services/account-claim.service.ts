@@ -12,11 +12,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
-import {
-  denySessionsAfterCommit,
-  revokeAllSessions,
-  revokeSessionRows,
-} from '@/services/session.service'
+import { denySessionsAfterCommit, revokeSessionRows } from '@/services/session.service'
 import { markEmailVerified } from '@/services/verification.service'
 
 const userRepository = new UserRepository()
@@ -60,14 +56,17 @@ export async function createLinkedAccount(email: string, tx: DbTransaction): Pro
  * credentials, and its own link), the verification, and every session
  * revoked.
  *
- * Precondition: the caller has proven the mailbox and checked that the
- * account's email was never verified. Nothing here checks either.
+ * Precondition: the caller has proven the mailbox and checked, before any
+ * lock, that the account's email was never verified. Each transaction below
+ * re-reads the row under the lock and stops when it is verified by then (a
+ * concurrent claim won): that account belongs to the mailbox owner, so it
+ * is returned as it is, with nothing revoked, written or emitted.
  *
  * Sessions are revoked first, in a committed transaction of their own under
- * the user row lock (`revokeAllSessions`), so every refresh token that
- * existed, and the successor of a rotation that was in flight, is already
- * revoked if the claim fails. The claim's transaction locks the user row,
- * runs `inLock`, verifies and revokes again under the same lock: a session
+ * the user row lock (as `revokeAllSessions` does), so every refresh token
+ * that existed, and the successor of a rotation that was in flight, is
+ * already revoked if the claim fails. The claim's transaction locks the user
+ * row, runs `inLock`, verifies and revokes again under the same lock: a session
  * created between the two either commits before the lock and is revoked
  * there, or waits and finds its token revoked. The revoked sessions' access
  * tokens are denied after the commit, best effort
@@ -83,10 +82,21 @@ export async function claimNeverVerifiedAccount(
   userId: string,
   inLock?: (tx: DbTransaction) => Promise<void>
 ): Promise<User> {
-  await revokeAllSessions(userId)
+  const firstPass = await withTransaction(async (tx) => {
+    const locked = await userRepository.lockById(userId, 'no key update', tx)
+    if (!locked) throw new HttpError('Claimed user not found', 500)
+    if (locked.emailVerifiedAt !== null) return { verified: locked }
+    return { sessionIds: await revokeSessionRows(userId, {}, tx) }
+  })
+  if ('verified' in firstPass) return firstPass.verified
+  await denySessionsAfterCommit(userId, firstPass.sessionIds)
 
   const { claimed, verifiedNow, revokedSessionIds } = await withTransaction(async (tx) => {
-    await userRepository.lockById(userId, 'no key update', tx)
+    const locked = await userRepository.lockById(userId, 'no key update', tx)
+    if (!locked) throw new HttpError('Claimed user not found', 500)
+    if (locked.emailVerifiedAt !== null) {
+      return { claimed: locked, verifiedNow: false, revokedSessionIds: [] }
+    }
     await inLock?.(tx)
     const verified = await markEmailVerified(userId, tx)
     const sessionIds = await revokeSessionRows(userId, {}, tx)

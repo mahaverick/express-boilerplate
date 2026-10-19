@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { LINK_INVALID_CODE, LINK_INVALID_MESSAGE } from '@/constants/auth.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
-import { READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
+import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -230,24 +230,35 @@ async function assertVerifyAllowedByMode(raw: string): Promise<void> {
 
 /**
  * Create the account a first click proves, in its own transaction, and emit
- * `email_verified` once it commits. A concurrent click that created it first
- * wins: the address's account is read back and signed in, not created, so a
- * link that proved the mailbox is never refused for it.
+ * `email_verified` once it commits. When another write created an account
+ * for the address first (a concurrent click, or a registration), the
+ * insert loses the users unique index and this answers undefined, so the
+ * caller treats that account as an existing one: a link that proved the
+ * mailbox is never refused for it, and a never-verified one is claimed.
  * @param email - The link's address.
- * @returns The account, and whether this call created it.
- * @throws {HttpError} 400 `LINK_INVALID` when the address's account vanished between the two writes.
+ * @returns The new account, or undefined when the address was taken meanwhile.
  */
-async function createOrFindLinkedAccount(email: string): Promise<{ user: User; isNew: boolean }> {
+async function createLinkedAccountOnce(email: string): Promise<User | undefined> {
   try {
     const created = await withTransaction((tx) => createLinkedAccount(email, tx))
     await emitDomainEvent({ type: 'email_verified', userId: created.id, at: new Date() })
-    return { user: created, isNew: true }
+    return created
   } catch (error) {
     if (!isAddressTaken(error)) throw error
-    const existing = await userRepository.findByEmail(email)
-    if (!existing) throw linkInvalid()
-    return { user: existing, isNew: false }
+    return undefined
   }
+}
+
+/**
+ * Refuse an account creation the maintenance mode forbids. The peek before
+ * the claim already refused it; this catches a mode that changed since, so
+ * no account is written in `read_only` or `full` (the link is spent).
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+function assertCreationAllowedByMode(): void {
+  const snapshot = getMaintenanceMode()
+  if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
+  if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
 }
 
 /**
@@ -268,26 +279,29 @@ function clearSquatterCredentials(userId: string): (tx: DbTransaction) => Promis
 
 /**
  * The account a claimed link signs in, checked for this click: it is
- * created for a web link to an address with none (refused in `read_only`);
- * an Apex link reaches only an existing staff account; an inactive account
- * is refused; a never-verified one is claimed.
+ * created for a web link to an address with none (refused in `read_only`
+ * and `full`); an Apex link reaches only an existing staff account; an
+ * inactive account is refused; a never-verified one is claimed. An account
+ * another write created while this click was creating one goes through the
+ * same checks as one that existed before.
  * @param row - The claimed link's address and frontend.
  * @param row.email - The address the link was mailed to.
  * @param row.app - The frontend the link opens.
  * @returns The account and whether this click created it.
- * @throws {HttpError} 400 `LINK_INVALID`, or 503 `READ_ONLY_MODE`.
+ * @throws {HttpError} 400 `LINK_INVALID`, or 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
  */
 async function resolveLinkAccount(row: {
   email: string
   app: FrontendApp
 }): Promise<{ user: User; isNew: boolean }> {
-  const existing = await userRepository.findByEmail(row.email)
+  let existing = await userRepository.findByEmail(row.email)
   if (!existing) {
     if (row.app === 'apex') throw linkInvalid()
-    const snapshot = getMaintenanceMode()
-    // The mode changed to read_only after the peek: the link is spent, but no account is created.
-    if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
-    return createOrFindLinkedAccount(row.email)
+    assertCreationAllowedByMode()
+    const created = await createLinkedAccountOnce(row.email)
+    if (created) return { user: created, isNew: true }
+    existing = await userRepository.findByEmail(row.email)
+    if (!existing) throw linkInvalid()
   }
   if (!existing.active) throw linkInvalid()
   if (row.app === 'apex' && (await getPlatformMembership(existing.id)) === null) {

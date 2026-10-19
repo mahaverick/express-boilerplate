@@ -18,6 +18,8 @@ import { createApp } from '@/app'
 import { LINK_INVALID_CODE } from '@/constants/auth.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { EmailJobData } from '@/jobs/email.job'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
@@ -47,6 +49,7 @@ vi.mock('@/services/sign-in-link-limit.service', async (importOriginal) => {
 
 const app = createApp()
 const userRepository = new UserRepository()
+const authProviderRepository = new AuthProviderRepository()
 const { name: REFRESH_COOKIE_NAME } = testRefreshCookie()
 
 /**
@@ -529,6 +532,17 @@ describe('POST /auth/link/verify', () => {
       hasPassword: true,
     })
     await issueRefreshToken(user.id, randomUUID())
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'email',
+      providerId: user.email,
+    })
+    // A squatter's own Google link on the never-verified account.
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'google',
+      providerId: randomUUID(),
+    })
     const token = await issueTestLink(user.email)
 
     const response = await postVerify(token)
@@ -538,8 +552,10 @@ describe('POST /auth/link/verify', () => {
     expect(await refreshRows(user.id)).toEqual([{ revoked: true }, { revoked: false }])
     const claimed = await userRepository.findById(user.id)
     expect(claimed?.emailVerifiedAt).toBeInstanceOf(Date)
-    // A squatter's password on the address goes once the mailbox is proven.
+    // A squatter's password and federated links on the address go once the mailbox is proven.
     expect(claimed?.passwordHash).toBeNull()
+    const providers = await authProviderRepository.findByUser(user.id)
+    expect(providers.map((provider) => provider.provider)).toEqual(['email'])
     expect(eventsFor(user.id).filter((event) => event.type === 'email_verified')).toHaveLength(1)
   })
 
@@ -621,7 +637,74 @@ describe('POST /auth/link/verify', () => {
     expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
       200, 400,
     ])
+    const loser = responses.find((response) => response.status === 400)
+    expect(loser?.body).toMatchObject({ code: LINK_INVALID_CODE })
+    const loserCookies = (loser?.headers['set-cookie'] as unknown as string[] | undefined) ?? []
+    expect(loserCookies.some((line) => line.startsWith(`${REFRESH_COOKIE_NAME}=`))).toBe(false)
     expect(await refreshRows(user.id)).toEqual([{ revoked: false }])
+  })
+
+  it('claims a never-verified account registered while the click was creating one', async () => {
+    const email = uniqueEmail('register-race')
+    const token = await issueTestLink(email)
+    const seeded: { id?: string } = {}
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realCreate = UserRepository.prototype.create
+    /**
+     * Stands in for `UserRepository.create`: just before the click's insert, a
+     * registration commits an unverified password account for the address, with a session.
+     */
+    const racingCreate: typeof realCreate = async function (this: UserRepository, ...arguments_) {
+      const [values] = arguments_
+      if (seeded.id === undefined && values.email === email) {
+        const squatter = await realCreate.call(this, { email, passwordHash: 'not-a-real-hash' })
+        seeded.id = squatter.id
+        await issueRefreshToken(squatter.id, randomUUID())
+      }
+      return realCreate.apply(this, arguments_)
+    }
+
+    let response: Response | undefined
+    await withMutatedMethod(UserRepository.prototype, 'create', racingCreate, async () => {
+      response = await postVerify(token)
+    })
+
+    expect(response?.status).toBe(200)
+    const data = verifyData(response as Response)
+    expect(data.isNewUser).toBe(false)
+    expect(data.user.id).toBe(seeded.id)
+    const claimed = await userRepository.findById(seeded.id ?? '')
+    expect(claimed?.passwordHash).toBeNull()
+    expect(claimed?.emailVerifiedAt).toBeInstanceOf(Date)
+    expect(await refreshRows(seeded.id ?? '')).toEqual([{ revoked: true }, { revoked: false }])
+  })
+
+  it('creates no account when full maintenance begins between the peek and the claim', async () => {
+    const email = uniqueEmail('flip-full')
+    const token = await issueTestLink(email)
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realClaim = UserTokenRepository.prototype.claimOnce
+    /**
+     * Stands in for `claimOnce`: it claims, then switches the mode to `full` before the account is resolved.
+     */
+    const flippingClaim: typeof realClaim = async function (
+      this: UserTokenRepository,
+      ...arguments_
+    ) {
+      const claimed = await realClaim.apply(this, arguments_)
+      await storeMaintenanceMode('full')
+      await reloadMaintenanceMode()
+      return claimed
+    }
+
+    let response: Response | undefined
+    await withMutatedMethod(UserTokenRepository.prototype, 'claimOnce', flippingClaim, async () => {
+      response = await postVerify(token)
+    })
+
+    expect(response?.status).toBe(503)
+    expect(response?.body).toMatchObject({ code: MAINTENANCE_MODE_CODE })
+    expect(await userRepository.findByEmail(email)).toBeUndefined()
   })
 
   it('creates one account when two links for a new address are verified at once', async () => {
