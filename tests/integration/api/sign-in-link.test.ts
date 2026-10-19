@@ -15,7 +15,7 @@ import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
-import { LINK_INVALID_CODE } from '@/constants/auth.constants'
+import { LINK_INVALID_CODE, MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { EmailJobData } from '@/jobs/email.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
@@ -333,6 +333,40 @@ describe('POST /auth/link/request', () => {
     expect(link.searchParams.get('token')).toMatch(/^[\w-]{43}$/)
     expect(link.searchParams.get('email')).toBe(email)
     expect(link.searchParams.has('redirect')).toBe(false)
+  })
+
+  it('refuses an address longer than the columns hold with 400 errors.email, not a 500 after the reply', async () => {
+    // /link/request replies before the lookup, so without the .max() cap an over-wide address would 202 and then fail silently on varchar(320).
+    const domain = '@example.test'
+    const overLong = `${'a'.repeat(MAX_EMAIL_LENGTH + 1 - domain.length)}${domain}`
+    expect(overLong).toHaveLength(MAX_EMAIL_LENGTH + 1)
+
+    const response = await postRequest({ email: overLong })
+
+    expect(response.status).toBe(400)
+    expect((response.body as { errors?: Record<string, unknown> }).errors).toHaveProperty('email')
+  })
+
+  it('stores an address exactly at the column width, and its click creates the user and its email provider', async () => {
+    // The other side of the boundary: user_tokens.email, users.email and auth_providers.provider_id all hold MAX_EMAIL_LENGTH.
+    const domain = '@example.test'
+    const local = `${randomUUID()}${'a'.repeat(MAX_EMAIL_LENGTH - domain.length - 36)}`
+    const exact = `${local}${domain}`
+    expect(exact).toHaveLength(MAX_EMAIL_LENGTH)
+    usedEmails.push(exact)
+
+    const response = await postRequest({ email: exact })
+    expect(response.status).toBe(202)
+    const link = await mailedLink(exact)
+    expect(await linkRows(exact)).toHaveLength(1)
+
+    const verified = await postVerify(link.searchParams.get('token') ?? '')
+
+    expect(verified.status).toBe(200)
+    const stored = await userRepository.findByEmail(exact)
+    expect(stored?.id).toBe(verifyData(verified).user.id)
+    const provider = await authProviderRepository.findByProviderAndId('email', exact)
+    expect(provider?.userId).toBe(stored?.id)
   })
 
   it('mails nothing to a deactivated user', async () => {
