@@ -1,14 +1,23 @@
 /**
  * @file Query access to `user_tokens`, on `BaseRepository`. The bulk writers
- * (the five revokers and `markSessionAuthenticated`) lock the rows they write
- * in id order through `lockedIds`, so two sharing rows queue instead of
- * deadlocking; a new bulk writer must lock the same way and join `WRITERS` in
- * user-token-lock-order.test.ts.
+ * (the revokers, `deleteForEmail` and `markSessionAuthenticated`) lock the
+ * rows they write in id order through `lockedIds`, so two sharing rows queue
+ * instead of deadlocking; a new bulk writer must lock the same way and join
+ * `WRITERS` in user-token-lock-order.test.ts.
+ *
+ * The emailed links (`sign_in_link`, `step_up_link`) share the table. A
+ * `step_up_link` row carries its session's `session_id`, so every reader
+ * that gives a session's rows refresh meaning is scoped to `purpose =
+ * 'refresh'`: above all `isSessionKilled`, where a revoked link would
+ * otherwise read as a kill marker and end the session.
  */
 import { and, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import {
+  refreshTokenOf,
   userTokenModel,
+  type LinkTokenPurpose,
   type NewUserToken,
+  type RefreshUserToken,
   type TokenPurpose,
   type UserToken,
 } from '@/database/models/user-token.model'
@@ -37,6 +46,36 @@ function killStamp(): SQL {
 }
 
 /**
+ * The session a `step_up_link` belongs to. A claim that names one matches
+ * only that user's link for that session.
+ */
+export interface LinkTokenBinding {
+  userId: string
+  sessionId: string
+}
+
+/**
+ * Which live links a newly issued one supersedes: every sign-in link of one
+ * address, or every step-up link of one session.
+ */
+export type LiveLinkMatch =
+  { email: string; intent: 'sign_in' } | { userId: string; sessionId: string; intent: 'step_up' }
+
+/**
+ * The predicate for one `LiveLinkMatch`, live rows only. The address is
+ * compared lowercased, as the service stores it, so
+ * `user_tokens_live_email_idx` serves it.
+ * @param match - The address or the session.
+ * @returns The SQL condition.
+ */
+function liveLinkMatch(match: LiveLinkMatch): SQL {
+  if (match.intent === 'sign_in') {
+    return sql`${userTokenModel.email} = lower(${match.email}) and ${userTokenModel.purpose} = 'sign_in_link' and ${userTokenModel.revokedAt} is null`
+  }
+  return sql`${userTokenModel.userId} = ${match.userId} and ${userTokenModel.sessionId} = ${match.sessionId} and ${userTokenModel.purpose} = 'step_up_link' and ${userTokenModel.revokedAt} is null`
+}
+
+/**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
  * atomic single-use claiming (`claimOnce`), and bulk revocation by session
  * or by user. Every lookup excludes a soft-deleted row by default — see
@@ -58,17 +97,23 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * its row locks in that order, whatever plan or physical row layout the
    * predicate gets, so two revokers sharing rows queue instead of
    * deadlocking. NO KEY UPDATE is the lock the UPDATE itself takes.
+   * A deleting writer passes `'update'`, the lock a DELETE takes.
    * @param where - The revoker's predicate, already scoped for soft-delete visibility.
    * @param executor - Where to run the query; the locks last until its transaction ends.
+   * @param mode - The row lock: FOR NO KEY UPDATE by default, FOR UPDATE for a delete.
    * @returns A subquery for `inArray(userTokenModel.id, …)`.
    */
-  private lockedIds(where: SQL | undefined, executor: DbExecutor) {
+  private lockedIds(
+    where: SQL | undefined,
+    executor: DbExecutor,
+    mode: 'no key update' | 'update' = 'no key update'
+  ) {
     return executor
       .select({ id: userTokenModel.id })
       .from(userTokenModel)
       .where(where)
       .orderBy(userTokenModel.id)
-      .for('no key update')
+      .for(mode)
   }
 
   /**
@@ -84,6 +129,48 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     executor: DbExecutor = db
   ): Promise<UserToken | undefined> {
     return this.selectOne(this.scope(eq(userTokenModel.tokenHash, tokenHash), options), executor)
+  }
+
+  /**
+   * Find a refresh token row by its hash, narrowed to the columns a refresh
+   * row always fills. A row of any other purpose, a link included, is not
+   * found, so the refresh paths never lock, kill or sign out by a link.
+   * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The refresh row, or undefined when none matches.
+   */
+  async findRefreshByHash(
+    tokenHash: string,
+    executor: DbExecutor = db
+  ): Promise<RefreshUserToken | undefined> {
+    const row = await this.selectOne(
+      this.scope(
+        sql`${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.purpose} = 'refresh'`
+      ),
+      executor
+    )
+    return refreshTokenOf(row)
+  }
+
+  /**
+   * Read a live link without spending it: unrevoked, not soft-deleted and
+   * unexpired, by the database's clock.
+   * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
+   * @param purpose - The link purpose it must have been issued for.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The row, or undefined when no live, unexpired row of that purpose matched.
+   */
+  findLiveByHash(
+    tokenHash: string,
+    purpose: LinkTokenPurpose,
+    executor: DbExecutor = db
+  ): Promise<UserToken | undefined> {
+    return this.selectOne(
+      this.scope(
+        sql`${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null and ${userTokenModel.expiresAt} > now()`
+      ),
+      executor
+    )
   }
 
   /**
@@ -109,23 +196,32 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    *
    * `consumedAt` is set only here, so it tells a row spent through this path
    * from one killed by an explicit revoke, which sets `revokedAt` alone.
+   *
+   * A `bound` claim also requires the row's user and session, so a step-up
+   * link presented by another session neither matches nor is spent.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param purpose - The purpose the token must have been issued for; a row that exists but for a different purpose is left untouched and this resolves undefined, exactly as if no row matched at all.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The now-claimed row, expiry not checked, or undefined when no not-yet-revoked row of that purpose matched.
+   * @param bound - For a `step_up_link`: the user and session that must hold it.
+   * @returns The now-claimed row, expiry not checked, or undefined when no not-yet-revoked row of that purpose (and binding) matched.
    */
   async claimOnce(
     tokenHash: string,
     purpose: TokenPurpose,
-    executor: DbExecutor = db
+    executor: DbExecutor = db,
+    bound?: LinkTokenBinding
   ): Promise<UserToken | undefined> {
+    const binding =
+      bound === undefined
+        ? sql``
+        : sql` and ${userTokenModel.userId} = ${bound.userId} and ${userTokenModel.sessionId} = ${bound.sessionId}`
     const [row] = await executor
       .update(userTokenModel)
       // now() (transaction start) errs early for consumed_at, which keeps isSessionKilled's comparison safe.
       .set(this.touched({ revokedAt: sql`now()`, consumedAt: sql`now()` }))
       .where(
         this.scope(
-          sql`${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
+          sql`${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null${binding}`
         )
       )
       .returning()
@@ -172,7 +268,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * ended by a password change or sign-out of other sessions
    * (`revokeAllForUserExceptToken`). Compared on Postgres's own timestamps,
    * by the presented row's hash, so no client clock or JavaScript rounding
-   * enters.
+   * enters. Only `'refresh'` rows count as markers: a `step_up_link` shares
+   * the session id, and its revoke on reissue would otherwise end the session.
    * @param sessionId - The session (rotation-chain) id.
    * @param presentedTokenHash - The hash of the consumed token being replayed; a row without `consumed_at`, or a soft-deleted one, never matches.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -193,7 +290,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .from(userTokenModel)
       .where(
         this.scope(
-          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null and ${userTokenModel.revokedAt} >= (${consumedAt})`
+          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.purpose} = 'refresh' and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null and ${userTokenModel.revokedAt} >= (${consumedAt})`
         )
       )
       .limit(1)
@@ -202,7 +299,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * Revoke every still-live token sharing a session id — the whole rotation
-   * chain for one login. Used by logout and by reuse detection;
+   * chain for one login, and the session's live `step_up_link`, so a pending
+   * confirmation dies with its session. Used by logout and by reuse detection;
    * session.service.ts denies the session's access tokens afterwards. A
    * caller that runs this inside its own transaction must deny the session
    * only after that transaction commits. Lock the user row FOR NO KEY UPDATE
@@ -476,6 +574,67 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .where(and(inArray(userTokenModel.id, locked), liveTokenExists))
       .returning({ id: userTokenModel.id })
     return updated.length > 0 ? authenticatedAt : undefined
+  }
+
+  /**
+   * Serialise issuing links for one address or one session until `tx` ends,
+   * with a transaction-scoped advisory lock: without it two concurrent issues
+   * each revoke before the other's insert commits, and both links stay live.
+   * The caller takes it first, in a transaction holding no other lock, so it
+   * joins no lock-order cycle. The key is a 64-bit hash; an unrelated match
+   * that collides only waits.
+   * @param match - The address or the session being issued for.
+   * @param tx - The issuing transaction; the lock is released when it ends.
+   * @returns Resolves once the lock is held.
+   */
+  async lockLinkIssue(match: LiveLinkMatch, tx: DbTransaction): Promise<void> {
+    const key =
+      match.intent === 'sign_in'
+        ? `user_tokens:sign_in_link:${match.email.toLowerCase()}`
+        : `user_tokens:step_up_link:${match.userId}:${match.sessionId}`
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`)
+  }
+
+  /**
+   * Revoke every live link a newly issued one supersedes, leaving
+   * `consumedAt` null. Locks its rows in id order (`lockedIds`).
+   * @param match - Every sign-in link of one address, or every step-up link of one session.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns How many rows this call revoked.
+   */
+  async revokeLiveFor(match: LiveLinkMatch, executor: DbExecutor = db): Promise<number> {
+    const locked = this.lockedIds(this.scope(liveLinkMatch(match)), executor)
+    const revoked = await executor
+      .update(userTokenModel)
+      // Stamped at the moment of the write, never now(): see killStamp.
+      .set(this.touched({ revokedAt: killStamp() }))
+      .where(inArray(userTokenModel.id, locked))
+      .returning({ id: userTokenModel.id })
+    return revoked.length
+  }
+
+  /**
+   * Delete every link mailed to one address, of either link purpose, created
+   * at or before a moment, for a user purge: a `sign_in_link` row has no user
+   * id, so the user row's cascade never reaches it. The address is compared
+   * case-insensitively, as the purge's other address-keyed deletes compare
+   * it. Soft-deleted rows go too. Locks its rows FOR UPDATE in id order.
+   * @param email - The purged user's address.
+   * @param createdAtOrBefore - The user's deletion; a link written after it is kept.
+   * @param tx - The purge's transaction.
+   * @returns How many rows were deleted.
+   */
+  async deleteForEmail(email: string, createdAtOrBefore: Date, tx: DbTransaction): Promise<number> {
+    const locked = this.lockedIds(
+      sql`${userTokenModel.email} is not null and lower(${userTokenModel.email}) = lower(${email}) and date_trunc('milliseconds', ${userTokenModel.createdAt}) <= ${createdAtOrBefore.toISOString()}::timestamptz`,
+      tx,
+      'update'
+    )
+    const deleted = await tx
+      .delete(userTokenModel)
+      .where(inArray(userTokenModel.id, locked))
+      .returning({ id: userTokenModel.id })
+    return deleted.length
   }
 
   /**

@@ -15,6 +15,7 @@ import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql, withTransaction, type DbExecutor } from '@/services/database.service'
+import { claimLinkToken, issueLinkToken } from '@/services/link-token.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import {
   claimToken,
@@ -39,6 +40,7 @@ function hashRawToken(raw: string): string {
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
+const LINK_TTL_MS = 15 * 60_000
 
 // Each repository revocation, called for one user's one session; the except-session case spares an unrelated id.
 const REPOSITORY_REVOKES: readonly [
@@ -81,6 +83,16 @@ function uniqueEmail(): string {
  * only one that presents an already-rotated token, and it first ages the row past the reuse
  * grace window.
  */
+/**
+ * Issue a step-up link for one session of a user.
+ */
+function issueStepUp(user: User, sessionId: string) {
+  return issueLinkToken(
+    { intent: 'step_up', email: user.email, app: 'apex', userId: user.id, sessionId },
+    LINK_TTL_MS
+  )
+}
+
 describe('refresh token issuance, rotation, and revocation', () => {
   const createdUserIds: string[] = []
 
@@ -356,6 +368,52 @@ describe('refresh token issuance, rotation, and revocation', () => {
 
     await expect(rotateRefreshToken(issuedA.raw)).rejects.toMatchObject({ statusCode: 401 })
     await expect(rotateRefreshToken(issuedB.raw)).rejects.toMatchObject({ statusCode: 401 })
+  })
+
+  it('a claimed step-up link does not kill its session', async () => {
+    const user = await createUserRow()
+    const sessionId = randomUUID()
+    const first = await issueRefreshToken(user.id, sessionId)
+    const second = await rotateRefreshToken(first.raw)
+    // One link superseded (revoked unused) and one claimed: both leave revoked_at on the session's id.
+    await issueStepUp(user, sessionId)
+    const confirm = await issueStepUp(user, sessionId)
+    expect(
+      await claimLinkToken(confirm.raw, 'step_up', { userId: user.id, sessionId })
+    ).toBeDefined()
+
+    // A grace-window replay of the rotated token still gets a sibling: no kill marker was read.
+    const sibling = await rotateRefreshToken(first.raw)
+    expect(sibling.sessionId).toBe(sessionId)
+    const next = await rotateRefreshToken(second.raw)
+    expect(next.sessionId).toBe(sessionId)
+  })
+
+  it('refuses a link presented as a refresh token, and kills no session', async () => {
+    const user = await createUserRow()
+    const sessionId = randomUUID()
+    const refresh = await issueRefreshToken(user.id, sessionId)
+    const link = await issueStepUp(user, sessionId)
+
+    await expect(rotateRefreshToken(link.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await revokeRefreshToken(link.raw)
+
+    expect(await isSessionDenied(sessionId)).toBe(false)
+    const next = await rotateRefreshToken(refresh.raw)
+    expect(next.sessionId).toBe(sessionId)
+  })
+
+  it("sign-out revokes the session's live step-up link", async () => {
+    const user = await createUserRow()
+    const sessionId = randomUUID()
+    const refresh = await issueRefreshToken(user.id, sessionId)
+    const link = await issueStepUp(user, sessionId)
+
+    await revokeRefreshToken(refresh.raw)
+
+    expect(
+      await claimLinkToken(link.raw, 'step_up', { userId: user.id, sessionId })
+    ).toBeUndefined()
   })
 })
 

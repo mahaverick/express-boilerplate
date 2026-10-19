@@ -879,7 +879,7 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     const { app, presented, refreshed } = await refreshAfterReset(DEPLOYMENTS[0])
     expect(refreshed.status).toBe(401)
     const nextCookie = cookieHeaderAfter([presented], refreshed)
-    const findByHash = vi.spyOn(UserTokenRepository.prototype, 'findByHash')
+    const findByHash = vi.spyOn(UserTokenRepository.prototype, 'findRefreshByHash')
     try {
       const followUp = request(app).post('/api/v1/auth/refresh')
       const response = await (nextCookie === undefined
@@ -1121,16 +1121,21 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     const app = appWith(PLAIN_HOST_ONLY)
     const live = await sessionFor(await createVerifiedUser())
     const unavailable = (() =>
-      Promise.reject(new Error('database unavailable'))) as UserTokenRepository['findByHash']
+      Promise.reject(new Error('database unavailable'))) as UserTokenRepository['findRefreshByHash']
 
-    await withMutatedMethod(UserTokenRepository.prototype, 'findByHash', unavailable, async () => {
-      const failed = await request(app)
-        .post('/api/v1/auth/refresh')
-        .set('Cookie', `${PLAIN_COOKIE}=${live}`)
+    await withMutatedMethod(
+      UserTokenRepository.prototype,
+      'findRefreshByHash',
+      unavailable,
+      async () => {
+        const failed = await request(app)
+          .post('/api/v1/auth/refresh')
+          .set('Cookie', `${PLAIN_COOKIE}=${live}`)
 
-      expect(failed.status).toBe(500)
-      expect(cookieLines(failed, PLAIN_COOKIE)).toHaveLength(0)
-    })
+        expect(failed.status).toBe(500)
+        expect(cookieLines(failed, PLAIN_COOKIE)).toHaveLength(0)
+      }
+    )
     expect(await tokenState(live)).toEqual({ isConsumed: false, isRevoked: false })
   })
 })

@@ -50,6 +50,7 @@ afterEach(async () => {
   await truncateAuditLogs()
   await sql`delete from analytics_outbox where event = ${OUTBOX_EVENT}`
   await sql`delete from email_logs where recipient like ${RECIPIENT_LIKE}`
+  await sql`delete from user_tokens where email like ${RECIPIENT_LIKE}`
   await deleteTrackingRows(RECIPIENT_PREFIX)
   if (createdTenantIds.length > 0) {
     await sql`delete from tenants where id = any(${createdTenantIds})`
@@ -161,6 +162,24 @@ async function insertToken(userId: string, seed: TokenSeed): Promise<string> {
     returning id
   `
   if (!row) throw new Error('token insert returned no row')
+  return row.id
+}
+
+/**
+ * Seed a sign-in link row (no user) whose timestamps decide whether the tokens rule deletes it.
+ */
+async function insertSignInLink(seed: TokenSeed): Promise<string> {
+  const email = `${RECIPIENT_PREFIX}${randomUUID()}@example.test`
+  const [row] = await sql<{ id: string }[]>`
+    insert into user_tokens (purpose, email, app, token_hash, expires_at, revoked_at, consumed_at)
+    values (
+      'sign_in_link', ${email}, 'web',
+      ${randomBytes(32).toString('hex')}, ${seed.expiresAt}::timestamptz,
+      ${timestampOrNull(seed.revokedAt)}, ${timestampOrNull(seed.consumedAt)}
+    )
+    returning id
+  `
+  if (!row) throw new Error('link insert returned no row')
   return row.id
 }
 
@@ -284,6 +303,25 @@ async function seedPair(insert: () => Promise<string>): Promise<[string, string]
 }
 
 describe('runRetentionPurge', () => {
+  it('purges sign-in links past RETENTION_TOKENS_DAYS by the tokens rule', async () => {
+    const days = DAYS.tokens
+    const expiredOld = await insertSignInLink({ expiresAt: justOlder(days) })
+    const expiredNew = await insertSignInLink({ expiresAt: justNewer(days) })
+    const supersededOld = await insertSignInLink({ expiresAt: LATER, revokedAt: justOlder(days) })
+    const spentOld = await insertSignInLink({
+      expiresAt: LATER,
+      revokedAt: justOlder(days),
+      consumedAt: justOlder(days),
+    })
+
+    const results = await runRetentionPurge(NOW, DAYS)
+
+    expect(deletedBy(results, 'user_tokens')).toBe(2)
+    expect(
+      await surviving('user_tokens', [expiredOld, expiredNew, supersededOld, spentOld])
+    ).toEqual(sorted([expiredNew, spentOld]))
+  })
+
   it('deletes tokens expired, or revoked unused, before the cutoff, and keeps rotated ones until they expire', async () => {
     const userId = await insertUser()
     const days = DAYS.tokens

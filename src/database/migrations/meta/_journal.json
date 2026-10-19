@@ -197,6 +197,13 @@
       "when": 1792162870714,
       "tag": "0027_users_full_name_trgm",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792386827446,
+      "tag": "0028_link_tokens_in_user_tokens",
+      "breakpoints": true
     }
   ]
 }

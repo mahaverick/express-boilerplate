@@ -1,5 +1,5 @@
 /**
- * @file The bulk writers (the five revokers and markSessionAuthenticated)
+ * @file The bulk writers (the revokers, deleteForEmail and markSessionAuthenticated)
  * lock the rows they write in id order, whatever plan or physical row layout
  * Postgres uses (`user-token.repository.ts`'s header). Three groups of tests
  * pin that property: a race on a built physical layout, a plan-shape check,
@@ -455,6 +455,29 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
       userTokenRepository.revokeAllForUserAndPurpose(randomUUID(), 'email_verification', executor),
   },
   {
+    name: 'revokeLiveFor (sign-in links of an address)',
+    run: (executor) =>
+      userTokenRepository.revokeLiveFor(
+        { email: `${randomUUID()}@example.test`, intent: 'sign_in' },
+        executor
+      ),
+  },
+  {
+    name: 'revokeLiveFor (step-up links of a session)',
+    run: (executor) =>
+      userTokenRepository.revokeLiveFor(
+        { userId: randomUUID(), sessionId: randomUUID(), intent: 'step_up' },
+        executor
+      ),
+  },
+  {
+    name: 'deleteForEmail',
+    run: (executor) =>
+      executor.transaction((tx) =>
+        userTokenRepository.deleteForEmail(`${randomUUID()}@example.test`, new Date(), tx)
+      ),
+  },
+  {
     name: 'markSessionAuthenticated',
     run: (executor) =>
       userTokenRepository.markSessionAuthenticated(
@@ -476,15 +499,19 @@ const PLANNERS: { label: string; settings: readonly string[] }[] = [
 ]
 
 /**
- * The UPDATE a writer sends, captured by running it for ids that match no row.
+ * The UPDATE (or, for a deleting writer, the DELETE) a writer sends, captured by running it for
+ * ids that match no row.
  */
 async function capturedUpdate(
   run: (executor: DbExecutor) => Promise<unknown>
 ): Promise<CapturedStatement> {
   captured.length = 0
   await run(capturing.conn)
-  const update = captured.find(({ query }) => query.startsWith('update "user_tokens"'))
-  if (!update) throw new Error('the writer sent no UPDATE of user_tokens')
+  const update = captured.find(
+    ({ query }) =>
+      query.startsWith('update "user_tokens"') || query.startsWith('delete from "user_tokens"')
+  )
+  if (!update) throw new Error('the writer sent no UPDATE or DELETE of user_tokens')
   return update
 }
 

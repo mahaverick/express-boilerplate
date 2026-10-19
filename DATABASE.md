@@ -44,7 +44,7 @@ glob is picked up by `drizzle.config.ts` with no config change.
 | Table                      | Model file                        | Holds                                                                                                                                           |
 | -------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `users`                    | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
-| `user_tokens`              | `user-token.model.ts`             | Refresh, email-verification and password-reset tokens, as hashes; see below.                                                                    |
+| `user_tokens`              | `user-token.model.ts`             | Refresh, email-verification and password-reset tokens and emailed sign-in and step-up links, as hashes; see below.                              |
 | `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for a password, `'google'` for a linked account).                                              |
 | `tenants`                  | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
 | `tenant_settings`          | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
@@ -77,10 +77,11 @@ off browser analytics; server events ignore it) and the
 
 ### `user_tokens`
 
-One table holds all three token purposes (`purpose`: `'refresh'`,
-`'email_verification'`, `'password_reset'`), since they share hashing, lookup,
-expiry and revocation. The `user_tokens_purpose_check` constraint enforces the
-list in the database, not only through TypeScript's `$type<TokenPurpose>()`.
+One table holds every token purpose (`purpose`: `'refresh'`,
+`'email_verification'`, `'password_reset'`, `'sign_in_link'`,
+`'step_up_link'`), since they share hashing, lookup, expiry and revocation.
+The `user_tokens_purpose_check` constraint enforces the list in the database,
+not only through TypeScript's `$type<TokenPurpose>()`.
 
 - `token_hash` is a SHA-256 digest of the raw token, never the token.
 - `session_id`, `session_started_at` and `authenticated_at` are meaningful only
@@ -96,6 +97,47 @@ list in the database, not only through TypeScript's `$type<TokenPurpose>()`.
   read back after the retention purge can have gaps.
 - `deleted_at` exists only to satisfy `SoftDeletableTableConfig`. No path sets
   it, and the retention purge ignores it.
+
+#### Emailed links
+
+The two link purposes are the links a mail carries to sign someone in or to
+confirm a step-up, 32 random bytes each, stored as a SHA-256 hash. They use
+three columns no other purpose fills: `email` (the address, lowercased), `app`
+(`'web'` or `'apex'`, the frontend the link opens; verify reads it from the
+row, never from the request; `user_tokens_app_check`) and `redirect` (a
+same-origin path checked by `redirectPathSchema`). `user_tokens_shape_check`
+holds each purpose's shape:
+
+- `refresh`, `email_verification` and `password_reset` rows name a user and
+  none of the three link columns.
+- A `sign_in_link` row names an address and an app, and never a `user_id` or
+  `session_id`. The click looks the account up by address, so a link can be
+  mailed to an address with no account yet, and a soft-deleted user's address
+  reaches a fresh account rather than the deleted one. `user_id` is nullable
+  for this purpose alone.
+- A `step_up_link` row names the user, the `session_id` it elevates, an
+  address and an app, and no `redirect`. Its claim matches the user and the
+  session as well as the hash, so another session of the same user neither
+  honours nor spends it, and a sign-out (`revokeAllForSession`) revokes it with
+  the session's chain.
+
+A link row shares `session_id` with its session's refresh rows, so every
+reader that gives a session's rows refresh meaning is scoped to
+`purpose = 'refresh'`: `isSessionKilled` (a superseded or claimed link would
+otherwise read as a kill marker and end the session), `findRefreshByHash` (the
+rotation and sign-out lookups), `liveSessionIdsExcept` and
+`markSessionAuthenticated`.
+
+Issuing a link revokes the live links it supersedes (every `sign_in_link` of
+the address, through `user_tokens_live_email_idx`, or every `step_up_link` of
+the session) and inserts the new row in one transaction, under a
+transaction-scoped advisory lock on the address or the session taken first, so
+at most one of each stays live. The claim is `claimOnce`, which checks no
+expiry; the caller judges `expires_at` on the claimed row, so an expired link is
+spent by its one presentation. A `sign_in_link` row has no user, so a user
+purge deletes the purged address's links itself (`deleteForEmail`), up to the
+deletion and only while no live account holds the address. The retention rule
+below covers link rows as it covers the rest.
 
 Rotation is append-only, because reuse detection needs the old row to
 recognise a replay. With a 15-minute `ACCESS_TOKEN_TTL`, a client that stays
@@ -502,6 +544,15 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   ```sql
   CREATE INDEX CONCURRENTLY IF NOT EXISTS users_full_name_trgm_idx ON users USING gin (lower(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, ''))) gin_trgm_ops);
   ```
+
+- **`0028` blocks every read and write on `user_tokens` until the batch
+  commits.** Its `ALTER TABLE`s take an `ACCESS EXCLUSIVE` lock, held while
+  `user_tokens_shape_check`, `user_tokens_app_check` and the re-added
+  `user_tokens_purpose_check` scan every row, and while
+  `user_tokens_live_email_idx` builds, which scans the table too although it
+  holds no row yet. Every refresh reads that table, so on a large one
+  run the retention purge first to shorten the scans, and apply `0028` in a
+  quiet window.
 
 ## The test database
 

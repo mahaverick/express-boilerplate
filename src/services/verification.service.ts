@@ -189,7 +189,7 @@ async function isUsedLinkOfVerifiedUser(token: string): Promise<boolean> {
     row?.purpose === 'email_verification' &&
     row.consumedAt !== null &&
     row.consumedAt.getTime() < row.expiresAt.getTime()
-  if (!row || !wasUsedInTime) return false
+  if (!wasUsedInTime || !row?.userId) return false
   const user = await userRepository.findById(row.userId)
   return Boolean(user?.emailVerifiedAt)
 }

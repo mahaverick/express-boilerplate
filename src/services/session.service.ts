@@ -10,7 +10,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE, REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
-import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
+import {
+  refreshTokenOf,
+  type LinkTokenPurpose,
+  type RefreshUserToken,
+  type TokenPurpose,
+  type UserToken,
+} from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -104,6 +110,13 @@ export interface IssuedRefreshToken {
 }
 
 /**
+ * The purposes `issueToken` and `claimToken` serve: a user's mailed token
+ * with no session (email verification, password reset). Refresh rows have
+ * their own entry points, and links go through link-token.service.ts.
+ */
+type SessionlessPurpose = Exclude<TokenPurpose, 'refresh' | LinkTokenPurpose>
+
+/**
  * A freshly issued token for a non-session purpose (email verification,
  * password reset): the raw value to hand to the caller (an email link, in
  * practice), and everything about it that isn't recoverable from the raw
@@ -113,7 +126,7 @@ export interface IssuedRefreshToken {
 export interface IssuedToken {
   raw: string
   userId: string
-  purpose: Exclude<TokenPurpose, 'refresh'>
+  purpose: SessionlessPurpose
   expiresAt: Date
 }
 
@@ -287,7 +300,7 @@ export async function issueRefreshToken(
  */
 export async function issueToken(
   userId: string,
-  purpose: Exclude<TokenPurpose, 'refresh'>,
+  purpose: SessionlessPurpose,
   ttlMs: number
 ): Promise<IssuedToken> {
   const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined)
@@ -304,16 +317,19 @@ export async function issueToken(
  * spends it: one presentation is one attempt.
  * @param raw - The raw token presented by the caller.
  * @param purpose - The purpose it must have been issued for.
- * @returns The claimed row, or undefined when the token is unknown, of another purpose, already claimed, or expired.
+ * @returns The claimed row, its user narrowed, or undefined when the token is unknown, of another purpose, already claimed, or expired.
  */
 export async function claimToken(
   raw: string,
-  purpose: Exclude<TokenPurpose, 'refresh'>
-): Promise<UserToken | undefined> {
+  purpose: SessionlessPurpose
+): Promise<(UserToken & { userId: string }) | undefined> {
   const claimed = await userTokenRepository.claimOnce(hashToken(raw), purpose)
   if (!claimed) return undefined
   if (claimed.expiresAt.getTime() <= Date.now()) return undefined
-  return claimed
+  // The shape CHECK gives these purposes a user; narrowed so a broken invariant is a miss, not a crash.
+  const { userId } = claimed
+  if (userId === null) return undefined
+  return { ...claimed, userId }
 }
 
 /**
@@ -361,13 +377,12 @@ type RotationOutcome = RotationIssued | RotationRefused
  * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
  */
 async function findGraceSession(
-  existing: UserToken,
+  existing: RefreshUserToken,
   tx: DbTransaction
 ): Promise<
   { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null } | undefined
 > {
-  const { purpose, sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
-  if (purpose !== 'refresh' || sessionId === null || sessionStartedAt === null) return undefined
+  const { sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
   // consumedAt is null for a row an explicit revoke killed, and set for one a rotation spent.
   if (consumedAt === null) return undefined
   // Judged by Postgres's own clock, not Date.now() — see wasConsumedWithin.
@@ -435,11 +450,11 @@ async function rotateUnderUserLock(
   tx: DbTransaction
 ): Promise<RotationOutcome> {
   await userRepository.lockById(userId, 'share', tx)
-  const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh', tx)
+  const spent = await userTokenRepository.claimOnce(tokenHash, 'refresh', tx)
 
-  if (!claimed) {
-    // Never issued as 'refresh', or already revoked (the reuse signal); only a 'refresh' row has a session.
-    const existing = await userTokenRepository.findByHash(tokenHash, {}, tx)
+  if (!spent) {
+    // Never issued as 'refresh', or already revoked (the reuse signal); only a 'refresh' row is found, so a link never kills a session.
+    const existing = await userTokenRepository.findRefreshByHash(tokenHash, tx)
     const graceSession = existing ? await findGraceSession(existing, tx) : undefined
     if (existing && graceSession) {
       return continueSession(
@@ -450,17 +465,16 @@ async function rotateUnderUserLock(
         tx
       )
     }
-    if (existing && existing.sessionId !== null) {
+    if (existing) {
       return { ok: false, message: 'Invalid refresh token', killSessionId: existing.sessionId }
     }
     return { ok: false, message: 'Invalid refresh token' }
   }
 
-  // issueRefreshToken always fills both for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
+  // issueRefreshToken always fills these for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
+  const claimed = refreshTokenOf(spent)
+  if (!claimed) return { ok: false, message: 'Invalid refresh token' }
   const { sessionId, sessionStartedAt } = claimed
-  if (sessionId === null || sessionStartedAt === null) {
-    return { ok: false, message: 'Invalid refresh token' }
-  }
 
   if (claimed.expiresAt.getTime() < Date.now()) {
     // Already revoked by the claim; expiry is not a reuse signal, so the session is untouched.
@@ -506,7 +520,7 @@ async function rotateUnderUserLock(
 export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToken> {
   const tokenHash = hashToken(raw)
   // Read only to learn whose row to lock; everything that decides runs under the lock.
-  const presented = await userTokenRepository.findByHash(tokenHash)
+  const presented = await userTokenRepository.findRefreshByHash(tokenHash)
   if (!presented) throw new HttpError('Invalid refresh token', 401)
 
   const outcome = await withTransaction((tx) =>
@@ -525,8 +539,8 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
  * logout's primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
- * issued for another purpose (`findByHash` is purpose-agnostic, but a reset
- * or verification token has no session to revoke), and returns nothing that
+ * issued for another purpose (`findRefreshByHash` finds only a refresh row,
+ * so a link or a reset token signs nothing out), and returns nothing that
  * tells those apart from a live one: logout must not be a way to test
  * whether a token string is live. Its timing is not uniform: a matched token
  * opens a locked transaction and a miss returns at once.
@@ -545,8 +559,8 @@ export async function revokeRefreshToken(
   raw: string,
   options: { emitSignedOut?: boolean } = {}
 ): Promise<void> {
-  const existing = await userTokenRepository.findByHash(hashToken(raw))
-  if (!existing || existing.sessionId === null) return
+  const existing = await userTokenRepository.findRefreshByHash(hashToken(raw))
+  if (!existing) return
   const revoked = await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
   const isLive = existing.expiresAt.getTime() > Date.now() && existing.revokedAt === null
   if (isLive && revoked > 0 && options.emitSignedOut !== false) {

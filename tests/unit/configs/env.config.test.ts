@@ -190,8 +190,36 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, ACCOUNT_SETUP_TTL: 'soon' })).toThrow(/ACCOUNT_SETUP_TTL/)
   })
 
-  it('defaults INVITATION_TTL to 7d', () => {
-    expect(parseEnv(valid).INVITATION_TTL).toBe('7d')
+  it('defaults INVITATION_TTL to 3d', () => {
+    expect(parseEnv(valid).INVITATION_TTL).toBe('3d')
+  })
+
+  it('defaults the sign-in and step-up link settings', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.SIGN_IN_LINK_TTL).toBe('15m')
+    expect(parsed.SIGN_IN_LINK_MAIL_COOLDOWN).toBe('1m')
+    expect(parsed.SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT).toBe(10)
+    expect(parsed.STEP_UP_LINK_TTL).toBe('15m')
+    expect(parsed.STEP_UP_LINK_COOLDOWN).toBe('1m')
+  })
+
+  it.each([
+    'SIGN_IN_LINK_TTL',
+    'SIGN_IN_LINK_MAIL_COOLDOWN',
+    'STEP_UP_LINK_TTL',
+    'STEP_UP_LINK_COOLDOWN',
+  ])('rejects a %s that is unparseable or zero', (name) => {
+    expect(() => parseEnv({ ...valid, [name]: 'soon' })).toThrow(new RegExp(name))
+    expect(() => parseEnv({ ...valid, [name]: '0' })).toThrow(new RegExp(name))
+  })
+
+  it('rejects a SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT that is not a positive integer', () => {
+    expect(() => parseEnv({ ...valid, SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: '0' })).toThrow(
+      /SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT/
+    )
+    expect(() => parseEnv({ ...valid, SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: '1.5' })).toThrow(
+      /SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT/
+    )
   })
 
   it('rejects an INVITATION_TTL that ms() cannot parse', () => {
