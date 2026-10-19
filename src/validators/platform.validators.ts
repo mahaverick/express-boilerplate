@@ -126,6 +126,11 @@ export const platformUserListSchema = listParamsSchema({
   filters: {
     status: listFilter('status', PLATFORM_USER_STATUSES).default(['active', 'inactive']),
     verified: booleanFilter.optional(),
+    /**
+     * `true` keeps users with a recorded sign-in (`lastLoggedInAt` set), `false`
+     * those who have never signed in. A verified account can have none.
+     */
+    signedIn: booleanFilter.optional(),
     staff: booleanFilter.optional(),
   },
 })

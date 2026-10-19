@@ -103,6 +103,19 @@ describe('platformUserListSchema', () => {
     })
   })
 
+  it('parses signedIn as a boolean filter, absent unless given', () => {
+    expect(platformUserListSchema.parse({}).filters.signedIn).toBeUndefined()
+    expect(platformUserListSchema.parse({ signedIn: 'true' }).filters.signedIn).toBe(true)
+    expect(platformUserListSchema.parse({ signedIn: 'false' }).filters.signedIn).toBe(false)
+    expect(platformUserListSchema.safeParse({ signedIn: 'maybe' }).success).toBe(false)
+  })
+
+  it('keeps verified and signedIn independent', () => {
+    expect(
+      platformUserListSchema.parse({ verified: 'true', signedIn: 'false' }).filters
+    ).toMatchObject({ verified: true, signedIn: false })
+  })
+
   it('takes -lastSignIn and refuses lastSignIn ascending', () => {
     expect(platformUserListSchema.parse({ sort: '-lastSignIn' }).params.sort).toBe('-lastSignIn')
     expect(platformUserListSchema.safeParse({ sort: 'lastSignIn' }).success).toBe(false)

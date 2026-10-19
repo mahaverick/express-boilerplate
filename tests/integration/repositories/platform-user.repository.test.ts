@@ -185,6 +185,55 @@ describe('PlatformUserRepository.list', () => {
     expect(await ids({ search: tag, staff: 'false' })).not.toContain(staff.id)
   })
 
+  it('filters by whether the user has signed in, apart from verified', async () => {
+    const tag = newTag()
+    const signedIn = await createTrackedUser({ email: `${tag}-signed@example.test` })
+    await sql`update users set last_logged_in_at = now() where id = ${signedIn.id}`
+    // Verified, never signed in: the case `verified` and `signedIn` tell apart.
+    const verifiedOnly = await createTrackedUser({ email: `${tag}-verified@example.test` })
+    const neither = await createTrackedUser({
+      email: `${tag}-neither@example.test`,
+      verified: false,
+    })
+
+    expect(await ids({ search: tag, signedIn: 'true' })).toEqual([signedIn.id])
+    expect(await ids({ search: tag, signedIn: 'false' })).toEqual([neither.id, verifiedOnly.id])
+    expect(await ids({ search: tag, verified: 'true' })).toEqual([signedIn.id, verifiedOnly.id])
+    expect(await ids({ search: tag })).toHaveLength(3)
+  })
+
+  it('combines signedIn with verified, staff, status and search', async () => {
+    const tag = newTag()
+    const staffSignedIn = await createTrackedUser({ email: `${tag}-a@example.test` })
+    await makeStaff(staffSignedIn.id, 'viewer')
+    const inactiveSignedIn = await createTrackedUser({
+      email: `${tag}-b@example.test`,
+      active: false,
+    })
+    await sql`update users set last_logged_in_at = now() where id = any(${[staffSignedIn.id, inactiveSignedIn.id]})`
+    const verifiedStaffNever = await createTrackedUser({ email: `${tag}-c@example.test` })
+    await makeStaff(verifiedStaffNever.id, 'viewer')
+    const unverifiedNever = await createTrackedUser({
+      email: `${tag}-d@example.test`,
+      verified: false,
+    })
+
+    expect(await ids({ search: tag, signedIn: 'true', staff: 'true' })).toEqual([staffSignedIn.id])
+    expect(await ids({ search: tag, signedIn: 'false', staff: 'true' })).toEqual([
+      verifiedStaffNever.id,
+    ])
+    expect(await ids({ search: tag, signedIn: 'false', verified: 'true' })).toEqual([
+      verifiedStaffNever.id,
+    ])
+    expect(await ids({ search: tag, signedIn: 'false', verified: 'false' })).toEqual([
+      unverifiedNever.id,
+    ])
+    expect(await ids({ search: tag, signedIn: 'true', status: 'inactive' })).toEqual([
+      inactiveSignedIn.id,
+    ])
+    expect(await ids({ search: `${tag}-c`, signedIn: 'true' })).toEqual([])
+  })
+
   it('excludes a soft-deleted user unless status is deleted, which lists only them', async () => {
     const tag = newTag()
     const live = await createTrackedUser({ email: `${tag}-live@example.test` })

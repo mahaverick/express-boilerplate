@@ -591,21 +591,21 @@ is applied by the server, so a URL can omit it.
 1,000 rows and reported as `{ count: 1000, capped: true }` past them (a client
 shows "1,000+"; the query is `select count(*) from (<the list> limit 1001)`).
 
-| Endpoint                           | `search`                                           | Filters                                                      | Sorts (default first)                         |
-| ---------------------------------- | -------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------- |
-| `GET /platform/tenants`            | name, slug                                         | `state` (list; active, suspended)                            | `name`, `created`, `-created`                 |
-| `GET /platform/users`              | email, first and last name, full name              | `status` (list; active, inactive), `verified`, `staff`       | `email`, `created`, `-created`, `-lastSignIn` |
-| `GET /platform/emails`             | recipient                                          | `status`, `template` (lists), `user`, `tenant`, `from`, `to` | `-created`, `created`                         |
-| `GET /platform/email-suppressions` | address                                            | `state` (list; active)                                       | `-created`, `created`, `address`              |
-| `GET /platform/onboarding/tenants` | tenant name                                        | `state` (one; stuck)                                         | `progress` for stuck, else `-started`; `name` |
-| `GET /platform/audit-log`          | action, actor email, target email or name          | `tenant`, `actor`, `target`, `action`, `access` (lists)      | `-occurred`, `occurred`                       |
-| `GET /tenants/:slug/audit-log`     | action, actor email, the entry's own tenant's name | `action`, `access` (lists), `actor`                          | `-occurred`, `occurred`                       |
-| `GET /tenants/:slug/members`       | email, full name                                   | `role` (list)                                                | `name`, `email`, `role`, `-joined`            |
-| `GET /tenants/:slug/invitations`   | email                                              | `role` (list)                                                | `-created`, `email`                           |
-| `GET /tenants`                     | name                                               | `role` (list)                                                | `name`, `-joined`                             |
-| `GET /notifications`               | title, body                                        | `unread`                                                     | `-created`                                    |
-| `GET /platform/flags`              | key, description                                   | `kind`, `state` (lists)                                      | `key` (in memory)                             |
-| `GET /platform/flags/unregistered` | key                                                | none                                                         | `key` (in memory)                             |
+| Endpoint                           | `search`                                           | Filters                                                            | Sorts (default first)                         |
+| ---------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------- |
+| `GET /platform/tenants`            | name, slug                                         | `state` (list; active, suspended)                                  | `name`, `created`, `-created`                 |
+| `GET /platform/users`              | email, first and last name, full name              | `status` (list; active, inactive), `verified`, `signedIn`, `staff` | `email`, `created`, `-created`, `-lastSignIn` |
+| `GET /platform/emails`             | recipient                                          | `status`, `template` (lists), `user`, `tenant`, `from`, `to`       | `-created`, `created`                         |
+| `GET /platform/email-suppressions` | address                                            | `state` (list; active)                                             | `-created`, `created`, `address`              |
+| `GET /platform/onboarding/tenants` | tenant name                                        | `state` (one; stuck)                                               | `progress` for stuck, else `-started`; `name` |
+| `GET /platform/audit-log`          | action, actor email, target email or name          | `tenant`, `actor`, `target`, `action`, `access` (lists)            | `-occurred`, `occurred`                       |
+| `GET /tenants/:slug/audit-log`     | action, actor email, the entry's own tenant's name | `action`, `access` (lists), `actor`                                | `-occurred`, `occurred`                       |
+| `GET /tenants/:slug/members`       | email, full name                                   | `role` (list)                                                      | `name`, `email`, `role`, `-joined`            |
+| `GET /tenants/:slug/invitations`   | email                                              | `role` (list)                                                      | `-created`, `email`                           |
+| `GET /tenants`                     | name                                               | `role` (list)                                                      | `name`, `-joined`                             |
+| `GET /notifications`               | title, body                                        | `unread`                                                           | `-created`                                    |
+| `GET /platform/flags`              | key, description                                   | `kind`, `state` (lists)                                            | `key` (in memory)                             |
+| `GET /platform/flags/unregistered` | key                                                | none                                                               | `key` (in memory)                             |
 
 `GET /platform/flags/meta` is not a list: it carries the traits reference and
 the snapshot's age. The mark-read routes and the bell's `limit=5` read are
