@@ -66,6 +66,14 @@ const SAMPLE_VARIABLES: {
     expiresInMinutes: '15',
     appName: 'App',
   },
+  invitation_confirm: {
+    firstName: 'Ada',
+    tenantName: 'Acme',
+    role: 'editor',
+    confirmUrl: 'https://x.test/invitations/confirm?token=t&email=a%40x.test',
+    expiresInMinutes: '15',
+    appName: 'App',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -109,6 +117,11 @@ describe('EMAIL_TEMPLATE_META', () => {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
         resendAction: 'sign_in_link',
+      },
+      invitation_confirm: {
+        senderClass: 'transactional',
+        previewVariables: ['firstName', 'tenantName', 'role', 'expiresInMinutes', 'appName'],
+        resendAction: 'invitation',
       },
     })
   })

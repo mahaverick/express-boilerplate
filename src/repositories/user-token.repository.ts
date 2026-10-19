@@ -5,7 +5,8 @@
  * instead of deadlocking; a new bulk writer must lock the same way and join
  * `WRITERS` in user-token-lock-order.test.ts.
  *
- * The emailed links (`sign_in_link`, `step_up_link`) share the table. A
+ * The emailed links (`sign_in_link`, `step_up_link`, `invitation_link`)
+ * share the table. A
  * `step_up_link` row carries its session's `session_id`, so every reader
  * that gives a session's rows refresh meaning is scoped to `purpose =
  * 'refresh'`: above all `isSessionKilled`, where a revoked link would
@@ -56,10 +57,13 @@ export interface LinkTokenBinding {
 
 /**
  * Which live links a newly issued one supersedes: every sign-in link of one
- * address, or every step-up link of one session.
+ * address, every step-up link of one session, or every invitation confirm
+ * link of one address.
  */
 export type LiveLinkMatch =
-  { email: string; intent: 'sign_in' } | { userId: string; sessionId: string; intent: 'step_up' }
+  | { email: string; intent: 'sign_in' }
+  | { userId: string; sessionId: string; intent: 'step_up' }
+  | { email: string; intent: 'invitation' }
 
 /**
  * The predicate for one `LiveLinkMatch`, live rows only. The address is
@@ -71,6 +75,9 @@ export type LiveLinkMatch =
 function liveLinkMatch(match: LiveLinkMatch): SQL {
   if (match.intent === 'sign_in') {
     return sql`${userTokenModel.email} = lower(${match.email}) and ${userTokenModel.purpose} = 'sign_in_link' and ${userTokenModel.revokedAt} is null`
+  }
+  if (match.intent === 'invitation') {
+    return sql`${userTokenModel.email} = lower(${match.email}) and ${userTokenModel.purpose} = 'invitation_link' and ${userTokenModel.revokedAt} is null`
   }
   return sql`${userTokenModel.userId} = ${match.userId} and ${userTokenModel.sessionId} = ${match.sessionId} and ${userTokenModel.purpose} = 'step_up_link' and ${userTokenModel.revokedAt} is null`
 }
@@ -550,28 +557,33 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Serialise issuing links for one address or one session until `tx` ends,
+   * Serialise issuing links of one intent for one address or one session until `tx` ends,
    * with a transaction-scoped advisory lock: without it two concurrent issues
    * each revoke before the other's insert commits, and both links stay live.
    * The caller takes it first, in a transaction holding no other lock, so it
-   * joins no lock-order cycle. The key is a 64-bit hash; an unrelated match
-   * that collides only waits.
+   * joins no lock-order cycle. The insert that follows takes `FOR KEY SHARE`
+   * on an invitation link's invitation row, which only a purge's delete of a
+   * long-settled invitation conflicts with. The key is a 64-bit hash; an
+   * unrelated match that collides only waits.
    * @param match - The address or the session being issued for.
    * @param tx - The issuing transaction; the lock is released when it ends.
    * @returns Resolves once the lock is held.
    */
   async lockLinkIssue(match: LiveLinkMatch, tx: DbTransaction): Promise<void> {
-    const key =
-      match.intent === 'sign_in'
-        ? `user_tokens:sign_in_link:${match.email.toLowerCase()}`
-        : `user_tokens:step_up_link:${match.userId}:${match.sessionId}`
+    let key: string
+    if (match.intent === 'step_up') {
+      key = `user_tokens:step_up_link:${match.userId}:${match.sessionId}`
+    } else {
+      const purpose = match.intent === 'sign_in' ? 'sign_in_link' : 'invitation_link'
+      key = `user_tokens:${purpose}:${match.email.toLowerCase()}`
+    }
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`)
   }
 
   /**
    * Revoke every live link a newly issued one supersedes, leaving
    * `consumedAt` null. Locks its rows in id order (`lockedIds`).
-   * @param match - Every sign-in link of one address, or every step-up link of one session.
+   * @param match - Every sign-in link or every invitation confirm link of one address, or every step-up link of one session.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns How many rows this call revoked.
    */
@@ -587,9 +599,10 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Delete every link mailed to one address, of either link purpose, created
-   * at or before a moment, for a user purge: a `sign_in_link` row has no user
-   * id, so the user row's cascade never reaches it. The address is compared
+   * Delete every link mailed to one address, of any link purpose, created
+   * at or before a moment, for a user purge: a `sign_in_link` or
+   * `invitation_link` row has no user id, so the user row's cascade never
+   * reaches it. The address is compared
    * case-insensitively, as the purge's other address-keyed deletes compare
    * it. Soft-deleted rows go too. Locks its rows FOR UPDATE in id order.
    * It scans the table by design: no index covers `lower(email)` over every

@@ -270,6 +270,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   write('POST', '/api/v1/invitations/accept'),
   // One click joins, which is a write, even when it signs an existing account in.
   write('POST', '/api/v1/invitations/verify'),
+  // Signs in and joins: a write in both modes.
+  write('POST', '/api/v1/invitations/confirm'),
   read('/api/v1/flags'),
   readOnlyWrite('POST', '/api/v1/flags/exposures'),
 ]

@@ -226,7 +226,7 @@ const EnvSchema = z.object({
         'SIGN_IN_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
     })
     .describe(
-      'How long an emailed sign-in link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because the link is a full credential and a new one is one click away; staff-sent and welcome links use it too. Defaults to 15m.'
+      'How long an emailed sign-in link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because the link is a full credential and a new one is one click away; staff-sent and welcome links use it too, and so does the invitation confirm link. Defaults to 15m.'
     ),
 
   /**
@@ -241,7 +241,7 @@ const EnvSchema = z.object({
         'SIGN_IN_LINK_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
     })
     .describe(
-      'Shortest gap between two sign-in link mails to one address, as an ms()-parseable duration (e.g. "1m"). A request inside the gap answers the same 202 and mails nothing. Defaults to 1m, matching the sign-in page\'s 60-second resend countdown.'
+      'Shortest gap between two sign-in link mails to one address, as an ms()-parseable duration (e.g. "1m"). A request inside the gap answers the same 202 and mails nothing. Also the gap between two invitation confirm links to one address, counted separately. Defaults to 1m, matching the sign-in page\'s 60-second resend countdown.'
     ),
 
   SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: z.coerce

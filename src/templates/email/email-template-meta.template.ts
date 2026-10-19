@@ -5,6 +5,7 @@
  * before anything can store it.
  */
 import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
+import { INVITATION_CONFIRM_TEMPLATE_META } from '@/templates/email/invitation-confirm.template'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_META } from '@/templates/email/maintenance-mode-changed.template'
 import { ONBOARDING_REMINDER_TEMPLATE_META } from '@/templates/email/onboarding-reminder.template'
 import { SIGN_IN_LINK_TEMPLATE_META } from '@/templates/email/sign-in-link.template'
@@ -50,4 +51,5 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     sign_in_link: SIGN_IN_LINK_TEMPLATE_META,
     step_up_link: STEP_UP_LINK_TEMPLATE_META,
     welcome: WELCOME_TEMPLATE_META,
+    invitation_confirm: INVITATION_CONFIRM_TEMPLATE_META,
   })

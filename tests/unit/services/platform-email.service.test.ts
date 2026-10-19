@@ -56,6 +56,7 @@ describe('buildPreviewMessage', () => {
     ['sign_in_link', '/auth/link?token='],
     ['welcome', '/auth/link?token='],
     ['step_up_link', '/auth/confirm?token='],
+    ['invitation_confirm', '/invitations/confirm?token='],
   ])('%s keeps the real page and frontend and masks the token', (templateKey, path) => {
     const { message } = buildPreviewMessage(templateKey, {}, ORIGIN)
     const rendered = renderForMessage(message)

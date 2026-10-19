@@ -227,6 +227,7 @@ function shapeOf(call: string): string {
 const PRE_SIGN_IN_CALLS = new Set([
   'POST /api/v1/invitations/preview',
   'POST /api/v1/invitations/verify',
+  'POST /api/v1/invitations/confirm',
 ])
 
 beforeAll(async () => {

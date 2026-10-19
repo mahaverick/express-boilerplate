@@ -409,6 +409,19 @@ function stepUpConfirmPageUrl(rawToken: string, origin: string): string {
 }
 
 /**
+ * The page an invitation confirm link opens, carrying `rawToken`: the shape
+ * of `buildInvitationConfirmUrl`'s link without the address, which a preview
+ * never shows.
+ * @param rawToken - The token text, empty for a preview's masked link.
+ * @param origin - The frontend origin the real link pointed at.
+ * @returns The URL.
+ */
+function invitationConfirmPageUrl(rawToken: string, origin: string): string {
+  const base = new URL('invitations/confirm', origin.endsWith('/') ? origin : `${origin}/`)
+  return withEmailUtm(`${base.href}?token=${rawToken}`, 'invitation_confirm', 'primary_button')
+}
+
+/**
  * The mail a preview renders, and whether a stored preview variable was
  * missing (a message migrated from an old send attempt, whose variables are
  * `{}`, or one written with empty variables) and read as the mask. The
@@ -521,6 +534,20 @@ export function buildPreviewMessage(
           variables: {
             firstName: fill('firstName'),
             confirmUrl: maskedLink(stepUpConfirmPageUrl, origin),
+            expiresInMinutes: fill('expiresInMinutes'),
+            appName: fill('appName'),
+          },
+        }
+      }
+      case 'invitation_confirm': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            tenantName: fill('tenantName'),
+            role: fill('role'),
+            confirmUrl: maskedLink(invitationConfirmPageUrl, origin),
             expiresInMinutes: fill('expiresInMinutes'),
             appName: fill('appName'),
           },

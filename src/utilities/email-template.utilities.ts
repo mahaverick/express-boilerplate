@@ -19,6 +19,7 @@ export const EMAIL_TEMPLATE_KEYS = [
   'sign_in_link',
   'step_up_link',
   'welcome',
+  'invitation_confirm',
 ] as const
 
 /**

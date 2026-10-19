@@ -22,7 +22,7 @@ import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 
 /**
  * The templates a person needs to sign in, confirm it's them, or join a
- * workspace. They go on the `auth-email` queue, so full maintenance, which
+ * workspace (the invitation and its confirm link). They go on the `auth-email` queue, so full maintenance, which
  * pauses every other queue, cannot hold them.
  */
 export const AUTH_EMAIL_TEMPLATE_KEYS = [
@@ -30,6 +30,7 @@ export const AUTH_EMAIL_TEMPLATE_KEYS = [
   'step_up_link',
   'welcome',
   'tenant_invitation',
+  'invitation_confirm',
 ] as const satisfies readonly EmailTemplateKey[]
 
 /**

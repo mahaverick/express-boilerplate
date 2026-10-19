@@ -446,10 +446,12 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * 20 per 15 minutes per IP for `POST /invitations/verify`, keyed on IP
-   * alone: a public route, with no caller identity to key on. The token is
-   * single-use and carries 256 bits, so this bounds a client working through
-   * dead links, not guessing.
+   * 20 per 15 minutes per IP, one instance shared by `POST
+   * /invitations/verify` and `POST /invitations/confirm`: a confirm spends
+   * two (the click that mailed it, then the link's click), a resend three.
+   * Keyed on IP alone: public routes, with no caller identity to key on.
+   * Every token is single-use and carries 256 bits, so this bounds a client
+   * working through dead links, not guessing.
    */
   invitationVerify: {
     name: 'invitation-verify',

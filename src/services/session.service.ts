@@ -568,18 +568,21 @@ export async function revokeSessionRows(
 }
 
 /**
- * Revoke the live sign-in links mailed to a user's address, in the caller's
- * transaction. A `sign_in_link` row names the address, not the user, so the
- * user-wide revocations (`revokeSessionRows`) never reach it; every path
- * that ends a user's sessions to cut their access (a sign-out of the other
- * sessions, a staff sign-out, a deactivation) calls this beside them, or a
- * link already in the inbox would mint a new session.
+ * Revoke the live sign-in links and invitation confirm links mailed to a
+ * user's address, in the caller's transaction. A `sign_in_link` or
+ * `invitation_link` row names the address, not the user, so the user-wide
+ * revocations (`revokeSessionRows`) never reach it; every path that ends a
+ * user's sessions to cut their access (a sign-out of the other sessions, a
+ * staff sign-out, a deactivation) calls this beside them, or a link already
+ * in the inbox would mint a new session. The caller holds the user row lock
+ * first, then these link rows: the order an invitation confirm takes.
  * @param email - The user's address.
  * @param tx - The revoking transaction, holding the user row lock.
  * @returns Resolves once the links are revoked.
  */
 export async function revokeSignInLinksOf(email: string, tx: DbTransaction): Promise<void> {
   await userTokenRepository.revokeLiveFor({ email, intent: 'sign_in' }, tx)
+  await userTokenRepository.revokeLiveFor({ email, intent: 'invitation' }, tx)
 }
 
 /**

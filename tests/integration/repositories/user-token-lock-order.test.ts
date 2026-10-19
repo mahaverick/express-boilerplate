@@ -435,6 +435,14 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
       ),
   },
   {
+    name: 'revokeLiveFor (invitation confirm links of an address)',
+    run: (executor) =>
+      userTokenRepository.revokeLiveFor(
+        { email: `${randomUUID()}@example.test`, intent: 'invitation' },
+        executor
+      ),
+  },
+  {
     name: 'revokeLiveFor (step-up links of a session)',
     run: (executor) =>
       userTokenRepository.revokeLiveFor(

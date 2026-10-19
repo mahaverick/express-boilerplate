@@ -11,6 +11,7 @@ import { getEnv } from '@/configs/env.config'
 import type { LinkTokenIntent } from '@/database/models/user-token.model'
 import { sql } from '@/services/database.service'
 import {
+  buildInvitationConfirmUrl,
   buildSignInLinkUrl,
   buildStepUpConfirmUrl,
   claimLinkToken,
@@ -30,10 +31,13 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const PREFIX = `link-svc-${randomUUID()}-`
 const PREFIX_LIKE = `${PREFIX}%`
 const userIds: string[] = []
+const tenantIds: string[] = []
 const TTL_MS = 15 * 60_000
 
 afterEach(async () => {
   await sql`delete from user_tokens where email like ${PREFIX_LIKE}`
+  if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
+  tenantIds.length = 0
   if (userIds.length > 0) await sql`delete from users where id = any(${userIds})`
   userIds.length = 0
 })
@@ -61,6 +65,26 @@ async function insertUser(): Promise<string> {
   if (!row) throw new Error('user insert returned no row')
   userIds.push(row.id)
   return row.id
+}
+
+/**
+ * Inserts a tenant and a pending invitation in it with raw SQL, tracked for
+ * cleanup, and returns the invitation's id.
+ */
+async function insertInvitation(email: string): Promise<string> {
+  const inviterId = await insertUser()
+  const slug = `${PREFIX}${randomUUID()}`
+  const [tenant] = await sql<{ id: string }[]>`
+    insert into tenants (name, slug) values ('Acme Inc', ${slug}) returning id`
+  if (!tenant) throw new Error('tenant insert returned no row')
+  tenantIds.push(tenant.id)
+  const [invitation] = await sql<{ id: string }[]>`
+    insert into tenant_invitations (tenant_id, email, role, token_hash, invited_by, expires_at)
+    values (${tenant.id}, ${email}, 'editor', ${sha256hex(randomUUID())}, ${inviterId},
+      now() + interval '3 days')
+    returning id`
+  if (!invitation) throw new Error('invitation insert returned no row')
+  return invitation.id
 }
 
 /**
@@ -161,6 +185,47 @@ describe('issueLinkToken', () => {
     expect(await claimedId(second.raw, 'step_up', { userId, sessionId })).toBe(second.row.id)
   })
 
+  it('keys an invitation link by address and invitation, and revokes only the address’s earlier invitation link', async () => {
+    const email = address()
+    const invitationId = await insertInvitation(email)
+    const signInLink = await issueLinkToken(signIn({ email }), TTL_MS)
+    const first = await issueLinkToken(
+      { intent: 'invitation', email, app: 'web', invitationId },
+      TTL_MS
+    )
+    const second = await issueLinkToken(
+      { intent: 'invitation', email: email.toUpperCase(), app: 'web', invitationId },
+      TTL_MS
+    )
+
+    const [stored] = await sql<Record<string, unknown>[]>`
+      select purpose, user_id, session_id, redirect, invitation_id from user_tokens
+      where id = ${second.row.id}`
+    expect(stored).toEqual({
+      purpose: 'invitation_link',
+      // eslint-disable-next-line unicorn/no-null -- SQL NULL: an invitation link names no user
+      user_id: null,
+      // eslint-disable-next-line unicorn/no-null -- SQL NULL: nor a session
+      session_id: null,
+      // eslint-disable-next-line unicorn/no-null -- SQL NULL: nor a redirect
+      redirect: null,
+      invitation_id: invitationId,
+    })
+    expect(await claimLinkToken(first.raw, 'invitation')).toBeUndefined()
+    // Another intent's link of the same address is left alone, and never claims as this one.
+    expect(await claimLinkToken(signInLink.raw, 'invitation')).toBeUndefined()
+    expect(await claimedId(signInLink.raw, 'sign_in')).toBe(signInLink.row.id)
+    expect(await claimedId(second.raw, 'invitation')).toBe(second.row.id)
+  })
+
+  it('refuses an invitation issue without its invitation, writing nothing', async () => {
+    const email = address()
+    await expect(
+      issueLinkToken({ intent: 'invitation', email, app: 'web' }, TTL_MS)
+    ).rejects.toThrow('An invitation link needs its invitation')
+    expect(await sql`select 1 from user_tokens where email = ${email}`).toHaveLength(0)
+  })
+
   it('refuses a step_up issue without its user and session, writing nothing', async () => {
     const email = address()
     await expect(
@@ -236,6 +301,24 @@ describe('link URLs', () => {
     expect(webUrl.searchParams.get('token')).toBe(raw)
     expect(webUrl.searchParams.get('email')).toBe(email)
     expect(webUrl.searchParams.has('redirect')).toBe(false)
+  })
+
+  it('builds the invitation confirm link with token and email on the row’s app origin', () => {
+    const raw = 'c'.repeat(43)
+    const email = 'grace+tag@example.test'
+    const apexUrl = new URL(buildInvitationConfirmUrl(raw, { email, app: 'apex' }))
+    expect(apexUrl.origin).toBe(APEX)
+    expect(apexUrl.pathname).toBe('/invitations/confirm')
+    expect(apexUrl.searchParams.get('token')).toBe(raw)
+    expect(apexUrl.searchParams.get('email')).toBe(email)
+    expect(apexUrl.searchParams.get('utm_campaign')).toBe('invitation_confirm')
+    expect(apexUrl.searchParams.get('utm_content')).toBe('primary_button')
+    const webUrl = new URL(buildInvitationConfirmUrl(raw, { email, app: 'web' }))
+    expect(webUrl.origin).toBe(new URL(getEnv().WEB_URL).origin)
+    // eslint-disable-next-line unicorn/no-null -- a row with no app, which no link row is
+    expect(() => buildInvitationConfirmUrl(raw, { email, app: null })).toThrow()
+    // eslint-disable-next-line unicorn/no-null -- a row with no address, which no link row is
+    expect(() => buildInvitationConfirmUrl(raw, { email: null, app: 'web' })).toThrow()
   })
 
   it('builds the step-up confirm link on the apex origin', () => {

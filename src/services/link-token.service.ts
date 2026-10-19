@@ -1,7 +1,7 @@
 /**
  * @file Issuing, claiming and peeking the single-use links a mail carries
- * (the `sign_in_link` and `step_up_link` rows of `user_tokens`), and building
- * the URLs they travel in. A link is 32
+ * (the `sign_in_link`, `step_up_link` and `invitation_link` rows of
+ * `user_tokens`), and building the URLs they travel in. A link is 32
  * random bytes, base64url-encoded; only its SHA-256 hash is stored. A claim
  * spends the row before its expiry is judged, so one presentation is one
  * attempt.
@@ -41,8 +41,14 @@ const SIGN_IN_LINK_PATH = 'auth/link'
 const STEP_UP_CONFIRM_PATH = 'auth/confirm'
 
 /**
+ * The frontend page an invitation confirm link opens, relative to its origin.
+ */
+const INVITATION_CONFIRM_PATH = 'invitations/confirm'
+
+/**
  * What a link is issued for. A `step_up` link names the user and session it
- * elevates; a `sign_in` link names neither, and only it carries a redirect.
+ * elevates; an `invitation` link names the invitation it joins; a `sign_in`
+ * link names none of them, and only it carries a redirect.
  */
 export interface IssueLinkTokenInput {
   intent: LinkTokenIntent
@@ -51,16 +57,23 @@ export interface IssueLinkTokenInput {
   userId?: string
   sessionId?: string
   redirect?: string
+  invitationId?: string
 }
 
 /**
  * The live links a new one supersedes, from its input.
  * @param input - The link being issued, its address already lowercased.
- * @returns The address's sign-in links, or the session's step-up links.
- * @throws {Error} When a `step_up` link names no user or session: a caller's bug, refused before any write.
+ * @returns The address's sign-in links or invitation confirm links, or the session's step-up links.
+ * @throws {Error} When a `step_up` link names no user or session, or an `invitation` link no invitation: a caller's bug, refused before any write.
  */
 function supersededBy(input: IssueLinkTokenInput): LiveLinkMatch {
   if (input.intent === 'sign_in') return { email: input.email, intent: 'sign_in' }
+  if (input.intent === 'invitation') {
+    if (input.invitationId === undefined) {
+      throw new Error('An invitation link needs its invitation')
+    }
+    return { email: input.email, intent: 'invitation' }
+  }
   if (input.userId === undefined || input.sessionId === undefined) {
     throw new Error('A step_up link needs its user and session')
   }
@@ -68,8 +81,9 @@ function supersededBy(input: IssueLinkTokenInput): LiveLinkMatch {
 }
 
 /**
- * Issue a link: revoke the live links it supersedes (every sign-in link of
- * the address, or every step-up link of the session) and insert the new
+ * Issue a link: revoke the live links it supersedes (every sign-in link or
+ * every invitation confirm link of the address, or every step-up link of the
+ * session) and insert the new
  * row, in one transaction serialised per address or session, so at most one
  * link of each stays live.
  * @param input - What the link is for. The address is stored lowercased.
@@ -94,6 +108,7 @@ export async function issueLinkToken(
         userId: input.userId,
         sessionId: input.sessionId,
         redirect: input.redirect,
+        invitationId: input.invitationId,
         tokenHash: hashToken(raw),
         expiresAt: new Date(Date.now() + ttlMs),
       },
@@ -192,4 +207,28 @@ export function buildStepUpConfirmUrl(raw: string): string {
   const url = frontendPageUrl('apex', STEP_UP_CONFIRM_PATH)
   url.searchParams.set('token', raw)
   return withEmailUtm(url.href, 'step_up_link', 'text_link')
+}
+
+/**
+ * The invitation confirm link a mail carries:
+ * `<frontend>/invitations/confirm?token=…&email=…`. The frontend reads
+ * `email` as a display hint and sends it back for the mismatch check; it
+ * never carries the invitation's own token.
+ * @param raw - The raw token, never its hash.
+ * @param row - The issued row's address and frontend.
+ * @returns The absolute URL, with UTM parameters after the link's own query.
+ * @throws {Error} For a row with no app or address, which no link row is.
+ */
+export function buildInvitationConfirmUrl(
+  raw: string,
+  row: Pick<UserToken, 'email' | 'app'>
+): string {
+  const { app, email } = row
+  // Every link row has both (user_tokens_shape_check); anything else is a caller's bug.
+  if (app === null || email === null)
+    throw new Error('An invitation confirm link row has an app and an address')
+  const url = frontendPageUrl(app, INVITATION_CONFIRM_PATH)
+  url.searchParams.set('token', raw)
+  url.searchParams.set('email', email)
+  return withEmailUtm(url.href, 'invitation_confirm', 'primary_button')
 }

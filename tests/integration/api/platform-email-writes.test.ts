@@ -187,11 +187,13 @@ async function customerTenant(): Promise<Tenant> {
 }
 
 /**
- * A pending invitation in `tenant` and the tracked message that mailed it.
+ * A pending invitation in `tenant` and the tracked message that mailed it:
+ * the invitation itself, or the confirm link an invite click mailed.
  */
 async function invitationMessage(
   tenant: Tenant,
-  role: MembershipRole = 'editor'
+  role: MembershipRole = 'editor',
+  templateKey: 'tenant_invitation' | 'invitation_confirm' = 'tenant_invitation'
 ): Promise<{ invitationId: string; message: EmailMessage }> {
   const inviter = await createTrackedUser()
   const email = `invitee-${randomUUID()}@example.test`
@@ -206,11 +208,20 @@ async function invitationMessage(
   createdInvitationIds.push(invitation.id)
   const message = await createTrackedMessage({
     recipient: email,
-    templateKey: 'tenant_invitation',
+    templateKey,
     tenantId: tenant.id,
     invitationId: invitation.id,
     linkApp: tenant.isPlatform ? 'apex' : 'web',
-    variables: { tenantName: tenant.name, role, expiresInDays: '7', appName: 'Acme' },
+    variables:
+      templateKey === 'tenant_invitation'
+        ? { tenantName: tenant.name, role, expiresInDays: '7', appName: 'Acme' }
+        : {
+            firstName: 'Grace',
+            tenantName: tenant.name,
+            role,
+            expiresInMinutes: '15',
+            appName: 'Acme',
+          },
   })
   return { invitationId: invitation.id, message }
 }
@@ -380,6 +391,27 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
       select to_jsonb(email_messages) as row from email_messages where resent_from_id = ${message.id}`
     expect(messageRows).toHaveLength(1)
     expect(JSON.stringify(messageRows[0]?.row)).not.toContain(REASON)
+  })
+
+  it('answers a resend of an invitation confirm mail by sending the invitation itself', async () => {
+    const { token } = await staffSignedIn('admin')
+    const tenant = await customerTenant()
+    const { invitationId, message } = await invitationMessage(
+      tenant,
+      'editor',
+      'invitation_confirm'
+    )
+
+    const response = await resend(token, message)
+
+    expect(response.status).toBe(202)
+    const invitationAudit = await auditRows(invitationId)
+    expect(invitationAudit.map((row) => row.action)).toEqual(['invitation.resent'])
+    const job = await waitForJob<EmailJobData>(
+      emailQueueFor(TENANT_INVITATION_TEMPLATE_KEY),
+      (data) => data.to === message.recipient && data.templateKey === TENANT_INVITATION_TEMPLATE_KEY
+    )
+    expect(job.data.templateKey).toBe(TENANT_INVITATION_TEMPLATE_KEY)
   })
 
   it('resends straight after the last mail, skipping the cooldown, and still spends the address budget', async () => {

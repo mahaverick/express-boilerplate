@@ -13,6 +13,11 @@ import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
+  INVITATION_CONFIRM_TEMPLATE_KEY,
+  renderInvitationConfirmTemplate,
+  type InvitationConfirmVariables,
+} from '@/templates/email/invitation-confirm.template'
+import {
   MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY,
   renderMaintenanceModeChangedTemplate,
   type MaintenanceModeChangedVariables,
@@ -89,6 +94,11 @@ export type MailMessage =
       templateKey: typeof WELCOME_TEMPLATE_KEY
       variables: WelcomeVariables
     }
+  | {
+      to: string
+      templateKey: typeof INVITATION_CONFIRM_TEMPLATE_KEY
+      variables: InvitationConfirmVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -133,6 +143,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case WELCOME_TEMPLATE_KEY: {
       return renderWelcomeTemplate(message.variables)
+    }
+    case INVITATION_CONFIRM_TEMPLATE_KEY: {
+      return renderInvitationConfirmTemplate(message.variables)
     }
     default: {
       throw new Error(

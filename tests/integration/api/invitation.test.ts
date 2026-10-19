@@ -25,6 +25,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { issueLinkToken } from '@/services/link-token.service'
 import { logger } from '@/services/logger.service'
 import {
   closeQueue,
@@ -1246,14 +1247,19 @@ describe('invitations API', () => {
       })
     })
 
-    it('answers alreadyMember true to the invitee whose link a one-click verify spent', async () => {
+    it('answers alreadyMember true to the invitee who joined through the confirm link', async () => {
       const { owner, tenant } = await setup()
       const { user: invitee, token: inviteeToken } = await createUser()
-      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
-      const verified = await request(app)
-        .post('/api/v1/invitations/verify')
-        .send({ token: rawToken })
-      expect(verified.status).toBe(200)
+      const { rawToken, invitationId } = await seedInvitation(tenant, owner, {
+        email: invitee.email,
+      })
+      // The confirm link an invite click mails, minted directly: no Worker runs here.
+      const { raw } = await issueLinkToken(
+        { intent: 'invitation', email: invitee.email, app: 'web', invitationId },
+        requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+      )
+      const confirmed = await request(app).post('/api/v1/invitations/confirm').send({ token: raw })
+      expect(confirmed.status).toBe(200)
 
       const again = await acceptVia(rawToken, inviteeToken)
 

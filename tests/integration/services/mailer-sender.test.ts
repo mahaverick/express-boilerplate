@@ -58,6 +58,17 @@ describe('sendMail sender', () => {
       'welcome',
       { firstName: 'Ada', signInUrl: 'https://x.test/l', expiresInMinutes: '15', appName: 'A' },
     ],
+    [
+      'invitation_confirm',
+      {
+        firstName: 'Ada',
+        tenantName: 'Acme',
+        role: 'editor',
+        confirmUrl: 'https://x.test/c',
+        expiresInMinutes: '15',
+        appName: 'A',
+      },
+    ],
   ] as const)(
     'sends %s, a token template, from the transactional sender',
     async (templateKey, variables) => {

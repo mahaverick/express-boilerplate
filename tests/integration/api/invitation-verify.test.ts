@@ -1,41 +1,57 @@
 /**
- * @file `POST /api/v1/invitations/verify`: one click on an invitation link
- * signs the invitee in and joins them, creating a verified account when the
- * address has none. The link is single-use: a second presentation, by
- * anyone, answers the generic `invitation_invalid` with no session, and so
- * does every dead link, before any account is created. No Worker runs; the
- * file reads rows straight from the database.
+ * @file `POST /api/v1/invitations/verify`: one click on an invitation link.
+ * A customer invitation to an address with no account signs the invitee in
+ * and joins them in that click, creating a verified account. Any other
+ * click (an address that has an account, or any staff invitation) answers
+ * `202` "Check your inbox", spends nothing, sets no cookie, and mails a
+ * 15-minute confirm link after the reply. Every dead link answers the
+ * generic `invitation_invalid`. No Worker runs; the file reads rows and
+ * queued jobs straight from the database and the queue.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
-import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
-import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
+import { addressDigest } from '@/services/mail-cooldown.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, issueRefreshToken } from '@/services/session.service'
+import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
+import { requestSignInLink } from '@/services/sign-in-link.service'
+import { verifyInvitation } from '@/services/tenant-invitation.service'
+import { INVITATION_CONFIRM_TEMPLATE_KEY } from '@/templates/email/invitation-confirm.template'
 import type { DomainEvent } from '@/types/domain-event'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { deferred } from '../../helpers/lock-probe'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { platformTenant } from '../../helpers/platform-staff'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
+import { queuedJobs } from '../../helpers/queue-jobs'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
-import { signInByLink } from '../../helpers/sign-in'
+import { clearRateLimiter, signInByLink } from '../../helpers/sign-in'
+import { waitUntil } from '../../helpers/timing'
+
+vi.mock('@/services/sign-in-link-limit.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/sign-in-link-limit.service')>()
+  return { ...actual, spendSignInLinkBudget: vi.fn(actual.spendSignInLinkBudget) }
+})
 
 const app = createApp()
-const authProviderRepository = new AuthProviderRepository()
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -57,7 +73,7 @@ const INVALID = {
 
 /**
  * Every address this file used, lowercased, for `afterEach` to delete the
- * accounts a click created.
+ * accounts a click created, the links minted and the messages queued.
  */
 const usedEmails: string[] = []
 
@@ -80,6 +96,12 @@ for (const type of [
     emitted.push(event)
   })
 }
+
+afterAll(async () => {
+  await getEmailQueue().obliterate({ force: true })
+  await getAuthEmailQueue().obliterate({ force: true })
+  await closeQueue()
+})
 
 /**
  * A fresh address for one test, recorded for cleanup.
@@ -136,6 +158,20 @@ async function seedInvitation(
     )
   )
   return { rawToken, invitationId: invitation.id }
+}
+
+/**
+ * A customer invitation to `email`, from a fresh tenant.
+ * @param email - The invited address.
+ * @param role - The offered role.
+ * @returns The tenant, the raw token and the invitation's id.
+ */
+async function customerInvitation(
+  email: string,
+  role: MembershipRole = 'editor'
+): Promise<{ tenant: Tenant; rawToken: string; invitationId: string }> {
+  const { tenant, owner } = await createTenant()
+  return { tenant, ...(await seedInvitation(tenant, owner, email, role)) }
 }
 
 /**
@@ -219,7 +255,80 @@ async function isPending(invitationId: string): Promise<boolean> {
 }
 
 /**
- * The events emitted for one user, by type.
+ * The `invitation_link` rows of one address, oldest first.
+ * @param email - The address.
+ * @returns The columns these tests read.
+ */
+async function confirmLinks(email: string): Promise<
+  {
+    userId: string | null
+    app: string
+    invitationId: string | null
+    revoked: boolean
+  }[]
+> {
+  return sql<
+    { userId: string | null; app: string; invitationId: string | null; revoked: boolean }[]
+  >`
+    select user_id as "userId", app, invitation_id as "invitationId",
+      revoked_at is not null as revoked
+    from user_tokens where email = ${email} and purpose = 'invitation_link'
+    order by created_at, id
+  `
+}
+
+/**
+ * The confirm mails queued for one address.
+ * @param email - The recipient.
+ * @returns Their job payloads.
+ */
+async function confirmJobs(email: string): Promise<EmailJobData[]> {
+  const jobs = await queuedJobs<EmailJobData>(emailQueueFor(INVITATION_CONFIRM_TEMPLATE_KEY))
+  return jobs
+    .map((job) => job.data)
+    .filter((data) => data.to === email && data.templateKey === INVITATION_CONFIRM_TEMPLATE_KEY)
+}
+
+/**
+ * Wait until one confirm mail is queued for an address, after the reply.
+ * @param email - The recipient.
+ * @returns The queued mail.
+ */
+async function waitForConfirmJob(email: string): Promise<EmailJobData> {
+  const [job] = await waitUntil(
+    async () => {
+      const jobs = await confirmJobs(email)
+      return jobs.length > 0 ? jobs : undefined
+    },
+    { message: `the confirm mail to ${email}` }
+  )
+  if (!job) throw new Error('no confirm mail')
+  return job
+}
+
+/**
+ * Run a verify at the service level and await its follow-up, for tests of
+ * what the follow-up mails or skips.
+ * @param rawToken - The raw invitation token.
+ * @returns The outcome's kind.
+ */
+async function verifyAndFollowUp(rawToken: string): Promise<string> {
+  const outcome = await verifyInvitation(rawToken)
+  if (outcome.kind === 'confirm') await outcome.followUp()
+  return outcome.kind
+}
+
+/**
+ * Release one address's confirm-mail cooldown, as its expiry would.
+ * @param email - The address.
+ */
+async function releaseConfirmCooldown(email: string): Promise<void> {
+  const redis = await getRedis()
+  await redis.del(redisKey('invitation-confirm', addressDigest(email)))
+}
+
+/**
+ * The events emitted for one user.
  * @param userId - The user.
  * @returns The events, in emit order.
  */
@@ -228,33 +337,33 @@ function eventsFor(userId: string): DomainEvent[] {
 }
 
 /**
- * Delete every key of the verify limiter, so the IP-keyed budget this file
- * spends does not carry from one test to the next.
+ * Switch the maintenance mode for this replica, as a staff change would.
+ * @param mode - The mode to switch to.
  */
-async function clearVerifyLimiter(): Promise<void> {
-  const client = await getRedis()
-  const keys: string[] = []
-  const batches = client.scanIterator({ MATCH: `${redisKey('rl', 'invitation-verify')}:*` })
-  for await (const batch of batches) {
-    keys.push(...batch)
-  }
-  if (keys.length > 0) await client.del(keys)
+async function switchMode(mode: 'read_only' | 'full'): Promise<void> {
+  await storeMaintenanceMode(mode)
+  await reloadMaintenanceMode()
 }
 
 beforeEach(async () => {
-  await clearVerifyLimiter()
+  await clearRateLimiter('invitation-verify')
 })
 
 afterEach(async () => {
   await resetMaintenanceMode()
   await reloadMaintenanceMode()
+  vi.mocked(spendSignInLinkBudget).mockClear()
   await truncateAuditLogs()
   if (createdTenantIds.length > 0) {
     await sql`delete from tenants where id = any(${createdTenantIds})`
     createdTenantIds.length = 0
   }
   if (usedEmails.length > 0) {
+    await sql`delete from email_messages where recipient = any(${usedEmails})`
+    await sql`delete from user_tokens where email = any(${usedEmails})`
     await sql`delete from users where lower(email) = any(${usedEmails})`
+    const redis = await getRedis()
+    await redis.del(usedEmails.map((email) => redisKey('invitation-confirm', addressDigest(email))))
     usedEmails.length = 0
   }
   await deleteTrackedUsers()
@@ -262,9 +371,8 @@ afterEach(async () => {
 
 describe('POST /api/v1/invitations/verify', () => {
   it('creates a verified account, joins with the invited role and signs in', async () => {
-    const { tenant, owner } = await createTenant()
     const email = uniqueEmail('new')
-    const { rawToken, invitationId } = await seedInvitation(tenant, owner, email, 'manager')
+    const { tenant, rawToken, invitationId } = await customerInvitation(email, 'manager')
 
     const response = await postVerify(rawToken)
 
@@ -302,8 +410,7 @@ describe('POST /api/v1/invitations/verify', () => {
         metadata: { role: 'manager', invitationId },
       },
     ])
-    const types = eventsFor(data.user.id).map((event) => event.type)
-    expect(types).toEqual(
+    expect(eventsFor(data.user.id).map((event) => event.type)).toEqual(
       expect.arrayContaining([
         'email_verified',
         'invitation_accepted',
@@ -315,9 +422,6 @@ describe('POST /api/v1/invitations/verify', () => {
       expect.objectContaining({ type: 'user_signed_up', method: 'link' })
     )
     expect(eventsFor(data.user.id)).toContainEqual(
-      expect.objectContaining({ type: 'user_signed_in', method: 'link' })
-    )
-    expect(eventsFor(data.user.id)).toContainEqual(
       expect.objectContaining({
         type: 'invitation_accepted',
         tenantId: tenant.id,
@@ -325,68 +429,256 @@ describe('POST /api/v1/invitations/verify', () => {
         wasFirstMember: false,
       })
     )
+    expect(await confirmLinks(email)).toEqual([])
   })
 
-  it('signs an existing account in and joins it', async () => {
-    const { tenant, owner } = await createTenant()
-    const invitee = await createTrackedUser({ email: uniqueEmail('existing') })
-    const { rawToken } = await seedInvitation(tenant, owner, invitee.email)
+  it('issues a one-click session that does not count as a recent sign-in', async () => {
+    const email = uniqueEmail('stale')
+    const { rawToken } = await customerInvitation(email)
+
+    const response = await postVerify(rawToken)
+    expect(response.status).toBe(200)
+    const data = verifyData(response)
+
+    const [row] = await sql<{ authenticated: boolean }[]>`
+      select authenticated_at is not null as authenticated from user_tokens
+      where user_id = ${data.user.id} and purpose = 'refresh'
+    `
+    expect(row?.authenticated).toBe(false)
+    const [, payload] = data.accessToken.split('.', 2)
+    const claims = JSON.parse(Buffer.from(payload ?? '', 'base64url').toString()) as object
+    expect(claims).not.toHaveProperty('auth_time')
+  })
+
+  it('joins in one click for an address whose only account was deleted', async () => {
+    const gone = await createTrackedUser({ email: uniqueEmail('soft-deleted') })
+    await sql`update users set deleted_at = now() where id = ${gone.id}`
+    const { rawToken } = await customerInvitation(gone.email)
 
     const response = await postVerify(rawToken)
 
     expect(response.status).toBe(200)
-    const data = verifyData(response)
-    expect(data.isNewUser).toBe(false)
-    expect(data.user.id).toBe(invitee.id)
-    expect(data.role).toBe('editor')
-    expect(hasRefreshCookie(response)).toBe(true)
-    const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
-    expect(membership?.role).toBe('editor')
-    expect(await refreshRows(invitee.id)).toEqual([{ revoked: false }])
-    const types = eventsFor(invitee.id).map((event) => event.type)
-    expect(types).toEqual(['invitation_accepted', 'user_signed_in'])
+    expect(verifyData(response).isNewUser).toBe(true)
+    expect(verifyData(response).user.id).not.toBe(gone.id)
   })
 
-  it('verifies a never-verified invitee and revokes their earlier sessions', async () => {
-    const { tenant, owner } = await createTenant()
+  it('mails a confirm link instead of signing in an existing verified account', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('existing'), firstName: 'Grace' })
+    const presented = await issueRefreshToken(invitee.id, randomUUID())
+    const { tenant, rawToken, invitationId } = await customerInvitation(invitee.email)
+
+    const response = await postVerify(rawToken, `${REFRESH_COOKIE_NAME}=${presented.raw}`)
+
+    expect(response.status).toBe(202)
+    expect(response.headers['cache-control']).toBe('no-store')
+    expect(response.headers['set-cookie']).toBeUndefined()
+    expect(response.body).toEqual({
+      success: true,
+      message: 'Check your inbox to finish joining.',
+      statusCode: 202,
+      data: { confirmationSent: true, email: invitee.email },
+    })
+    // The presented session survives, and no new one exists.
+    expect(await refreshRows(invitee.id)).toEqual([{ revoked: false }])
+    expect(
+      await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+    ).toBeUndefined()
+    expect(await isPending(invitationId)).toBe(true)
+    const preview = await request(app).post('/api/v1/invitations/preview').send({ token: rawToken })
+    expect(preview.status).toBe(200)
+
+    const job = await waitForConfirmJob(invitee.email)
+    expect(job.userId).toBe(invitee.id)
+    if (job.templateKey !== INVITATION_CONFIRM_TEMPLATE_KEY) throw new Error('wrong template')
+    expect(job.variables).toMatchObject({
+      firstName: 'Grace',
+      tenantName: 'Acme Inc',
+      role: 'editor',
+      expiresInMinutes: '15',
+    })
+    const link = new URL(job.variables.confirmUrl)
+    expect(link.pathname).toBe('/invitations/confirm')
+    expect(link.searchParams.get('email')).toBe(invitee.email)
+    expect(link.searchParams.get('token')).toMatch(/^[\w-]{43}$/)
+    // The invitation's own token is never mailed in the confirm link.
+    expect(job.variables.confirmUrl).not.toContain(rawToken)
+    expect(await confirmLinks(invitee.email)).toEqual([
+      // eslint-disable-next-line unicorn/no-null -- an invitation_link row names no user
+      { userId: null, app: 'web', invitationId, revoked: false },
+    ])
+    const [message] = await sql<{ tenantId: string; invitationId: string; linkApp: string }[]>`
+      select tenant_id as "tenantId", invitation_id as "invitationId", link_app as "linkApp"
+      from email_messages
+      where recipient = ${invitee.email} and template_key = ${INVITATION_CONFIRM_TEMPLATE_KEY}
+    `
+    expect(message).toEqual({ tenantId: tenant.id, invitationId, linkApp: 'web' })
+
+    // The mailed link signs in and joins.
+    const confirmed = await request(app)
+      .post('/api/v1/invitations/confirm')
+      .send({ token: link.searchParams.get('token'), email: link.searchParams.get('email') })
+    expect(confirmed.status).toBe(200)
+    expect(verifyData(confirmed).user.id).toBe(invitee.id)
+    expect(await isPending(invitationId)).toBe(false)
+  })
+
+  it('mails a confirm link for a never-verified account and claims nothing', async () => {
     const invitee = await createTrackedUser({
       email: uniqueEmail('never-verified'),
       verified: false,
     })
     await issueRefreshToken(invitee.id, randomUUID())
-    await authProviderRepository.create({
-      userId: invitee.id,
-      provider: 'email',
-      providerId: invitee.email,
-    })
-    // A squatter's own Google link on the never-verified account.
-    await authProviderRepository.create({
-      userId: invitee.id,
-      provider: 'google',
-      providerId: randomUUID(),
-    })
-    const { rawToken } = await seedInvitation(tenant, owner, invitee.email)
+    const { rawToken, invitationId } = await customerInvitation(invitee.email)
 
     const response = await postVerify(rawToken)
 
-    expect(response.status).toBe(200)
-    expect(verifyData(response).isNewUser).toBe(false)
-    expect(verifyData(response).user.id).toBe(invitee.id)
-    expect(await refreshRows(invitee.id)).toEqual([{ revoked: true }, { revoked: false }])
-    const claimed = await userRepository.findById(invitee.id)
-    expect(claimed?.emailVerifiedAt).toBeInstanceOf(Date)
-    // The click proves the mailbox, so a squatter's federated links go.
-    const providers = await authProviderRepository.findByUser(invitee.id)
-    expect(providers.map((provider) => provider.provider)).toEqual(['email'])
-    expect(eventsFor(invitee.id).filter((event) => event.type === 'email_verified')).toHaveLength(1)
-    const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
-    expect(membership?.role).toBe('editor')
+    expect(response.status).toBe(202)
+    expect(hasRefreshCookie(response)).toBe(false)
+    await waitForConfirmJob(invitee.email)
+    const untouched = await userRepository.findById(invitee.id)
+    expect(untouched?.emailVerifiedAt).toBeNull()
+    // Its earlier session stays live until the confirm claims the account.
+    expect(await refreshRows(invitee.id)).toEqual([{ revoked: false }])
+    expect(await isPending(invitationId)).toBe(true)
+  })
+
+  it('mails a confirm link for a staff invitation to a new address and creates no account', async () => {
+    const platform = await platformTenant()
+    const inviter = await createTrackedUser()
+    const email = uniqueEmail('staff')
+    const { rawToken, invitationId } = await seedInvitation(platform, inviter, email, 'admin')
+
+    const response = await postVerify(rawToken)
+
+    expect(response.status).toBe(202)
+    expect(response.body).toMatchObject({ data: { confirmationSent: true, email } })
+    expect(hasRefreshCookie(response)).toBe(false)
+    const job = await waitForConfirmJob(email)
+    expect(job.userId).toBe('')
+    if (job.templateKey !== INVITATION_CONFIRM_TEMPLATE_KEY) throw new Error('wrong template')
+    expect(job.variables.firstName).toBe('there')
+    expect(await userCount(email)).toBe(0)
+    expect(await isPending(invitationId)).toBe(true)
+    expect(await confirmLinks(email)).toEqual([
+      // eslint-disable-next-line unicorn/no-null -- an invitation_link row names no user
+      { userId: null, app: 'apex', invitationId, revoked: false },
+    ])
+  })
+
+  it('still answers invitation_invalid for a deactivated invitee and mails nothing', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('deactivated'), active: false })
+    const { tenant, rawToken, invitationId } = await customerInvitation(invitee.email)
+
+    const response = await postVerify(rawToken)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toMatchObject(INVALID)
+    expect(response.headers['set-cookie']).toBeUndefined()
+    await expect(verifyInvitation(rawToken)).rejects.toMatchObject({ statusCode: 404 })
+    expect(await confirmLinks(invitee.email)).toEqual([])
+    expect(await confirmJobs(invitee.email)).toEqual([])
+    expect(
+      await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+    ).toBeUndefined()
+    expect(await isPending(invitationId)).toBe(true)
+  })
+
+  it('mails one confirm link per cooldown and still answers 202', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('cooldown') })
+    const { rawToken } = await customerInvitation(invitee.email)
+
+    const first = await postVerify(rawToken)
+    await waitForConfirmJob(invitee.email)
+    const second = await postVerify(rawToken)
+    expect(await verifyAndFollowUp(rawToken)).toBe('confirm')
+
+    expect(first.status).toBe(202)
+    expect(second.status).toBe(202)
+    expect(second.text).toBe(first.text)
+    expect(await confirmJobs(invitee.email)).toHaveLength(1)
+    expect(await confirmLinks(invitee.email)).toHaveLength(1)
+  })
+
+  it('sends the confirm link even right after a sign-in link to the same address', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('separate-scopes') })
+    const { rawToken } = await customerInvitation(invitee.email)
+    await requestSignInLink({ email: invitee.email, app: 'web' })()
+
+    expect(await verifyAndFollowUp(rawToken)).toBe('confirm')
+
+    expect(await confirmLinks(invitee.email)).toHaveLength(1)
+    expect(await confirmJobs(invitee.email)).toHaveLength(1)
+  })
+
+  it('mails nothing once the daily budget is spent', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('budget') })
+    const { rawToken } = await customerInvitation(invitee.email)
+    vi.mocked(spendSignInLinkBudget).mockResolvedValueOnce('exhausted')
+
+    const outcome = await verifyInvitation(rawToken)
+    if (outcome.kind !== 'confirm') throw new Error('expected the confirm branch')
+    await outcome.followUp()
+
+    expect(vi.mocked(spendSignInLinkBudget)).toHaveBeenCalledWith(invitee.email)
+    expect(await confirmLinks(invitee.email)).toEqual([])
+    expect(await confirmJobs(invitee.email)).toEqual([])
+  })
+
+  it('revokes the earlier confirm link when a new one is issued', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('supersede') })
+    const { rawToken } = await customerInvitation(invitee.email)
+
+    await verifyAndFollowUp(rawToken)
+    await releaseConfirmCooldown(invitee.email)
+    await verifyAndFollowUp(rawToken)
+
+    const links = await confirmLinks(invitee.email)
+    expect(links.map((row) => row.revoked)).toEqual([true, false])
+    expect(await confirmJobs(invitee.email)).toHaveLength(2)
+  })
+
+  it('replies before the mail work', async () => {
+    const invitee = await createTrackedUser({ email: uniqueEmail('before-mail') })
+    const { rawToken } = await customerInvitation(invitee.email)
+    const reached = deferred()
+    const release = deferred()
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realLock = UserTokenRepository.prototype.lockLinkIssue
+    /**
+     * Stands in for `lockLinkIssue`, which only the follow-up's `issueLinkToken` calls: it
+     * signals, then holds the issue until released.
+     */
+    const blockingLock: typeof realLock = async function (
+      this: UserTokenRepository,
+      ...arguments_
+    ) {
+      reached.resolve()
+      await release.promise
+      return realLock.apply(this, arguments_)
+    }
+
+    await withMutatedMethod(
+      UserTokenRepository.prototype,
+      'lockLinkIssue',
+      blockingLock,
+      async () => {
+        try {
+          const response = await postVerify(rawToken)
+          expect(response.status).toBe(202)
+          // The reply is in hand while the follow-up's issue has not run.
+          await reached.promise
+          expect(await confirmLinks(invitee.email)).toEqual([])
+        } finally {
+          release.resolve()
+        }
+      }
+    )
+    await waitForConfirmJob(invitee.email)
   })
 
   it('answers invitation_invalid for a used link, even for the invitee, and issues no session', async () => {
-    const { tenant, owner } = await createTenant()
     const email = uniqueEmail('used')
-    const { rawToken } = await seedInvitation(tenant, owner, email)
+    const { rawToken } = await customerInvitation(email)
     const first = await postVerify(rawToken)
     expect(first.status).toBe(200)
     const inviteeId = verifyData(first).user.id
@@ -443,121 +735,14 @@ describe('POST /api/v1/invitations/verify', () => {
       expect(response.body).toMatchObject(INVALID)
       expect(response.headers['set-cookie']).toBeUndefined()
       expect(await userCount(email)).toBe(before)
+      expect(await confirmLinks(email)).toEqual([])
     }
   })
 
-  it('answers invitation_invalid for a deactivated invitee', async () => {
-    const { tenant, owner } = await createTenant()
-    const invitee = await createTrackedUser({ email: uniqueEmail('deactivated'), active: false })
-    const { rawToken, invitationId } = await seedInvitation(tenant, owner, invitee.email)
-
-    const response = await postVerify(rawToken)
-
-    expect(response.status).toBe(404)
-    expect(response.body).toMatchObject(INVALID)
-    expect(response.headers['set-cookie']).toBeUndefined()
-    expect(await refreshRows(invitee.id)).toEqual([])
-    expect(
-      await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
-    ).toBeUndefined()
-    // Refused before the claim: the link is not spent.
-    expect(await isPending(invitationId)).toBe(true)
-  })
-
-  it('answers invitation_invalid for a deactivated, never-verified invitee without claiming the account', async () => {
-    const { tenant, owner } = await createTenant()
-    const invitee = await createTrackedUser({
-      email: uniqueEmail('deactivated-unverified'),
-      active: false,
-      verified: false,
-    })
-    const { rawToken, invitationId } = await seedInvitation(tenant, owner, invitee.email)
-
-    const response = await postVerify(rawToken)
-
-    expect(response.status).toBe(404)
-    expect(response.body).toMatchObject(INVALID)
-    expect(response.headers['set-cookie']).toBeUndefined()
-    const untouched = await userRepository.findById(invitee.id)
-    expect(untouched?.emailVerifiedAt).toBeNull()
-    expect(await isPending(invitationId)).toBe(true)
-  })
-
-  it('lands a platform invitee as staff', async () => {
-    const platform = await platformTenant()
-    const inviter = await createTrackedUser()
-    const email = uniqueEmail('staff')
-    const { rawToken } = await seedInvitation(platform, inviter, email, 'viewer')
-
-    const response = await postVerify(rawToken)
-
-    expect(response.status).toBe(200)
-    const data = verifyData(response)
-    expect(data.isNewUser).toBe(true)
-    expect(data.role).toBe('viewer')
-    expect(data.tenant.slug).toBe(platform.slug)
-    expect(data.user.platformRole).toBe('viewer')
-  })
-
-  it('issues a session that does not count as a recent sign-in, so a step-up route answers REAUTH_REQUIRED', async () => {
-    const platform = await platformTenant()
-    const inviter = await createTrackedUser()
-    const email = uniqueEmail('staff-stale')
-    const { rawToken } = await seedInvitation(platform, inviter, email, 'admin')
-
-    const response = await postVerify(rawToken)
-    expect(response.status).toBe(200)
-    const data = verifyData(response)
-    expect(data.user.platformRole).toBe('admin')
-
-    const [row] = await sql<{ authenticated: boolean }[]>`
-      select authenticated_at is not null as authenticated from user_tokens
-      where user_id = ${data.user.id} and purpose = 'refresh'
-    `
-    expect(row?.authenticated).toBe(false)
-
-    const refused = await request(app)
-      .post(`/api/v1/platform/users/${randomUUID()}/deactivate`)
-      .set('Authorization', `Bearer ${data.accessToken}`)
-      .send({})
-    expect(refused.status).toBe(401)
-    expect(refused.body).toMatchObject({ code: REAUTH_REQUIRED_CODE })
-  })
-
-  it('keeps an existing membership’s role and still signs in', async () => {
-    const { tenant, owner } = await createTenant()
-    const invitee = await createTrackedUser({ email: uniqueEmail('member') })
-    const { rawToken } = await seedInvitation(tenant, owner, invitee.email, 'viewer')
-    await userMembershipRepository.create({
-      userId: invitee.id,
-      tenantId: tenant.id,
-      role: 'admin',
-    })
-
-    const response = await postVerify(rawToken)
-
-    expect(response.status).toBe(200)
-    expect(verifyData(response).role).toBe('admin')
-    expect(eventsFor(invitee.id).map((event) => event.type)).toEqual(['user_signed_in'])
-  })
-
-  it('revokes the session the browser presented', async () => {
-    const { tenant, owner } = await createTenant()
-    const email = uniqueEmail('presented')
-    const earlier = await signInByLink(email)
-    const { rawToken } = await seedInvitation(tenant, owner, email)
-
-    const response = await postVerify(rawToken, earlier.refreshCookie)
-
-    expect(response.status).toBe(200)
-    expect(await refreshRows(earlier.userId)).toEqual([{ revoked: true }, { revoked: false }])
-  })
-
-  it('signs in the invitee, not the signed-in user, and revokes the session they presented', async () => {
-    const { tenant, owner } = await createTenant()
+  it('revokes the session the browser presented on a one-click join', async () => {
     const signedIn = await signInByLink(uniqueEmail('someone-else'))
-    const invitee = await createTrackedUser({ email: uniqueEmail('invitee-b') })
-    const { rawToken } = await seedInvitation(tenant, owner, invitee.email)
+    const email = uniqueEmail('presented')
+    const { tenant, rawToken } = await customerInvitation(email)
 
     const response = await request(app)
       .post('/api/v1/invitations/verify')
@@ -566,17 +751,17 @@ describe('POST /api/v1/invitations/verify', () => {
       .send({ token: rawToken })
 
     expect(response.status).toBe(200)
-    expect(verifyData(response).user.id).toBe(invitee.id)
+    const data = verifyData(response)
+    expect(data.user.email).toBe(email)
     expect(await refreshRows(signedIn.userId)).toEqual([{ revoked: true }])
-    expect(await refreshRows(invitee.id)).toEqual([{ revoked: false }])
+    expect(await refreshRows(data.user.id)).toEqual([{ revoked: false }])
     expect(
       await userMembershipRepository.findByUserAndTenant(signedIn.userId, tenant.id)
     ).toBeUndefined()
   })
 
   it('refuses a disallowed Origin', async () => {
-    const { tenant, owner } = await createTenant()
-    const { rawToken, invitationId } = await seedInvitation(tenant, owner, uniqueEmail('origin'))
+    const { rawToken, invitationId } = await customerInvitation(uniqueEmail('origin'))
 
     const response = await request(app)
       .post('/api/v1/invitations/verify')
@@ -589,8 +774,7 @@ describe('POST /api/v1/invitations/verify', () => {
   })
 
   it('answers 415 for a form body', async () => {
-    const { tenant, owner } = await createTenant()
-    const { rawToken, invitationId } = await seedInvitation(tenant, owner, uniqueEmail('form'))
+    const { rawToken, invitationId } = await customerInvitation(uniqueEmail('form'))
 
     const response = await request(app)
       .post('/api/v1/invitations/verify')
@@ -612,23 +796,28 @@ describe('POST /api/v1/invitations/verify', () => {
     expect(limited.status).toBe(429)
   })
 
-  it('is refused in read_only and full with the maintenance codes', async () => {
-    const { tenant, owner } = await createTenant()
-    const email = uniqueEmail('maintenance')
-    const { rawToken, invitationId } = await seedInvitation(tenant, owner, email)
+  it.each(['new address', 'existing account'] as const)(
+    'is refused in read_only and full with the maintenance codes for a %s, and mails nothing',
+    async (kind) => {
+      const email = uniqueEmail('maintenance')
+      if (kind === 'existing account') await createTrackedUser({ email })
+      const { rawToken, invitationId } = await customerInvitation(email)
+      const accounts = await userCount(email)
 
-    await storeMaintenanceMode('read_only')
-    await reloadMaintenanceMode()
-    const readOnly = await postVerify(rawToken)
-    await storeMaintenanceMode('full')
-    await reloadMaintenanceMode()
-    const full = await postVerify(rawToken)
+      await switchMode('read_only')
+      const readOnly = await postVerify(rawToken)
+      await switchMode('full')
+      const full = await postVerify(rawToken)
 
-    expect(readOnly.status).toBe(503)
-    expect(readOnly.body).toMatchObject({ code: READ_ONLY_MODE_CODE })
-    expect(full.status).toBe(503)
-    expect(full.body).toMatchObject({ code: MAINTENANCE_MODE_CODE })
-    expect(await userCount(email)).toBe(0)
-    expect(await isPending(invitationId)).toBe(true)
-  })
+      expect(readOnly.status).toBe(503)
+      expect(readOnly.body).toMatchObject({ code: READ_ONLY_MODE_CODE })
+      expect(full.status).toBe(503)
+      expect(full.body).toMatchObject({ code: MAINTENANCE_MODE_CODE })
+      expect(await userCount(email)).toBe(accounts)
+      expect(await isPending(invitationId)).toBe(true)
+      await expect(verifyInvitation(rawToken)).rejects.toMatchObject({ statusCode: 503 })
+      expect(await confirmLinks(email)).toEqual([])
+      expect(await confirmJobs(email)).toEqual([])
+    }
+  )
 })

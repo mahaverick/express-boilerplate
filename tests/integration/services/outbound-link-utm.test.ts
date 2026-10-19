@@ -7,7 +7,11 @@
 import { describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import { buildInvitationAcceptUrl } from '@/services/frontend-links.service'
-import { buildSignInLinkUrl, buildStepUpConfirmUrl } from '@/services/link-token.service'
+import {
+  buildInvitationConfirmUrl,
+  buildSignInLinkUrl,
+  buildStepUpConfirmUrl,
+} from '@/services/link-token.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { buildTenantOverviewLink } from '@/services/platform-onboarding.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
@@ -43,6 +47,21 @@ interface LinkCase {
  * `EmailTemplateKey`, so a new template fails to compile until it is here.
  */
 const CASES: Record<EmailTemplateKey, () => LinkCase> = {
+  invitation_confirm: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'invitation_confirm',
+      variables: {
+        firstName: 'Ada',
+        tenantName: 'Acme',
+        role: 'editor',
+        confirmUrl: buildInvitationConfirmUrl(RAW, { email: EMAIL, app: 'web' }),
+        expiresInMinutes: '15',
+        appName: 'App',
+      },
+    },
+    contents: ['primary_button'],
+  }),
   tenant_invitation: () => ({
     message: {
       to: EMAIL,
@@ -211,6 +230,15 @@ describe('links we send', () => {
     expect(url.search.split('&utm_source', 1)[0]).toBe(
       `?token=${RAW}&email=${encodeURIComponent(EMAIL)}&redirect=${encodeURIComponent(REDIRECT)}`
     )
+  })
+
+  it('keeps the confirm link token and email as the builder wrote them, and never a redirect', () => {
+    const url = new URL(buildInvitationConfirmUrl(RAW, { email: EMAIL, app: 'web' }))
+    expect(url.pathname).toBe('/invitations/confirm')
+    expect(url.search.split('&utm_source', 1)[0]).toBe(
+      `?token=${RAW}&email=${encodeURIComponent(EMAIL)}`
+    )
+    expect(url.searchParams.has('redirect')).toBe(false)
   })
 
   it('names the welcome mail as the campaign of a welcome link', () => {

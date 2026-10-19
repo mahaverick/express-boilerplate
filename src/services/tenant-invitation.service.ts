@@ -1,7 +1,9 @@
 /**
  * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
- * accept, and the one-click verify that signs the invitee in and joins them,
- * creating their account when the address has none. Multi-step writes run in one transaction with their audit entry,
+ * accept, the signed-out verify, and the confirm link. A verify joins a new
+ * address on a customer invitation in one click, creating its account; an
+ * address that has an account, and every staff invitation, is mailed a
+ * 15-minute confirm link instead, whose click signs in and joins. Multi-step writes run in one transaction with their audit entry,
  * and every query inside one goes through its `tx`. Audit metadata carries
  * the address's domain, never the address. Mail and the in-app notification
  * are enqueued after the write commits, and a failed enqueue is logged,
@@ -29,6 +31,7 @@ import { canActorGrantRole } from '@/policies/tenant.policy'
 import {
   TenantInvitationRepository,
   type PendingInvitationSummary,
+  type ValidInvitation,
 } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -44,9 +47,20 @@ import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
-import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
+import {
+  buildInvitationAcceptUrl,
+  frontendUrl,
+  MISSING_FIRST_NAME_FALLBACK,
+} from '@/services/frontend-links.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
+import {
+  buildInvitationConfirmUrl,
+  claimLinkToken,
+  issueLinkToken,
+  peekLinkToken,
+} from '@/services/link-token.service'
 import { logger } from '@/services/logger.service'
+import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import {
@@ -55,11 +69,13 @@ import {
   signAccessToken,
   type IssuedRefreshToken,
 } from '@/services/session.service'
+import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import {
   assertStaffReasonGiven,
   lockActorRole,
   lockUserForOwnership,
 } from '@/services/tenant-membership.service'
+import { INVITATION_CONFIRM_TEMPLATE_KEY } from '@/templates/email/invitation-confirm.template'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
@@ -97,6 +113,18 @@ const ALREADY_MEMBER_MESSAGE =
  * tenant that is deleted or not active. One code for all of them, on purpose.
  */
 export const INVITATION_INVALID_CODE = 'invitation_invalid'
+
+/**
+ * The message of the `202` an invite click answers when the invitee must
+ * confirm by email.
+ */
+export const INVITATION_CONFIRM_MESSAGE = 'Check your inbox to finish joining.'
+
+/**
+ * The cooldown key segment for confirm-link mail: its own scope, so a
+ * sign-in request for the address a moment earlier does not hold it.
+ */
+const CONFIRM_MAIL_COOLDOWN_SCOPE = 'invitation-confirm'
 
 /**
  * Message for `INVITATION_INVALID_CODE`.
@@ -182,9 +210,9 @@ interface AcceptOutcome {
 }
 
 /**
- * A one-click verify that joined: the account, its new session's tokens, its
- * platform role, whether this click created it, and the tenant and role it
- * holds there.
+ * A click that joined (one-click verify or confirm link): the account, its
+ * new session's tokens, its platform role, whether this click created it,
+ * and the tenant and role it holds there.
  */
 export interface InvitationSession {
   user: User
@@ -197,7 +225,7 @@ export interface InvitationSession {
 }
 
 /**
- * What a verify's transaction settles: the account, its session, the role it
+ * What a join's transaction settles: the account, its session, the role it
  * holds, and the membership it added, when it added one.
  */
 interface VerifyOutcome {
@@ -1059,22 +1087,36 @@ function assertJoinAllowedByMode(): void {
 }
 
 /**
- * The existing account an invitation link signs in, settled before the
- * verify's transaction: none when the address has no account; refused when
- * the account is inactive or `assertSignInAllowed` refuses it, both before
- * anything is written; claimed when it was never verified, as a sign-in link
- * claims one (the click proves the mailbox, so a squatter's sessions and
- * federated links go). An account deleted or deactivated during the claim is the
- * generic invalid link, never the claim's 500.
+ * The account the invited address holds, read before anything is written:
+ * none when the address has no live account (a soft-deleted one released
+ * it); refused when the account is inactive or `assertSignInAllowed`
+ * refuses it.
  * @param email - The invitation's stored (lowercased) address.
+ * @returns The account, or undefined when the address has none.
+ * @throws {HttpError} 404 `invitation_invalid` for an inactive account.
+ * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
+ */
+async function existingInvitee(email: string): Promise<User | undefined> {
+  const existing = await userRepository.findByEmail(email)
+  if (existing && !existing.active) throw invitationInvalid()
+  await assertSignInAllowed(existing?.id)
+  return existing
+}
+
+/**
+ * The account a confirm link signs in, settled before the confirm's
+ * transaction: `existingInvitee`, and a never-verified account is claimed,
+ * as a sign-in link claims one (the click proves the mailbox, so a
+ * squatter's sessions and federated links go). An account deleted or
+ * deactivated during the claim is the generic invalid link, never the
+ * claim's 500.
+ * @param email - The link's (lowercased) address.
  * @returns The account, or undefined when the click should create one.
  * @throws {HttpError} 404 `invitation_invalid` for an inactive or vanished account.
  * @throws {MaintenanceModeError} 503 `MAINTENANCE_MODE` from `assertSignInAllowed`.
  */
 async function invitedAccount(email: string): Promise<User | undefined> {
-  const existing = await userRepository.findByEmail(email)
-  if (existing && !existing.active) throw invitationInvalid()
-  await assertSignInAllowed(existing?.id)
+  const existing = await existingInvitee(email)
   if (existing?.emailVerifiedAt !== null) return existing
   let claimed: User
   try {
@@ -1088,13 +1130,13 @@ async function invitedAccount(email: string): Promise<User | undefined> {
 }
 
 /**
- * Create the invitee's verified account in the verify's transaction. When
- * another write created an account for the address first (a concurrent click
- * on the same link, or a registration), the insert loses the users unique
- * index and the click answers the generic invalid link; the transaction rolls
- * back before the claim, so the link stays usable for the next click.
+ * Create the invitee's verified account in the join's transaction. When
+ * another write created an account for the address first (a concurrent
+ * click, or a sign-in), the insert loses the users unique index and the
+ * click answers the generic invalid link; the transaction rolls back before
+ * anything is claimed, so the link stays usable for the next click.
  * @param email - The invitation's address.
- * @param tx - The verify's transaction.
+ * @param tx - The join's transaction.
  * @returns The new account.
  * @throws {HttpError} 404 `invitation_invalid` when the address was taken meanwhile.
  */
@@ -1108,13 +1150,14 @@ async function createInvitedAccount(email: string, tx: DbTransaction): Promise<U
 }
 
 /**
- * Lock an existing invitee's row `FOR SHARE` in the verify's transaction and
- * re-check it, so a deactivation or delete that committed since the lookup
- * wins, and one that commits later waits for the join and the session and
- * then revokes them. The lock comes before the claim, as `accept`'s
- * `lockUserForOwnership` does.
+ * Lock an existing invitee's row `FOR SHARE` in the confirm's transaction
+ * and re-check it, so a deactivation or delete that committed since the
+ * lookup wins, and one that commits later waits for the join and the
+ * session and then revokes them. The lock comes before the link and the
+ * invitation are claimed, the order a deactivation takes (the user row,
+ * then the address's links).
  * @param userId - The invitee.
- * @param tx - The verify's transaction.
+ * @param tx - The confirm's transaction.
  * @returns The locked row.
  * @throws {HttpError} 404 `invitation_invalid` when the account is gone or inactive.
  */
@@ -1125,80 +1168,76 @@ async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<Use
 }
 
 /**
- * Accept an invitation in one click, signed out: sign the invitee in and
- * join them. The link is single-use: once accepted it signs nobody in, the
- * invitee included (a signed-in invitee gets `alreadyMember` from `accept`).
- *
- * Order, as `verifySignInLink` checks: the link is looked up first, outside
- * any transaction, so a used, expired, revoked, suspended-tenant or
- * archived-tenant link touches no account; the maintenance mode is
- * re-checked (`assertJoinAllowedByMode`); the address's account is resolved
- * and passed through `assertSignInAllowed` (`invitedAccount`); the mode is
- * checked once more; then one
- * transaction creates the account or locks it, claims the invitation, adds
- * the membership (an existing one keeps its role), audits
- * `invitation.accepted` and issues the session. A claim that loses (the link
- * went dead since the lookup) rolls a new account back. After commit it
- * stamps `lastLoggedInAt`, best effort, and emits `invitation_accepted` when
- * it joined, `email_verified` and `user_signed_up` when it created the
- * account, and `user_signed_in`.
- * @param rawToken - The raw token from the link.
- * @returns The session, and the tenant and role it joined with.
- * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in.
- * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` when a mode began after the route's gate.
+ * Inside a join's transaction, once the invitation is claimed for `user`:
+ * add the membership (an existing one keeps its role), audit
+ * `invitation.accepted` and issue the session.
+ * @param user - The account joining.
+ * @param claimed - The invitation, claimed for it.
+ * @param sessionId - The new session's id.
+ * @param isRecentAuth - Whether the session counts as a recent sign-in.
+ * @param tx - The join's transaction.
+ * @returns The account, its session, its role, and the membership event when one was added.
  */
-export async function verifyInvitation(rawToken: string): Promise<InvitationSession> {
-  const tokenHash = hashToken(rawToken)
-  const valid = await invitationRepository.findValidByTokenHash(tokenHash)
-  if (!valid) throw invitationInvalid()
-  assertJoinAllowedByMode()
-  const account = await invitedAccount(valid.invitation.email)
-  // Again after the claim's own transactions, so a mode that began meanwhile writes no join.
-  assertJoinAllowedByMode()
-  const isNewUser = account === undefined
-
-  const sessionId = randomUUID()
-  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
-    const user = account
-      ? await lockActiveInvitee(account.id, tx)
-      : await createInvitedAccount(valid.invitation.email, tx)
-    const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-    // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
-    if (!claimed) throw invitationInvalid()
-
-    const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
-    const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
-    // An existing membership keeps its role; createIfAbsent reads it back.
-    const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
-    await record(
-      {
-        action: 'invitation.accepted',
-        actor: { userId: user.id },
-        access: 'member',
-        tenantId: claimed.tenantId,
-        targetId: membership.id,
-        metadata: { role: membership.role, invitationId: claimed.id },
-      },
-      tx
-    )
-    // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
-    const refreshToken = await issueRefreshToken(user.id, sessionId, tx, { recentAuth: false })
-    const settled = { user, refreshToken, role: membership.role }
-    if (!inserted) return settled
-    const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
-    return {
-      ...settled,
-      joined: {
-        type: 'invitation_accepted',
-        tenantId: claimed.tenantId,
-        userId: user.id,
-        role: inserted.role,
-        wasFirstMember: memberCount === 1,
-        at: inserted.createdAt,
-      },
-    }
+async function joinAndIssueSession(
+  user: User,
+  claimed: TenantInvitation,
+  sessionId: string,
+  isRecentAuth: boolean,
+  tx: DbTransaction
+): Promise<VerifyOutcome> {
+  const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
+  const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
+  // An existing membership keeps its role; createIfAbsent reads it back.
+  const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
+  await record(
+    {
+      action: 'invitation.accepted',
+      actor: { userId: user.id },
+      access: 'member',
+      tenantId: claimed.tenantId,
+      targetId: membership.id,
+      metadata: { role: membership.role, invitationId: claimed.id },
+    },
+    tx
+  )
+  const refreshToken = await issueRefreshToken(user.id, sessionId, tx, {
+    recentAuth: isRecentAuth,
   })
+  const settled = { user, refreshToken, role: membership.role }
+  if (!inserted) return settled
+  const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
+  return {
+    ...settled,
+    joined: {
+      type: 'invitation_accepted',
+      tenantId: claimed.tenantId,
+      userId: user.id,
+      role: inserted.role,
+      wasFirstMember: memberCount === 1,
+      at: inserted.createdAt,
+    },
+  }
+}
 
+/**
+ * After a join commits: stamp `lastLoggedInAt` (best effort), sign the
+ * access token, and emit `invitation_accepted` when it joined,
+ * `email_verified` and `user_signed_up` when it created the account, and
+ * `user_signed_in`.
+ * @param outcome - What the join's transaction settled.
+ * @param sessionId - The new session's id.
+ * @param isNewUser - Whether the join created the account.
+ * @param tenant - The tenant it joined.
+ * @param tenant.name - Its name.
+ * @param tenant.slug - Its slug.
+ * @returns The session.
+ */
+async function finishJoin(
+  outcome: VerifyOutcome,
+  sessionId: string,
+  isNewUser: boolean,
+  tenant: { name: string; slug: string }
+): Promise<InvitationSession> {
   const user = await stampSignIn(outcome.user)
   const accessToken = signAccessToken(user, sessionId, outcome.refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
@@ -1219,9 +1258,202 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationSess
     refreshToken: outcome.refreshToken,
     platformRole,
     isNewUser,
-    tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
+    tenant: { name: tenant.name, slug: tenant.slug },
     role: outcome.role,
   }
+}
+
+/**
+ * What a click on an invitation link comes to: a one-click session, or
+ * "check your inbox" with the mail work to run after the reply.
+ */
+export type InvitationVerifyOutcome =
+  | { kind: 'session'; session: InvitationSession }
+  | { kind: 'confirm'; email: string; followUp: () => Promise<void> }
+
+/**
+ * Mail the invitee a confirm link, after the reply to an invite click that
+ * needs one. In order, it stops silently at the first "no": its own
+ * per-address cooldown (`SIGN_IN_LINK_MAIL_COOLDOWN`, scope
+ * `invitation-confirm`, sent when Redis is down), the daily budget shared
+ * with sign-in links (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), then the link
+ * (`SIGN_IN_LINK_TTL`, revoking the address's earlier confirm link) and the
+ * mail. The link opens Apex for the platform tenant and the web app
+ * otherwise. It writes no audit entry.
+ * @param valid - The redeemable invitation the click opened.
+ * @param existing - The account the address holds, already read by the click.
+ * @returns The follow-up; it never rejects, and logs its own failure.
+ */
+function requestInvitationConfirm(
+  valid: ValidInvitation,
+  existing: User | undefined
+): () => Promise<void> {
+  return async () => {
+    try {
+      const env = getEnv()
+      const { invitation, tenant } = valid
+      const cooldownMs = requireDurationMs(env.SIGN_IN_LINK_MAIL_COOLDOWN)
+      const canSend = await didClaimMailCooldown(
+        CONFIRM_MAIL_COOLDOWN_SCOPE,
+        invitation.email,
+        cooldownMs,
+        { whenUnavailable: 'send' }
+      )
+      // The budget is spent only once the cooldown is won.
+      if (!canSend || (await spendSignInLinkBudget(invitation.email)) === 'exhausted') return
+      // Server-decided, as for the invitation itself: staff join through Apex.
+      const linkApp = tenant.isPlatform ? 'apex' : 'web'
+      const ttlMs = requireDurationMs(env.SIGN_IN_LINK_TTL)
+      const { raw, row } = await issueLinkToken(
+        {
+          intent: 'invitation',
+          email: invitation.email,
+          app: linkApp,
+          invitationId: invitation.id,
+        },
+        ttlMs
+      )
+      await addEmailJob(
+        {
+          to: invitation.email,
+          templateKey: INVITATION_CONFIRM_TEMPLATE_KEY,
+          variables: {
+            // The stored name, never a submitted one.
+            firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+            tenantName: tenant.name,
+            role: invitation.role,
+            confirmUrl: buildInvitationConfirmUrl(raw, row),
+            expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+            appName: env.APP_NAME,
+          },
+        },
+        // The account the mail is for: '' (stored as NULL) when the address has none.
+        existing?.id ?? '',
+        { context: { tenantId: invitation.tenantId, invitationId: invitation.id, linkApp } }
+      )
+    } catch (error) {
+      logger.error('Invitation confirm mail failed', { error: redactedForLog(error) })
+    }
+  }
+}
+
+/**
+ * A click on an invitation link, signed out. A customer invitation to an
+ * address with no account joins in that click: it signs the invitee in,
+ * creating their verified account, and joins them. Every other click (an
+ * address that holds an account, whether verified or not, or any staff
+ * invitation) writes nothing and answers `confirm`, whose follow-up mails a
+ * 15-minute confirm link (`requestInvitationConfirm`): a forwarded
+ * invitation then signs nobody in to an existing account and grants no
+ * staff role. The link is single-use: once accepted it signs nobody in.
+ *
+ * Order: the link is looked up first, outside any transaction, so a used,
+ * expired, revoked, suspended-tenant or archived-tenant link touches no
+ * account; the maintenance mode is re-checked (`assertJoinAllowedByMode`);
+ * the address's account is read and passed through `assertSignInAllowed`
+ * (`existingInvitee`); then, for a one-click join, the mode is checked once
+ * more and one transaction creates the account, claims the invitation, adds
+ * the membership, audits `invitation.accepted` and issues a session that
+ * does not count as a recent sign-in. A claim that loses (the link went dead
+ * since the lookup) rolls the new account back.
+ * @param rawToken - The raw token from the link.
+ * @returns The one-click session, or the confirm branch's address and follow-up.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in and mails nothing.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` when a mode began after the route's gate.
+ */
+export async function verifyInvitation(rawToken: string): Promise<InvitationVerifyOutcome> {
+  const tokenHash = hashToken(rawToken)
+  const valid = await invitationRepository.findValidByTokenHash(tokenHash)
+  if (!valid) throw invitationInvalid()
+  assertJoinAllowedByMode()
+  const existing = await existingInvitee(valid.invitation.email)
+  if (existing || valid.tenant.isPlatform) {
+    return {
+      kind: 'confirm',
+      email: valid.invitation.email,
+      followUp: requestInvitationConfirm(valid, existing),
+    }
+  }
+  // Again after the account read, so a mode that began meanwhile writes no join.
+  assertJoinAllowedByMode()
+
+  const sessionId = randomUUID()
+  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
+    const user = await createInvitedAccount(valid.invitation.email, tx)
+    const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
+    // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
+    if (!claimed) throw invitationInvalid()
+    // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
+    return joinAndIssueSession(user, claimed, sessionId, false, tx)
+  })
+  const session = await finishJoin(outcome, sessionId, true, valid.tenant)
+  return { kind: 'session', session }
+}
+
+/**
+ * Join by an invitation confirm link: spend it once, sign the invitee in
+ * (creating their verified account when the address has none, which only a
+ * staff invitation reaches) and join them. The session counts as a recent
+ * sign-in: the click proves the mailbox within `SIGN_IN_LINK_TTL`, as a
+ * sign-in link does. Every refusal is the one `invitation_invalid` and
+ * spends nothing.
+ *
+ * Order: the maintenance mode; a read-only peek of the link; the address the
+ * client shows, when it sends one, against the link's (neither is logged);
+ * the invitation by the link's id, which must still be redeemable, for the
+ * link's address, and for the link's frontend (Apex for the platform
+ * tenant); the account (`invitedAccount`, which claims a never-verified
+ * one); the mode again; then one transaction that locks the user row
+ * `FOR SHARE` (or inserts the new account), claims the link, claims the
+ * invitation (`claimForAcceptById`, which re-checks it atomically), adds
+ * the membership, audits `invitation.accepted` and issues the session. Any
+ * refusal inside rolls the link's claim back. No platform-role check runs
+ * for an Apex link: the invitee becomes staff by this join, and the
+ * invitation's tenant is what authorises Apex.
+ * @param rawLink - The raw token from the confirm link.
+ * @param shownEmail - The address the link displays, trimmed and lowercased, when the client sends it.
+ * @returns The session, and the tenant and role it joined with.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+export async function confirmInvitation(
+  rawLink: string,
+  shownEmail?: string
+): Promise<InvitationSession> {
+  assertJoinAllowedByMode()
+  const peeked = await peekLinkToken(rawLink, 'invitation')
+  if (!peeked?.email || !peeked.app || !peeked.invitationId) throw invitationInvalid()
+  const { email, app, invitationId } = peeked
+  if (shownEmail !== undefined && shownEmail.trim().toLowerCase() !== email) {
+    throw invitationInvalid()
+  }
+  const valid = await invitationRepository.findValidById(invitationId)
+  // The last two are defence in depth: the follow-up issues links only of this shape.
+  if (
+    !valid ||
+    valid.invitation.email.toLowerCase() !== email ||
+    app !== (valid.tenant.isPlatform ? 'apex' : 'web')
+  ) {
+    throw invitationInvalid()
+  }
+  const account = await invitedAccount(email)
+  // Again after the claim's own transactions, so a mode that began meanwhile writes no join.
+  assertJoinAllowedByMode()
+
+  const sessionId = randomUUID()
+  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
+    // The user row first, then the link row: the order a deactivation takes.
+    const user = account
+      ? await lockActiveInvitee(account.id, tx)
+      : await createInvitedAccount(email, tx)
+    const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
+    if (link?.invitationId !== invitationId) throw invitationInvalid()
+    const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)
+    // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
+    if (!claimed) throw invitationInvalid()
+    return joinAndIssueSession(user, claimed, sessionId, true, tx)
+  })
+  return finishJoin(outcome, sessionId, account === undefined, valid.tenant)
 }
 
 /**
