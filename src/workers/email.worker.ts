@@ -28,10 +28,10 @@ import { redisKey } from '@/services/redis.service'
 
 /**
  * The message row for a job queued by a replica without tracking, created
- * here. Keyed by the job's id and timestamp, so the job's retries get the
- * same row, and a job id reused after a Redis flush does not. The id is
- * written into the job's data, best-effort, so `recordPermanentFailure`
- * finds it.
+ * here. Keyed by the job's queue, id and timestamp, so the job's retries get
+ * the same row, and a job id reused after a Redis flush, or on the other
+ * email queue, does not. The id is written into the job's data, best-effort,
+ * so `recordPermanentFailure` finds it.
  * @param job - The email job, whose data has no `messageId`.
  * @returns The created (or, on a retry, the existing) row.
  * @throws {Error} When the job has no id, or the insert fails.
@@ -39,7 +39,8 @@ import { redisKey } from '@/services/redis.service'
 async function createMessageForUntrackedJob(job: Job<EmailJobData>): Promise<EmailMessage> {
   if (job.id === undefined) throw new Error('Email job has no id')
   const created = await createQueuedMessage(job.data, job.data.userId, {
-    jobKey: `email-job-${job.id}-${String(job.timestamp)}`,
+    // Job ids count per queue, so the queue name keeps an email and an auth-email job apart.
+    jobKey: `${job.queueName}-job-${job.id}-${String(job.timestamp)}`,
   })
   try {
     await job.updateData({ ...job.data, messageId: created.id })

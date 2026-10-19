@@ -90,10 +90,12 @@ function trackedData(): EmailJobData {
  */
 function mockJob(
   data: EmailJobData = trackedData(),
-  updateData: (data: unknown) => Promise<void> = () => Promise.resolve()
+  updateData: (data: unknown) => Promise<void> = () => Promise.resolve(),
+  queueName = 'email'
 ): Job<EmailJobData> {
   return {
     id: 'test-job-1',
+    queueName,
     timestamp: 1_767_225_600_000,
     updateData,
     data,
@@ -176,6 +178,19 @@ describe('processEmailJob', () => {
       messageId: MESSAGE_ID,
       messageIdHeader: `<${MESSAGE_ID}@mail.example.com>`,
     })
+  })
+
+  it('keys an untracked auth-email job apart from an email job with the same id and timestamp', async () => {
+    vi.mocked(mailerService.sendMail).mockResolvedValue('sent')
+
+    await processEmailJob(mockJob(untrackedData(), undefined, 'auth-email'))
+
+    // Job ids count per queue, so without the queue name the two would share one row.
+    expect(emailMessageService.createQueuedMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-123',
+      { jobKey: 'auth-email-job-test-job-1-1767225600000' }
+    )
   })
 
   it('still sends when storing the new message id on the job fails', async () => {
