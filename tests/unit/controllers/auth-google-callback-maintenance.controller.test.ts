@@ -38,7 +38,7 @@ describe('handleGoogleCallback in full maintenance', () => {
     const { authController } = await import('@/controllers/auth.controller')
     const redirect = vi.fn()
     authController.handleGoogleCallback(
-      { session: { oauthApp: 'react' } } as unknown as Request,
+      { session: { oauthIntent: { kind: 'sign_in', app: 'react' } } } as unknown as Request,
       { redirect } as unknown as Response,
       vi.fn() as NextFunction
     )

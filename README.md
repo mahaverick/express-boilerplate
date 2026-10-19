@@ -352,7 +352,7 @@ is and is not sent is in
 a free-text `reason` reduced to `has_reason`, and a tenant's `name` and `slug`
 left out; a few product events; and each email tracking event as
 `email_<type>`. No name, full address, reason or recipient is sent; invitation,
-auto-join, user and email audit events carry only the address's
+user and email audit events carry only the address's
 `email_domain`. `$session_id` goes only on an event of the user whose browser
 sent it. The rules live in `analytics-event-builder.service.ts` and
 [SECURITY.md](SECURITY.md#server-events).

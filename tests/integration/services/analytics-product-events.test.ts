@@ -246,7 +246,7 @@ describe('user_signed_in', () => {
     const email = freshEmail()
     const profile = googleProfile(email)
 
-    await completeGoogleSignIn(profile)
+    await completeGoogleSignIn(profile, 'web')
     const first = await outboxRows()
     expect(first.map((row) => row.event)).toEqual(['user_signed_up', 'user_signed_in'])
     expect(first[0]?.properties).toMatchObject({
@@ -256,7 +256,7 @@ describe('user_signed_in', () => {
     })
 
     await clearOutbox()
-    await completeGoogleSignIn(profile)
+    await completeGoogleSignIn(profile, 'web')
     const second = await outboxRows()
     expect(second.map((row) => row.event)).toEqual(['user_signed_in'])
     expect(second[0]?.properties).toMatchObject({ method: 'google' })

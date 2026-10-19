@@ -14,7 +14,6 @@ import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
-import { autoJoinSafely } from '@/services/platform.service'
 import { claimToken, hashToken, issueToken } from '@/services/session.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import type { EmailResendOptions } from '@/types/email-context'
@@ -159,10 +158,9 @@ export async function sendVerificationMail(
 
 /**
  * Mark a user's email verified. The only writer of users.email_verified_at;
- * a no-op when it is already set, so an earlier timestamp never moves. On
- * the transition to verified, an address on PLATFORM_EMAIL_DOMAINS joins the
- * platform tenant as viewer, unless it already has a platform membership; a
- * failure there is logged, never thrown.
+ * a no-op when it is already set, so an earlier timestamp never moves. It
+ * grants nothing: staff join the platform tenant only by invitation or the
+ * bootstrap grant.
  * @param userId - The user whose mailbox has been proven.
  * @param executor - The pool, or the caller's transaction to join.
  * @returns The verified row when this call verified it, undefined when it already was (or is gone).
@@ -171,9 +169,7 @@ export async function markEmailVerified(
   userId: string,
   executor: DbExecutor = db
 ): Promise<User | undefined> {
-  const verified = await userRepository.markEmailVerified(userId, executor)
-  if (verified) await autoJoinSafely(verified, executor)
-  return verified
+  return userRepository.markEmailVerified(userId, executor)
 }
 
 /**

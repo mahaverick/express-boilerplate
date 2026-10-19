@@ -307,7 +307,7 @@ describe('buildAuditEvents', () => {
 
   it('marks a user staff in the $set row while they hold a platform role', () => {
     const rows = buildAuditEvents(
-      auditRow('platform.member.auto_joined', { userId: TARGET_ID, emailDomain: 'example.test' }),
+      auditRow('platform.member.granted', { userId: TARGET_ID, role: 'viewer', via: 'script' }),
       {},
       { staffStatus: { userId: TARGET_ID, platformRole: 'viewer' } }
     )
@@ -392,8 +392,8 @@ describe('session attribution', () => {
   it('omits $session_id from a system row inside a user request', () => {
     const [row] = buildAuditEvents(
       auditRow(
-        'platform.member.auto_joined',
-        { userId: TARGET_ID, role: 'viewer' },
+        'platform.member.granted',
+        { userId: TARGET_ID, role: 'viewer', via: 'script' },
         { actorKind: 'system', actorUserId: NONE, access: 'system' }
       ),
       { ...session, userId: ACTOR_ID }
@@ -523,13 +523,10 @@ describe('scrubPiiProperties', () => {
   it('logs the dropped keys of a built event at warn, never their values', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
-    buildAuditEvents(
-      auditRow('platform.member.auto_joined', { userId: TARGET_ID, emailDomain: PII_EMAIL }),
-      {}
-    )
+    buildAuditEvents(auditRow('user.created', { emailDomain: PII_EMAIL }), {})
 
     expect(warn).toHaveBeenCalledWith('Analytics properties dropped by the PII guard', {
-      event: 'platform_member_auto_joined',
+      event: 'user_created',
       droppedKeys: ['email_domain'],
     })
     expect(JSON.stringify(warn.mock.calls)).not.toContain(PII_EMAIL)

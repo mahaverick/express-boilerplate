@@ -30,7 +30,6 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'invitation.resent': { role: 'viewer', emailDomain: 'example.test' },
   'invitation.revoked': { role: 'viewer', emailDomain: 'example.test' },
   'invitation.accepted': { role: 'viewer', invitationId: 'invitation-1' },
-  'platform.member.auto_joined': { userId: 'user-1', emailDomain: 'staff.example.test' },
   'platform.member.granted': { userId: 'user-1', role: 'admin', via: 'script' },
   'tenant.accessed_by_platform': { platformRole: 'viewer' },
   'user.created': { emailDomain: 'example.test' },
@@ -106,7 +105,6 @@ describe('AUDIT_ACTIONS', () => {
       'onboarding.step_completed',
       'onboarding.undismissed',
       'platform.maintenance_mode_changed',
-      'platform.member.auto_joined',
       'platform.member.granted',
       'tenant.accessed_by_platform',
       'tenant.archived',
@@ -297,12 +295,6 @@ describe('emailDomain shape', () => {
     }
   )
 
-  it('keeps the auto-join domain required', () => {
-    const autoJoined = AUDIT_ACTIONS['platform.member.auto_joined'].metadata
-    // eslint-disable-next-line unicorn/no-null -- proving null is refused here
-    expect(autoJoined.safeParse({ userId: 'user-1', emailDomain: null }).success).toBe(false)
-  })
-
   it.each([
     ['a hex token with no dot', 'a1b2c3d4'.repeat(8)],
     ['a full address', 'a@b.com'],
@@ -342,6 +334,13 @@ describe('audit value sets', () => {
     expect(schema.safeParse('not.an.action').success).toBe(false)
   })
 
+  it('lets invitation.resent name the sign-in request that triggered it, and nothing else', () => {
+    const resent = AUDIT_ACTIONS['invitation.resent'].metadata
+    const base = { role: 'viewer', emailDomain: 'example.test' }
+    expect(resent.safeParse({ ...base, trigger: 'sign_in_request' }).success).toBe(true)
+    expect(resent.safeParse({ ...base, trigger: 'staff' }).success).toBe(false)
+  })
+
   describe('retired actions', () => {
     it('are stored and filterable but not written', () => {
       expect(RETIRED_AUDIT_ACTIONS).toEqual([
@@ -349,6 +348,7 @@ describe('audit value sets', () => {
         'tenant.timeline_viewed',
         'user.errors_viewed',
         'tenant.errors_viewed',
+        'platform.member.auto_joined',
       ])
       for (const action of RETIRED_AUDIT_ACTIONS) {
         expect(Object.hasOwn(AUDIT_ACTIONS, action)).toBe(false)

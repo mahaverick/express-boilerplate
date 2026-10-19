@@ -30,7 +30,7 @@ import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
 import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
-import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
+import { getPlatformMembership } from '@/services/platform.service'
 import {
   claimToken,
   denySessionsAfterCommit,
@@ -278,8 +278,7 @@ async function rehashIfOutdated(
  * A deactivation or soft delete that committed after the first read answers
  * the same 401 there too. In `full` maintenance a user with no platform role
  * is refused (`assertSignInAllowed`) once the credentials have passed and
- * before anything is written; an auto-join domain user who has not joined
- * yet counts as non-staff.
+ * before anything is written.
  * @param input - The validated login body.
  * @returns The user, their platform role, an access token and a new refresh token.
  * @throws {HttpError} 401 'Invalid email or password', or 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
@@ -298,8 +297,6 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 
   // After the guard, so a failed attempt leaves no trace; before tokens, so a failed UPDATE sets no cookie.
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
-  // After the guard, so a failed attempt never reaches it; it never throws.
-  await autoJoinSafely(user)
 
   const sessionId = randomUUID()
   const { refreshToken, verifiedHash } = await withTransaction(async (tx) => {

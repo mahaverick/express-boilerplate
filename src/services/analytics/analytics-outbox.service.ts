@@ -46,7 +46,6 @@ const TENANT_GROUP_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>([
  * are filed in the platform tenant.
  */
 const STAFF_STATUS_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>([
-  'platform.member.auto_joined',
   'platform.member.granted',
 ])
 

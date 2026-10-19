@@ -1,17 +1,18 @@
 /**
  * @file The fields this app keeps in the OAuth round-trip's express-session.
  */
-import type { FrontendApp } from '@/constants/frontend.constants'
+import type { OAuthIntent } from '@/types/oauth-intent'
 
 declare module 'express-session' {
   /**
-   * This app's own fields on one Google sign-in's session, from `/auth/google`
-   * to its callback (passport keeps the OAuth `state` beside them).
+   * This app's own fields on one Google round-trip's session, from
+   * `/auth/google` to its callback (passport keeps the OAuth `state` beside
+   * them).
    */
   interface SessionData {
     /**
-     * Which frontend started the Google sign-in, so the callback returns there.
+     * What the round-trip is for, so the callback acts on it and returns there.
      */
-    oauthApp?: FrontendApp
+    oauthIntent?: OAuthIntent
   }
 }

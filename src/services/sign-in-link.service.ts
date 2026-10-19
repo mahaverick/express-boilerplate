@@ -2,7 +2,8 @@
  * @file Signing in by an emailed link. A request answers one fixed reply for
  * every address and does its work after it (`requestSignInLink`): the
  * cooldown, the daily budget, the lookup and the mail, any of which stops it
- * silently. A verify (`verifySignInLink`) spends the link once and signs in
+ * silently; on Apex a staff invitee is mailed their invitation instead. A
+ * verify (`verifySignInLink`) spends the link once and signs in
  * the account its address holds, creating a verified account on the first
  * click when there is none. Every dead link, and every account it may not
  * sign in, answers one `LINK_INVALID`.
@@ -46,6 +47,7 @@ import {
   type IssuedRefreshToken,
 } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
+import { resendPlatformInvitationForSignIn } from '@/services/tenant-invitation.service'
 import { MISSING_FIRST_NAME_FALLBACK } from '@/services/verification.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import type { EmailResendOptions } from '@/types/email-context'
@@ -141,23 +143,31 @@ export async function sendSignInLink(
 }
 
 /**
- * Whether a request's address may be mailed a link, and the account it
- * holds: an inactive account never may; in `full` maintenance only staff
- * may; and an Apex link goes only to staff.
+ * What a request's follow-up does for its address: mail a sign-in link, mail
+ * a staff invitee their invitation again, or nothing.
+ */
+type RequestOutcome =
+  { kind: 'link'; user: User | undefined } | { kind: 'invitation' } | { kind: 'nothing' }
+
+/**
+ * Decide what a request's address gets: an inactive account gets nothing; in
+ * `full` maintenance only staff get a link and everyone else nothing; on
+ * Apex staff get a link and any other address (an invitee is not staff until
+ * they accept) gets its pending staff invitation again, when it holds one;
+ * on web everyone else gets a link.
  * @param email - The requested address.
  * @param app - The frontend the link would open.
- * @returns Whether to send, and the account the address holds, if any.
+ * @returns The outcome, with the account the address holds for a link.
  */
-async function eligibleRecipient(
-  email: string,
-  app: FrontendApp
-): Promise<{ send: boolean; user: User | undefined }> {
+async function requestOutcome(email: string, app: FrontendApp): Promise<RequestOutcome> {
   const user = await userRepository.findByEmail(email)
-  if (user && !user.active) return { send: false, user }
-  const requiresStaff = app === 'apex' || getMaintenanceMode().mode === 'full'
-  if (!requiresStaff) return { send: true, user }
-  if (!user) return { send: false, user }
-  return { send: (await getPlatformMembership(user.id)) !== null, user }
+  if (user && !user.active) return { kind: 'nothing' }
+  const isFull = getMaintenanceMode().mode === 'full'
+  if (app !== 'apex' && !isFull) return { kind: 'link', user }
+  const isStaff = user !== undefined && (await getPlatformMembership(user.id)) !== null
+  if (isStaff) return { kind: 'link', user }
+  // In `full` a non-staff address gets nothing at all, an invitation included.
+  return { kind: app === 'apex' && !isFull ? 'invitation' : 'nothing' }
 }
 
 /**
@@ -167,9 +177,11 @@ async function eligibleRecipient(
  * silently at the first "nothing": the per-address cooldown
  * (`SIGN_IN_LINK_MAIL_COOLDOWN`, sent when Redis is down), the daily budget
  * (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), the lookup (an inactive account,
- * a non-staff or unknown address in `full`, or a non-staff or unknown
- * address on Apex get nothing), then the mail. An unknown address on web is
- * mailed: its click creates the account.
+ * or a non-staff or unknown address in `full`, gets nothing), then the mail.
+ * An unknown address on web is mailed a link: its click creates the account.
+ * On Apex only staff are mailed a link; any other address is mailed its
+ * pending staff invitation again (`resendPlatformInvitationForSignIn`, which
+ * keeps the invitation's own resend cooldown), or nothing when it holds none.
  * @param input - The validated request body.
  * @returns The follow-up; it never rejects, and logs its own failure.
  */
@@ -182,13 +194,17 @@ export function requestSignInLink(input: SignInLinkRequestInput): () => Promise<
       })
       // The budget is spent only once the cooldown is won.
       if (!canSend || (await spendSignInLinkBudget(input.email)) === 'exhausted') return
-      const { send, user } = await eligibleRecipient(input.email, input.app)
-      if (!send) return
+      const outcome = await requestOutcome(input.email, input.app)
+      if (outcome.kind === 'invitation') {
+        await resendPlatformInvitationForSignIn(input.email)
+        return
+      }
+      if (outcome.kind === 'nothing') return
       await sendSignInLink({
         email: input.email,
         app: input.app,
         ...(input.redirect !== undefined && { redirect: input.redirect }),
-        ...(user !== undefined && { userId: user.id }),
+        ...(outcome.user !== undefined && { userId: outcome.user.id }),
         reason: 'self',
       })
     } catch (error) {

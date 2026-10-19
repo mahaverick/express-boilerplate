@@ -22,6 +22,7 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { canActorGrantRole } from '@/policies/tenant.policy'
@@ -306,12 +307,29 @@ async function assertRecipientBudget(email: string, tenantId: string): Promise<v
  * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown.
  */
 function assertResendCooldownOver(invitation: TenantInvitation): void {
-  if (invitation.lastSentAt === null) return
-  const elapsedMs = Date.now() - invitation.lastSentAt.getTime()
-  if (elapsedMs < requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)) {
+  if (isInsideResendCooldown(invitation)) {
     throw new HttpError(INVITATION_RESEND_COOLDOWN_MESSAGE, 429, INVITATION_RESEND_COOLDOWN_CODE)
   }
 }
+
+/**
+ * Whether an invitation was last mailed less than
+ * `INVITATION_RESEND_COOLDOWN` ago. A row never stamped is not.
+ * @param invitation - The pending invitation.
+ * @returns True inside the cooldown.
+ */
+function isInsideResendCooldown(invitation: TenantInvitation): boolean {
+  if (invitation.lastSentAt === null) return false
+  const elapsedMs = Date.now() - invitation.lastSentAt.getTime()
+  return elapsedMs < requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+}
+
+/**
+ * Thrown inside the sign-in resend's transaction when the address has had
+ * its day's invitation mail, so the token swap rolls back; caught and
+ * dropped, since a refused resend is silent.
+ */
+class RecipientBudgetSpentError extends Error {}
 
 /**
  * The one 404 for every token that cannot be previewed or accepted.
@@ -701,6 +719,82 @@ export async function resend(
   dispatchInvitationMessages(context, undefined, resendOptions).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })
+}
+
+/**
+ * Mail a staff invitee their pending invitation again, because they asked
+ * Apex for a sign-in link: an Apex link reaches only staff, and an invitee is
+ * not staff until they accept. Run from the sign-in request's follow-up,
+ * after its reply, so nothing here is visible to the requester.
+ *
+ * It does nothing when the platform tenant holds no pending, unexpired
+ * invitation for the address, inside `INVITATION_RESEND_COOLDOWN` of its last
+ * send (re-checked by the token swap, so two concurrent requests mail once),
+ * or when the address has had its day's invitation mail. Otherwise one
+ * transaction gives the invitation a new link, keeping its expiry so a
+ * request from anyone cannot lengthen it, stamps `last_sent_at`, spends the
+ * recipient budget and audits `invitation.resent` as the system with
+ * `trigger: 'sign_in_request'`; the mail is queued after commit.
+ * @param email - The address that asked for a link.
+ * @returns Resolves once the mail is queued or nothing is due; it never rejects, and logs its own failure.
+ */
+export async function resendPlatformInvitationForSignIn(email: string): Promise<void> {
+  try {
+    const platform = await tenantRepository.findPlatformTenant()
+    if (!platform) throw new HttpError('The platform tenant is missing', 500)
+    const pending = await invitationRepository.findRedeemableForEmail(platform.id, email)
+    if (!pending || isInsideResendCooldown(pending)) return
+
+    const rawToken = generateInvitationToken()
+    const invitation = await db.transaction(async (tx) => {
+      const updated = await invitationRepository.replaceToken(
+        pending.id,
+        hashToken(rawToken),
+        pending.expiresAt,
+        tx,
+        { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) }
+      )
+      // Accepted, revoked or resent since the read: nothing is due.
+      if (!updated) return
+      // After the token swap, so a refusal rolls it back and the mailed link keeps working.
+      if ((await spendInvitationRecipientBudget(updated.email, platform.id)) === 'exhausted') {
+        throw new RecipientBudgetSpentError()
+      }
+      await record(
+        {
+          action: 'invitation.resent',
+          actor: 'system',
+          access: 'system',
+          tenantId: platform.id,
+          targetId: updated.id,
+          metadata: {
+            role: updated.role,
+            emailDomain: auditEmailDomain(updated.email),
+            trigger: 'sign_in_request',
+          },
+        },
+        tx
+      )
+      return updated
+    })
+    if (!invitation) return
+
+    const context = {
+      invitation,
+      rawToken,
+      tenant: { name: platform.name, slug: platform.slug, isPlatform: platform.isPlatform },
+      inviterName: inviterDisplayName(
+        invitation.invitedBy === null
+          ? undefined
+          : await userRepository.findById(invitation.invitedBy)
+      ),
+      invitee: await userRepository.findByEmail(invitation.email),
+    }
+    await dispatchInvitationMessages(context, undefined)
+  } catch (error) {
+    if (error instanceof RecipientBudgetSpentError) return
+    logger.error('Sign-in invitation resend failed', { error: redactedForLog(error) })
+  }
 }
 
 /**

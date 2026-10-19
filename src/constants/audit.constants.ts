@@ -121,9 +121,15 @@ export const AUDIT_ACTIONS = {
     target: 'invitation',
     metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
   },
+  // `trigger` is set when the system resent it because the invitee asked Apex for a sign-in link; a member's or staff resend carries none.
   'invitation.resent': {
     target: 'invitation',
-    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
+    metadata: z.strictObject({
+      role,
+      emailDomain: invitationEmailDomain,
+      reason: staffReason,
+      trigger: z.literal('sign_in_request').optional(),
+    }),
   },
   'invitation.revoked': {
     target: 'invitation',
@@ -132,10 +138,6 @@ export const AUDIT_ACTIONS = {
   'invitation.accepted': {
     target: 'membership',
     metadata: z.strictObject({ role, invitationId: id }),
-  },
-  'platform.member.auto_joined': {
-    target: 'membership',
-    metadata: z.strictObject({ userId: id, emailDomain }),
   },
   'platform.member.granted': {
     target: 'membership',
@@ -254,6 +256,7 @@ export const RETIRED_AUDIT_ACTIONS = [
   'tenant.timeline_viewed',
   'user.errors_viewed',
   'tenant.errors_viewed',
+  'platform.member.auto_joined',
 ] as const
 
 /**

@@ -585,7 +585,7 @@ describe('POST /api/v1/auth/reset-password', () => {
     const providers = await authProviderRepository.findByUser(user.id)
     expect(providers.map((row) => row.provider)).toEqual(['email'])
     await expect(
-      completeGoogleSignIn(unverifiedGoogleProfile(squatterGoogleId, email))
+      completeGoogleSignIn(unverifiedGoogleProfile(squatterGoogleId, email), 'web')
     ).rejects.toMatchObject({ statusCode: 403, code: 'email_not_verified' })
   })
 

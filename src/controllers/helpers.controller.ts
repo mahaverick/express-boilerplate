@@ -1,8 +1,8 @@
 /**
  * @file Request accessors shared by every controller: the authenticated user
  * id, the `Actor` a service call takes instead of a Request, the tenant
- * principal for `/tenants/:slug` handlers, and the frontend a Google sign-in
- * started from. Also the refresh cookie, for every controller that signs a
+ * principal for `/tenants/:slug` handlers, and what a Google round-trip
+ * started for. Also the refresh cookie, for every controller that signs a
  * browser in: reading the one the request carries, revoking the session it
  * names, and setting a freshly issued one. Its name, path and domain come
  * only from `refreshCookieSpec`.
@@ -10,10 +10,12 @@
 import type { CookieOptions, Request, Response } from 'express'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import { refreshCookieSpec, type RefreshCookieSpec } from '@/constants/auth.constants'
-import { isFrontendApp, type FrontendApp } from '@/constants/frontend.constants'
+import { isFrontendApp } from '@/constants/frontend.constants'
 import { HttpError } from '@/errors/http-error'
 import { revokeRefreshToken } from '@/services/session.service'
 import type { Actor, RequestPrincipal } from '@/types/actor'
+import type { OAuthIntent } from '@/types/oauth-intent'
+import { redirectPathSchema } from '@/validators/redirect.validators'
 
 /**
  * The authenticated principal's id, guarding against a route reaching a
@@ -54,14 +56,23 @@ export function tenantPrincipal(request: Request): RequestPrincipal {
 }
 
 /**
- * The frontend a Google callback should return to.
+ * The Google round-trip's stored intent, re-checked field by field: the
+ * session store is server-side, but a value read back is still checked,
+ * never trusted.
  * @param request - The callback request, after the OAuth session middleware.
- * @returns The stored app, or 'web' when there is none or it is not a known value.
+ * @returns The stored sign-in, with an unknown app read as 'web' and an unsafe redirect dropped; a web sign-in when there is none or it is not one.
  */
-export function oauthAppOf(request: Request): FrontendApp {
-  // The session store is server-side, but a value read back is still checked, never trusted.
-  const stored: unknown = (request as Partial<Request>).session?.oauthApp
-  return isFrontendApp(stored) ? stored : 'web'
+export function oauthIntentOf(request: Request): OAuthIntent {
+  const stored: unknown = (request as Partial<Request>).session?.oauthIntent
+  if (typeof stored !== 'object' || stored === null) return { kind: 'sign_in', app: 'web' }
+  const { kind, app, redirect } = stored as Record<string, unknown>
+  if (kind !== 'sign_in') return { kind: 'sign_in', app: 'web' }
+  const safeRedirect = redirectPathSchema.safeParse(redirect)
+  return {
+    kind: 'sign_in',
+    app: isFrontendApp(app) ? app : 'web',
+    ...(safeRedirect.success && { redirect: safeRedirect.data }),
+  }
 }
 
 /**

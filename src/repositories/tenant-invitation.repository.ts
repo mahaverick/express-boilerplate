@@ -271,6 +271,34 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * The redeemable (pending, unexpired) invitation one tenant holds for an
+   * address, compared case-insensitively. A tenant holds at most one pending
+   * invitation per address (`tenant_invitations_pending_unique`).
+   * @param tenantId - The tenant.
+   * @param email - The address, in any case.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The invitation, or undefined.
+   */
+  async findRedeemableForEmail(
+    tenantId: string,
+    email: string,
+    executor: DbExecutor = db
+  ): Promise<TenantInvitation | undefined> {
+    const [row] = await executor
+      .select()
+      .from(invitation)
+      .where(
+        and(
+          eq(invitation.tenantId, tenantId),
+          sql`lower(${invitation.email}) = lower(${email})`,
+          redeemableCondition()
+        )
+      )
+      .limit(1)
+    return row
+  }
+
+  /**
    * Whether any tenant holds a redeemable (pending, unexpired) invitation
    * for an address, compared case-insensitively. For analytics only: it
    * tells whether a new account's address had been invited.

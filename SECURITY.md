@@ -335,8 +335,8 @@ change or reset commits.
   profile edit, email verification) queue behind a grant for its few
   statements.
 
-A correct password still updates `last_logged_in_at` and runs the platform
-auto-join before that re-read, even when the re-read then answers 401.
+A correct password still updates `last_logged_in_at` before that re-read,
+even when the re-read then answers 401.
 
 ## Email links
 
@@ -389,8 +389,10 @@ session, in one transaction.
 ### Invitations
 
 A user joins a customer tenant only by creating it or by accepting an
-invitation; the platform tenant also admits staff by auto-join and
-`pnpm platform:grant` ([Platform staff](#platform-staff)). No route adds a
+invitation; the platform tenant also admits staff by
+`pnpm platform:grant` ([Platform staff](#platform-staff)). An Apex sign-in
+request from a staff invitee mails them their invitation again (outside its
+resend cooldown), never a sign-in link. No route adds a
 registered address to a tenant directly
 (`src/services/tenant-invitation.service.ts`).
 
@@ -522,12 +524,9 @@ their role there is their platform role (`src/services/platform.service.ts`).
   service policies apply to it as to a member's role, so a platform viewer reads
   but cannot write. Where a staff user is also a member, only the membership
   counts. The platform tenant itself is members-only.
-- **Joining.** A verified address whose domain is exactly one listed in
-  `PLATFORM_EMAIL_DOMAINS` (no subdomains) joins as `viewer` when it is verified
-  and at each successful sign-in. It never changes an existing platform role;
-  anything above viewer takes an invitation or `pnpm platform:grant`. Every
-  platform role reads every user, tenant and address, so list only domains
-  whose mailboxes you control.
+- **Joining.** Staff join only by an invitation to the platform tenant or
+  `pnpm platform:grant`; no address joins by its domain. Apex sign-in, by link
+  or by Google, reaches only an existing staff account and never creates one.
 - **Deleting a user never leaves a tenant ownerless.** The delete refuses
   while the user is the last live owner of a customer tenant or the last
   active platform owner, re-counting under the owner-row locks, and holds the

@@ -261,7 +261,7 @@ async function lockStaffPair(
 
   const target = await userRepository.lockById(targetUserId, 'no key update', tx)
   if (!target) throw new HttpError('User not found', 404)
-  // Read again after the user-row wait: a platform invitation accepted meanwhile held that row first and has committed. Only auto-join can still add a role now (viewer, under neither lock), and any admin may act on a viewer.
+  // Read again after the user-row wait: a platform invitation accepted meanwhile held that row first and has committed.
   const targetRole = await userMembershipRepository.findPlatformRole(targetUserId, tx)
   // The rule never covers oneself: a caller that must refuse a self-action does so before this, and one that allows it relies on this skip.
   if (

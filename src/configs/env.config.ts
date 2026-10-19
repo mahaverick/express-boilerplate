@@ -8,7 +8,6 @@ import { randomBytes } from 'node:crypto'
 import { config } from 'dotenv'
 import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
-import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
 // Skipped under Vitest so a developer's .env never leaks into the suite; `quiet` keeps stdout clean.
 if (!process.env.VITEST) {
@@ -23,19 +22,6 @@ const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
  * The deployment an `APP_ENV` value names.
  */
 export type AppEnv = z.infer<typeof AppEnvSchema>
-
-const TOP_LEVEL_LABEL = /^[a-z]{2,}$/
-
-/**
- * Whether `value` is a lowercase domain: a dotted hostname by
- * `EMAIL_DOMAIN_PATTERN`, the shape the audit log stores for an auto-join,
- * whose last label is two or more letters.
- * @param value - One trimmed entry of PLATFORM_EMAIL_DOMAINS.
- * @returns True for a domain such as `example.com`.
- */
-function isLowercaseDomain(value: string): boolean {
-  return EMAIL_DOMAIN_PATTERN.test(value) && TOP_LEVEL_LABEL.test(value.split('.').at(-1) ?? '')
-}
 
 /**
  * Whether no entry of a comma-separated origin list has an opaque origin.
@@ -457,21 +443,6 @@ const EnvSchema = z.object({
     .optional()
     .describe(
       'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. POST /auth/refresh and /auth/logout also refuse a present Origin that is none of these, so list every other frontend origin (SECURITY.md, "CSRF"). Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
-    ),
-
-  /**
-   * Grants viewer only, and only to a verified address. Parsed by
-   * `parsePlatformEmailDomains` (platform.service.ts).
-   */
-  PLATFORM_EMAIL_DOMAINS: z
-    .string()
-    .refine((value) => value.split(',').every((domain) => isLowercaseDomain(domain.trim())), {
-      message:
-        'PLATFORM_EMAIL_DOMAINS must be lowercase domains separated by commas, e.g. "example.com,example.org".',
-    })
-    .optional()
-    .describe(
-      'Comma-separated email domains, e.g. "example.com,example.org". A user whose verified address is on one of them joins the platform tenant as viewer, when the address is verified and at every sign-in. Only the exact domain after the last "@" matches, never a subdomain. Empty means nobody joins automatically. What viewer can see, and how to grant more, is in SECURITY.md, "Platform staff".'
     ),
 
   OTEL_EXPORTER_OTLP_ENDPOINT: z

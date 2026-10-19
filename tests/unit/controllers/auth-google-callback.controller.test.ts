@@ -24,7 +24,7 @@ describe('handleGoogleCallback', () => {
     const { authController } = await import('@/controllers/auth.controller')
     const redirect = vi.fn()
     authController.handleGoogleCallback(
-      { session: { oauthApp: 'apex' } } as unknown as Request,
+      { session: { oauthIntent: { kind: 'sign_in', app: 'apex' } } } as unknown as Request,
       { redirect } as unknown as Response,
       vi.fn() as NextFunction
     )

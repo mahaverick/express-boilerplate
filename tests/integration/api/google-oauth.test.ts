@@ -23,7 +23,7 @@ import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/sess
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
-import { request } from '../../helpers/request'
+import { agent, request } from '../../helpers/request'
 
 /**
  * The `state` query parameter off a Google OAuth redirect URL, if present.
@@ -185,11 +185,24 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
    * user it resolved, as committed. The user is tracked for cleanup.
    */
   async function signInWithGoogle(profile: GoogleProfile): Promise<User> {
-    const issued = await completeGoogleSignIn(profile)
-    createdIds.push(issued.userId)
-    const user = await userRepository.findById(issued.userId)
+    const { refreshToken } = await completeGoogleSignIn(profile, 'web')
+    createdIds.push(refreshToken.userId)
+    const user = await userRepository.findById(refreshToken.userId)
     if (!user) throw new Error('completeGoogleSignIn issued a session for no live user')
     return user
+  }
+
+  /**
+   * A verified, active account whose address a fake profile then carries,
+   * so its sign-in is not a new account's.
+   * @returns The account's address.
+   */
+  async function existingVerifiedEmail(): Promise<string> {
+    const email = uniqueEmail()
+    const existing = await userRepository.create({ email })
+    createdIds.push(existing.id)
+    await sql`update users set email_verified_at = now() where id = ${existing.id}`
+    return email
   }
 
   it('responds with a 302 redirect', async () => {
@@ -283,8 +296,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const response = await request(app).get('/api/v1/auth/google/callback')
 
         expect(response.status).toBe(302)
-        // WEB_URL from .env.test — see the earlier redirect test's own note.
-        expect(response.headers.location).toBe('http://localhost:5173/auth/callback')
+        // WEB_URL from .env.test — see the earlier redirect test's own note. The profile is new, so the callback says so.
+        expect(response.headers.location).toBe('http://localhost:5173/auth/callback?new=1')
 
         const cookies = response.headers['set-cookie'] as string[] | undefined
         const refreshCookie = cookies?.find((cookie) => cookie.startsWith('refreshToken='))
@@ -314,7 +327,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
           .set('Cookie', `${testRefreshCookie().name}=${presented.raw}`)
 
         expect(response.status).toBe(302)
-        expect(response.headers.location).toBe('http://localhost:5173/auth/callback')
+        expect(response.headers.location).toBe('http://localhost:5173/auth/callback?new=1')
         const email = profile.emails?.[0]?.value
         if (!email) throw new Error('test fixture has no email')
         const user = await userRepository.findByEmail(email)
@@ -391,10 +404,118 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         if (user) createdIds.push(user.id)
         expect(user).toBeUndefined()
       })
+
+      it('carries a valid redirect through to the callback', async () => {
+        const email = await existingVerifiedEmail()
+        const browser = agent(app)
+        const start = await browser.get(
+          '/api/v1/auth/google?redirect=%2Ftenants%2Facme%3Ftenant%3Dacme'
+        )
+        expect(start.status).toBe(302)
+        passport.use(
+          GOOGLE_STRATEGY_NAME,
+          new FakeGoogleSuccessStrategy(googleProfile({ email, emailVerified: true }))
+        )
+
+        const response = await browser.get('/api/v1/auth/google/callback')
+
+        expect(response.headers.location).toBe(
+          'http://localhost:5173/auth/callback?redirect=%2Ftenants%2Facme%3Ftenant%3Dacme'
+        )
+      })
+
+      it('drops an off-origin redirect', async () => {
+        const email = await existingVerifiedEmail()
+        const browser = agent(app)
+        // The start is a navigation, so a bad redirect is dropped, never answered with a 400.
+        const start = await browser.get('/api/v1/auth/google?redirect=%2F%2Fevil.test')
+        expect(start.status).toBe(302)
+        expect(start.headers.location).toContain('https://accounts.google.com')
+        passport.use(
+          GOOGLE_STRATEGY_NAME,
+          new FakeGoogleSuccessStrategy(googleProfile({ email, emailVerified: true }))
+        )
+
+        const response = await browser.get('/api/v1/auth/google/callback')
+
+        expect(response.headers.location).toBe('http://localhost:5173/auth/callback')
+      })
+
+      it('marks a new web Google user with new=1', async () => {
+        const profile = googleProfile({ emailVerified: true })
+        const browser = agent(app)
+        await browser.get('/api/v1/auth/google?redirect=%2Fwelcome')
+        passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(profile))
+
+        const response = await browser.get('/api/v1/auth/google/callback')
+
+        const email = profile.emails?.[0]?.value
+        if (!email) throw new Error('test fixture has no email')
+        const user = await userRepository.findByEmail(email)
+        if (user) createdIds.push(user.id)
+        expect(user).toBeDefined()
+        expect(response.headers.location).toBe(
+          'http://localhost:5173/auth/callback?redirect=%2Fwelcome&new=1'
+        )
+      })
     })
   })
 
   describe('Google account linking (completeGoogleSignIn, google-auth.service.ts)', () => {
+    it('answers isNewUser true only for the sign-in that created the account', async () => {
+      const profile = googleProfile({ emailVerified: true })
+      const first = await completeGoogleSignIn(profile, 'web')
+      createdIds.push(first.refreshToken.userId)
+      const second = await completeGoogleSignIn(profile, 'web')
+
+      expect(first.isNewUser).toBe(true)
+      expect(second.isNewUser).toBe(false)
+      expect(second.refreshToken.userId).toBe(first.refreshToken.userId)
+    })
+
+    it.each(['deleted', 'deactivated'] as const)(
+      'answers google_auth_failed with no session when the never-verified account is %s during the claim',
+      async (change) => {
+        const { UserRepository: Users } = await import('@/repositories/user.repository')
+        const email = uniqueEmail()
+        const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+        createdIds.push(existing.id)
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+        const realLock = Users.prototype.lockById
+        const changed = { done: false }
+        /**
+         * Stands in for `UserRepository.lockById`: just before the claim's
+         * first lock, a delete or a deactivation commits on another connection.
+         */
+        const changingLock: typeof realLock = async function (
+          this: InstanceType<typeof Users>,
+          ...arguments_
+        ) {
+          const [id, mode] = arguments_
+          if (mode === 'no key update' && id === existing.id && !changed.done) {
+            changed.done = true
+            await (change === 'deleted'
+              ? sql`update users set deleted_at = now() where id = ${existing.id}`
+              : sql`update users set active = false where id = ${existing.id}`)
+          }
+          return realLock.apply(this, arguments_)
+        }
+
+        await withMutatedMethod(Users.prototype, 'lockById', changingLock, async () => {
+          await expect(
+            completeGoogleSignIn(googleProfile({ email, emailVerified: true }), 'web')
+          ).rejects.toMatchObject({ statusCode: 401, code: 'google_auth_failed' })
+        })
+
+        expect(changed.done).toBe(true)
+        const [row] = await sql<{ count: number }[]>`
+          select count(*)::int as count from user_tokens
+          where user_id = ${existing.id} and purpose = 'refresh'
+        `
+        expect(row?.count).toBe(0)
+      }
+    )
+
     it('creates a new user, an email provider, and a google provider, with emailVerifiedAt set, when Google verified the email', async () => {
       const email = uniqueEmail()
       const profile = googleProfile({ email, emailVerified: true })
@@ -599,7 +720,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
       const profile = googleProfile({ email, emailVerified: false })
 
-      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
         statusCode: 403,
         code: 'email_not_verified',
       })
@@ -627,7 +748,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       const user = await signInWithGoogle(profile)
       await userRepository.softDelete(user.id)
 
-      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
         statusCode: 401,
         code: 'google_auth_failed',
       })
@@ -662,7 +783,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(registration.status).toBe(202)
       expect(fresh?.id).toBeDefined()
       expect(fresh?.id).not.toBe(deleted.id)
-      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
         statusCode: 401,
         code: 'google_auth_failed',
       })
@@ -673,7 +794,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     it('rejects a Google profile that carries no email at all, and writes no row', async () => {
       const profile = googleProfile({ includeEmails: false })
       try {
-        await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
+        await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
           statusCode: 400,
           code: 'google_email_missing',
         })
@@ -704,7 +825,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     const realUpdate = Users.prototype.update
     const email = `google-race-${randomUUID()}@example.test`
     const profile = googleProfile({ email, emailVerified: true })
-    const created = await completeGoogleSignIn(profile)
+    const { refreshToken: created } = await completeGoogleSignIn(profile, 'web')
     createdIds.push(created.userId)
     await sql`delete from user_tokens where user_id = ${created.userId}`
     /**
@@ -720,7 +841,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       return result
     }
     await withMutatedMethod(Users.prototype, 'update', deactivating, async () => {
-      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({ statusCode: 401 })
+      await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({ statusCode: 401 })
     })
     const [row] = await sql<{ count: number }[]>`
       select count(*)::int as count from user_tokens where user_id = ${created.userId}

@@ -25,6 +25,7 @@ import { hashToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { makeStaff } from '../../helpers/platform-staff'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
@@ -376,6 +377,40 @@ describe('invitation verify races', () => {
     ).toBeUndefined()
     expect(await isPendingToken(rawToken)).toBe(true)
   })
+
+  it.each(['non-staff', 'staff'] as const)(
+    'writes no join when full begins during the never-verified claim of a %s invitee',
+    async (kind) => {
+      // A staff invitee passes assertSignInAllowed in full; only the re-check after the claim refuses the join.
+      const invitee = await createTrackedUser({ verified: false })
+      if (kind === 'staff') await makeStaff(invitee.id, 'viewer')
+      const { tenant, rawToken } = await invitedTo(invitee.email)
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+      const realLock = UserRepository.prototype.lockById
+      /**
+       * Stands in for `UserRepository.lockById`: the claim's first lock switches the mode.
+       */
+      const switchingLock: typeof realLock = async function (this: UserRepository, ...arguments_) {
+        const [id, mode] = arguments_
+        if (mode === 'no key update' && id === invitee.id) await switchMode('full')
+        return realLock.apply(this, arguments_)
+      }
+
+      let response: Response | undefined
+      await withMutatedMethod(UserRepository.prototype, 'lockById', switchingLock, async () => {
+        response = await postVerify(rawToken)
+      })
+
+      expect(response?.status).toBe(503)
+      expect(response?.body).toMatchObject({ code: MAINTENANCE_MODE_CODE })
+      expect(hasRefreshCookie(response)).toBe(false)
+      expect(await refreshCount(invitee.id)).toBe(0)
+      expect(
+        await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+      ).toBeUndefined()
+      expect(await isPendingToken(rawToken)).toBe(true)
+    }
+  )
 
   it.each(['deleted', 'deactivated'] as const)(
     'answers invitation_invalid when the never-verified invitee is %s during the claim',

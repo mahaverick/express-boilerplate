@@ -15,9 +15,8 @@ points at the code or doc that holds the detail. How things work is in
   `jsonwebtoken`'s `TokenExpiredError` (`src/services/session.service.ts`).
   Don't derive a third reason from an error message.
 - **Keep the user-row lock modes and their placement.** Login keeps
-  `lastLoggedInAt` and `autoJoinSafely` outside the transaction that re-reads
-  the hash `FOR SHARE` and issues the token, so that lock covers only the
-  re-read and the insert. The refresh kills run after the rotation commits,
+  `lastLoggedInAt` outside the transaction that re-reads the hash `FOR SHARE`
+  and issues the token, so that lock covers only the re-read and the insert. The refresh kills run after the rotation commits,
   never inside it. The lock each of them takes is in
   [SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
 - **A wrong step-up password answers 400, never 401** (`reauthenticate`,
@@ -48,10 +47,6 @@ points at the code or doc that holds the detail. How things work is in
   `X-Forwarded-Proto`.** When `COOKIE_SECURE` resolves true, `oauth.sid` is
   `Secure`, and express-session silently skips a `Secure` cookie on a request
   it doesn't see as HTTPS, which breaks Google sign-in.
-- **Platform auto-join grants `viewer` only, and runs after the
-  timing-equalised credential check.** A wider grant gives one compromised
-  inbox on a `PLATFORM_EMAIL_DOMAINS` domain write access to every tenant; an
-  earlier run leaks whether an address is registered.
 
 ### Tenants and roles
 

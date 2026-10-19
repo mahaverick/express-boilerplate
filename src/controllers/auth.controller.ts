@@ -13,7 +13,7 @@ import {
   authenticatedUserId,
   clearHostOnlyPlainRefreshCookie,
   currentRefreshCookie,
-  oauthAppOf,
+  oauthIntentOf,
   readRefreshTokenCookie,
   refreshCookieOptions,
   revokePresentedSession,
@@ -143,6 +143,21 @@ const FORGOT_PASSWORD_RESPONSE_MESSAGE =
   'If that address has an account, a password reset email has been sent.'
 
 const SIGN_IN_LINK_REQUEST_MESSAGE = 'Check your inbox for a sign-in link.'
+
+/**
+ * The query a Google callback's success redirect carries: the stored
+ * redirect, then `new=1` for an account this sign-in created.
+ * @param redirect - The same-origin path the start stored, if any.
+ * @param isNewUser - Whether the sign-in created the account.
+ * @returns `?…`, or '' when there is nothing to carry.
+ */
+function callbackQuery(redirect: string | undefined, isNewUser: boolean): string {
+  const query = new URLSearchParams()
+  if (redirect !== undefined) query.set('redirect', redirect)
+  if (isNewUser) query.set('new', '1')
+  const text = query.toString()
+  return text === '' ? '' : `?${text}`
+}
 
 /**
  * Handlers for `/api/v1/auth`, except email verification (`VerificationController`).
@@ -433,6 +448,10 @@ class AuthController extends BaseController {
    * sign-in; the cross-site hop withholds a Strict one) has its session
    * revoked once the new one is issued, as `login` does.
    *
+   * A success redirects to `/auth/callback` on the frontend that started the
+   * sign-in, carrying the redirect the start stored (`redirect=`) and `new=1`
+   * when the sign-in created the account.
+   *
    * Every failure of the async body redirects to `/login?error=...` on the
    * frontend that started the sign-in, never this API's JSON envelope (the
    * browser arrived by a full-page navigation), so it is not wrapped in
@@ -445,7 +464,8 @@ class AuthController extends BaseController {
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
    */
   handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
-    const frontend = withoutTrailingSlashes(frontendUrl(oauthAppOf(request)))
+    const intent = oauthIntentOf(request)
+    const frontend = withoutTrailingSlashes(frontendUrl(intent.app))
 
     const authenticate = passport.authenticate(
       GOOGLE_STRATEGY_NAME,
@@ -459,11 +479,13 @@ class AuthController extends BaseController {
           }
 
           try {
-            const refreshToken = await completeGoogleSignIn(profile)
+            const { refreshToken, isNewUser } = await completeGoogleSignIn(profile, intent.app)
             await revokePresentedSession(request, { emitSignedOut: false })
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
-            response.redirect(`${frontend}/auth/callback`)
+            response.redirect(
+              `${frontend}/auth/callback${callbackQuery(intent.redirect, isNewUser)}`
+            )
           } catch (innerError) {
             if (!(innerError instanceof MaintenanceModeError)) {
               logger.error('Google OAuth callback failed', { error: redactedForLog(innerError) })

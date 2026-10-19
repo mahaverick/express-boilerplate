@@ -164,7 +164,7 @@ describe('Google sign-in in full', () => {
     await storeMaintenanceMode('full')
     await reloadMaintenanceMode()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
     expect(await sessionsOf(user.id)).toBe(0)
@@ -176,7 +176,7 @@ describe('Google sign-in in full', () => {
     await storeMaintenanceMode('full')
     await reloadMaintenanceMode()
 
-    await completeGoogleSignIn(googleProfile(user.email))
+    await completeGoogleSignIn(googleProfile(user.email), 'web')
 
     expect(await sessionsOf(user.id)).toBe(1)
   })
@@ -186,7 +186,7 @@ describe('Google sign-in in full', () => {
     const profile = googleProfile(email)
     await enterFull()
 
-    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+    await expect(completeGoogleSignIn(profile, 'web')).rejects.toBeInstanceOf(MaintenanceModeError)
 
     const [users] = await sql<{ count: number }[]>`
       select count(*)::int as count from users where email = ${email}`
@@ -198,7 +198,7 @@ describe('Google sign-in in full', () => {
     const user = await createTrackedUser({ email: googleEmail() })
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
 
@@ -214,7 +214,7 @@ describe('Google sign-in in full', () => {
     await issueRefreshToken(user.id, randomUUID())
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
 
@@ -232,7 +232,7 @@ describe('Google sign-in in full', () => {
   it('answers a non-staff profile with no email with the 503, not a 400', async () => {
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(undefined))).rejects.toBeInstanceOf(
+    await expect(completeGoogleSignIn(googleProfile(undefined), 'web')).rejects.toBeInstanceOf(
       MaintenanceModeError
     )
   })
@@ -249,7 +249,7 @@ describe('Google sign-in in full', () => {
     })
     await enterFull()
 
-    await completeGoogleSignIn(profile)
+    await completeGoogleSignIn(profile, 'web')
 
     expect(await sessionsOf(user.id)).toBe(1)
   })
@@ -259,9 +259,9 @@ describe('Google sign-in in full', () => {
     await makeStaff(user.id, 'admin')
     await enterFull()
 
-    await expect(completeGoogleSignIn(googleProfile(user.email, false))).rejects.toBeInstanceOf(
-      MaintenanceModeError
-    )
+    await expect(
+      completeGoogleSignIn(googleProfile(user.email, false), 'web')
+    ).rejects.toBeInstanceOf(MaintenanceModeError)
 
     expect(await googleLinks({ userId: user.id })).toBe(0)
     expect(await sessionsOf(user.id)).toBe(0)
@@ -297,7 +297,7 @@ describe('Google sign-in in full', () => {
     const answers: Record<string, unknown> = {}
     for (const [name, profile] of Object.entries(profiles)) {
       try {
-        await completeGoogleSignIn(profile)
+        await completeGoogleSignIn(profile, 'web')
         answers[name] = 'signed in'
       } catch (error) {
         answers[name] =
@@ -329,7 +329,7 @@ describe('Google sign-in in full', () => {
     const profile = googleProfile(googleEmail())
     await enterFull()
 
-    await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+    await expect(completeGoogleSignIn(profile, 'web')).rejects.toBeInstanceOf(MaintenanceModeError)
 
     expect(await googleLinks({ providerId: profile.id })).toBe(0)
   })
@@ -350,7 +350,9 @@ describe('Google sign-in in full', () => {
       findPlatformRole,
       async () => {
         for (const profile of [unknownProfile, memberProfile]) {
-          await expect(completeGoogleSignIn(profile)).rejects.toBeInstanceOf(MaintenanceModeError)
+          await expect(completeGoogleSignIn(profile, 'web')).rejects.toBeInstanceOf(
+            MaintenanceModeError
+          )
         }
       }
     )

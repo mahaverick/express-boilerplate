@@ -1,10 +1,7 @@
 /**
  * @file Exercises `platform.service` against the real per-worker Postgres.
- * The domain list is passed in: the suite's environment leaves
- * `PLATFORM_EMAIL_DOMAINS` unset, which is itself the "nobody joins" case.
  */
 import { randomUUID } from 'node:crypto'
-import { sql as drizzleSql } from 'drizzle-orm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -13,14 +10,8 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { db, sql } from '@/services/database.service'
-import { logger } from '@/services/logger.service'
-import {
-  autoJoin,
-  autoJoinSafely,
-  bootstrapGrant,
-  getPlatformMembership,
-} from '@/services/platform.service'
+import { sql } from '@/services/database.service'
+import { bootstrapGrant, getPlatformMembership } from '@/services/platform.service'
 import { hashToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -31,7 +22,6 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 const STAFF_DOMAIN = 'staff.example.test'
-const DOMAINS = [STAFF_DOMAIN]
 
 /**
  * One audit_logs row, as the assertions below read it.
@@ -68,7 +58,7 @@ async function platformTenant(): Promise<Tenant> {
 }
 
 /**
- * A unique address on the staff domain.
+ * A unique address for one test.
  */
 function staffEmail(): string {
   return `platform-service-${randomUUID()}@${STAFF_DOMAIN}`
@@ -81,14 +71,6 @@ function staffEmail(): string {
 async function grantPlatformRole(userId: string, role: MembershipRole): Promise<void> {
   const platform = await platformTenant()
   await userMembershipRepository.create({ userId, tenantId: platform.id, role })
-}
-
-/**
- * An insertIfAbsent stand-in that always rejects with a real SQL error, so
- * Postgres aborts the transaction that ran it.
- */
-const failingInsert: UserMembershipRepository['insertIfAbsent'] = async (_data, executor = db) => {
-  await executor.execute(drizzleSql`select 1 / 0`)
 }
 
 describe('platform.service', () => {
@@ -118,113 +100,6 @@ describe('platform.service', () => {
     if (!stored) throw new Error('setup: user vanished')
     return stored
   }
-
-  describe('autoJoin', () => {
-    it('joins a verified address on a listed domain as viewer, and audits it once as a system action', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      const platform = await platformTenant()
-
-      const joined = await db.transaction((tx) => autoJoin(user, tx, DOMAINS))
-
-      expect(joined?.role).toBe('viewer')
-      expect(joined?.tenantId).toBe(platform.id)
-      if (!joined) throw new Error('unreachable: asserted above')
-      expect(await auditRowsFor(joined.id)).toEqual([
-        {
-          action: 'platform.member.auto_joined',
-          actorKind: 'system',
-          // eslint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
-          actorUserId: null,
-          access: 'system',
-          tenantId: platform.id,
-          targetType: 'membership',
-          targetId: joined.id,
-          metadata: { userId: user.id, emailDomain: STAFF_DOMAIN },
-        },
-      ])
-    })
-
-    it('does not join a subdomain of a listed domain', async () => {
-      const user = await createUser(`platform-service-${randomUUID()}@eu.${STAFF_DOMAIN}`, {
-        isVerified: true,
-      })
-
-      expect(await db.transaction((tx) => autoJoin(user, tx, DOMAINS))).toBeUndefined()
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-
-    it('does not join an unverified address', async () => {
-      const user = await createUser(staffEmail(), { isVerified: false })
-
-      expect(await db.transaction((tx) => autoJoin(user, tx, DOMAINS))).toBeUndefined()
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-
-    it('leaves an existing platform membership alone: no demotion, no second audit row', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      await grantPlatformRole(user.id, 'admin')
-
-      expect(await db.transaction((tx) => autoJoin(user, tx, DOMAINS))).toBeUndefined()
-
-      expect(await getPlatformMembership(user.id)).toBe('admin')
-      const rows = await sql`
-        select id from audit_logs
-        where action = 'platform.member.auto_joined' and metadata->>'userId' = ${user.id}
-      `
-      expect(rows).toHaveLength(0)
-    })
-  })
-
-  describe('autoJoinSafely', () => {
-    it('joins nobody when PLATFORM_EMAIL_DOMAINS is unset (the suite default)', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-
-      await autoJoinSafely(user)
-
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-
-    it('logs a failure at warn instead of throwing it', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
-
-      await withMutatedMethod(
-        UserMembershipRepository.prototype,
-        'insertIfAbsent',
-        () => Promise.reject(new Error('insert failed')),
-        async () => {
-          await expect(autoJoinSafely(user, db, DOMAINS)).resolves.toBeUndefined()
-        }
-      )
-
-      expect(warn).toHaveBeenCalledWith(
-        'Platform auto-join failed',
-        expect.objectContaining({ userId: user.id })
-      )
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-
-    it('rolls back only its own savepoint when it fails inside a caller transaction', async () => {
-      const user = await createUser(staffEmail(), { isVerified: true })
-      vi.spyOn(logger, 'warn').mockImplementation(() => {})
-      await withMutatedMethod(
-        UserMembershipRepository.prototype,
-        'insertIfAbsent',
-        failingInsert,
-        async () => {
-          await db.transaction(async (tx) => {
-            await autoJoinSafely(user, tx, DOMAINS)
-            // Fails with "current transaction is aborted" unless the join ran in a savepoint.
-            await userRepository.update(user.id, { firstName: 'Still usable' }, {}, tx)
-          })
-        }
-      )
-
-      const updated = await userRepository.findById(user.id)
-      expect(updated?.firstName).toBe('Still usable')
-      expect(await getPlatformMembership(user.id)).toBeNull()
-    })
-  })
 
   describe('getPlatformMembership', () => {
     it('returns the platform role for staff and null for everyone else', async () => {
