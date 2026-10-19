@@ -90,7 +90,8 @@ not only through TypeScript's `$type<TokenPurpose>()`.
   copied forward unchanged by every rotation, which makes
   `SESSION_ABSOLUTE_TTL` an absolute ceiling. `authenticated_at` is when the
   session last proved who its user is, and is the source of the access
-  token's `auth_time`.
+  token's `auth_time`. NULL for a session an invitation link started, or one
+  from before 0018.
 - `consumed_at` is set only by `UserTokenRepository.claimOnce`, so it
   separates a row spent through its single-use path from one revoked unused.
 - `replaced_by_id` points at the row a token rotated into. Nothing reads it; it

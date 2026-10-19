@@ -602,8 +602,8 @@ their role there is their platform role (`src/services/platform.service.ts`).
 `requireRecentAuth` (`src/middlewares/auth.middleware.ts`) refuses a session
 that last authenticated more than `STEP_UP_MAX_AGE_MS` (10 minutes) ago with
 `401 REAUTH_REQUIRED`. The time comes from the token's `auth_time`, which the
-refresh row records at sign-in and rotation carries forward; a token without it
-counts as stale. Staff move it forward by confirming it's them, by an emailed
+refresh row records at sign-in (an invitation-link sign-in records none) and
+rotation carries forward; a token without it counts as stale. Staff move it forward by confirming it's them, by an emailed
 link or by Google
 ([Step-up by link and by Google](#step-up-by-link-and-by-google)).
 A client must not sign out on `REAUTH_REQUIRED`.
@@ -641,7 +641,8 @@ session (`src/services/step-up.service.ts`).
 - **By link, bound to the session.** `POST /auth/step-up/link/request` mails a
   link to the account's own address and answers `202` with
   `resendAvailableAt`. Another request by the same staff member, from any of
-  their sessions, inside `STEP_UP_LINK_COOLDOWN` (default `1m`) answers `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
+  their sessions, inside `STEP_UP_LINK_COOLDOWN` (default `1m`) answers
+  `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
   `step_up_link` row names the user and the session (the token's `sid`) that
   asked: a new link revokes that session's earlier one, and a sign-out revokes
   it. `POST /auth/step-up/link/verify` claims it only for that user and

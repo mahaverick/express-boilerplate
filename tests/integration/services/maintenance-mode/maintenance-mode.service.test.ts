@@ -385,6 +385,17 @@ describe('Google sign-in in read_only', () => {
     expect(await googleLinks({ providerId: profile.id })).toBe(0)
   })
 
+  it('answers READ_ONLY_MODE before the verified-address check for a profile that reaches no account', async () => {
+    // Only the up-front guard answers this: the one before the insert comes after email_not_verified.
+    const unverified = googleProfile(googleEmail(), false)
+    await enterReadOnly()
+
+    await expect(completeGoogleSignIn(unverified, 'web')).rejects.toMatchObject({
+      statusCode: 503,
+      code: READ_ONLY_MODE_CODE,
+    })
+  })
+
   it('refuses the creation when read_only begins after the first lookup', async () => {
     const email = googleEmail()
     const profile = googleProfile(email)
