@@ -337,7 +337,7 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
           tenantName: 'Acme Rockets',
           appName: getEnv().APP_NAME,
           nextStep: onboardingStepByKey('configure_settings')?.title,
-          overviewLink: `${getEnv().WEB_URL.replace(/\/$/, '')}/tenants/${tenant.slug}`,
+          overviewLink: `${getEnv().WEB_URL.replace(/\/$/, '')}/tenants/${tenant.slug}?utm_source=email&utm_medium=email&utm_campaign=onboarding_reminder&utm_content=primary_button`,
         },
       })
     }

@@ -21,6 +21,7 @@ import {
 import { db, withTransaction, type DbExecutor } from '@/services/database.service'
 import { hashToken } from '@/services/session.service'
 import { frontendUrl } from '@/services/verification.service'
+import { withEmailUtm } from '@/utilities/utm.utilities'
 
 const userTokenRepository = new UserTokenRepository()
 
@@ -162,12 +163,14 @@ function frontendPageUrl(app: FrontendApp, pagePath: string): URL {
  * `redirect` only as hints; verify returns the stored redirect.
  * @param raw - The raw token, never its hash.
  * @param row - The issued row's address, frontend and redirect.
- * @returns The absolute URL.
+ * @param templateKey - The mail that carries the link: its key is the `utm_campaign`.
+ * @returns The absolute URL, with UTM parameters after the link's own query.
  * @throws {Error} For a row with no app or address, which no link row is.
  */
 export function buildSignInLinkUrl(
   raw: string,
-  row: Pick<UserToken, 'email' | 'app' | 'redirect'>
+  row: Pick<UserToken, 'email' | 'app' | 'redirect'>,
+  templateKey: 'sign_in_link' | 'welcome'
 ): string {
   const { app, email } = row
   // Every link row has both (user_tokens_shape_check); anything else is a caller's bug.
@@ -177,16 +180,16 @@ export function buildSignInLinkUrl(
   url.searchParams.set('token', raw)
   url.searchParams.set('email', email)
   if (row.redirect !== null) url.searchParams.set('redirect', row.redirect)
-  return url.href
+  return withEmailUtm(url.href, templateKey, 'text_link')
 }
 
 /**
  * The step-up link a mail carries: `<apex>/auth/confirm?token=…`.
  * @param raw - The raw token, never its hash.
- * @returns The absolute URL.
+ * @returns The absolute URL, with UTM parameters after the token.
  */
 export function buildStepUpConfirmUrl(raw: string): string {
   const url = frontendPageUrl('apex', STEP_UP_CONFIRM_PATH)
   url.searchParams.set('token', raw)
-  return url.href
+  return withEmailUtm(url.href, 'step_up_link', 'text_link')
 }

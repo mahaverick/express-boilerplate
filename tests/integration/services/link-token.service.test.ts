@@ -216,7 +216,9 @@ describe('link URLs', () => {
     const email = 'person+tag@example.test'
     const redirect = '/tenants/acme/members?tenant=acme&tab=2#x'
 
-    const apexUrl = new URL(buildSignInLinkUrl(raw, { email, app: 'apex', redirect }))
+    const apexUrl = new URL(
+      buildSignInLinkUrl(raw, { email, app: 'apex', redirect }, 'sign_in_link')
+    )
     expect(apexUrl.origin).toBe(APEX)
     expect(apexUrl.pathname).toBe('/auth/link')
     expect(apexUrl.searchParams.get('token')).toBe(raw)
@@ -224,8 +226,10 @@ describe('link URLs', () => {
     expect(apexUrl.searchParams.get('redirect')).toBe(redirect)
     expect(apexUrl.hash).toBe('')
 
-    // eslint-disable-next-line unicorn/no-null -- a row with no stored redirect
-    const webUrl = new URL(buildSignInLinkUrl(raw, { email, app: 'web', redirect: null }))
+    const webUrl = new URL(
+      // eslint-disable-next-line unicorn/no-null -- a row with no stored redirect
+      buildSignInLinkUrl(raw, { email, app: 'web', redirect: null }, 'sign_in_link')
+    )
     expect(webUrl.origin).toBe(new URL(getEnv().WEB_URL).origin)
     expect(webUrl.origin).not.toBe(APEX)
     expect(webUrl.pathname).toBe('/auth/link')
@@ -239,7 +243,7 @@ describe('link URLs', () => {
     const url = new URL(buildStepUpConfirmUrl(raw))
     expect(url.origin).toBe(APEX)
     expect(url.pathname).toBe('/auth/confirm')
-    // The token is the only parameter.
-    expect(url.search).toBe(`?token=${raw}`)
+    // The token comes first; UTM parameters follow.
+    expect(url.searchParams.get('token')).toBe(raw)
   })
 })

@@ -68,6 +68,7 @@ import type {
 } from '@/types/platform-onboarding'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
+import { withEmailUtm } from '@/utilities/utm.utilities'
 import {
   STEP_NOT_FOUND_CODE,
   STEP_NOT_FOUND_MESSAGE,
@@ -584,14 +585,18 @@ const REMINDED_RECENTLY_CODE = 'reminded_recently'
 
 /**
  * The customer app's overview page of a tenant: the reminder's one link.
- * It carries no token.
+ * It carries no token, and UTM parameters for the reminder's button.
  * @param slug - The tenant's slug.
  * @param webUrl - The customer app's origin; defaults to the configured `WEB_URL`.
  * @returns The absolute URL.
  */
-function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
+export function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
   const base = webUrl.endsWith('/') ? webUrl : `${webUrl}/`
-  return new URL(`tenants/${encodeURIComponent(slug)}`, base).href
+  return withEmailUtm(
+    new URL(`tenants/${encodeURIComponent(slug)}`, base).href,
+    'onboarding_reminder',
+    'primary_button'
+  )
 }
 
 /**

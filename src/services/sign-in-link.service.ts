@@ -128,13 +128,17 @@ export async function sendSignInLink(
   const account =
     target.userId === undefined ? undefined : await userRepository.findById(target.userId)
   const to = target.email.toLowerCase()
+  const reason = target.reason ?? 'self'
   const variables = {
     firstName: account?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-    signInUrl: buildSignInLinkUrl(raw, row),
+    signInUrl: buildSignInLinkUrl(
+      raw,
+      row,
+      reason === 'welcome' ? WELCOME_TEMPLATE_KEY : SIGN_IN_LINK_TEMPLATE_KEY
+    ),
     expiresInMinutes: String(Math.round(ttlMs / 60_000)),
     appName: getEnv().APP_NAME,
   }
-  const reason = target.reason ?? 'self'
   await addEmailJob(
     reason === 'welcome'
       ? { to, templateKey: WELCOME_TEMPLATE_KEY, variables }

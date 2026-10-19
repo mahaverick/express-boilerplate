@@ -197,7 +197,7 @@ describe('tenant-invitation.service', () => {
         tenantName: 'Acme Inc',
         inviterName: 'Ada Lovelace',
         role: 'editor',
-        acceptUrl: `http://localhost:5173/invitations/accept?token=${queued.token}`,
+        acceptUrl: `http://localhost:5173/invitations/accept?token=${queued.token}&utm_source=email&utm_medium=email&utm_campaign=tenant_invitation&utm_content=primary_button`,
         expiresInDays: '3',
         appName: queued.variables.appName,
       })

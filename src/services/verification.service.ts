@@ -9,6 +9,7 @@ import type { FrontendApp } from '@/constants/frontend.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
+import { withEmailUtm } from '@/utilities/utm.utilities'
 
 const userRepository = new UserRepository()
 
@@ -44,13 +45,17 @@ function buildTokenUrl(pagePath: string, rawToken: string, webUrl: string): stri
  * POSTs the token to `/invitations/preview` and then `/invitations/accept`.
  * @param rawToken - The raw invitation token, never its hash.
  * @param webUrl - The frontend origin; defaults to the configured `WEB_URL`.
- * @returns An absolute URL carrying the token as a query parameter.
+ * @returns An absolute URL carrying the token as a query parameter, then UTM parameters.
  */
 export function buildInvitationAcceptUrl(
   rawToken: string,
   webUrl: string = getEnv().WEB_URL
 ): string {
-  return buildTokenUrl(INVITATION_ACCEPT_PATH, rawToken, webUrl)
+  return withEmailUtm(
+    buildTokenUrl(INVITATION_ACCEPT_PATH, rawToken, webUrl),
+    'tenant_invitation',
+    'primary_button'
+  )
 }
 
 /**

@@ -56,6 +56,7 @@ import {
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import { isRecentAuth } from '@/utilities/recent-auth.utilities'
+import { withEmailUtm } from '@/utilities/utm.utilities'
 import type {
   PlatformEmailListQuery,
   PlatformSuppressionListQuery,
@@ -373,7 +374,8 @@ export async function getEmailDetail(actor: Actor, id: string): Promise<EmailMes
  * @returns The masked URL.
  */
 function maskedLink(build: (rawToken: string, webUrl: string) => string, origin: string): string {
-  return `${build('', origin)}${TOKEN_MASK}`
+  // `token=` is the first parameter in every built link; UTM parameters follow it.
+  return build('', origin).replace('token=', () => `token=${TOKEN_MASK}`)
 }
 
 /**
@@ -382,11 +384,16 @@ function maskedLink(build: (rawToken: string, webUrl: string) => string, origin:
  * shows.
  * @param rawToken - The token text, empty for a preview's masked link.
  * @param origin - The frontend origin the real link pointed at.
+ * @param templateKey - The mail the link is in: its key is the `utm_campaign`.
  * @returns The URL.
  */
-function signInPageUrl(rawToken: string, origin: string): string {
+function signInPageUrl(
+  rawToken: string,
+  origin: string,
+  templateKey: 'sign_in_link' | 'welcome'
+): string {
   const base = new URL('auth/link', origin.endsWith('/') ? origin : `${origin}/`)
-  return `${base.href}?token=${rawToken}`
+  return withEmailUtm(`${base.href}?token=${rawToken}`, templateKey, 'text_link')
 }
 
 /**
@@ -398,7 +405,7 @@ function signInPageUrl(rawToken: string, origin: string): string {
  */
 function stepUpConfirmPageUrl(rawToken: string, origin: string): string {
   const base = new URL('auth/confirm', origin.endsWith('/') ? origin : `${origin}/`)
-  return `${base.href}?token=${rawToken}`
+  return withEmailUtm(`${base.href}?token=${rawToken}`, 'step_up_link', 'text_link')
 }
 
 /**
@@ -485,7 +492,10 @@ export function buildPreviewMessage(
           templateKey,
           variables: {
             firstName: fill('firstName'),
-            signInUrl: maskedLink(signInPageUrl, origin),
+            signInUrl: maskedLink(
+              (token, from) => signInPageUrl(token, from, 'sign_in_link'),
+              origin
+            ),
             expiresInMinutes: fill('expiresInMinutes'),
             appName: fill('appName'),
             reason: fill('reason') === 'staff' ? 'staff' : 'self',
@@ -498,7 +508,7 @@ export function buildPreviewMessage(
           templateKey,
           variables: {
             firstName: fill('firstName'),
-            signInUrl: maskedLink(signInPageUrl, origin),
+            signInUrl: maskedLink((token, from) => signInPageUrl(token, from, 'welcome'), origin),
             expiresInMinutes: fill('expiresInMinutes'),
             appName: fill('appName'),
           },

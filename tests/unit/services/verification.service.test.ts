@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 
+/**
+ * The UTM query an invitation link carries after its token.
+ */
+const INVITATION_UTM =
+  'utm_source=email&utm_medium=email&utm_campaign=tenant_invitation&utm_content=primary_button'
+
 describe('buildInvitationAcceptUrl', () => {
   it('points at the frontend accept page with the token as a query parameter', () => {
     const url = new URL(buildInvitationAcceptUrl('abc_123-XYZ', 'https://app.example.com'))
@@ -8,6 +14,7 @@ describe('buildInvitationAcceptUrl', () => {
     expect(url.origin).toBe('https://app.example.com')
     expect(url.pathname).toBe('/invitations/accept')
     expect(url.searchParams.get('token')).toBe('abc_123-XYZ')
+    expect(url.searchParams.get('utm_campaign')).toBe('tenant_invitation')
   })
 
   it('percent-encodes the token rather than concatenating it raw', () => {
@@ -19,7 +26,7 @@ describe('buildInvitationAcceptUrl', () => {
 
   it('does not double a slash when WEB_URL has a trailing one', () => {
     expect(buildInvitationAcceptUrl('t', 'https://app.example.com/')).toBe(
-      'https://app.example.com/invitations/accept?token=t'
+      `https://app.example.com/invitations/accept?token=t&${INVITATION_UTM}`
     )
   })
 })
@@ -42,14 +49,11 @@ describe('frontendUrl', () => {
   })
 
   it.each([
-    ['https://admin.example.com/', 'https://admin.example.com/invitations/accept?token=t'],
-    ['https://admin.example.com/apex', 'https://admin.example.com/apex/invitations/accept?token=t'],
-    [
-      'https://admin.example.com/apex/',
-      'https://admin.example.com/apex/invitations/accept?token=t',
-    ],
+    ['https://admin.example.com/', 'https://admin.example.com/invitations/accept'],
+    ['https://admin.example.com/apex', 'https://admin.example.com/apex/invitations/accept'],
+    ['https://admin.example.com/apex/', 'https://admin.example.com/apex/invitations/accept'],
   ])('builds a clean link from APEX_URL %s', (configured, expected) => {
     const base = frontendUrl('apex', { WEB_URL: web, APEX_URL: configured })
-    expect(buildInvitationAcceptUrl('t', base)).toBe(expected)
+    expect(buildInvitationAcceptUrl('t', base)).toBe(`${expected}?token=t&${INVITATION_UTM}`)
   })
 })
