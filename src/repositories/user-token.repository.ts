@@ -337,11 +337,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    *
    * This method has no purpose predicate — it deliberately revokes
    * `password_reset`, `email_verification`, and every other purpose too,
-   * not just `'refresh'` rows. `sessionId` is only ever set on a
-   * `'refresh'` row (user-token.model.ts), so a revoked non-refresh row
-   * contributes `sessionId: null` and is filtered out of the returned ids.
-   * An entire rotation chain shares one session id, so the ids are
-   * deduplicated.
+   * not just `'refresh'` rows. A `'refresh'` row carries its session id,
+   * and so does a `'step_up_link'` row (the session it elevates, which is one
+   * of this user's and is ending too), so both contribute it; a row with no
+   * session (verification, reset) contributes `sessionId: null` and is
+   * filtered out of the returned ids. An entire rotation chain shares one
+   * session id, so the ids are deduplicated.
    *
    * A session mid-rotation when this runs (old row claimed, next row not yet
    * committed) survives it: the next row is not in this statement's snapshot.
@@ -386,9 +387,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * request that triggered the change keeps working uninterrupted.
    *
    * The spared-session predicate is `session_id IS DISTINCT FROM $2`, never
-   * `!=`: `!=` is NULL for a non-refresh row (its `session_id` is NULL), so
-   * reset and verification tokens would survive a password change.
-   * `IS DISTINCT FROM` revokes them, as `revokeAllForUser` does.
+   * `!=`: `!=` is NULL for a row with no session (verification, reset: its
+   * `session_id` is NULL), so those tokens would survive a password change.
+   * `IS DISTINCT FROM` revokes them, as `revokeAllForUser` does. A
+   * `step_up_link` of the spared session shares its id, so it is spared with
+   * it.
    *
    * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
    * lock the user row first. Locks its rows in id order (`lockedIds`),
@@ -619,6 +622,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * id, so the user row's cascade never reaches it. The address is compared
    * case-insensitively, as the purge's other address-keyed deletes compare
    * it. Soft-deleted rows go too. Locks its rows FOR UPDATE in id order.
+   * It scans the table by design: no index covers `lower(email)` over every
+   * row, and it runs only for a staff purge, which is rare.
    * @param email - The purged user's address.
    * @param createdAtOrBefore - The user's deletion; a link written after it is kept.
    * @param tx - The purge's transaction.

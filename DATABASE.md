@@ -85,7 +85,8 @@ not only through TypeScript's `$type<TokenPurpose>()`.
 
 - `token_hash` is a SHA-256 digest of the raw token, never the token.
 - `session_id`, `session_started_at` and `authenticated_at` are meaningful only
-  for `'refresh'`. `session_id` groups every token descended from one login
+  for `'refresh'`, except that `session_id` is meaningful on a `'step_up_link'`
+  too (see Emailed links). `session_id` groups every token descended from one login
   into a rotation family. `session_started_at` is copied forward unchanged by
   every rotation, which makes `SESSION_ABSOLUTE_TTL` an absolute ceiling.
   `authenticated_at` is when the session last proved who its user is, and is
