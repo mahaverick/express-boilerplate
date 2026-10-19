@@ -10,13 +10,13 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
+import { frontendUrl } from '@/services/frontend-links.service'
 import {
   closeQueue,
   getAuthEmailQueue,
   getEmailQueue,
   getNotificationQueue,
 } from '@/services/queue.service'
-import { frontendUrl } from '@/services/verification.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import { requireDurationMs } from '@/utilities/duration.utilities'

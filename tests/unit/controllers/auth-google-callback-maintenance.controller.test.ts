@@ -8,7 +8,7 @@ import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 
-vi.mock('@/services/verification.service', () => ({
+vi.mock('@/services/frontend-links.service', () => ({
   frontendUrl: () => 'https://app.example.com',
 }))
 vi.mock('passport', () => ({

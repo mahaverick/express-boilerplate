@@ -5,8 +5,8 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UserRepository } from '@/repositories/user.repository'
+import { markEmailVerified } from '@/services/account-claim.service'
 import { sql, withTransaction } from '@/services/database.service'
-import { markEmailVerified } from '@/services/verification.service'
 
 const userRepository = new UserRepository()
 

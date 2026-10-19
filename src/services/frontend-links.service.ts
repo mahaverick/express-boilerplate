@@ -1,17 +1,11 @@
 /**
- * @file The frontend links mailed to a user, and `markEmailVerified`, the one
- * writer of `users.email_verified_at`. Every link that proves a mailbox
- * (a sign-in link, an invitation, Google's verified address) verifies the
- * account through it.
+ * @file The frontend links mailed to a user: the configured origin of each
+ * frontend (`frontendUrl`), the invitation accept link, and the name a
+ * template greets an unnamed user by.
  */
 import { getEnv, type Env } from '@/configs/env.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
-import type { User } from '@/database/models/user.model'
-import { UserRepository } from '@/repositories/user.repository'
-import { db, type DbExecutor } from '@/services/database.service'
 import { withEmailUtm } from '@/utilities/utm.utilities'
-
-const userRepository = new UserRepository()
 
 const INVITATION_ACCEPT_PATH = 'invitations/accept'
 
@@ -70,20 +64,4 @@ export function frontendUrl(
   env: Pick<Env, 'WEB_URL' | 'APEX_URL'> = getEnv()
 ): string {
   return app === 'apex' && env.APEX_URL !== undefined ? env.APEX_URL : env.WEB_URL
-}
-
-/**
- * Mark a user's email verified. The only writer of users.email_verified_at;
- * a no-op when it is already set, so an earlier timestamp never moves. It
- * grants nothing: staff join the platform tenant only by invitation or the
- * bootstrap grant.
- * @param userId - The user whose mailbox has been proven.
- * @param executor - The pool, or the caller's transaction to join.
- * @returns The verified row when this call verified it, undefined when it already was (or is gone).
- */
-export async function markEmailVerified(
-  userId: string,
-  executor: DbExecutor = db
-): Promise<User | undefined> {
-  return userRepository.markEmailVerified(userId, executor)
 }

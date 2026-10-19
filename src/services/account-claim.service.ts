@@ -11,13 +11,33 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { withTransaction, type DbTransaction } from '@/services/database.service'
+import {
+  db,
+  withTransaction,
+  type DbExecutor,
+  type DbTransaction,
+} from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { denySessionsAfterCommit, revokeSessionRows } from '@/services/session.service'
-import { markEmailVerified } from '@/services/verification.service'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
+
+/**
+ * Mark a user's email verified. The only writer of users.email_verified_at;
+ * a no-op when it is already set, so an earlier timestamp never moves. It
+ * grants nothing: staff join the platform tenant only by invitation or the
+ * bootstrap grant.
+ * @param userId - The user whose mailbox has been proven.
+ * @param executor - The pool, or the caller's transaction to join.
+ * @returns The verified row when this call verified it, undefined when it already was (or is gone).
+ */
+export async function markEmailVerified(
+  userId: string,
+  executor: DbExecutor = db
+): Promise<User | undefined> {
+  return userRepository.markEmailVerified(userId, executor)
+}
 
 /**
  * The 500 a claim answers when the account it locks is gone (deleted since

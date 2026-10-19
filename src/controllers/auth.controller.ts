@@ -25,6 +25,7 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
+import { frontendUrl } from '@/services/frontend-links.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
 import { revokeOtherSessions } from '@/services/session.service'
@@ -37,7 +38,6 @@ import {
   startGoogleStepUp,
   type StepUpIntent,
 } from '@/services/step-up.service'
-import { frontendUrl } from '@/services/verification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { revokeOtherSessionsSchema } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'

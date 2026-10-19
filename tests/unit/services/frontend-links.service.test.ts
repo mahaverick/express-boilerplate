@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
+import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
 
 /**
  * The UTM query an invitation link carries after its token.

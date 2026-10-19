@@ -19,8 +19,8 @@ import {
   type LiveLinkMatch,
 } from '@/repositories/user-token.repository'
 import { db, withTransaction, type DbExecutor } from '@/services/database.service'
+import { frontendUrl } from '@/services/frontend-links.service'
 import { hashToken } from '@/services/session.service'
-import { frontendUrl } from '@/services/verification.service'
 import { withEmailUtm } from '@/utilities/utm.utilities'
 
 const userTokenRepository = new UserTokenRepository()

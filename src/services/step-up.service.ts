@@ -26,6 +26,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record, type AuditEntry } from '@/services/audit.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
+import { MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import {
   buildStepUpConfirmUrl,
   claimLinkToken,
@@ -35,7 +36,6 @@ import { logger } from '@/services/logger.service'
 import { claimCooldown, releaseCooldown } from '@/services/mail-cooldown.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import { markSessionReauthenticated, signAccessToken } from '@/services/session.service'
-import { MISSING_FIRST_NAME_FALLBACK } from '@/services/verification.service'
 import { STEP_UP_LINK_TEMPLATE_KEY } from '@/templates/email/step-up-link.template'
 import type { OAuthIntent } from '@/types/oauth-intent'
 import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'

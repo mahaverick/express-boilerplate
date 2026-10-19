@@ -31,6 +31,7 @@ import {
 import { platformRoleForLogin } from '@/services/auth.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import {
   buildSignInLinkUrl,
   claimLinkToken,
@@ -52,7 +53,6 @@ import {
 } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import { resendPlatformInvitationForSignIn } from '@/services/tenant-invitation.service'
-import { MISSING_FIRST_NAME_FALLBACK } from '@/services/verification.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import type { EmailResendOptions } from '@/types/email-context'

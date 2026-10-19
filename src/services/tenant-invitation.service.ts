@@ -44,6 +44,7 @@ import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
@@ -59,7 +60,6 @@ import {
   lockActorRole,
   lockUserForOwnership,
 } from '@/services/tenant-membership.service'
-import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
@@ -935,6 +935,7 @@ function assertInvitedAddress(user: User, invitedEmail: string): void {
   if (user.email.trim().toLowerCase() !== invitedEmail) {
     throw new HttpError(INVITATION_EMAIL_MISMATCH_MESSAGE, 403, INVITATION_EMAIL_MISMATCH_CODE)
   }
+  // Every sign-in now verifies the account, so this refuses only a session from before passwordless; kept with its wire code as defence in depth.
   if (user.emailVerifiedAt === null) {
     throw new HttpError(INVITATION_EMAIL_UNVERIFIED_MESSAGE, 403, INVITATION_EMAIL_UNVERIFIED_CODE)
   }

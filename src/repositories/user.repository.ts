@@ -49,7 +49,7 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
 
   /**
    * Mark a user's email verified, once.
-   * Call it through verification.service.ts's `markEmailVerified`, never directly.
+   * Call it through account-claim.service.ts's `markEmailVerified`, never directly.
    * The `email_verified_at is null` predicate is what makes this idempotent
    * in the database rather than in a caller's read-then-write: a second
    * valid token, or two tabs submitting the same one, must not move a

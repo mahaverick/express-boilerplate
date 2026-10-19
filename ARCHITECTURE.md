@@ -700,7 +700,7 @@ same name, so log meta cannot spoof them.
 ### A second frontend: Apex
 
 `APEX_URL` (optional) names the Apex staff dashboard. Links and redirects pick
-a frontend with `frontendUrl(app)` (`src/services/verification.service.ts`),
+a frontend with `frontendUrl(app)` (`src/services/frontend-links.service.ts`),
 where `app` is `'web'` or `'apex'`, never a URL: it returns `APEX_URL` for
 `'apex'` when that is set, and `WEB_URL` otherwise.
 

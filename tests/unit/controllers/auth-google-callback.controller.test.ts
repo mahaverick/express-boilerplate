@@ -6,7 +6,7 @@ import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 
 // frontendUrl is mocked, so this test proves only the trailing-slash stripping.
-vi.mock('@/services/verification.service', () => ({
+vi.mock('@/services/frontend-links.service', () => ({
   frontendUrl: () => 'https://admin.example.com//',
 }))
 vi.mock('passport', () => ({

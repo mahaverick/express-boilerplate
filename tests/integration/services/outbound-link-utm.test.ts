@@ -6,10 +6,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
+import { buildInvitationAcceptUrl } from '@/services/frontend-links.service'
 import { buildSignInLinkUrl, buildStepUpConfirmUrl } from '@/services/link-token.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { buildTenantOverviewLink } from '@/services/platform-onboarding.service'
-import { buildInvitationAcceptUrl } from '@/services/verification.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import { EMAIL_TEMPLATE_KEYS, type EmailTemplateKey } from '@/utilities/email-template.utilities'
 import { UTM_CONTENTS, type UtmContent } from '@/utilities/utm.utilities'

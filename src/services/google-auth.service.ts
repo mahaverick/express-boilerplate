@@ -13,7 +13,11 @@ import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { claimNeverVerifiedAccount, isClaimedAccountGone } from '@/services/account-claim.service'
+import {
+  claimNeverVerifiedAccount,
+  isClaimedAccountGone,
+  markEmailVerified,
+} from '@/services/account-claim.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
@@ -23,7 +27,6 @@ import {
 } from '@/services/maintenance-mode/maintenance-mode.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import { issueRefreshToken, type IssuedRefreshToken } from '@/services/session.service'
-import { markEmailVerified } from '@/services/verification.service'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
