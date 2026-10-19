@@ -88,6 +88,7 @@ export type RateLimitName =
   | 'revokeOtherSessions'
   | 'signInLinkRequest'
   | 'signInLinkVerify'
+  | 'invitationVerify'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -614,6 +615,19 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
    */
   signInLinkVerify: {
     name: 'sign-in-link-verify',
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    keyBy: 'ip',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 20 per 15 minutes per IP for `POST /invitations/verify`, keyed on IP
+   * alone: a public route, with no caller identity to key on. The token is
+   * single-use and carries 256 bits, so this bounds a client working through
+   * dead links, not guessing.
+   */
+  invitationVerify: {
+    name: 'invitation-verify',
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'ip',

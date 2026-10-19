@@ -1,13 +1,14 @@
 /**
  * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
- * accept. Multi-step writes run in one transaction with their audit entry,
+ * accept, and the one-click verify that signs the invitee in and joins them,
+ * creating their account when the address has none. Multi-step writes run in one transaction with their audit entry,
  * and every query inside one goes through its `tx`. Audit metadata carries
  * the address's domain, never the address. Mail and the in-app notification
  * are enqueued after the write commits, and a failed enqueue is logged,
  * never thrown. A teammate invitation and an accept that adds a membership
  * emit their domain event after commit.
  */
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITED_CODE } from '@/constants/rate-limit.constants'
 import {
@@ -29,12 +30,24 @@ import {
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import {
+  claimNeverVerifiedAccount,
+  clearSquatterCredentials,
+  createLinkedAccount,
+  isAddressTaken,
+} from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
+import { platformRoleForLogin } from '@/services/auth.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
-import { hashToken } from '@/services/session.service'
+import {
+  hashToken,
+  issueRefreshToken,
+  signAccessToken,
+  type IssuedRefreshToken,
+} from '@/services/session.service'
 import {
   assertStaffReasonGiven,
   lockActorRole,
@@ -146,11 +159,14 @@ export interface InvitationPreview {
 }
 
 /**
- * The outcome of an accept: the tenant and the role the user holds in it.
+ * The outcome of an accept: the tenant, the role the user holds in it, and
+ * whether this accept added no membership (the user had joined already, by
+ * this invitation or otherwise), so the client can say "You've already joined".
  */
 export interface AcceptedInvitation {
   tenant: { name: string; slug: string }
   role: MembershipRole
+  alreadyMember: boolean
 }
 
 /**
@@ -159,6 +175,32 @@ export interface AcceptedInvitation {
  */
 interface AcceptOutcome {
   accepted: AcceptedInvitation
+  joined?: DomainEventOf<'invitation_accepted'>
+}
+
+/**
+ * A one-click verify that joined: the account, its new session's tokens, its
+ * platform role, whether this click created it, and the tenant and role it
+ * holds there.
+ */
+export interface InvitationSession {
+  user: User
+  accessToken: string
+  refreshToken: IssuedRefreshToken
+  platformRole: MembershipRole | null
+  isNewUser: boolean
+  tenant: { name: string; slug: string }
+  role: MembershipRole
+}
+
+/**
+ * What a verify's transaction settles: the account, its session, the role it
+ * holds, and the membership it added, when it added one.
+ */
+interface VerifyOutcome {
+  user: User
+  refreshToken: IssuedRefreshToken
+  role: MembershipRole
   joined?: DomainEventOf<'invitation_accepted'>
 }
 
@@ -758,7 +800,11 @@ async function acceptedEarlierBy(
     executor
   )
   if (!membership) throw invitationInvalid()
-  return { tenant: { name: found.tenant.name, slug: found.tenant.slug }, role: membership.role }
+  return {
+    tenant: { name: found.tenant.name, slug: found.tenant.slug },
+    role: membership.role,
+    alreadyMember: true,
+  }
 }
 
 /**
@@ -773,7 +819,7 @@ async function acceptedEarlierBy(
  * wins and this answers 401.
  * @param rawToken - The raw token from the link.
  * @param userId - The signed-in user.
- * @returns The tenant and the role the user holds (an existing membership's role is kept).
+ * @returns The tenant, the role the user holds (an existing membership's role is kept), and `alreadyMember`: true for a repeat accept and for a user who was a member already.
  * @throws {HttpError} 404 `invitation_invalid`; 403 `invitation_email_mismatch` when the address differs; 403 `invitation_email_unverified` when it matches but is unverified; 401 when the account is gone or inactive.
  */
 export async function accept(rawToken: string, userId: string): Promise<AcceptedInvitation> {
@@ -814,6 +860,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     const accepted = {
       tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
       role: membership.role,
+      alreadyMember: !inserted,
     }
     if (!inserted) return { accepted }
     const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
@@ -831,4 +878,167 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
   })
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
   return outcome.accepted
+}
+
+/**
+ * The existing account an invitation link signs in, settled before the
+ * verify's transaction: none when the address has no account; refused when
+ * the account is inactive; claimed when it was never verified, as a sign-in
+ * link claims one (the click proves the mailbox, so a squatter's sessions
+ * and credentials go).
+ * @param email - The invitation's stored (lowercased) address.
+ * @returns The account, or undefined when the click should create one.
+ * @throws {HttpError} 404 `invitation_invalid` for an inactive account.
+ */
+async function invitedAccount(email: string): Promise<User | undefined> {
+  const existing = await userRepository.findByEmail(email)
+  if (!existing) return undefined
+  if (!existing.active) throw invitationInvalid()
+  if (existing.emailVerifiedAt !== null) return existing
+  return claimNeverVerifiedAccount(existing.id, clearSquatterCredentials(existing.id))
+}
+
+/**
+ * Create the invitee's verified account in the verify's transaction. When
+ * another write created an account for the address first (a concurrent click
+ * on the same link, or a registration), the insert loses the users unique
+ * index and the click answers the generic invalid link; the transaction rolls
+ * back before the claim, so the link stays usable for the next click.
+ * @param email - The invitation's address.
+ * @param tx - The verify's transaction.
+ * @returns The new account.
+ * @throws {HttpError} 404 `invitation_invalid` when the address was taken meanwhile.
+ */
+async function createInvitedAccount(email: string, tx: DbTransaction): Promise<User> {
+  try {
+    return await createLinkedAccount(email, tx)
+  } catch (error) {
+    if (isAddressTaken(error)) throw invitationInvalid()
+    throw error
+  }
+}
+
+/**
+ * Lock an existing invitee's row `FOR SHARE` in the verify's transaction and
+ * re-check it, so a deactivation or delete that committed since the lookup
+ * wins, and one that commits later waits for the join and the session and
+ * then revokes them. The lock comes before the claim, as `accept`'s
+ * `lockUserForOwnership` does.
+ * @param userId - The invitee.
+ * @param tx - The verify's transaction.
+ * @returns The locked row.
+ * @throws {HttpError} 404 `invitation_invalid` when the account is gone or inactive.
+ */
+async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<User> {
+  const locked = await userRepository.lockById(userId, 'share', tx)
+  if (!locked?.active) throw invitationInvalid()
+  return locked
+}
+
+/**
+ * Accept an invitation in one click, signed out: sign the invitee in and
+ * join them. The link is single-use: once accepted it signs nobody in, the
+ * invitee included (a signed-in invitee gets `alreadyMember` from `accept`).
+ *
+ * Order: the link is looked up first, outside any transaction, so a used,
+ * expired, revoked, suspended-tenant or archived-tenant link touches no
+ * account; the address's account is resolved (`invitedAccount`); then one
+ * transaction creates the account or locks it, claims the invitation, adds
+ * the membership (an existing one keeps its role), audits
+ * `invitation.accepted` and issues the session. A claim that loses (the link
+ * went dead since the lookup) rolls a new account back. After commit it
+ * stamps `lastLoggedInAt`, best effort, and emits `invitation_accepted` when
+ * it joined, `email_verified` and `user_signed_up` when it created the
+ * account, and `user_signed_in`.
+ * @param rawToken - The raw token from the link.
+ * @returns The session, and the tenant and role it joined with.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in.
+ */
+export async function verifyInvitation(rawToken: string): Promise<InvitationSession> {
+  const tokenHash = hashToken(rawToken)
+  const valid = await invitationRepository.findValidByTokenHash(tokenHash)
+  if (!valid) throw invitationInvalid()
+  const account = await invitedAccount(valid.invitation.email)
+  const isNewUser = account === undefined
+
+  const sessionId = randomUUID()
+  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
+    const user = account
+      ? await lockActiveInvitee(account.id, tx)
+      : await createInvitedAccount(valid.invitation.email, tx)
+    const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
+    // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
+    if (!claimed) throw invitationInvalid()
+
+    const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
+    const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
+    // An existing membership keeps its role; createIfAbsent reads it back.
+    const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
+    await record(
+      {
+        action: 'invitation.accepted',
+        actor: { userId: user.id },
+        access: 'member',
+        tenantId: claimed.tenantId,
+        targetId: membership.id,
+        metadata: { role: membership.role, invitationId: claimed.id },
+      },
+      tx
+    )
+    const refreshToken = await issueRefreshToken(user.id, sessionId, tx)
+    const settled = { user, refreshToken, role: membership.role }
+    if (!inserted) return settled
+    const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
+    return {
+      ...settled,
+      joined: {
+        type: 'invitation_accepted',
+        tenantId: claimed.tenantId,
+        userId: user.id,
+        role: inserted.role,
+        wasFirstMember: memberCount === 1,
+        at: inserted.createdAt,
+      },
+    }
+  })
+
+  const user = await stampSignIn(outcome.user)
+  const accessToken = signAccessToken(user, sessionId, outcome.refreshToken.authenticatedAt)
+  const platformRole = await platformRoleForLogin(user.id)
+  if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
+  if (isNewUser) {
+    await emitDomainEvent({ type: 'email_verified', userId: user.id, at: new Date() })
+    await emitDomainEvent({
+      type: 'user_signed_up',
+      userId: user.id,
+      method: 'link',
+      at: user.createdAt,
+    })
+  }
+  await emitDomainEvent({ type: 'user_signed_in', userId: user.id, method: 'link', at: new Date() })
+  return {
+    user,
+    accessToken,
+    refreshToken: outcome.refreshToken,
+    platformRole,
+    isNewUser,
+    tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
+    role: outcome.role,
+  }
+}
+
+/**
+ * Stamp `lastLoggedInAt` on an account a verify just signed in, after the
+ * join commits. Best effort: the link is spent by then, so a failed stamp is
+ * logged and the session is still handed back.
+ * @param user - The account as the verify's transaction left it.
+ * @returns The stamped row, or the given one when the stamp failed.
+ */
+async function stampSignIn(user: User): Promise<User> {
+  try {
+    return (await userRepository.update(user.id, { lastLoggedInAt: new Date() })) ?? user
+  } catch (error) {
+    logger.error('Last sign-in could not be stamped', { error, userId: user.id })
+    return user
+  }
 }

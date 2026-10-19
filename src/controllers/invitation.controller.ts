@@ -1,16 +1,23 @@
 /**
- * @file The invitee's side of an invitation: preview (public) and accept
- * (signed in). A malformed token answers exactly like an unknown one, so the
- * shape check tells a caller nothing the lookup would not.
+ * @file The invitee's side of an invitation: preview (public), the one-click
+ * verify (public; it signs the invitee in) and accept (signed in). A
+ * malformed token answers exactly like an unknown one, so the shape check
+ * tells a caller nothing the lookup would not.
  */
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
+import {
+  revokePresentedSession,
+  setRefreshTokenCookie,
+} from '@/controllers/session-cookie.controller'
 import { HttpError } from '@/errors/http-error'
+import { toProfileResponse } from '@/presenters/user.presenter'
 import {
   accept,
   INVITATION_INVALID_CODE,
   INVITATION_INVALID_MESSAGE,
   preview,
+  verifyInvitation,
 } from '@/services/tenant-invitation.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { invitationTokenInputSchema } from '@/validators/invitation.validators'
@@ -44,8 +51,43 @@ class InvitationController extends BaseController {
   })
 
   /**
+   * `POST /invitations/verify`: accept an invitation in one click, signed
+   * out. Signs the invitee in, creating a verified account when the address
+   * has none (`isNewUser`), and joins them. Every link that signs nobody in,
+   * a used one included, answers one 404 `invitation_invalid` with no cookie.
+   * A refresh cookie the browser still presented has its session revoked once
+   * the new one is issued, as a sign-in by link does. `no-store`, as every
+   * token response (RFC 6749 §5.1).
+   */
+  verifyInvitation = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    const token = invitationTokenFrom(request.body)
+    const session = await verifyInvitation(token)
+    await revokePresentedSession(request, { emitSignedOut: false })
+
+    setRefreshTokenCookie(
+      request,
+      response,
+      session.refreshToken.raw,
+      session.refreshToken.expiresAt
+    )
+    successResponse(
+      response,
+      {
+        user: toProfileResponse(session.user, session.platformRole),
+        accessToken: session.accessToken,
+        isNewUser: session.isNewUser,
+        tenant: session.tenant,
+        role: session.role,
+      },
+      'Invitation accepted.'
+    )
+  })
+
+  /**
    * `POST /invitations/accept`: accept an invitation as the signed-in user,
-   * behind `requireAuth`.
+   * behind `requireAuth`. Idempotent for the invitee: `alreadyMember` says
+   * whether they had joined already.
    */
   acceptInvitation = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

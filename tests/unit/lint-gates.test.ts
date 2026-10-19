@@ -346,12 +346,13 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       expect(zoneMessage?.severity).toBe(2)
     })
 
-    // The controllers-to-controllers zone excepts the two shared modules every controller builds on; without it every real controller would fail the zone.
-    it('allows a controller to import base.controller and helpers.controller', async () => {
+    // The controllers-to-controllers zone excepts the three shared modules controllers build on; without it every real controller would fail the zone.
+    it('allows a controller to import base.controller, helpers.controller and session-cookie.controller', async () => {
       const source =
         "import { BaseController } from '@/controllers/base.controller'\n" +
-        "import { authenticatedUserId } from '@/controllers/helpers.controller'\n\n" +
-        'export const shared = [BaseController, authenticatedUserId]\n'
+        "import { authenticatedUserId } from '@/controllers/helpers.controller'\n" +
+        "import { setRefreshTokenCookie } from '@/controllers/session-cookie.controller'\n\n" +
+        'export const shared = [BaseController, authenticatedUserId, setRefreshTokenCookie]\n'
       const ids = await ruleIdsFor('src/controllers/probe.controller.ts', source)
       expect(ids).not.toContain('import-x/no-restricted-paths')
     })

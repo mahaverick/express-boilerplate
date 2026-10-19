@@ -514,6 +514,7 @@ describe('tenant-invitation.service', () => {
       expect(accepted).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
       const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
       expect(membership?.role).toBe('editor')
@@ -533,6 +534,7 @@ describe('tenant-invitation.service', () => {
       expect(await accept(queued.token, invitee.id)).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
     })
 
@@ -574,7 +576,8 @@ describe('tenant-invitation.service', () => {
       const first = await accept(rawToken, invitee.id)
       const second = await accept(rawToken, invitee.id)
 
-      expect(second).toStrictEqual(first)
+      expect(first.alreadyMember).toBe(false)
+      expect(second).toStrictEqual({ ...first, alreadyMember: true })
     })
 
     it('answers invitation_invalid to the user who already accepted while the tenant is suspended', async () => {
@@ -631,7 +634,13 @@ describe('tenant-invitation.service', () => {
       ])
 
       const expected = { tenant: { name: 'Acme Inc', slug: tenant.slug }, role: 'editor' }
-      expect(results).toStrictEqual([expected, expected])
+      // One accept claims and joins; the other finds the join already made.
+      expect(
+        results.toSorted((a, b) => Number(a.alreadyMember) - Number(b.alreadyMember))
+      ).toStrictEqual([
+        { ...expected, alreadyMember: false },
+        { ...expected, alreadyMember: true },
+      ])
       const [row] = await sql<{ count: number }[]>`
         select count(*)::int as count from user_memberships
         where user_id = ${invitee.id} and tenant_id = ${tenant.id}
@@ -691,7 +700,7 @@ describe('tenant-invitation.service', () => {
 
         expect(claims).toEqual([undefined])
 
-        expect(second).toStrictEqual(first)
+        expect(second).toStrictEqual({ ...first, alreadyMember: true })
         const [row] = await sql<{ count: number }[]>`
           select count(*)::int as count from user_memberships
           where user_id = ${invitee.id} and tenant_id = ${tenant.id}

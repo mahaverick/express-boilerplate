@@ -231,6 +231,7 @@ const PRE_SIGN_IN_CALLS = new Set([
   'POST /api/v1/auth/verify-email',
   'POST /api/v1/auth/resend-verification',
   'POST /api/v1/invitations/preview',
+  'POST /api/v1/invitations/verify',
 ])
 
 beforeAll(async () => {

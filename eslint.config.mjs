@@ -135,9 +135,13 @@ export default tseslint.config(
             {
               target: './src/controllers',
               from: './src/controllers',
-              except: ['./base.controller.ts', './helpers.controller.ts'],
+              except: [
+                './base.controller.ts',
+                './helpers.controller.ts',
+                './session-cookie.controller.ts',
+              ],
               message:
-                'Controllers must not import other controllers (base.controller and helpers.controller excepted). Shared response shaping belongs in src/presenters/.',
+                'Controllers must not import other controllers (base.controller, helpers.controller and session-cookie.controller excepted). Shared response shaping belongs in src/presenters/.',
             },
             {
               target: [

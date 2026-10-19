@@ -1,6 +1,8 @@
 /**
- * @file The "you've been invited to join a team" message. The accept link
- * carries the raw invitation token, so it never appears in the subject; tenant
+ * @file The "you've been invited to join a team" message, with one button,
+ * "Join <Tenant>": one click signs the invitee in and joins them, creating
+ * their account when the address has none. The accept link carries the raw
+ * invitation token, so it never appears in the subject; tenant
  * and inviter names are user-chosen text, so they stay out of it too.
  */
 import {
@@ -40,7 +42,7 @@ export interface TenantInvitationVariables {
    */
   acceptUrl: string
   /**
-   * Whole days until the link expires.
+   * Whole days until the link expires (`INVITATION_TTL`).
    */
   expiresInDays: string
   /**
@@ -72,7 +74,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TenantInvitationVariables> = 
 
 /**
  * Render the invitation email: plain-text and HTML parts, both carrying the
- * accept link and the instructions for a reader without an account.
+ * accept link, which needs no account beforehand.
  * @param variables - See `TenantInvitationVariables`.
  * @returns The rendered subject, text and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
@@ -89,15 +91,13 @@ export function renderTenantInvitationTemplate(
   const text = [
     'Hi,',
     '',
-    `${inviterName} invited you to join ${tenantName} on ${appName} as ${role}.`,
+    `${inviterName} invited you to join ${tenantName} as ${role}.`,
     '',
-    'Accept the invitation here:',
+    `Join ${tenantName}:`,
     '',
     acceptUrl,
     '',
     `This link expires in ${lifetime}.`,
-    '',
-    `No ${appName} account yet? Create one with this email address, verify it, then open this link again.`,
     '',
     "If you weren't expecting this invitation, you can ignore this email.",
     '',
@@ -115,11 +115,10 @@ export function renderTenantInvitationTemplate(
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi,</p>
-    <p>${escapedInviterName} invited you to join ${escapedTenantName} on ${escapedAppName} as ${escapedRole}.</p>
-    <p><a href="${escapedAcceptUrl}">Accept the invitation</a></p>
+    <p>${escapedInviterName} invited you to join ${escapedTenantName} as ${escapedRole}.</p>
+    <p><a href="${escapedAcceptUrl}">Join ${escapedTenantName}</a></p>
     <p>Or paste this link into your browser: ${escapedAcceptUrl}</p>
     <p>This link expires in ${escapedLifetime}.</p>
-    <p>No ${escapedAppName} account yet? Create one with this email address, verify it, then open this link again.</p>
     <p>If you weren't expecting this invitation, you can ignore this email.</p>
     <p>— The ${escapedAppName} team</p>
   </body>

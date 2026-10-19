@@ -2,9 +2,10 @@
  * @file The two account writes a proven mailbox makes: creating a verified
  * account for an address that has none (`createLinkedAccount`), and taking
  * over a never-verified account that holds the address
- * (`claimNeverVerifiedAccount`), which a sign-in link and a verified Google
- * identity both do. `markEmailVerified` stays the only writer of
- * `email_verified_at`.
+ * (`claimNeverVerifiedAccount`), which a sign-in link, an invitation link and
+ * a verified Google identity all do. A link's claim also clears the
+ * squatter's credentials (`clearSquatterCredentials`). `markEmailVerified`
+ * stays the only writer of `email_verified_at`.
  */
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -48,6 +49,17 @@ export async function createLinkedAccount(email: string, tx: DbTransaction): Pro
   const verified = await markEmailVerified(user.id, tx)
   if (!verified) throw new HttpError('Created user could not be verified', 500)
   return verified
+}
+
+/**
+ * Whether a write failed because a live account holds the address:
+ * `BaseRepository.create` translates the users unique violation into 409,
+ * which `createLinkedAccount` passes on.
+ * @param error - The error the creating transaction threw.
+ * @returns True for that 409.
+ */
+export function isAddressTaken(error: unknown): boolean {
+  return error instanceof HttpError && error.statusCode === 409
 }
 
 /**
@@ -109,4 +121,20 @@ export async function claimNeverVerifiedAccount(
     await emitDomainEvent({ type: 'email_verified', userId, at: new Date() })
   }
   return claimed
+}
+
+/**
+ * The writes a link makes on a never-verified account it claims, in the
+ * claim's locked transaction: a squatter who registered the address first
+ * loses their password and any federated link, since the click proves the
+ * mailbox is someone else's.
+ * @param userId - The never-verified account.
+ * @returns The callback for `claimNeverVerifiedAccount`.
+ */
+export function clearSquatterCredentials(userId: string): (tx: DbTransaction) => Promise<void> {
+  return async (tx) => {
+    await authProviderRepository.deleteFederatedForUser(userId, tx)
+    // eslint-disable-next-line unicorn/no-null -- a null hash is the password-less state (user.model.ts)
+    await userRepository.update(userId, { passwordHash: null }, {}, tx)
+  }
 }

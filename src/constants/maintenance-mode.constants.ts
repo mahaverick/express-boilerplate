@@ -272,6 +272,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // Token lookup sent as POST to keep the token out of the URL; it writes nothing.
   readOnlyWrite('POST', '/api/v1/invitations/preview'),
   write('POST', '/api/v1/invitations/accept'),
+  // One click joins, which is a write, even when it signs an existing account in.
+  write('POST', '/api/v1/invitations/verify'),
   read('/api/v1/flags'),
   readOnlyWrite('POST', '/api/v1/flags/exposures'),
 ]

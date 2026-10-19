@@ -76,6 +76,7 @@ const WRITES: [string, string][] = [
   ['DELETE', '/api/v1/tenants/acme/members/0190a8e2-0000-7000-8000-000000000001'],
   ['PUT', '/api/v1/notifications/preferences'],
   ['POST', '/api/v1/invitations/accept'],
+  ['POST', '/api/v1/invitations/verify'],
 ]
 
 const EXPOSURES = ['/api/v1/flags/exposures', '/api/v1/tenants/acme/flags/exposures']
@@ -167,6 +168,7 @@ describe('maintenanceVerdict', () => {
     expect(classifyMaintenanceRoute('PATCH', '/api/v1/tenants/acme')?.staffPass).toBe(true)
     expect(classifyMaintenanceRoute('GET', '/api/v1/tenants/acme/members')?.staffPass).toBe(true)
     expect(classifyMaintenanceRoute('POST', '/api/v1/invitations/accept')?.staffPass).toBe(true)
+    expect(classifyMaintenanceRoute('POST', '/api/v1/invitations/verify')?.staffPass).toBe(false)
     expect(classifyMaintenanceRoute('GET', '/api/v1/notifications')?.staffPass).toBe(false)
     expect(classifyMaintenanceRoute('POST', '/api/v1/auth/register')?.staffPass).toBe(false)
   })

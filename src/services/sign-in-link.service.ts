@@ -18,11 +18,15 @@ import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
-import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { claimNeverVerifiedAccount, createLinkedAccount } from '@/services/account-claim.service'
+import {
+  claimNeverVerifiedAccount,
+  clearSquatterCredentials,
+  createLinkedAccount,
+  isAddressTaken,
+} from '@/services/account-claim.service'
 import { platformRoleForLogin } from '@/services/auth.service'
-import { withTransaction, type DbTransaction } from '@/services/database.service'
+import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import {
   buildSignInLinkUrl,
@@ -48,7 +52,6 @@ import { requireDurationMs } from '@/utilities/duration.utilities'
 import type { SignInLinkRequestInput } from '@/validators/sign-in-link.validators'
 
 const userRepository = new UserRepository()
-const authProviderRepository = new AuthProviderRepository()
 
 /**
  * The cooldown key segment: at most one sign-in link per address per
@@ -194,16 +197,6 @@ export function requestSignInLink(input: SignInLinkRequestInput): () => Promise<
 }
 
 /**
- * Whether a write failed because a live account holds the address:
- * `BaseRepository.create` translates the users unique violation into 409.
- * @param error - The error the creating transaction threw.
- * @returns True for that 409.
- */
-function isAddressTaken(error: unknown): boolean {
-  return error instanceof HttpError && error.statusCode === 409
-}
-
-/**
  * Refuse, before the link is spent, a verify the maintenance mode would
  * refuse, so the link still works once the mode ends. Reads only: the link
  * is peeked, not claimed. In `full` the account the link's address holds must
@@ -259,22 +252,6 @@ function assertCreationAllowedByMode(): void {
   const snapshot = getMaintenanceMode()
   if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
   if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
-}
-
-/**
- * The writes a link makes on a never-verified account it claims, in the
- * claim's locked transaction: a squatter who registered the address first
- * loses their password and any federated link, since the click proves the
- * mailbox is someone else's.
- * @param userId - The never-verified account.
- * @returns The callback for `claimNeverVerifiedAccount`.
- */
-function clearSquatterCredentials(userId: string): (tx: DbTransaction) => Promise<void> {
-  return async (tx) => {
-    await authProviderRepository.deleteFederatedForUser(userId, tx)
-    // eslint-disable-next-line unicorn/no-null -- a null hash is the password-less state (user.model.ts)
-    await userRepository.update(userId, { passwordHash: null }, {}, tx)
-  }
 }
 
 /**

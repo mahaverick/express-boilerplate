@@ -210,7 +210,7 @@ Every form is `HttpOnly`, and `Secure` when `isCookieSecure` says so
 - **The newest cookie wins.** Within one name the API reads the last value
   sent, the most recently created one, so a stale cookie from an older
   `COOKIE_DOMAIN` never reaches reuse detection (`readCookie`,
-  `src/controllers/auth.controller.ts`). After `COOKIE_DOMAIN` is reverted to
+  `src/controllers/session-cookie.controller.ts`). After `COOKIE_DOMAIN` is reverted to
   an earlier value the browser keeps the overwritten cookie's original creation
   time, so the other scope's cookie reads as newer and refresh fails until the
   user signs in again or the cookie expires (`REFRESH_TOKEN_TTL`).
@@ -397,12 +397,21 @@ registered address to a tenant directly
 - **No enumeration.** Inviting answers the same `202` whether or not the
   address has an account. The one distinct answer is `409 already_member`,
   which tells an owner or admin who is already in their own tenant.
-- **Consent.** Accepting needs a signed-in user whose verified address is the
-  invited one: a different address gets `403 invitation_email_mismatch`, the
-  right one unverified gets `403 invitation_email_unverified`, and nothing is
-  claimed. A second accept by the same user succeeds; anyone else's fails.
-- **The token travels in bodies only.** `POST /invitations/preview` and
-  `POST /invitations/accept` take it as JSON. The API answers with
+- **Consent.** The link was mailed to the invited address, so one click on it
+  proves the mailbox: `POST /invitations/verify` signs in the account the
+  address holds, creating a verified one when there is none, and joins it. A
+  never-verified account is claimed as a sign-in link claims one (its
+  sessions are revoked and a squatter's password and Google link removed); a
+  deactivated one gets the generic `404 invitation_invalid`. The link is
+  single-use: once accepted it signs nobody in, the invitee included, and a
+  used, expired, revoked, suspended-tenant or archived-tenant link creates no
+  account. Accepting signed in (`POST /invitations/accept`) needs a user whose
+  verified address is the invited one: a different address gets
+  `403 invitation_email_mismatch`, the right one unverified gets
+  `403 invitation_email_unverified`, and nothing is claimed. A second accept by
+  the same user succeeds with `alreadyMember: true`; anyone else's fails.
+- **The token travels in bodies only.** `POST /invitations/preview`,
+  `POST /invitations/verify` and `POST /invitations/accept` take it as JSON. The API answers with
   `Referrer-Policy: no-referrer`; the accept page's own header is the
   frontend's (`react-boilerplate/nginx.conf`).
 - **The grant is re-checked.** Invite, resend and revoke apply

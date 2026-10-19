@@ -26,7 +26,7 @@ describe('renderTenantInvitationTemplate', () => {
   it('names the inviter, tenant, role and lifetime in both parts', () => {
     const rendered = renderTenantInvitationTemplate(validVariables)
     for (const part of [rendered.text, rendered.html]) {
-      expect(part).toContain('Ada Lovelace invited you to join Acme Inc on Boilerplate as editor.')
+      expect(part).toContain('Ada Lovelace invited you to join Acme Inc as editor.')
       expect(part).toContain('This link expires in 7 days.')
     }
   })
@@ -37,6 +37,13 @@ describe('renderTenantInvitationTemplate', () => {
     expect(rendered.html).toContain(`href="${ACCEPT_URL}"`)
   })
 
+  it('labels the one button "Join <Tenant>"', () => {
+    const rendered = renderTenantInvitationTemplate(validVariables)
+    expect(rendered.html).toContain(`<a href="${ACCEPT_URL}">Join Acme Inc</a>`)
+    expect(rendered.html.match(/<a /g)).toHaveLength(1)
+    expect(rendered.text).toContain(`Join Acme Inc:\n\n${ACCEPT_URL}`)
+  })
+
   it('keeps the link and the user-chosen names out of the subject', () => {
     const { subject } = renderTenantInvitationTemplate(validVariables)
     expect(subject).toBe("You've been invited to join a team on Boilerplate")
@@ -45,12 +52,12 @@ describe('renderTenantInvitationTemplate', () => {
     expect(subject).not.toContain('Ada Lovelace')
   })
 
-  it('tells a reader without an account how to accept', () => {
+  it('asks a reader without an account for nothing beyond the click', () => {
     const rendered = renderTenantInvitationTemplate(validVariables)
-    const instruction =
-      'No Boilerplate account yet? Create one with this email address, verify it, then open this link again.'
-    expect(rendered.text).toContain(instruction)
-    expect(rendered.html).toContain(instruction)
+    for (const part of [rendered.text, rendered.html]) {
+      expect(part).not.toContain('account yet')
+      expect(part).not.toContain('verify it')
+    }
   })
 
   it('says "1 day" for a one-day lifetime', () => {

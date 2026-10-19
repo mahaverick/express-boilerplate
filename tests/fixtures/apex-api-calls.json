@@ -31,6 +31,7 @@
     "POST /api/v1/collect",
     "POST /api/v1/invitations/accept",
     "POST /api/v1/invitations/preview",
+    "POST /api/v1/invitations/verify",
     "POST /api/v1/tenants/:slug/invitations",
     "POST /api/v1/tenants/:slug/invitations/:invitationId/resend"
   ]

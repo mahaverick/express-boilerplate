@@ -55,6 +55,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'revoke-other-sessions',
   'sign-in-link-request',
   'sign-in-link-verify',
+  'invitation-verify',
 ]
 
 /**
@@ -201,6 +202,13 @@ const EXPECTED_RATE_LIMITS: {
   {
     key: 'signInLinkVerify',
     name: 'sign-in-link-verify',
+    windowMs: 900_000,
+    limit: 20,
+    keyBy: 'ip',
+  },
+  {
+    key: 'invitationVerify',
+    name: 'invitation-verify',
     windowMs: 900_000,
     limit: 20,
     keyBy: 'ip',

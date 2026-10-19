@@ -1036,6 +1036,7 @@ describe('invitations API', () => {
       expect(envelopeOf(response).data).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
       expect(response.headers).toHaveProperty('ratelimit-limit')
       const membership = await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
@@ -1128,7 +1129,70 @@ describe('invitations API', () => {
 
       expect(first.status).toBe(200)
       expect(second.status).toBe(200)
-      expect(envelopeOf(second).data).toStrictEqual(envelopeOf(first).data)
+      expect(envelopeOf(second).data).toStrictEqual({
+        ...envelopeOf<Record<string, unknown>>(first).data,
+        alreadyMember: true,
+      })
+    })
+
+    it('answers alreadyMember false on the first accept', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+
+      const response = await acceptVia(rawToken, inviteeToken)
+
+      expect(response.status).toBe(200)
+      expect(envelopeOf(response).data).toStrictEqual({
+        tenant: { name: 'Acme Inc', slug: tenant.slug },
+        role: 'editor',
+        alreadyMember: false,
+      })
+    })
+
+    it('answers alreadyMember true when the invitee accepts a used link again', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      await acceptVia(rawToken, inviteeToken)
+
+      const again = await acceptVia(rawToken, inviteeToken)
+
+      expect(again.status).toBe(200)
+      expect(envelopeOf(again).data).toStrictEqual({
+        tenant: { name: 'Acme Inc', slug: tenant.slug },
+        role: 'editor',
+        alreadyMember: true,
+      })
+    })
+
+    it('answers alreadyMember true to the invitee whose link a one-click verify spent', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      const verified = await request(app)
+        .post('/api/v1/invitations/verify')
+        .send({ token: rawToken })
+      expect(verified.status).toBe(200)
+
+      const again = await acceptVia(rawToken, inviteeToken)
+
+      expect(again.status).toBe(200)
+      expect(envelopeOf<{ alreadyMember: boolean }>(again).data?.alreadyMember).toBe(true)
+    })
+
+    it('still answers invitation_invalid to someone else holding a used link', async () => {
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { token: otherToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      await acceptVia(rawToken, inviteeToken)
+
+      const response = await acceptVia(rawToken, otherToken)
+
+      expect(response.status).toBe(404)
+      expect(response.body).toMatchObject(INVALID)
+      expect(envelopeOf(response).data).toBeUndefined()
     })
 
     it('404s anyone else once the invitation is accepted', async () => {
@@ -1179,6 +1243,7 @@ describe('invitations API', () => {
       expect(envelopeOf(accepted).data).toStrictEqual({
         tenant: { name: 'Acme Inc', slug: tenant.slug },
         role: 'editor',
+        alreadyMember: false,
       })
       const membership = await userMembershipRepository.findByUserAndTenant(user.id, tenant.id)
       expect(membership?.role).toBe('editor')

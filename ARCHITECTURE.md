@@ -219,7 +219,9 @@ regularly passes 300 ms trips the cooldown. What each caller then does is in
 
 - `import-x/no-restricted-paths`: controllers may not import a repository or
   `database.service`; controllers may not import another controller, except
-  `base.controller.ts` and `helpers.controller.ts`; services, repositories,
+  `base.controller.ts`, `helpers.controller.ts` and
+  `session-cookie.controller.ts` (the refresh cookie every sign-in sets);
+  services, repositories,
   policies, errors and presenters may not import controllers, routes or
   middlewares; repositories may not import a service other than
   `database.service`; policies may not import repositories, services or
