@@ -318,27 +318,29 @@ async function assertRecipientBudget(email: string, tenantId: string): Promise<v
 /**
  * When a resend of an invitation last mailed at `lastSentAt` is allowed.
  * @param lastSentAt - When it was last mailed, or null for a row never stamped.
+ * @param now - The current time in epoch milliseconds; the caller's one clock read.
  * @returns The instant the cooldown ends, or null when it is over or never began.
  */
-export function resendAvailableAt(lastSentAt: Date | null): Date | null {
+export function resendAvailableAt(lastSentAt: Date | null, now: number = Date.now()): Date | null {
   // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no cooldown applies
   if (lastSentAt === null) return null
   const availableAt = new Date(
     lastSentAt.getTime() + requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
   )
   // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null once the cooldown is over
-  return availableAt.getTime() > Date.now() ? availableAt : null
+  return availableAt.getTime() > now ? availableAt : null
 }
 
 /**
- * The 429 for a resend inside the cooldown, carrying `Retry-After`.
+ * The 429 for a resend inside the cooldown, carrying `Retry-After`. It reads
+ * the clock once, so the end of the cooldown and the seconds left agree.
  * @param lastSentAt - When the invitation was last mailed.
- * @returns The error to throw; `retryAfterSeconds` is the whole seconds left, at least 1.
+ * @param now - The current time in epoch milliseconds.
+ * @returns The error to throw; `retryAfterSeconds` is the whole seconds left, at least 1, and 1 when the cooldown has already lapsed (a race re-read).
  */
-function resendCooldownError(lastSentAt: Date | null): HttpError {
-  const availableAt = resendAvailableAt(lastSentAt)
-  const secondsLeft =
-    availableAt === null ? 1 : Math.ceil((availableAt.getTime() - Date.now()) / 1000)
+export function resendCooldownError(lastSentAt: Date | null, now: number = Date.now()): HttpError {
+  const availableAt = resendAvailableAt(lastSentAt, now)
+  const secondsLeft = availableAt === null ? 1 : Math.ceil((availableAt.getTime() - now) / 1000)
   const retryAfterSeconds = Math.max(1, secondsLeft)
   return new HttpError(
     `You can resend this invitation in ${formatWait(retryAfterSeconds)}.`,

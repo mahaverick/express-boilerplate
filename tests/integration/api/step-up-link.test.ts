@@ -362,6 +362,25 @@ describe('POST /api/v1/auth/step-up/link/verify', () => {
     ).toBe(confirmedAt)
   })
 
+  it('confirms once when the same link is presented twice at once', async () => {
+    const session = await signIn(await createStaff())
+    await ageSession(session.sid)
+    const linkToken = await issueLink(session)
+
+    const responses = await Promise.all([
+      verifyLink(session.token, linkToken),
+      verifyLink(session.token, linkToken),
+    ])
+
+    expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+      200, 400,
+    ])
+    const refused = responses.find((response) => response.status === 400)
+    expect((refused?.body as { code?: string } | undefined)?.code).toBe(LINK_INVALID_CODE)
+    expect(await linkRows(session.userId)).toMatchObject([{ consumed: true }])
+    expect(await stepUpAudits(session.userId)).toHaveLength(1)
+  })
+
   it('neither spends nor honours the link for another session of the same user', async () => {
     const email = await createStaff()
     const asking = await signIn(email)

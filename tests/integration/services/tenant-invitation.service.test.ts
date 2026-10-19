@@ -6,6 +6,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -29,8 +30,11 @@ import {
   listPending,
   preview,
   resend,
+  resendAvailableAt,
+  resendCooldownError,
   revoke,
 } from '@/services/tenant-invitation.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
@@ -737,5 +741,46 @@ describe('tenant-invitation.service', () => {
         ).toBeUndefined()
       })
     })
+  })
+})
+
+/**
+ * INVITATION_RESEND_COOLDOWN in milliseconds, read per call so getEnv() runs inside a test.
+ * @returns The cooldown.
+ */
+function cooldownMs(): number {
+  return requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
+}
+
+describe('the resend cooldown', () => {
+  const lastSentAt = new Date('2026-01-01T00:00:00.000Z')
+  const sentMs = lastSentAt.getTime()
+
+  it('answers the cooldown end 1 ms before it, and null exactly at it', () => {
+    const end = sentMs + cooldownMs()
+
+    expect(resendAvailableAt(lastSentAt, end - 1)?.getTime()).toBe(end)
+    expect(resendAvailableAt(lastSentAt, end)).toBeNull()
+  })
+
+  it('answers null for a row never stamped', () => {
+    // eslint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
+    expect(resendAvailableAt(null, sentMs)).toBeNull()
+  })
+
+  it('rounds the seconds left up, from the one clock reading it is given', () => {
+    const end = sentMs + cooldownMs()
+
+    expect(resendCooldownError(lastSentAt, end - 90_000).retryAfterSeconds).toBe(90)
+    expect(resendCooldownError(lastSentAt, end - 1).retryAfterSeconds).toBe(1)
+  })
+
+  it('answers Retry-After 1 when the cooldown has lapsed by the time the 429 is built', () => {
+    const end = sentMs + cooldownMs()
+
+    expect(resendCooldownError(lastSentAt, end).retryAfterSeconds).toBe(1)
+    expect(resendCooldownError(lastSentAt, end + 60_000).retryAfterSeconds).toBe(1)
+    // eslint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
+    expect(resendCooldownError(null, sentMs).retryAfterSeconds).toBe(1)
   })
 })
