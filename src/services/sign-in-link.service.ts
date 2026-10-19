@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { LINK_INVALID_CODE, LINK_INVALID_MESSAGE } from '@/constants/auth.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
-import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
+import { READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -40,7 +40,10 @@ import {
 import { logger } from '@/services/logger.service'
 import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
-import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
+import {
+  assertCreationAllowedByMode,
+  assertSignInAllowed,
+} from '@/services/maintenance-mode/maintenance-mode.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import {
   issueRefreshToken,
@@ -289,18 +292,6 @@ async function createLinkedAccountOnce(email: string): Promise<User | undefined>
 }
 
 /**
- * Refuse an account creation the maintenance mode forbids. The peek before
- * the claim already refused it; this catches a mode that changed since, so
- * no account is written in `read_only` or `full` (the link is spent).
- * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
- */
-function assertCreationAllowedByMode(): void {
-  const snapshot = getMaintenanceMode()
-  if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
-  if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
-}
-
-/**
  * The account a claimed link signs in, checked for this click: it is
  * created for a web link to an address with none (refused in `read_only`
  * and `full`); an Apex link reaches only an existing staff account; an
@@ -320,6 +311,7 @@ async function resolveLinkAccount(row: {
   let existing = await userRepository.findByEmail(row.email)
   if (!existing) {
     if (row.app === 'apex') throw linkInvalid()
+    // The peek before the claim already refused it; this catches a mode that changed since (the link is spent).
     assertCreationAllowedByMode()
     const created = await createLinkedAccountOnce(row.email)
     if (created) return { user: created, isNew: true }

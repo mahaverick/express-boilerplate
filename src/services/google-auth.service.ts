@@ -7,15 +7,20 @@
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import type { FrontendApp } from '@/constants/frontend.constants'
+import { READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { claimNeverVerifiedAccount, isClaimedAccountGone } from '@/services/account-claim.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
-import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
+import {
+  assertCreationAllowedByMode,
+  assertSignInAllowed,
+} from '@/services/maintenance-mode/maintenance-mode.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import { issueRefreshToken, type IssuedRefreshToken } from '@/services/session.service'
 import { markEmailVerified } from '@/services/verification.service'
@@ -149,13 +154,16 @@ async function findReachableGoogleUser(profile: GoogleProfile): Promise<User | u
  *    verified one is linked untouched. An account deleted during the claim
  *    is the generic `google_auth_failed`, never the claim's 500.
  * 4. With `allowCreate`, a new account gets its 'email' and 'google' rows in
- *    one transaction; without it, an address with no account is the generic
- *    `google_auth_failed`.
+ *    one transaction, refused in `read_only` and `full`; without it, an
+ *    address with no account is the generic `google_auth_failed`.
+ *
+ * In `read_only` a verified match signs in without the Google link being
+ * written; a never-verified one is still claimed, as a link click claims it.
  * @param profile - The raw Google profile.
  * @param options - Whether an address with no account gets one.
  * @param options.allowCreate - True to create an account for an unknown verified address.
  * @returns The existing, newly linked, or newly created user, and whether it is new.
- * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted, account gone mid-claim, or no account and no creation), 403 `email_not_verified`, 500 when a row it just wrote cannot be read back, or a database error.
+ * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted, account gone mid-claim, or no account and no creation), 403 `email_not_verified`, 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` instead of a creation, 500 when a row it just wrote cannot be read back, or a database error.
  */
 async function resolveGoogleUser(
   profile: GoogleProfile,
@@ -187,11 +195,16 @@ async function resolveGoogleUser(
       return { user: await claimForGoogle(existingUser.id, profile.id), isNew: false }
     }
 
-    await linkGoogleProvider(existingUser.id, profile.id)
+    // read_only writes no link; the sign-in goes ahead and a later one links the identity.
+    if (getMaintenanceMode().mode !== 'read_only') {
+      await linkGoogleProvider(existingUser.id, profile.id)
+    }
     return { user: existingUser, isNew: false }
   }
 
   if (!options.allowCreate) throw googleAuthFailed('No account uses this Google address')
+  // Again here, as a link click checks after its claim: a mode that began since completeGoogleSignIn's check creates nothing.
+  assertCreationAllowedByMode()
 
   const created = await withTransaction(async (tx) => {
     const createdUser = await userRepository.create({ email }, tx)
@@ -283,23 +296,29 @@ export interface GoogleSignIn {
  * is refused the same way, so none is created, linked or claimed, and every
  * refused caller gets the same 503, ahead of any 400 or 403
  * `resolveGoogleUser` would give. The controller redirects with
- * `error=MAINTENANCE_MODE`. In any other mode that lookup is skipped on web:
- * that check would allow the sign-in without reading it.
+ * `error=MAINTENANCE_MODE`. In `read_only` a web profile that reaches no
+ * account is refused with `READ_ONLY_MODE` on the same lookup, before
+ * anything is written, as a link click that would create an account is.
+ * While off that lookup is skipped on web: no check needs it.
  * @param profile - The raw Google profile from the callback.
  * @param app - The frontend the sign-in started from.
  * @returns The new session's refresh token and whether the account is new.
- * @throws {HttpError} 401 `google_auth_failed` on Apex for anything but an active staff account; 503 `MAINTENANCE_MODE` in `full` unless the account is staff (checked before `resolveGoogleUser` and again after it); any `resolveGoogleUser` error; 401 `google_auth_failed` for an inactive or deleted account.
+ * @throws {HttpError} 401 `google_auth_failed` on Apex for anything but an active staff account; 503 `MAINTENANCE_MODE` in `full` unless the account is staff (checked before `resolveGoogleUser` and again after it); 503 `READ_ONLY_MODE` in `read_only` on web for a profile that reaches no account; any `resolveGoogleUser` error; 401 `google_auth_failed` for an inactive or deleted account.
  */
 export async function completeGoogleSignIn(
   profile: GoogleProfile,
   app: FrontendApp
 ): Promise<GoogleSignIn> {
+  const snapshot = getMaintenanceMode()
   if (app === 'apex') {
     await assertApexStaff(profile)
-  } else if (getMaintenanceMode().mode === 'full') {
+  } else if (snapshot.mode === 'full') {
     // Before any write: in `full` only staff get a session, and a profile that reaches no account cannot be staff.
     const reachable = await findReachableGoogleUser(profile)
     await assertSignInAllowed(reachable?.id)
+  } else if (snapshot.mode === 'read_only' && !(await findReachableGoogleUser(profile))) {
+    // Before any write, as a link click to an address with no account is refused: read_only creates no account.
+    throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
   }
 
   const { user, isNew } = await resolveGoogleUser(profile, { allowCreate: app !== 'apex' })

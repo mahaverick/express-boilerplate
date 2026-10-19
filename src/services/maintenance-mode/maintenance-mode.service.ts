@@ -17,6 +17,7 @@ import {
   MAINTENANCE_ACTOR_PLACEHOLDER,
   MAINTENANCE_MODE_CODE,
   MAINTENANCE_MODE_CONFLICT_CODE,
+  READ_ONLY_MODE_CODE,
   type MaintenanceMode,
 } from '@/constants/maintenance-mode.constants'
 import { HttpError } from '@/errors/http-error'
@@ -98,6 +99,18 @@ const NO_REASON = 'No reason given.'
  * ignored, so a row imported with this id grants nothing.
  */
 const NO_ACCOUNT_ID = '00000000-0000-0000-0000-000000000000'
+
+/**
+ * Refuse an account creation in `read_only` or `full`. A sign-in link click
+ * and a web Google sign-in call it just before the insert, to catch a mode
+ * that began after their first check.
+ * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
+ */
+export function assertCreationAllowedByMode(): void {
+  const snapshot = getMaintenanceMode()
+  if (snapshot.mode === 'read_only') throw new MaintenanceModeError(READ_ONLY_MODE_CODE, snapshot)
+  if (snapshot.mode === 'full') throw new MaintenanceModeError(MAINTENANCE_MODE_CODE, snapshot)
+}
 
 /**
  * Refuse a sign-in in `full` unless the user is staff (holds any platform

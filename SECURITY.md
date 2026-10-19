@@ -114,7 +114,8 @@ address gets a fresh account, never the deleted one. When two clicks race on
 one address, the loser's insert hits `users_email_unique`, and it signs in to
 the winner's account as an existing one (`isNewUser: false`). In `read_only` a
 click that would create an account answers `503 READ_ONLY_MODE` before the
-claim, and a click to an existing account signs in.
+claim, and a click to an existing account signs in. A web Google sign-in
+follows the same rule ([Maintenance mode](#maintenance-mode)).
 
 **A never-verified account is claimed.** An account with a null
 `email_verified_at` may hold a squatter's credentials. One function takes such
@@ -1015,6 +1016,12 @@ since the list names only routes the frontends already call.
   callback is between the two checks is refused there, after
   `resolveGoogleUser` has written. On Apex a profile that is not staff gets
   `google_auth_failed` in every mode.
+- In `read_only` a web Google sign-in creates no account, as a link click
+  does not: a profile that reaches no account answers `503 READ_ONLY_MODE` on
+  the same read-only lookup, before `resolveGoogleUser`, and the creation
+  re-checks the mode just before its insert. An existing account signs in
+  without its Google link being written; a never-verified one is still
+  claimed, as a link click claims it.
 - Auth mail keeps flowing. `full` pauses every queue but `auth-email`, which
   carries the sign-in, step-up, welcome and invitation mail
   (`AUTH_EMAIL_TEMPLATE_KEYS`, `src/jobs/email.job.ts`), so staff can still

@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
@@ -81,6 +82,14 @@ async function googleLinks(by: { providerId: string } | { userId: string }): Pro
  */
 async function enterFull(): Promise<void> {
   await storeMaintenanceMode('full')
+  await reloadMaintenanceMode()
+}
+
+/**
+ * Switches this process to `read_only`.
+ */
+async function enterReadOnly(): Promise<void> {
+  await storeMaintenanceMode('read_only')
   await reloadMaintenanceMode()
 }
 
@@ -356,6 +365,76 @@ describe('Google sign-in in full', () => {
     )
 
     expect(findPlatformRole).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Google sign-in in read_only', () => {
+  it('refuses a web profile that reaches no account with READ_ONLY_MODE, and creates nothing', async () => {
+    const email = googleEmail()
+    const profile = googleProfile(email)
+    await enterReadOnly()
+
+    await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
+      statusCode: 503,
+      code: READ_ONLY_MODE_CODE,
+    })
+
+    const [users] = await sql<{ count: number }[]>`
+      select count(*)::int as count from users where email = ${email}`
+    expect(users?.count).toBe(0)
+    expect(await googleLinks({ providerId: profile.id })).toBe(0)
+  })
+
+  it('refuses the creation when read_only begins after the first lookup', async () => {
+    const email = googleEmail()
+    const profile = googleProfile(email)
+    const { UserRepository: Users } = await import('@/repositories/user.repository')
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realFindByEmail = Users.prototype.findByEmail
+    /**
+     * Stands in for `UserRepository.findByEmail`: read_only begins just before resolveGoogleUser's own lookup.
+     */
+    const enteringFind: typeof realFindByEmail = async function (
+      this: InstanceType<typeof Users>,
+      ...arguments_
+    ) {
+      await enterReadOnly()
+      return realFindByEmail.apply(this, arguments_)
+    }
+
+    await withMutatedMethod(Users.prototype, 'findByEmail', enteringFind, async () => {
+      await expect(completeGoogleSignIn(profile, 'web')).rejects.toMatchObject({
+        statusCode: 503,
+        code: READ_ONLY_MODE_CODE,
+      })
+    })
+
+    const [users] = await sql<{ count: number }[]>`
+      select count(*)::int as count from users where email = ${email}`
+    expect(users?.count).toBe(0)
+  })
+
+  it('signs an existing account in without linking the Google identity', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    const profile = googleProfile(user.email)
+    await enterReadOnly()
+
+    const signIn = await completeGoogleSignIn(profile, 'web')
+
+    expect(signIn.refreshToken.userId).toBe(user.id)
+    expect(signIn.isNewUser).toBe(false)
+    expect(await googleLinks({ userId: user.id })).toBe(0)
+  })
+
+  it('signs a linked account in', async () => {
+    const user = await createTrackedUser({ email: googleEmail() })
+    const profile = googleProfile(user.email)
+    await completeGoogleSignIn(profile, 'web')
+    await enterReadOnly()
+
+    const signIn = await completeGoogleSignIn(profile, 'web')
+
+    expect(signIn.refreshToken.userId).toBe(user.id)
   })
 })
 
