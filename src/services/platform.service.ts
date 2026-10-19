@@ -129,6 +129,20 @@ class GrantAddressTakenError extends HttpError {
 }
 
 /**
+ * A grant found its account unverified under the row lock: a write landed
+ * between the claim's commit and the grant. `bootstrapGrant` claims and
+ * grants once more; a second one is its answer.
+ */
+class GrantAccountUnverifiedError extends HttpError {
+  /**
+   * The 409 the second attempt answers.
+   */
+  constructor() {
+    super('The account for that address is unverified. Run the grant again.', 409)
+  }
+}
+
+/**
  * Give the account an address holds a role in the platform tenant, creating
  * or changing their membership, audited as a system grant. For the
  * bootstrap script: nobody can invite before the first platform owner
@@ -141,21 +155,27 @@ class GrantAddressTakenError extends HttpError {
  *   (`claimNeverVerifiedAccount` with `clearSquatterCredentials`): a
  *   squatter's password and federated links go, every session is revoked,
  *   the address is verified and `email_verified` is emitted. The claim
- *   commits on its own, before the grant.
+ *   commits on its own, before the grant, so the grant locks the account's
+ *   row and refuses it while it is unverified: the role never reaches an
+ *   unverified account.
  *
  * A create that loses the users unique index to a concurrent create of the
- * address runs again once, as a grant to the account that won; no other
- * failure is retried.
+ * address, and a grant that finds its account unverified, run the whole
+ * claim and grant again once; no other failure is retried.
  * @param email - The address, in any case.
  * @param role - The platform role to hold.
  * @returns The membership after the change.
- * @throws {HttpError} 409 when the change would leave the platform tenant without an owner; 500 when the platform tenant is missing.
+ * @throws {HttpError} 409 when the change would leave the platform tenant without an owner, or the account is still unverified on the second attempt; 500 when the platform tenant is missing.
  */
 export async function bootstrapGrant(email: string, role: MembershipRole): Promise<UserMembership> {
   try {
     return await grantOnce(email, role)
   } catch (error) {
-    if (!(error instanceof GrantAddressTakenError)) throw error
+    if (!(
+      error instanceof GrantAddressTakenError || error instanceof GrantAccountUnverifiedError
+    )) {
+      throw error
+    }
     return grantOnce(email, role)
   }
 }
@@ -166,6 +186,7 @@ export async function bootstrapGrant(email: string, role: MembershipRole): Promi
  * @param role - The platform role to hold.
  * @returns The membership after the change.
  * @throws {GrantAddressTakenError} When a concurrent create won the address.
+ * @throws {GrantAccountUnverifiedError} When the account is unverified under the row lock; the transaction rolls the grant back.
  * @throws {HttpError} 409 from the last-owner check; 500 when the platform tenant is missing or a claimed account vanished.
  */
 async function grantOnce(email: string, role: MembershipRole): Promise<UserMembership> {
@@ -176,8 +197,12 @@ async function grantOnce(email: string, role: MembershipRole): Promise<UserMembe
   const { membership, createdUserId } = await withTransaction(async (tx) => {
     const found = await userRepository.findByEmail(email, {}, tx)
     const user = found ?? (await createForGrant(email, tx))
+    const granted = await grantInTransaction(user.id, role, tx)
+    // The user row last, after the owner and membership locks, as staff writes take it.
+    const locked = await userRepository.lockById(user.id, 'no key update', tx)
+    if (!locked?.emailVerifiedAt) throw new GrantAccountUnverifiedError()
     return {
-      membership: await grantInTransaction(user.id, role, tx),
+      membership: granted,
       // eslint-disable-next-line unicorn/no-null -- the address held an account already
       createdUserId: found ? null : user.id,
     }

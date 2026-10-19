@@ -84,6 +84,32 @@ async function grantPlatformRole(userId: string, role: MembershipRole): Promise<
   await userMembershipRepository.create({ userId, tenantId: platform.id, role })
 }
 
+/**
+ * The real `findByEmail`, bound before any test replaces it on the prototype.
+ */
+const originalFindByEmail: UserRepository['findByEmail'] =
+  UserRepository.prototype.findByEmail.bind(userRepository)
+
+/**
+ * Stand in for `findByEmail` so that each read inside the grant's
+ * transaction first marks the account unverified again, as a write landing
+ * between the claim's commit and the grant would.
+ * @param userId - The account to unverify.
+ * @param times - How many in-transaction reads unverify it.
+ * @returns The stand-in.
+ */
+function unverifyingFindByEmail(userId: string, times: number): UserRepository['findByEmail'] {
+  let remaining = times
+  return async (email, options, executor) => {
+    // Only the grant's in-transaction read passes an executor; the claim's read before it does not.
+    if (executor !== undefined && remaining > 0) {
+      remaining -= 1
+      await sql`update users set email_verified_at = null where id = ${userId}`
+    }
+    return originalFindByEmail(email, options, executor)
+  }
+}
+
 describe('platform.service', () => {
   const createdUserIds: string[] = []
 
@@ -244,6 +270,51 @@ describe('platform.service', () => {
       expect(sessions.length).toBeGreaterThan(0)
       expect(sessions.every((session) => session.revoked)).toBe(true)
       expect(await getPlatformMembership(user.id)).toBe('owner')
+    })
+
+    it('claims again and grants when the account turns unverified once before the grant', async () => {
+      const user = await createUser(`grant-toctou-${randomUUID()}@example.test`, {
+        isVerified: false,
+      })
+
+      await withMutatedMethod(
+        UserRepository.prototype,
+        'findByEmail',
+        unverifyingFindByEmail(user.id, 1),
+        async () => {
+          await bootstrapGrant(user.email, 'admin')
+        }
+      )
+
+      const [row] = await sql<{ verified: boolean }[]>`
+        select email_verified_at is not null as verified from users where id = ${user.id}`
+      expect(row?.verified).toBe(true)
+      expect(await getPlatformMembership(user.id)).toBe('admin')
+    })
+
+    it('answers 409 and grants nothing when the account stays unverified past the retry', async () => {
+      const user = await createUser(`grant-toctou-${randomUUID()}@example.test`, {
+        isVerified: false,
+      })
+
+      await withMutatedMethod(
+        UserRepository.prototype,
+        'findByEmail',
+        unverifyingFindByEmail(user.id, Infinity),
+        async () => {
+          await expect(bootstrapGrant(user.email, 'owner')).rejects.toMatchObject({
+            statusCode: 409,
+          })
+        }
+      )
+
+      expect(await getPlatformMembership(user.id)).toBeNull()
+      const platform = await platformTenant()
+      const grants = await sql`
+        select 1 from audit_logs
+        where tenant_id = ${platform.id} and action = 'platform.member.granted'
+          and metadata->>'userId' = ${user.id}`
+      expect(grants).toHaveLength(0)
     })
 
     it('emits no email_verified for a user verified already', async () => {
