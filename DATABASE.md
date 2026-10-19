@@ -44,8 +44,8 @@ glob is picked up by `drizzle.config.ts` with no config change.
 | Table                      | Model file                        | Holds                                                                                                                                           |
 | -------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `users`                    | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
-| `user_tokens`              | `user-token.model.ts`             | Refresh, email-verification and password-reset tokens and emailed sign-in and step-up links, as hashes; see below.                              |
-| `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for a password, `'google'` for a linked account).                                              |
+| `user_tokens`              | `user-token.model.ts`             | Refresh tokens and emailed sign-in and step-up links, as hashes; see below.                                                                     |
+| `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                  |
 | `tenants`                  | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
 | `tenant_settings`          | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
 | `user_memberships`         | `user-membership.model.ts`        | One row per (user, tenant) pair, with the user's role in it.                                                                                    |
@@ -172,8 +172,8 @@ PostHog keeps refusing stays. What writes, claims and deletes the rows is under
 everything in it, except the hand-added statements in these migrations, each
 marked by a comment in its file (0024's has none):
 
-- `0010` backfills an `'email'` `auth_providers` row for every user with a
-  password.
+- `0010` backfills an `'email'` `auth_providers` row for every user who could
+  sign in by email when it ran.
 - `0016` creates the `pg_trgm` extension, refuses to run while a live tenant
   holds the reserved `platform` slug, seeds the platform tenant and its
   settings row, and adds the trigger that makes `audit_logs` append-only.
@@ -187,6 +187,9 @@ marked by a comment in its file (0024's has none):
   after that backfill.
 - `0024` inserts the single `maintenance_mode_state` row (mode `off`,
   version 0).
+- `0028` has no hand-added statement, only a comment on why every existing row
+  passes the two CHECKs it adds: the new `email`, `app` and `redirect` columns
+  start null. It makes `user_tokens.user_id` nullable, for `sign_in_link` rows.
 - `0029` deletes, before it narrows `user_tokens_purpose_check` to
   `refresh`, `sign_in_link` and `step_up_link` and drops the
   `email_verification`/`password_reset` branch of `user_tokens_shape_check`:
@@ -452,8 +455,8 @@ as described so it does not build them a second time under the lock, then run
   foreign keys to `users` (`onboarding_dismissed_by`, and
   `onboarding_completions.user_id` and `completed_by`) also take
   `SHARE ROW EXCLUSIVE` on `users` until the transaction commits, so every
-  write to a user row (login's `last_logged_in_at` update, a registration, a
-  profile change) waits for the migration too; reads, including `FOR SHARE`
+  write to a user row (a sign-in's `last_logged_in_at` update, an account
+  creation, a profile change) waits for the migration too; reads, including `FOR SHARE`
   and `FOR NO KEY UPDATE` locks, do not.
 
 - **`0022` holds `users` briefly.** Its `ADD COLUMN analytics_opt_out` is

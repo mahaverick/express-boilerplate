@@ -250,7 +250,7 @@ wrapped, each with a file-local reason: `handleGoogleCallback`
 Each controller file exports one singleton, which its routes file imports.
 
 **Services.** A service owns its transaction and never sends a response. Where
-a route replies before the work (register and forgot-password answer 202
+a route replies before the work (`POST /auth/link/request` answers 202
 first), the service exposes the work as a function the controller calls after
 replying, and that function never rejects. Authorization that matters is
 decided inside the transaction: the router's `requireRole` is the early coarse
@@ -272,15 +272,27 @@ every subscriber has run before the request answers. A failing subscriber is
 logged and never fails the emitter or the subscribers after it. Onboarding and
 the analytics forwarder are the subscribers.
 
-**Lock order.** Every transaction that locks more than one row set takes them
+**Lock order.** Issuing a sign-in or step-up link first takes a
+transaction-scoped advisory lock on the address or the session
+(`lockLinkIssue`, `pg_advisory_xact_lock`, `user-token.repository.ts`), alone,
+in a transaction that holds no other lock; it then locks the live link rows it
+revokes, in id order, and nothing else, so it joins no cycle. Without it two
+concurrent issues each revoke before the other's insert commits, and both
+links stay live. Every transaction that locks more than one row set takes them
 in this order:
 
-1. the user row (`lockById`, `user.repository.ts`), for password writes,
-   login, Google sign-in, refresh rotation, logout, the refresh kills, step-up,
-   the Google account claim, tenant creation, and an owner invitation's or
-   any platform-tenant invitation's accept (`lockUserForOwnership`,
+1. the user row (`lockById`, `user.repository.ts`), for a link, invitation or
+   Google sign-in (`FOR SHARE`, before the refresh insert), refresh rotation,
+   logout, the refresh kills, step-up, the never-verified account claim,
+   tenant creation, and an owner invitation's or any platform-tenant
+   invitation's accept (`lockUserForOwnership`,
    `tenant-membership.service.ts`, before the claim);
-   none of these goes on to lock a membership or tenant row;
+   none of these goes on to lock a membership or tenant row. One that also
+   locks token rows takes the user row, then the link row, then the refresh
+   rows: a step-up confirm locks the user row, claims its link and then moves
+   the session's refresh rows (`confirmStepUpLink`, `step-up.service.ts`), and
+   an invitation verify locks the invitee's row before it claims the
+   invitation and inserts the refresh row;
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);
 4. when the actor has no membership there, the actor's platform-tenant
@@ -292,7 +304,7 @@ in this order:
    (`updatePreferences`, `notification.service.ts`); that transaction locks
    nothing else (its foreign key takes `FOR KEY SHARE` on the user row).
 
-Two writes take a user row later. Staff writes lock owner rows and platform
+Three writes take a user row later. Staff writes lock owner rows and platform
 memberships first, then the actor's user row `FOR SHARE`
 (`assertStillPlatformRole`, `platform.service.ts`) and, for a user action, the
 target's (`lockStaffPair`, `platform-user.service.ts`), then the tenant row. A
@@ -306,7 +318,12 @@ staff delete's `FOR NO KEY UPDATE` on the target. A grant that holds the row
 first commits before the delete reads on: a new customer tenant fails its
 second ownership read (409), and a new platform role is seen by the role
 re-read after the user-row lock (`lockStaffPair`), so the rank rule and the
-last-owner guard apply to it. A transaction that locks
+last-owner guard apply to it. `pnpm platform:grant` locks the platform
+tenant's owner rows and the account's membership, then the account's user row
+`FOR SHARE` (`grantInTransaction`, `platform.service.ts`), the mode a
+platform-invitation accept takes, so an accept that holds the row while it
+waits for the grant's membership insert coexists with it instead of
+deadlocking. A transaction that locks
 membership rows in both a customer tenant and the platform tenant locks the
 customer tenant's first. Postgres cannot enforce an application lock order;
 the JSDoc of each lock method states its place, and deadlock regression tests
@@ -321,7 +338,7 @@ transaction. `FOR UPDATE` is only for a transaction that deletes the locked row
 or changes a key column; a method that serves both takes a `RowLockMode`
 (`src/types/lock-mode.ts`) defaulting to `'no key update'`. The user row's
 modes are in
-[SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
+[SECURITY.md](SECURITY.md#deactivation-against-a-concurrent-sign-in).
 Lock tests detect blocking with `pg_blocking_pids`
 (`tests/helpers/lock-probe.ts`), not with sleeps.
 
@@ -461,6 +478,41 @@ new feature router is one more `router.use(...)` there, never a change to
 - **Every authenticated write has a limiter**, built once per router and
   reused, so the in-memory fallback keeps one budget;
   `tests/unit/routes/route-limiters.test.ts` fails a write route without one.
+
+### Sign-in, step-up and their tokens
+
+A person signs in by an emailed link or by Google; there is no other
+credential. The auth routes, all under `/api/v1`:
+
+| Route                                                          | Service                                                         | What it does                                                                                                   |
+| -------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/link/request`                                      | `requestSignInLink` (`sign-in-link.service.ts`)                 | Answers 202 before any lookup, then mails a link (or, on Apex, a staff invitee's invitation) in the follow-up. |
+| `POST /auth/link/verify`                                       | `verifySignInLink`                                              | Spends the link and signs in the account its address holds, creating a verified one on the first web click.    |
+| `POST /invitations/verify`                                     | `verifyInvitation` (`tenant-invitation.service.ts`)             | Signs the invitee in and joins them, in one transaction.                                                       |
+| `GET /auth/google`, `GET /auth/google/callback`                | `completeGoogleSignIn` (`google-auth.service.ts`)               | Google sign-in; the callback also serves the Google step-up.                                                   |
+| `POST /auth/step-up/link/request`, `/auth/step-up/link/verify` | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`) | Staff only: mails a link bound to the calling session, and confirms it for that session alone.                 |
+| `POST /auth/step-up/google/start`, `GET /auth/step-up/google`  | `startGoogleStepUp`, `confirmGoogleStepUp`                      | Staff only: writes the step-up intent into the OAuth session, then the popup goes to Google with `max_age=0`.  |
+| `POST /platform/users/:id/sign-in-link`                        | `platform-user.service.ts`                                      | Staff send a user an ordinary sign-in link: Apex for staff, `WEB_URL` for anyone else.                         |
+| `POST /auth/refresh`, `POST /auth/logout`                      | `session.service.ts`                                            | Rotate or revoke the refresh cookie's session.                                                                 |
+
+**The tokens.** `user_tokens` holds three purposes: `refresh` (the session
+chain), `sign_in_link` (an address and an app, never a user) and
+`step_up_link` (a user and the session it elevates). `tenant_invitations`
+holds the invitation links. Every one is 32 random bytes with only its SHA-256
+stored; [DATABASE.md](DATABASE.md#user_tokens) has the columns and the shape
+CHECK, and [SECURITY.md](SECURITY.md#email-links) the lifetimes and claims.
+`link-token.service.ts` issues, claims and peeks the two link purposes and
+builds their URLs, each through `withUtm` (`src/utilities/utm.utilities.ts`),
+the one place UTM parameters are added to a link a user receives.
+
+**The step-up flow.** A staff route behind `requireRecentAuth()` answers
+`401 REAUTH_REQUIRED` once the session's `auth_time` is older than 10 minutes.
+Apex then confirms by link (request, then verify from the mailed page, which
+returns a new access token) or by Google (start, then the popup, whose
+callback marks the session and redirects to Apex's `/auth/confirm`). The
+waiting tab refreshes to pick up the new `auth_time` and retries the action
+once. Neither way mints a session. The checks are in
+[SECURITY.md](SECURITY.md#step-up-by-link-and-by-google).
 
 ### Errors and the response envelope
 
@@ -654,8 +706,9 @@ where `app` is `'web'` or `'apex'`, never a URL: it returns `APEX_URL` for
 
 - Invitations to the platform tenant link to Apex; every other invitation
   links to `WEB_URL` (`tenant-invitation.service.ts`).
-- `register`, `resend-verification` and `forgot-password` take an optional
-  `app` that picks the frontend of the link they mail.
+- `POST /auth/link/request` takes `app`, which picks the frontend its link
+  opens. The link's row keeps it, and verify reads it from the row, never from
+  the request.
 - A staff-sent sign-in link takes no `app`: the server links a staff target
   to Apex and anyone else to `WEB_URL` (`platform-user.service.ts`). A user
   staff create gets a `welcome` mail whose sign-in link opens `WEB_URL`.
