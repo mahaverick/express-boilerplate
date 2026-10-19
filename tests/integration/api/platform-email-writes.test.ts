@@ -527,7 +527,11 @@ describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
       const response = await resend(token, original)
 
       expect(response.status).toBe(409)
-      expect((response.body as ApiEnvelope<unknown>).code).toBe('not_resendable')
+      expect(response.body).toMatchObject({
+        code: 'not_resendable',
+        message:
+          'This kind of email is never resent. Send a new one from the action that sent it, such as a new onboarding reminder.',
+      })
       expect(await auditRows(original.id)).toEqual([])
     }
   )
@@ -540,7 +544,11 @@ describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
     for (const message of [setup, invitation]) {
       const response = await resend(token, message)
       expect(response.status).toBe(409)
-      expect((response.body as ApiEnvelope<unknown>).code).toBe('not_resendable')
+      expect(response.body).toMatchObject({
+        code: 'not_resendable',
+        message:
+          "This email lacks the record its resend needs, so it can't be resent. Send a new invitation, or a sign-in link from the user's profile, instead.",
+      })
     }
   })
 
@@ -551,7 +559,11 @@ describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
     const response = await resend(token, original)
 
     expect(response.status).toBe(409)
-    expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
+    expect(response.body).toMatchObject({
+      code: 'template_unavailable',
+      message:
+        "This email's template is retired, so it can't be resent. Send the user a new sign-in link from their profile instead.",
+    })
   })
 
   it.each(RETIRED_EMAIL_TEMPLATE_KEYS)(

@@ -503,7 +503,11 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
     const response = await get(token, `/emails/${message.id}/preview`)
 
     expect(response.status).toBe(409)
-    expect((response.body as ApiEnvelope<unknown>).code).toBe('template_unavailable')
+    expect(response.body).toMatchObject({
+      code: 'template_unavailable',
+      message:
+        "This email's template is retired, so it can't be shown. Check its status and delivery events on this page instead.",
+    })
   })
 })
 

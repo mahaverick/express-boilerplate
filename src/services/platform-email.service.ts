@@ -545,7 +545,7 @@ export async function previewEmail(id: string): Promise<EmailPreview> {
   const message = await requireMessage(id)
   if (!isKnownTemplateKey(message.templateKey)) {
     throw new HttpError(
-      "This email's template is retired, so it can't be resent.",
+      "This email's template is retired, so it can't be shown. Check its status and delivery events on this page instead.",
       409,
       TEMPLATE_UNAVAILABLE_CODE
     )
@@ -688,7 +688,7 @@ function resendTargetOf(
     return { action, userId: message.userId }
   }
   throw new HttpError(
-    "This email lacks the record its resend needs, so it can't be resent.",
+    "This email lacks the record its resend needs, so it can't be resent. Send a new invitation, or a sign-in link from the user's profile, instead.",
     409,
     NOT_RESENDABLE_CODE
   )
@@ -732,7 +732,7 @@ export async function resendEmail(
   const message = await requireMessage(id)
   if (!isKnownTemplateKey(message.templateKey)) {
     throw new HttpError(
-      "This email's template is retired, so it can't be resent.",
+      "This email's template is retired, so it can't be resent. Send the user a new sign-in link from their profile instead.",
       409,
       TEMPLATE_UNAVAILABLE_CODE
     )
@@ -741,7 +741,11 @@ export async function resendEmail(
   const templateKey = message.templateKey
   const action = EMAIL_TEMPLATE_META[templateKey].resendAction
   if (action === null) {
-    throw new HttpError('This kind of email is never resent.', 409, NOT_RESENDABLE_CODE)
+    throw new HttpError(
+      'This kind of email is never resent. Send a new one from the action that sent it, such as a new onboarding reminder.',
+      409,
+      NOT_RESENDABLE_CODE
+    )
   }
   const target = resendTargetOf(action, message)
   if (await emailSuppressionRepository.findActive(message.recipient)) {
