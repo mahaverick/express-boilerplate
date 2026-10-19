@@ -219,6 +219,11 @@ interface InvitationMessageContext {
   tenant: { name: string; slug: string; isPlatform: boolean }
   inviterName: string
   invitee: User | undefined
+  /**
+   * The mail's "expires in" days when the invitation keeps an earlier
+   * expiry; the full `INVITATION_TTL` when absent.
+   */
+  expiresInDays?: string
 }
 
 /**
@@ -243,6 +248,19 @@ function invitationExpiry(): Date {
  */
 function expiresInDays(): string {
   const days = Math.ceil(requireDurationMs(getEnv().INVITATION_TTL) / MS_PER_DAY)
+  return String(Math.max(1, days))
+}
+
+/**
+ * The whole days an invitation has left, for a mail about one that keeps its
+ * expiry: rounded down, so the mail never promises time past `expires_at`,
+ * and at least 1, so it never says 0 days for a link that still works.
+ * @param expiresAt - The invitation's expiry.
+ * @param now - The time the mail is composed.
+ * @returns The day count, as the template's variable.
+ */
+function daysLeftUntil(expiresAt: Date, now: Date = new Date()): string {
+  const days = Math.floor((expiresAt.getTime() - now.getTime()) / MS_PER_DAY)
   return String(Math.max(1, days))
 }
 
@@ -368,7 +386,7 @@ async function dispatchInvitationMessages(
           inviterName,
           role: invitation.role,
           acceptUrl: buildInvitationAcceptUrl(rawToken, acceptOrigin),
-          expiresInDays: expiresInDays(),
+          expiresInDays: context.expiresInDays ?? expiresInDays(),
           appName: getEnv().APP_NAME,
         },
       },
@@ -789,6 +807,8 @@ export async function resendPlatformInvitationForSignIn(email: string): Promise<
           : await userRepository.findById(invitation.invitedBy)
       ),
       invitee: await userRepository.findByEmail(invitation.email),
+      // The swap kept the expiry, so the mail states the time actually left.
+      expiresInDays: daysLeftUntil(invitation.expiresAt),
     }
     await dispatchInvitationMessages(context, undefined)
   } catch (error) {

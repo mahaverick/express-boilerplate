@@ -42,7 +42,8 @@ export interface TenantInvitationVariables {
    */
   acceptUrl: string
   /**
-   * Whole days until the link expires (`INVITATION_TTL`).
+   * Whole days until the link expires: `INVITATION_TTL` for a fresh link,
+   * the days left (rounded down, at least 1) for one that keeps its expiry.
    */
   expiresInDays: string
   /**

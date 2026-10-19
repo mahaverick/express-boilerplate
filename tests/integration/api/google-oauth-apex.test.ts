@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { createApp as CreateApp } from '@/app'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import type { sql as SqlType } from '@/services/database.service'
+import { withMutatedMethod } from '../../helpers/mutate'
 import type { testRefreshCookie as TestRefreshCookieType } from '../../helpers/refresh-cookie'
 import { agent } from '../../helpers/request'
 
@@ -61,6 +62,17 @@ function profileFor(email: string): GoogleProfile {
       email_verified: true,
     },
   }
+}
+
+/**
+ * Switch this replica to `full`, as a staff change would.
+ */
+async function enterFull(): Promise<void> {
+  const { storeMaintenanceMode } = await import('../../helpers/maintenance-mode')
+  const { reloadMaintenanceMode } =
+    await import('@/services/maintenance-mode/maintenance-mode-store.service')
+  await storeMaintenanceMode('full')
+  await reloadMaintenanceMode()
 }
 
 describe('Google sign-in return target', () => {
@@ -245,5 +257,77 @@ describe('Google sign-in return target', () => {
       select id from auth_providers where user_id = ${staff.id} and provider = 'google'
     `
     expect(links).toHaveLength(1)
+  })
+  it('refuses an apex Google user demoted between the staff check and the session', async () => {
+    const staff = await seedAccount('admin')
+    const { AuthProviderRepository } = await import('@/repositories/auth-provider.repository')
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realCreate = AuthProviderRepository.prototype.create
+    const demoted = { done: false }
+    /**
+     * Stands in for `AuthProviderRepository.create`: just before the Google
+     * link is written, the staff member's platform role is removed.
+     */
+    const demotingCreate: typeof realCreate = async function (
+      this: InstanceType<typeof AuthProviderRepository>,
+      ...arguments_
+    ) {
+      if (!demoted.done) {
+        demoted.done = true
+        await sql`
+          delete from user_memberships
+          where user_id = ${staff.id} and tenant_id = (select id from tenants where is_platform)
+        `
+      }
+      return realCreate.apply(this, arguments_)
+    }
+
+    let response: Response | undefined
+    await withMutatedMethod(
+      AuthProviderRepository.prototype,
+      'create',
+      demotingCreate,
+      async () => {
+        response = await signInFrom('?app=apex', staff.email)
+      }
+    )
+
+    expect(demoted.done).toBe(true)
+    expect(response?.headers.location).toBe(`${APEX}/login?error=google_auth_failed`)
+    if (!response) throw new Error('the callback answered nothing')
+    expect(hasRefreshCookie(response)).toBe(false)
+    expect(await refreshCount(staff.id)).toBe(0)
+  })
+
+  describe('in full maintenance', () => {
+    afterEach(async () => {
+      const { resetMaintenanceMode } = await import('../../helpers/maintenance-mode')
+      const { reloadMaintenanceMode } =
+        await import('@/services/maintenance-mode/maintenance-mode-store.service')
+      await resetMaintenanceMode()
+      await reloadMaintenanceMode()
+    })
+
+    it('signs a staff Google user in to apex', async () => {
+      const staff = await seedAccount('viewer')
+      await enterFull()
+
+      const response = await signInFrom('?app=apex', staff.email)
+
+      expect(response.headers.location).toBe(`${APEX}/auth/callback`)
+      expect(hasRefreshCookie(response)).toBe(true)
+      expect(await refreshCount(staff.id)).toBe(1)
+    })
+
+    it('refuses a non-staff Google user on apex with google_auth_failed and no session', async () => {
+      const customer = await seedAccount()
+      await enterFull()
+
+      const response = await signInFrom('?app=apex', customer.email)
+
+      expect(response.headers.location).toBe(`${APEX}/login?error=google_auth_failed`)
+      expect(hasRefreshCookie(response)).toBe(false)
+      expect(await refreshCount(customer.id)).toBe(0)
+    })
   })
 })

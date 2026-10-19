@@ -33,6 +33,7 @@ import {
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 import { issueTestLink } from '../../helpers/sign-in'
+import { waitUntil } from '../../helpers/timing'
 
 const app = createApp()
 const invitationRepository = new TenantInvitationRepository()
@@ -136,9 +137,14 @@ async function invitationState(id: string): Promise<InvitationState> {
  * fresh staff owner, its last send moved `lastSentAgoMs` into the past.
  * @param email - The invited address.
  * @param lastSentAgoMs - How long ago it was last mailed.
+ * @param expiresInMs - How long it has left; a day by default.
  * @returns The invitation's id.
  */
-async function staffInvitationFor(email: string, lastSentAgoMs: number): Promise<string> {
+async function staffInvitationFor(
+  email: string,
+  lastSentAgoMs: number,
+  expiresInMs = 24 * HOUR_MS
+): Promise<string> {
   const { user: inviter } = await createTrackedStaff('owner')
   const platform = await platformTenant()
   const rawToken = randomBytes(32).toString('base64url')
@@ -150,7 +156,7 @@ async function staffInvitationFor(email: string, lastSentAgoMs: number): Promise
         role: 'viewer',
         tokenHash: hashToken(rawToken),
         invitedBy: inviter.id,
-        expiresAt: new Date(Date.now() + 24 * HOUR_MS),
+        expiresAt: new Date(Date.now() + expiresInMs),
       },
       tx
     )
@@ -283,6 +289,53 @@ describe('POST /auth/link/request on Apex', () => {
       access: 'system',
       metadata: { role: 'viewer', emailDomain: 'example.test', trigger: 'sign_in_request' },
     })
+  })
+
+  it('states the days the resent invitation actually has left', async () => {
+    const email = uniqueEmail('days-left')
+    // 30 hours left: rounding up would promise 2 days, past the real expiry.
+    await staffInvitationFor(email, 2 * HOUR_MS, 30 * HOUR_MS)
+
+    await requestSignInLink({ email, app: 'apex' })()
+
+    const [message] = await sql<{ expiresInDays: string }[]>`
+      select variables->>'expiresInDays' as "expiresInDays" from email_messages
+      where recipient = ${email} and template_key = 'tenant_invitation'
+    `
+    expect(message?.expiresInDays).toBe('1')
+  })
+
+  it('answers one 202 body for staff, a staff invitee, a customer and an unknown address', async () => {
+    const { user: staff } = await createTrackedStaff('viewer', { email: uniqueEmail('body-staff') })
+    const invitee = uniqueEmail('body-invitee')
+    await staffInvitationFor(invitee, 2 * HOUR_MS)
+    const customer = await createTrackedUser({ email: uniqueEmail('body-customer') })
+    const unknown = uniqueEmail('body-unknown')
+
+    const responses = await Promise.all(
+      [staff.email, invitee, customer.email, unknown].map((email) =>
+        postRequest({ email, app: 'apex' })
+      )
+    )
+
+    for (const response of responses) {
+      expect(response.status).toBe(202)
+      expect(response.body).toEqual(REQUEST_ACCEPTED_BODY)
+      expect(response.text).toBe(responses[0]?.text)
+    }
+    // The follow-ups run after the reply; wait for the two that mail before cleanup.
+    await waitUntil(
+      async () => (await messageCount(staff.email, 'sign_in_link')) === 1 || undefined,
+      {
+        message: 'the link mailed to staff',
+      }
+    )
+    await waitUntil(
+      async () => (await messageCount(invitee, 'tenant_invitation')) === 1 || undefined,
+      {
+        message: 'the invitation mailed again to the invitee',
+      }
+    )
   })
 
   it('sends nothing when the pending staff invitation is inside its resend cooldown', async () => {

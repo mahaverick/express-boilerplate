@@ -16,8 +16,9 @@ points at the code or doc that holds the detail. How things work is in
   Don't derive a third reason from an error message.
 - **Keep the user-row lock modes and their placement.** Login keeps
   `lastLoggedInAt` outside the transaction that re-reads the hash `FOR SHARE`
-  and issues the token, so that lock covers only the re-read and the insert. The refresh kills run after the rotation commits,
-  never inside it. The lock each of them takes is in
+  and issues the token, so that lock covers only the re-read and the insert.
+  The refresh kills run after the rotation commits, never inside it. The lock
+  each of them takes is in
   [SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
 - **A wrong step-up password answers 400, never 401** (`reauthenticate`,
   `src/services/auth.service.ts`): clients sign out on a 401.
