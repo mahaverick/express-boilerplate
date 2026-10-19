@@ -124,7 +124,7 @@ describe('invitation mail', () => {
       invitation_id: pending?.id,
       link_app: 'web',
       sender_class: 'transactional',
-      variables: { tenantName: 'Acme Inc', role: 'editor', expiresInDays: '7' },
+      variables: { tenantName: 'Acme Inc', role: 'editor', expiresInDays: '3' },
     })
     expect(row.user_id).toBeNull()
     expect(row.variables).not.toHaveProperty('inviterName')

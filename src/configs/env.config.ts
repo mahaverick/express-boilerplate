@@ -228,6 +228,71 @@ const EnvSchema = z.object({
       'Hard ceiling on one login session, measured from the login itself and never reset by rotation, as an ms()-parseable duration string (e.g. "30d"). Past it, refreshing fails and the user signs in again. Defaults to 30d.'
     ),
 
+  /**
+   * Short: the link is a full credential, and a dead one is one click from a
+   * new one. Staff-sent and welcome links use it too.
+   */
+  SIGN_IN_LINK_TTL: z
+    .string()
+    .default('15m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'SIGN_IN_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
+    })
+    .describe(
+      'How long an emailed sign-in link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because the link is a full credential and a new one is one click away; staff-sent and welcome links use it too. Defaults to 15m.'
+    ),
+
+  /**
+   * A silent per-address cooldown (the request still answers 202), matching
+   * the client's own 60-second resend countdown.
+   */
+  SIGN_IN_LINK_MAIL_COOLDOWN: z
+    .string()
+    .default('1m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'SIGN_IN_LINK_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
+    })
+    .describe(
+      'Shortest gap between two sign-in link mails to one address, as an ms()-parseable duration (e.g. "1m"). A request inside the gap answers the same 202 and mails nothing. Defaults to 1m, matching the sign-in page\'s 60-second resend countdown.'
+    ),
+
+  SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10)
+    .describe(
+      'Most sign-in link mails one address may receive in 24 hours. A request past it answers the same 202 and mails nothing, so nobody can mail-bomb an address through the sign-in form. Defaults to 10.'
+    ),
+
+  /**
+   * As short as a sign-in link, for the same reason: confirming a step-up is
+   * one click from a new link.
+   */
+  STEP_UP_LINK_TTL: z
+    .string()
+    .default('15m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'STEP_UP_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
+    })
+    .describe(
+      'How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a staff session and a new one is one click away. Defaults to 15m.'
+    ),
+
+  STEP_UP_LINK_COOLDOWN: z
+    .string()
+    .default('1m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'STEP_UP_LINK_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
+    })
+    .describe(
+      'Shortest gap between two step-up confirmation mails for one session, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own session. Defaults to 1m.'
+    ),
+
   EMAIL_VERIFICATION_TTL: z
     .string()
     .default('24h')
@@ -302,12 +367,12 @@ const EnvSchema = z.object({
 
   INVITATION_TTL: z
     .string()
-    .default('7d')
+    .default('3d')
     .refine((value) => parseDurationMs(value) !== undefined, {
-      message: 'INVITATION_TTL must be a duration string ms() can parse, e.g. "7d" or "604800000".',
+      message: 'INVITATION_TTL must be a duration string ms() can parse, e.g. "3d" or "259200000".',
     })
     .describe(
-      'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.'
+      'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "3d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 3d.'
     ),
   INVITATION_RESEND_COOLDOWN: z
     .string()
@@ -479,7 +544,7 @@ const EnvSchema = z.object({
     .max(36_500)
     .default(7)
     .describe(
-      'Days to keep a user_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
+      'Days to keep a user_tokens or email_link_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change, a newer link). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
     ),
   RETENTION_INVITATIONS_DAYS: z.coerce
     .number()

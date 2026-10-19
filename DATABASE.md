@@ -45,6 +45,7 @@ glob is picked up by `drizzle.config.ts` with no config change.
 | -------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `users`                    | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
 | `user_tokens`              | `user-token.model.ts`             | Refresh, email-verification and password-reset tokens, as hashes; see below.                                                                    |
+| `email_link_tokens`        | `email-link-token.model.ts`       | Single-use sign-in and step-up links, as hashes; see below.                                                                                     |
 | `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for a password, `'google'` for a linked account).                                              |
 | `tenants`                  | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
 | `tenant_settings`          | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
@@ -107,6 +108,44 @@ rotated-away row carries `consumed_at`, so it stays until it expires. The
 indexes on `expires_at` and on the revoked-unconsumed partial predicate serve
 that query. The schedule, batch size and failure handling are in
 [ARCHITECTURE.md](ARCHITECTURE.md#retention).
+
+### `email_link_tokens`
+
+The links a mail carries that sign someone in or confirm a step-up, one row
+per link, stored as a SHA-256 hash of 32 random bytes. `intent` is
+`'sign_in'` or `'step_up'`, and `app` (`'web'` or `'apex'`) is the frontend
+the link opens; verify reads it from the row, never from the request.
+`email_link_tokens_intent_check`, `email_link_tokens_app_check` and
+`email_link_tokens_token_hash_check` (64 lowercase hex characters) hold the
+lists and the hash shape in the database.
+
+`email_link_tokens_shape_check` holds the two shapes:
+
+- A `sign_in` row has an address (lowercased) and an optional `redirect`, a
+  same-origin path checked by `redirectPathSchema`, and never a `user_id` or
+  `session_id`. The click looks the account up by address, so a link can be
+  mailed to an address with no account yet, and a soft-deleted user's address
+  reaches a fresh account rather than the deleted one.
+- A `step_up` row names the `user_id` (`ON DELETE CASCADE`) and the
+  `session_id` it elevates, and has no `redirect`. Its claim matches the user
+  and the session as well as the hash, so another session of the same user
+  neither honours nor spends it.
+
+Issuing a link revokes the live links it supersedes (every `sign_in` link of
+the address, or every `step_up` link of the session) and inserts the new row in
+one transaction, under a transaction-scoped advisory lock on the address or the
+session, so at most one of each stays live. The claim is one `UPDATE` that sets
+`revoked_at` and `consumed_at` together and checks no expiry; the caller
+judges `expires_at` on the claimed row, so an expired link is spent by its one
+presentation. A revoke on issue sets `revoked_at` alone.
+
+The retention purge deletes a row once `RETENTION_TOKENS_DAYS` days have passed
+since its `expires_at`, or since a revoke that never consumed it, the
+predicate `user_tokens` uses, served by `email_link_tokens_expires_at_idx` and
+`email_link_tokens_revoked_unconsumed_idx`. A `sign_in` row carries no user id,
+so a user purge deletes the purged address's rows itself, up to the deletion and
+only while no live account holds the address, as it does for the other
+address-keyed tables.
 
 ### `analytics_deletions`
 
@@ -582,7 +621,7 @@ retention loop stops on a short batch
 ([ARCHITECTURE.md](ARCHITECTURE.md#retention)).
 
 The shape is used in the retention deletes of `user_tokens`,
-`tenant_invitations`, `email_events`, `email_logs`, `email_messages`,
+`email_link_tokens`, `tenant_invitations`, `email_events`, `email_logs`, `email_messages`,
 `notifications` (read and unread), `audit_logs` and `analytics_outbox`
 (`deleteOlderThan`), and in the two claims, `AnalyticsOutboxRepository.claimBatch`
 and `AnalyticsDeletionRepository.claimDue`. Write any new limited delete or

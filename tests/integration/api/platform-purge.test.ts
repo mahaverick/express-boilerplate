@@ -50,6 +50,7 @@ afterEach(async () => {
     await sql`delete from email_logs where lower(recipient) = any(${lowered})`
     // Invitations in the platform tenant outlive the per-test tenants' cascade.
     await sql`delete from tenant_invitations where lower(email) = any(${lowered})`
+    await sql`delete from email_link_tokens where lower(email) = any(${lowered})`
   }
   mailedAddresses.length = 0
   if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
@@ -75,6 +76,19 @@ function purgeTenant(token: string, tenantId: string, body?: object): Promise<Re
     .post(`/api/v1/platform/tenants/${tenantId}/purge`)
     .set('Authorization', `Bearer ${token}`)
     .send(body ?? { reason: REASON })
+}
+
+/**
+ * Insert a live sign-in link row for an address, created `ageSql` ago, and return its id.
+ */
+async function insertSignInLink(email: string, ageSql: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into email_link_tokens (intent, app, email, token_hash, expires_at, created_at)
+    values ('sign_in', 'web', ${email.toLowerCase()}, ${randomUUID().replaceAll('-', '').repeat(2)},
+      now() + interval '15 minutes', now() - ${ageSql}::interval)
+    returning id`
+  if (!row) throw new Error('link insert returned no row')
+  return row.id
 }
 
 /**
@@ -279,6 +293,33 @@ describe('POST /api/v1/platform/users/:id/purge', () => {
     expect(
       await sql`select tenant_id from tenant_invitations where lower(email) = lower(${gone.email})`
     ).toEqual([{ tenant_id: gone.tenantId }])
+  })
+
+  it("deletes the address's sign-in links up to the deletion, and keeps them when a live account holds the address", async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    await sql`update users set deleted_at = now() - interval '1 hour' where id = ${gone.id}`
+    mailedAddresses.push(gone.email)
+    const before = await insertSignInLink(gone.email, '2 hours')
+    // Written after the deletion: the address may since have been claimed by someone else.
+    const after = await insertSignInLink(gone.email, '0 seconds')
+
+    const purged = await purgeUser(token, gone.id)
+    expect(purged.status).toBe(200)
+    expect(await sql`select id from email_link_tokens where id = any(${[before, after]})`).toEqual([
+      { id: after },
+    ])
+
+    const reused = await deletedUserWithHistory()
+    mailedAddresses.push(reused.email)
+    const reusedLink = await insertSignInLink(reused.email, '2 hours')
+    await createTrackedUser({ email: reused.email.toUpperCase() })
+
+    const purgedReused = await purgeUser(token, reused.id)
+    expect(purgedReused.status).toBe(200)
+    expect(await sql`select id from email_link_tokens where id = ${reusedLink}`).toEqual([
+      { id: reusedLink },
+    ])
   })
 
   it('answers 409 for a user who is not soft-deleted', async () => {

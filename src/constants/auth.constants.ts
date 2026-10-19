@@ -58,6 +58,13 @@ export const MIN_PASSWORD_LENGTH = 15
 export const MAX_EMAIL_LENGTH = 320
 
 /**
+ * The longest post-sign-in redirect path this API stores, in characters.
+ * `email_link_tokens.redirect` and `redirectPathSchema` share it, for the
+ * reason `MAX_EMAIL_LENGTH` gives.
+ */
+export const MAX_REDIRECT_PATH_LENGTH = 2048
+
+/**
  * The longest first or last name this API stores, in characters.
  *
  * Shared with `users.first_name`/`users.last_name` for the same reason as

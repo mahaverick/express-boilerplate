@@ -14,6 +14,7 @@ import { getEnv, type Env } from '@/configs/env.config'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
 import { EmailEventRepository } from '@/repositories/email-event.repository'
+import { EmailLinkTokenRepository } from '@/repositories/email-link-token.repository'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
@@ -30,6 +31,7 @@ export const RETENTION_BATCH_SIZE = 5000
 const DAY_MS = 86_400_000
 
 const auditLogRepository = new AuditLogRepository()
+const emailLinkTokenRepository = new EmailLinkTokenRepository()
 const emailEventRepository = new EmailEventRepository()
 const emailLogRepository = new EmailLogRepository()
 const emailMessageRepository = new EmailMessageRepository()
@@ -38,8 +40,9 @@ const tenantInvitationRepository = new TenantInvitationRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * Each rule's window in whole days; 0 turns the rule off. `emailLogs` covers
- * the three email tracking rules: events, attempts and messages.
+ * Each rule's window in whole days; 0 turns the rule off. `tokens` covers
+ * `user_tokens` and `email_link_tokens`; `emailLogs` covers the three email
+ * tracking rules: events, attempts and messages.
  */
 export interface RetentionDays {
   tokens: number
@@ -120,7 +123,7 @@ function reportDroppedAnalytics(deleted: number): void {
 /**
  * The rules, in the order they run.
  * @param days - Each rule's window.
- * @returns One rule per table, two for notifications; the three email rules share one window.
+ * @returns One rule per table, two for notifications; the two token rules share one window, as do the three email rules.
  */
 function retentionRules(days: RetentionDays): RetentionRule[] {
   return [
@@ -129,6 +132,12 @@ function retentionRules(days: RetentionDays): RetentionRule[] {
       days: days.tokens,
       purge: (cutoff, limit, tx) =>
         userTokenRepository.purgeExpiredOrRevokedBefore(cutoff, limit, tx),
+    },
+    {
+      table: 'email_link_tokens',
+      days: days.tokens,
+      purge: (cutoff, limit, tx) =>
+        emailLinkTokenRepository.purgeExpiredOrRevokedBefore(cutoff, limit, tx),
     },
     {
       table: 'tenant_invitations',

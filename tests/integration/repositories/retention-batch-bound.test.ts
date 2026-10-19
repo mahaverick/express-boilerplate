@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
 import { EmailEventRepository } from '@/repositories/email-event.repository'
+import { EmailLinkTokenRepository } from '@/repositories/email-link-token.repository'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
@@ -38,6 +39,7 @@ afterEach(async () => {
   await truncateAuditLogs()
   await sql`delete from analytics_outbox where event = ${OUTBOX_EVENT}`
   await sql`delete from email_logs where recipient like ${PREFIX_LIKE}`
+  await sql`delete from email_link_tokens where email like ${PREFIX_LIKE}`
   await deleteTrackingRows(PREFIX)
   if (createdTenantIds.length > 0) {
     await sql`delete from tenants where id = any(${createdTenantIds})`
@@ -126,6 +128,17 @@ const cases: BoundCase[] = [
       )
     },
     purge: (tx) => new UserTokenRepository().purgeExpiredOrRevokedBefore(CUTOFF, LIMIT, tx),
+  },
+  {
+    name: 'EmailLinkTokenRepository.purgeExpiredOrRevokedBefore',
+    seed: () =>
+      seedRows(
+        () => sql`
+          insert into email_link_tokens (intent, app, email, token_hash, expires_at)
+          values ('sign_in', 'web', ${address()}, ${randomBytes(32).toString('hex')}, ${ROWS_AT}::timestamptz)
+        `
+      ),
+    purge: (tx) => new EmailLinkTokenRepository().purgeExpiredOrRevokedBefore(CUTOFF, LIMIT, tx),
   },
   {
     name: 'TenantInvitationRepository.purgeSettledBefore',

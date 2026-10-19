@@ -50,6 +50,7 @@ afterEach(async () => {
   await truncateAuditLogs()
   await sql`delete from analytics_outbox where event = ${OUTBOX_EVENT}`
   await sql`delete from email_logs where recipient like ${RECIPIENT_LIKE}`
+  await sql`delete from email_link_tokens where email like ${RECIPIENT_LIKE}`
   await deleteTrackingRows(RECIPIENT_PREFIX)
   if (createdTenantIds.length > 0) {
     await sql`delete from tenants where id = any(${createdTenantIds})`
@@ -161,6 +162,23 @@ async function insertToken(userId: string, seed: TokenSeed): Promise<string> {
     returning id
   `
   if (!row) throw new Error('token insert returned no row')
+  return row.id
+}
+
+/**
+ * Seed a sign-in link row whose timestamps decide whether the tokens rule deletes it.
+ */
+async function insertLinkToken(seed: TokenSeed): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into email_link_tokens (intent, app, email, token_hash, expires_at, revoked_at, consumed_at)
+    values (
+      'sign_in', 'web', ${`${RECIPIENT_PREFIX}${randomUUID()}@example.test`},
+      ${randomBytes(32).toString('hex')}, ${seed.expiresAt}::timestamptz,
+      ${timestampOrNull(seed.revokedAt)}, ${timestampOrNull(seed.consumedAt)}
+    )
+    returning id
+  `
+  if (!row) throw new Error('link token insert returned no row')
   return row.id
 }
 
@@ -284,6 +302,32 @@ async function seedPair(insert: () => Promise<string>): Promise<[string, string]
 }
 
 describe('runRetentionPurge', () => {
+  it('purges email_link_tokens past RETENTION_TOKENS_DAYS', async () => {
+    const days = DAYS.tokens
+    const expiredOld = await insertLinkToken({ expiresAt: justOlder(days) })
+    const expiredNew = await insertLinkToken({ expiresAt: justNewer(days) })
+    const supersededOld = await insertLinkToken({ expiresAt: LATER, revokedAt: justOlder(days) })
+    const supersededNew = await insertLinkToken({ expiresAt: LATER, revokedAt: justNewer(days) })
+    const spentOld = await insertLinkToken({
+      expiresAt: LATER,
+      revokedAt: justOlder(days),
+      consumedAt: justOlder(days),
+    })
+
+    const results = await runRetentionPurge(NOW, DAYS)
+
+    expect(deletedBy(results, 'email_link_tokens')).toBe(2)
+    expect(
+      await surviving('email_link_tokens', [
+        expiredOld,
+        expiredNew,
+        supersededOld,
+        supersededNew,
+        spentOld,
+      ])
+    ).toEqual(sorted([expiredNew, supersededNew, spentOld]))
+  })
+
   it('deletes tokens expired, or revoked unused, before the cutoff, and keeps rotated ones until they expire', async () => {
     const userId = await insertUser()
     const days = DAYS.tokens
@@ -472,10 +516,10 @@ describe('runRetentionPurge', () => {
 
     const first = await runRetentionPurge(NOW, DAYS)
     // email_events and email_messages have nothing seeded here; the attempt row has no message.
-    expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1, 1])
+    expect(first.map((result) => result.deleted)).toEqual([1, 0, 1, 0, 1, 0, 1, 1, 1, 1])
 
     const second = await runRetentionPurge(NOW, DAYS)
-    expect(second.map((result) => result.deleted)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0])
+    expect(second.map((result) => result.deleted)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
   })
 
   it('loops in batches of RETENTION_BATCH_SIZE until a batch comes back short', async () => {
@@ -545,8 +589,8 @@ describe('runRetentionPurge', () => {
       const firstRun = runRetentionPurge(NOW, DAYS)
       expect(await waitForWaiter(holderPid, firstRun)).toBe(false)
       const first = await firstRun
-      expect(first.map((result) => result.error)).toEqual(Array.from({ length: 9 }))
-      expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1, 1])
+      expect(first.map((result) => result.error)).toEqual(Array.from({ length: 10 }))
+      expect(first.map((result) => result.deleted)).toEqual([1, 0, 1, 0, 1, 0, 1, 1, 1, 1])
       expect(await surviving('user_tokens', tokens)).toEqual(heldTokens)
       expect(await surviving('tenant_invitations', invitations)).toEqual(heldInvitations)
       expect(await surviving('email_logs', emailLogs)).toEqual(heldEmailLogs)
@@ -562,7 +606,7 @@ describe('runRetentionPurge', () => {
     }
 
     const second = await runRetentionPurge(NOW, DAYS)
-    expect(second.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1, 1])
+    expect(second.map((result) => result.deleted)).toEqual([1, 0, 1, 0, 1, 0, 1, 1, 1, 1])
     expect(await surviving('user_tokens', tokens)).toEqual([])
     expect(await surviving('tenant_invitations', invitations)).toEqual([])
     expect(await surviving('email_logs', emailLogs)).toEqual([])
@@ -585,6 +629,7 @@ describe('runRetentionPurge', () => {
 
           expect(results.map((result) => result.table)).toEqual([
             'user_tokens',
+            'email_link_tokens',
             'tenant_invitations',
             'email_events',
             'email_logs',
@@ -622,6 +667,7 @@ describe('runRetentionPurge', () => {
           .map(([, meta]) => meta)
       ).toEqual([
         { table: 'user_tokens', deleted: 0 },
+        { table: 'email_link_tokens', deleted: 0 },
         { table: 'tenant_invitations', deleted: 0 },
         { table: 'email_events', deleted: 0 },
         { table: 'email_logs', deleted: 1 },

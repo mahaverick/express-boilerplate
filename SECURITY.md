@@ -355,7 +355,7 @@ are part of this defence. Which frontend a link opens is an enum (`app: 'web' |
 | Email verification | 32 random bytes, SHA-256 stored            | `EMAIL_VERIFICATION_TTL` (`24h`) | `claimToken`, single use                                        |
 | Password reset     | 32 random bytes, SHA-256 stored            | `PASSWORD_RESET_TTL` (`1h`)      | `claimToken`, single use                                        |
 | Account setup      | a password-reset token                     | `ACCOUNT_SETUP_TTL` (`24h`)      | `claimToken`, single use                                        |
-| Tenant invitation  | 32 random bytes, base64url, SHA-256 stored | `INVITATION_TTL` (`7d`)          | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
+| Tenant invitation  | 32 random bytes, base64url, SHA-256 stored | `INVITATION_TTL` (`3d`)          | `claimForAccept`, one `UPDATE` with the expiry in its predicate |
 
 `claimToken` spends a token before it judges its expiry, so presenting an
 expired token also spends it: one presentation is one attempt. `claimToken` also
