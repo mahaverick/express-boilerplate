@@ -122,6 +122,7 @@ async function seedInvitation(
   email: string
 ): Promise<{ rawToken: string; invitationId: string }> {
   const rawToken = randomBytes(32).toString('base64url')
+  const inviter = await createTrackedUser()
   const invitation = await db.transaction((tx) =>
     invitationRepository.createPending(
       {
@@ -129,8 +130,7 @@ async function seedInvitation(
         email,
         role: 'viewer',
         tokenHash: hashToken(rawToken),
-        // eslint-disable-next-line unicorn/no-null -- a system invitation names no inviter
-        invitedBy: null,
+        invitedBy: inviter.id,
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       },
       tx
