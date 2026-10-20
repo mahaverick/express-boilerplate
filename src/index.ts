@@ -6,6 +6,7 @@
 import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
+import { applyNetworkDefaults } from '@/configs/network.config'
 import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
 // Static, unlike `@/server`: importing the logger calls no getEnv().
 import { logger } from '@/services/logger.service'
@@ -116,11 +117,13 @@ async function boot(): Promise<void> {
 }
 
 /**
- * Entrypoint: raise V8's stack depth (10 frames by default) to the frames
- * error tracking keeps, so a reported stack is not cut at 10; validate the
- * environment and its cross-field rules; then hand off to `boot()`.
+ * Entrypoint: apply the socket defaults before anything connects; raise V8's
+ * stack depth (10 frames by default) to the frames error tracking keeps, so a
+ * reported stack is not cut at 10; validate the environment and its
+ * cross-field rules; then hand off to `boot()`.
  */
 function main(): void {
+  applyNetworkDefaults()
   // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth; Node runs only on V8
   Error.stackTraceLimit = ERROR_FRAME_LIMIT
   try {
