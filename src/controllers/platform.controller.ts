@@ -42,7 +42,7 @@ class PlatformController extends BaseController {
    * `GET /platform/tenants/:id`: one customer tenant in any lifecycle state.
    */
   getTenant = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const tenant = await getTenantDetail(tenantId)
     successResponse(response, tenant, 'Tenant retrieved.')
   })
@@ -60,7 +60,7 @@ class PlatformController extends BaseController {
    * `POST /platform/tenants/:id/owner-invitation`: invite a new owner to an ownerless tenant.
    */
   reissueOwnerInvitation = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { email, reason } = parseBody(ownerInvitationBodySchema, request.body)
     const result = await reissueOwnerInvitation(actorFrom(request), tenantId, email, reason)
     successResponse(response, result, 'Owner invitation sent.')
@@ -70,7 +70,7 @@ class PlatformController extends BaseController {
    * `POST /platform/tenants/:id/suspend`: suspend an active tenant; its members get 404 on their next request.
    */
   suspendTenant = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
       response,
@@ -83,7 +83,7 @@ class PlatformController extends BaseController {
    * `POST /platform/tenants/:id/reactivate`: reactivate a suspended tenant.
    */
   reactivateTenant = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
       response,
@@ -96,7 +96,7 @@ class PlatformController extends BaseController {
    * `POST /platform/tenants/:id/archive`: archive an active or suspended tenant, which is terminal.
    */
   archiveTenant = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
       response,
@@ -109,7 +109,7 @@ class PlatformController extends BaseController {
    * `POST /platform/tenants/:id/purge`: permanently delete an archived tenant.
    */
   purgeTenant = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { reason } = parseBody(reasonBodySchema, request.body)
     await purgeTenant(actorFrom(request), tenantId, reason)
     messageResponse(response, 'Tenant permanently deleted.')

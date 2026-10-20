@@ -19,6 +19,7 @@ import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -1008,7 +1009,7 @@ describe('invitations API', () => {
           .get(`/api/v1/tenants/${tenant.slug}/invitations`)
           .set('Authorization', `Bearer ${token}`)
         expect(response.status).toBe(404)
-        expect(envelopeOf(response).message).toBe('Tenant not found')
+        expect(envelopeOf(response).message).toBe(NOT_FOUND.tenant.message)
       }
     })
 
@@ -1018,7 +1019,7 @@ describe('invitations API', () => {
       for (const token of tokens) {
         const response = await inviteVia(tenant.slug, token, { email, role: 'viewer' })
         expect(response.status).toBe(404)
-        expect(envelopeOf(response).message).toBe('Tenant not found')
+        expect(envelopeOf(response).message).toBe(NOT_FOUND.tenant.message)
       }
       expect(
         await sql`select 1 from tenant_invitations where tenant_id = ${tenant.id} and email = ${email}`
@@ -1034,7 +1035,7 @@ describe('invitations API', () => {
           .post(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}/resend`)
           .set('Authorization', `Bearer ${token}`)
         expect(response.status).toBe(404)
-        expect(envelopeOf(response).message).toBe('Tenant not found')
+        expect(envelopeOf(response).message).toBe(NOT_FOUND.tenant.message)
       }
       expect(await isStillPending(invitationId, rawToken)).toBe(true)
     })
@@ -1046,7 +1047,7 @@ describe('invitations API', () => {
           .delete(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}`)
           .set('Authorization', `Bearer ${token}`)
         expect(response.status).toBe(404)
-        expect(envelopeOf(response).message).toBe('Tenant not found')
+        expect(envelopeOf(response).message).toBe(NOT_FOUND.tenant.message)
       }
       expect(await isStillPending(invitationId, rawToken)).toBe(true)
     })

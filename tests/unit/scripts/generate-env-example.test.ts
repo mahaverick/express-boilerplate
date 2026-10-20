@@ -43,6 +43,7 @@ describe('render', () => {
     },
     { field: 'SESSION_SECRET', expectedText: 'Signs the express-session cookie' },
     { field: 'APP_NAME', expectedText: 'Product name in outbound email copy' },
+    { field: 'APEX_APP_NAME', expectedText: 'Name of the Apex staff dashboard in email copy' },
   ])(
     'describes what $field actually does, not a stale placeholder note',
     ({ field, expectedText }) => {

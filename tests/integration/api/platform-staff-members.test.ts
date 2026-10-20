@@ -8,6 +8,7 @@ import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql } from '@/services/database.service'
@@ -87,7 +88,7 @@ describe('the platform tenant member routes', () => {
     ]) {
       expect(response.status).toBe(404)
       expect(response.body).toMatchObject({
-        message: 'Member not found',
+        message: NOT_FOUND.member.message,
         code: 'member_not_found',
       })
     }

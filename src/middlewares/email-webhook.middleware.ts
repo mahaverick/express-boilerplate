@@ -5,7 +5,7 @@
  * enabled.
  */
 import { type NextFunction, type Request, type Response } from 'express'
-import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { getEmailWebhookAdapter } from '@/services/email-webhook.service'
 
 /**
@@ -21,7 +21,7 @@ export function requireEnabledEmailWebhookProvider(
 ): void {
   const { provider } = request.params
   if (typeof provider !== 'string' || getEmailWebhookAdapter(provider) === undefined) {
-    next(new HttpError('Not found', 404))
+    next(notFoundError('route'))
     return
   }
   next()

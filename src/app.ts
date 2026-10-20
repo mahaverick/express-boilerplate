@@ -9,7 +9,7 @@ import { corsOptions } from '@/configs/cors.config'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { helmetOptions } from '@/configs/helmet.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
-import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { maintenanceModeGate } from '@/middlewares/maintenance-mode.middleware'
 import { posthogSession } from '@/middlewares/posthog-session.middleware'
@@ -108,7 +108,7 @@ export function createApp(): Express {
   app.use('/api/v1', createApiRouter())
 
   app.use((_request, _response, next) => {
-    next(new HttpError('Not found', 404))
+    next(notFoundError('route'))
   })
   app.use(errorHandler)
 

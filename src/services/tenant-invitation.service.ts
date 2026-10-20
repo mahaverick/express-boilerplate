@@ -24,6 +24,7 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
@@ -48,6 +49,7 @@ import { platformRoleForLogin } from '@/services/auth.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import {
+  appNameFor,
   buildInvitationAcceptUrl,
   frontendUrl,
   MISSING_FIRST_NAME_FALLBACK,
@@ -181,7 +183,8 @@ const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
 const INVITATION_RECIPIENT_LIMITED_MESSAGE =
   'This address has reached its daily invitation limit. Try again in 24 hours.'
 
-const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
+const INVITATION_NOT_FOUND_MESSAGE =
+  'This invitation is no longer pending. Refresh the invitation list to see the current ones.'
 /**
  * Matches no membership: stands in for the invitee id when the address has no account.
  */
@@ -284,19 +287,6 @@ function invitationExpiry(): Date {
  */
 function expiresInDays(): string {
   const days = Math.ceil(requireDurationMs(getEnv().INVITATION_TTL) / MS_PER_DAY)
-  return String(Math.max(1, days))
-}
-
-/**
- * The whole days an invitation has left, for a mail about one that keeps its
- * expiry: rounded down, so the mail never promises time past `expires_at`,
- * and at least 1, so it never says 0 days for a link that still works.
- * @param expiresAt - The invitation's expiry.
- * @param now - The time the mail is composed.
- * @returns The day count, as the template's variable.
- */
-function daysLeftUntil(expiresAt: Date, now: Date = new Date()): string {
-  const days = Math.floor((expiresAt.getTime() - now.getTime()) / MS_PER_DAY)
   return String(Math.max(1, days))
 }
 
@@ -413,13 +403,6 @@ function isInsideResendCooldown(invitation: TenantInvitation): boolean {
 }
 
 /**
- * Thrown inside the sign-in resend's transaction when the address has had
- * its day's invitation mail, so the token swap rolls back; caught and
- * dropped, since a refused resend is silent.
- */
-class RecipientBudgetSpentError extends Error {}
-
-/**
  * The one 404 for every token that cannot be previewed or accepted.
  * @returns The error to throw.
  */
@@ -466,7 +449,7 @@ async function dispatchInvitationMessages(
           role: invitation.role,
           acceptUrl: buildInvitationAcceptUrl(rawToken, acceptOrigin),
           expiresInDays: context.expiresInDays ?? expiresInDays(),
-          appName: getEnv().APP_NAME,
+          appName: appNameFor(linkApp),
         },
       },
       // The account the mail is for: '' (stored as NULL) when the address has none.
@@ -516,7 +499,7 @@ async function tenantForMessages(
   executor: DbExecutor = db
 ): Promise<{ name: string; slug: string; isPlatform: boolean }> {
   const tenant = await tenantRepository.findById(tenantId, {}, executor)
-  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!tenant) throw notFoundError('tenant')
   return { name: tenant.name, slug: tenant.slug, isPlatform: tenant.isPlatform }
 }
 
@@ -532,7 +515,7 @@ async function tenantForMessages(
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
  * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function invite(
   actor: Actor,
@@ -757,7 +740,7 @@ export async function listPending(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `tenant_not_found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,
@@ -833,80 +816,36 @@ export async function resend(
 }
 
 /**
- * Mail a staff invitee their pending invitation again, because they asked
+ * Mail a staff invitee their invitation's confirm link, because they asked
  * Apex for a sign-in link: an Apex link reaches only staff, and an invitee is
- * not staff until they accept. Run from the sign-in request's follow-up,
- * after its reply, so nothing here is visible to the requester.
+ * not staff until they accept. The confirm link joins them in one click, so
+ * one request leads to one mail and a join (C12). Run from the sign-in
+ * request's follow-up, after its reply and after it won the request's own
+ * cooldown and spent the daily budget, so it spends neither again.
  *
- * It does nothing when the platform tenant holds no pending, unexpired
- * invitation for the address, inside `INVITATION_RESEND_COOLDOWN` of its last
- * send (re-checked by the token swap, so two concurrent requests mail once),
- * or when the address has had its day's invitation mail. Otherwise one
- * transaction gives the invitation a new link, keeping its expiry so a
- * request from anyone cannot lengthen it, stamps `last_sent_at`, spends the
- * recipient budget and audits `invitation.resent` as the system with
- * `trigger: 'sign_in_request'`; the mail is queued after commit.
+ * It does nothing when the platform tenant holds no redeemable invitation for
+ * the address, or inside the confirm link's cooldown for this address and
+ * invitation, which a Join click on the invitation shares: whichever comes
+ * second mails nothing, so neither revokes the link the other mailed. It
+ * never touches the invitation itself: the invitation mail the invitee holds
+ * keeps working, and a request from anyone cannot lengthen its life.
  * @param email - The address that asked for a link.
+ * @param existing - The account the address holds, already read by the request.
  * @returns Resolves once the mail is queued or nothing is due; it never rejects, and logs its own failure.
  */
-export async function resendPlatformInvitationForSignIn(email: string): Promise<void> {
+export async function mailPlatformInvitationConfirmForSignIn(
+  email: string,
+  existing: User | undefined
+): Promise<void> {
   try {
     const platform = await tenantRepository.findPlatformTenant()
     if (!platform) throw new HttpError('The platform tenant is missing', 500)
     const pending = await invitationRepository.findRedeemableForEmail(platform.id, email)
-    if (!pending || isInsideResendCooldown(pending)) return
-
-    const rawToken = generateInvitationToken()
-    const invitation = await db.transaction(async (tx) => {
-      const updated = await invitationRepository.replaceToken(
-        pending.id,
-        hashToken(rawToken),
-        pending.expiresAt,
-        tx,
-        { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) }
-      )
-      // Accepted, revoked or resent since the read: nothing is due.
-      if (!updated) return
-      // After the token swap, so a refusal rolls it back and the mailed link keeps working.
-      if ((await spendInvitationRecipientBudget(updated.email, platform.id)) === 'exhausted') {
-        throw new RecipientBudgetSpentError()
-      }
-      await record(
-        {
-          action: 'invitation.resent',
-          actor: 'system',
-          access: 'system',
-          tenantId: platform.id,
-          targetId: updated.id,
-          metadata: {
-            role: updated.role,
-            emailDomain: auditEmailDomain(updated.email),
-            trigger: 'sign_in_request',
-          },
-        },
-        tx
-      )
-      return updated
-    })
-    if (!invitation) return
-
-    const context = {
-      invitation,
-      rawToken,
-      tenant: { name: platform.name, slug: platform.slug, isPlatform: platform.isPlatform },
-      inviterName: inviterDisplayName(
-        invitation.invitedBy === null
-          ? undefined
-          : await userRepository.findById(invitation.invitedBy)
-      ),
-      invitee: await userRepository.findByEmail(invitation.email),
-      // The swap kept the expiry, so the mail states the time actually left.
-      expiresInDays: daysLeftUntil(invitation.expiresAt),
-    }
-    await dispatchInvitationMessages(context, undefined)
+    const valid = pending && (await invitationRepository.findValidById(pending.id))
+    if (!valid || !(await didClaimConfirmCooldown(valid.invitation))) return
+    await mailInvitationConfirm(valid, existing)
   } catch (error) {
-    if (error instanceof RecipientBudgetSpentError) return
-    logger.error('Sign-in invitation resend failed', { error: redactedForLog(error) })
+    logger.error('Sign-in invitation confirm mail failed', { error: redactedForLog(error) })
   }
 }
 
@@ -918,7 +857,7 @@ export async function resendPlatformInvitationForSignIn(email: string): Promise<
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `reason` when staff revoke through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function revoke(
   actor: Actor,
@@ -1302,15 +1241,76 @@ export type InvitationVerifyOutcome =
   | { kind: 'confirm'; email: string; followUp: () => Promise<void> }
 
 /**
+ * Claim the confirm mail's cooldown for one address and invitation
+ * (`SIGN_IN_LINK_MAIL_COOLDOWN`, scope `invitation-confirm:<invitation id>`,
+ * won when Redis is down). Per address and invitation: a click on one
+ * workspace's invitation never holds back another's mail.
+ * @param invitation - The invitation the confirm link is for.
+ * @returns True when this caller may mail.
+ */
+async function didClaimConfirmCooldown(invitation: TenantInvitation): Promise<boolean> {
+  return didClaimMailCooldown(
+    `${CONFIRM_MAIL_COOLDOWN_SCOPE}:${invitation.id}`,
+    invitation.email,
+    requireDurationMs(getEnv().SIGN_IN_LINK_MAIL_COOLDOWN),
+    { whenUnavailable: 'send' }
+  )
+}
+
+/**
+ * Issue an invitation confirm link (`SIGN_IN_LINK_TTL`, revoking the
+ * address's earlier confirm link for the same invitation) and queue its mail.
+ * The link opens Apex for the platform tenant and the web app otherwise. It
+ * checks no cooldown or budget, which are the caller's, and writes no audit
+ * entry.
+ * @param valid - The redeemable invitation.
+ * @param existing - The account the address holds, if any.
+ * @returns Resolves once the mail is queued.
+ */
+async function mailInvitationConfirm(
+  valid: ValidInvitation,
+  existing: User | undefined
+): Promise<void> {
+  const { invitation, tenant } = valid
+  // Server-decided, as for the invitation itself: staff join through Apex.
+  const linkApp = tenant.isPlatform ? 'apex' : 'web'
+  const ttlMs = requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+  const { raw, row } = await issueLinkToken(
+    {
+      intent: 'invitation',
+      email: invitation.email,
+      app: linkApp,
+      invitationId: invitation.id,
+    },
+    ttlMs
+  )
+  await addEmailJob(
+    {
+      to: invitation.email,
+      templateKey: INVITATION_CONFIRM_TEMPLATE_KEY,
+      variables: {
+        // The stored name, never a submitted one.
+        firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+        tenantName: tenant.name,
+        role: invitation.role,
+        confirmUrl: buildInvitationConfirmUrl(raw, row),
+        expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+        appName: appNameFor(linkApp),
+      },
+    },
+    // The account the mail is for: '' (stored as NULL) when the address has none.
+    existing?.id ?? '',
+    { context: { tenantId: invitation.tenantId, invitationId: invitation.id, linkApp } }
+  )
+}
+
+/**
  * Mail the invitee a confirm link, after the reply to an invite click that
- * needs one. In order, it stops silently at the first "no": its own
- * cooldown per address and invitation (`SIGN_IN_LINK_MAIL_COOLDOWN`, scope
- * `invitation-confirm:<invitation id>`, sent when Redis is down), the daily
+ * needs one. In order, it stops silently at the first "no": the confirm
+ * cooldown per address and invitation (`didClaimConfirmCooldown`), the daily
  * budget per address, shared with sign-in links
- * (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), then the link (`SIGN_IN_LINK_TTL`,
- * revoking the address's earlier confirm link for the same invitation) and
- * the mail. The link opens Apex for the platform tenant and the web app
- * otherwise. It writes no audit entry.
+ * (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), then the link and the mail
+ * (`mailInvitationConfirm`).
  * @param valid - The redeemable invitation the click opened.
  * @param existing - The account the address holds, already read by the click.
  * @returns The follow-up; it never rejects, and logs its own failure.
@@ -1321,48 +1321,10 @@ function requestInvitationConfirm(
 ): () => Promise<void> {
   return async () => {
     try {
-      const env = getEnv()
-      const { invitation, tenant } = valid
-      const cooldownMs = requireDurationMs(env.SIGN_IN_LINK_MAIL_COOLDOWN)
-      // Per address and invitation: a click on one workspace's invitation never holds back another's mail.
-      const canSend = await didClaimMailCooldown(
-        `${CONFIRM_MAIL_COOLDOWN_SCOPE}:${invitation.id}`,
-        invitation.email,
-        cooldownMs,
-        { whenUnavailable: 'send' }
-      )
+      const canSend = await didClaimConfirmCooldown(valid.invitation)
       // The budget is spent only once the cooldown is won.
-      if (!canSend || (await spendSignInLinkBudget(invitation.email)) === 'exhausted') return
-      // Server-decided, as for the invitation itself: staff join through Apex.
-      const linkApp = tenant.isPlatform ? 'apex' : 'web'
-      const ttlMs = requireDurationMs(env.SIGN_IN_LINK_TTL)
-      const { raw, row } = await issueLinkToken(
-        {
-          intent: 'invitation',
-          email: invitation.email,
-          app: linkApp,
-          invitationId: invitation.id,
-        },
-        ttlMs
-      )
-      await addEmailJob(
-        {
-          to: invitation.email,
-          templateKey: INVITATION_CONFIRM_TEMPLATE_KEY,
-          variables: {
-            // The stored name, never a submitted one.
-            firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-            tenantName: tenant.name,
-            role: invitation.role,
-            confirmUrl: buildInvitationConfirmUrl(raw, row),
-            expiresInMinutes: String(Math.round(ttlMs / 60_000)),
-            appName: env.APP_NAME,
-          },
-        },
-        // The account the mail is for: '' (stored as NULL) when the address has none.
-        existing?.id ?? '',
-        { context: { tenantId: invitation.tenantId, invitationId: invitation.id, linkApp } }
-      )
+      if (!canSend || (await spendSignInLinkBudget(valid.invitation.email)) === 'exhausted') return
+      await mailInvitationConfirm(valid, existing)
     } catch (error) {
       logger.error('Invitation confirm mail failed', { error: redactedForLog(error) })
     }

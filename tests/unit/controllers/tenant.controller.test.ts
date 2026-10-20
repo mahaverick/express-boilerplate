@@ -10,6 +10,7 @@ import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 import { tenantController } from '@/controllers/tenant.controller'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import type { RequestPrincipal } from '@/types/actor'
 
 const unusedResponse = {} as Response
@@ -62,7 +63,7 @@ describe('tenantPrincipal (via listMembers)', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    expect((error as HttpError).message).toBe('Tenant not found')
+    expect((error as HttpError).message).toBe(NOT_FOUND.tenant.message)
   })
 })
 
@@ -88,7 +89,7 @@ describe('targetUserIdParameter (via updateMemberRole)', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    expect((error as HttpError).message).toBe('Member not found')
+    expect((error as HttpError).message).toBe(NOT_FOUND.member.message)
     expect((error as HttpError).code).toBe('member_not_found')
   })
 })

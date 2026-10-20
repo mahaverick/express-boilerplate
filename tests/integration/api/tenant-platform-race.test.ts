@@ -12,6 +12,7 @@ import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -267,8 +268,8 @@ describe('the staff role is re-read under lock (platform role changed after reso
     await withPlatformRoleChangedAfterResolve(staff, 'remove', {}, async () => {
       const response = await rename(tenant, token)
       expect(response.status).toBe(404)
-      expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
-      expect(response.body).not.toHaveProperty('code')
+      expect(response.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
+      expect(response.body).toMatchObject({ code: 'tenant_not_found' })
     })
 
     expect(await storedName(tenant)).toBe('Acme Inc')
@@ -448,8 +449,8 @@ describe('the staff role is re-read under lock (platform role changed after reso
           .set('Authorization', `Bearer ${token}`)
           .send({})
         expect(response.status).toBe(404)
-        expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
-        expect(response.body).not.toHaveProperty('code')
+        expect(response.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
+        expect(response.body).toMatchObject({ code: 'tenant_not_found' })
       })
 
       const rows = await sql`

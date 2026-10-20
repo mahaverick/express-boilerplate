@@ -13,6 +13,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -482,7 +483,7 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
     const response = await resend(token, message)
 
     expect(response.status).toBe(404)
-    expect((response.body as ApiEnvelope<unknown>).message).toBe('Tenant not found')
+    expect((response.body as ApiEnvelope<unknown>).message).toBe(NOT_FOUND.platformTenant.message)
   })
 })
 
@@ -539,7 +540,7 @@ describe('canResend for invitation emails', () => {
     const response = await resend(token, message)
 
     expect(response.status).toBe(404)
-    expect((response.body as ApiEnvelope<unknown>).message).toBe('Tenant not found')
+    expect((response.body as ApiEnvelope<unknown>).message).toBe(NOT_FOUND.platformTenant.message)
   })
 })
 

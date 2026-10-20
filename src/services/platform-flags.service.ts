@@ -21,6 +21,7 @@ import {
 } from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { recordFlagsEvaluateView } from '@/services/audit.service'
@@ -240,7 +241,7 @@ export async function evaluateFlagsFor(
   query: PlatformFlagsEvaluateQuery
 ): Promise<FlagsEvaluateResponse> {
   const user = await userRepository.findById(query.userId)
-  if (!user) throw new HttpError('User not found', 404)
+  if (!user) throw notFoundError('user')
   if (query.tenantId !== undefined && query.app === 'apex') {
     throw new HttpError('Validation failed', 400, undefined, {
       tenantId: ['apex flags are evaluated with no tenant.'],

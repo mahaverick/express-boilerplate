@@ -7,6 +7,7 @@
 import { getEnv, type AppEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -104,7 +105,7 @@ export function buildFlagContext(input: FlagContextInput): FlagContext {
  * @param sessionId - The request's refresh session id, or null outside a request.
  * @returns The context. A tenant that cannot be read contributes its group
  *   key but no `tenant_created_days`.
- * @throws {HttpError} 404 `User not found` when the user does not exist or is deleted.
+ * @throws {HttpError} 404 `user_not_found` when the user does not exist or is deleted.
  */
 export async function flagContextForUser(
   userId: string,
@@ -117,7 +118,7 @@ export async function flagContextForUser(
     tenantId === null ? undefined : userMembershipRepository.findByUserAndTenant(userId, tenantId),
     tenantId === null ? undefined : tenantRepository.findById(tenantId),
   ])
-  if (!user) throw new HttpError('User not found', 404)
+  if (!user) throw notFoundError('ownAccount')
   return buildFlagContext({
     userId,
     tenantId,

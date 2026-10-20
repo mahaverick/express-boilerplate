@@ -11,6 +11,7 @@ import { sql } from 'drizzle-orm'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { analyticsDeletionRepository } from '@/repositories/analytics-deletion.repository'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
@@ -102,7 +103,7 @@ async function lockMembershipsForPurge(
  */
 export async function purgeUser(actor: Actor, userId: string, reason: string): Promise<void> {
   const found = await platformUserRepository.findRecord(userId, { includeDeleted: true })
-  if (!found) throw new HttpError('User not found', 404)
+  if (!found) throw notFoundError('user')
   const { deletedAt } = found
   if (deletedAt === null) throw new HttpError('Delete the user before purging them', 409)
 
@@ -172,7 +173,7 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
  */
 export async function purgeTenant(actor: Actor, tenantId: string, reason: string): Promise<void> {
   const found = await tenantRepository.findByIdIncludingDeleted(tenantId)
-  if (!found) throw new HttpError('Tenant not found', 404)
+  if (!found) throw notFoundError('platformTenant')
   if (found.isPlatform || found.lifecycleState !== 'archived') {
     throw new HttpError('Archive the tenant before purging it', 409)
   }

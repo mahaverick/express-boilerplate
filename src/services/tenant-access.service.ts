@@ -6,6 +6,7 @@
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import type { DbTransaction } from '@/services/database.service'
 import type { Actor, TenantAccess } from '@/types/actor'
@@ -53,7 +54,7 @@ export interface LockedTenantAccess {
  * @param mode - `'update'` when the transaction deletes a locked membership; otherwise `'no key update'`.
  * @param tx - The transaction to hold the locks in.
  * @returns The actor's access and the locked memberships that exist, in `user_id` order.
- * @throws {HttpError} 404 `Tenant not found` when the actor is neither a member nor staff, as `resolveTenant` answers.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor is neither a member nor staff, as `resolveTenant` answers.
  */
 export async function lockTenantAccess(
   actor: Actor,
@@ -73,7 +74,7 @@ export async function lockTenantAccess(
   if (own) return { actor: { role: own.role, access: 'member' }, memberships }
 
   const platformRole = await userMembershipRepository.lockPlatformRole(actor.userId, tx)
-  if (!platformRole) throw new HttpError('Tenant not found', 404)
+  if (!platformRole) throw notFoundError('tenant')
   return { actor: { role: platformAccessRole(platformRole), access: 'platform' }, memberships }
 }
 
@@ -83,7 +84,7 @@ export async function lockTenantAccess(
  * @param tenantId - The tenant acted on.
  * @param tx - The transaction to hold the locks in.
  * @returns The role the actor acts with and how they reached the tenant.
- * @throws {HttpError} 404 `Tenant not found` when the actor is neither a member nor staff.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor is neither a member nor staff.
  */
 export async function resolveActorAccess(
   actor: Actor,

@@ -5,7 +5,8 @@ import { z } from 'zod'
 import { FLAG_STATES } from '@/constants/flags.constants'
 import { STATS_RANGES } from '@/constants/platform.constants'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
-import { HttpError } from '@/errors/http-error'
+import type { HttpError } from '@/errors/http-error'
+import { notFoundError, type NotFoundKind } from '@/errors/not-found-errors'
 import { emailSchema } from '@/validators/auth.validators'
 import { booleanFilter, listFilter, listParamsSchema } from '@/validators/list.validators'
 import { updateProfileSchema } from '@/validators/profile.validators'
@@ -143,21 +144,17 @@ export type PlatformUserListQuery = z.output<typeof platformUserListSchema>
 const idParameterSchema = z.uuid()
 
 /**
- * A route's `:id` as a uuid, or a 404 with `notFoundMessage`: a malformed id
- * answers like an unknown one, so the two cannot be told apart, and Postgres
- * never sees a non-uuid.
+ * A route's `:id` as a uuid, or the 404 an unknown id of that kind answers:
+ * a malformed id answers like an unknown one, code and message alike, so the
+ * two cannot be told apart, and Postgres never sees a non-uuid.
  * @param raw - `request.params.id` as Express supplies it.
- * @param notFoundMessage - The 404's message, e.g. 'Tenant not found'.
- * @param notFoundCode - The 404's code, when the unknown-id answer carries one, so the malformed id answers with it too.
+ * @param notFound - What the id names, e.g. 'platformTenant'.
+ * @returns The id.
  * @throws {HttpError} 404 when `raw` is not a uuid.
  */
-export function parseIdParameter(
-  raw: unknown,
-  notFoundMessage: string,
-  notFoundCode?: string
-): string {
+export function parseIdParameter(raw: unknown, notFound: NotFoundKind): string {
   const parsed = idParameterSchema.safeParse(raw)
-  if (!parsed.success) throw new HttpError(notFoundMessage, 404, notFoundCode)
+  if (!parsed.success) throw notFoundError(notFound)
   return parsed.data
 }
 

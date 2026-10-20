@@ -478,17 +478,21 @@ invitee's mailbox receives the confirm link.
   shows the address anyway; a staff invitation always answers `202`. Signing
   out everywhere revokes no invitation: invitations belong to the admins who
   sent them.
-- **Accepted:** on Apex, a staff invitee who asks for a sign-in link is mailed
-  the invitation again, and its click mails the confirm link: two mails
-  before they can sign in.
+- **An Apex sign-in request from a staff invitee mails the invitation's
+  confirm link,** not a sign-in link and not the invitation again, so one mail
+  and one click join them. It goes only to the invited address, after the
+  request's fixed `202`, and spends the request's cooldown and daily budget
+  once. It shares the confirm link's per-invitation cooldown with a Join
+  click, so whichever comes second mails nothing and never revokes the link
+  the first one mailed. The invitation itself is untouched.
 
 ### Invitations
 
 A user joins a customer tenant only by creating it or by accepting an
 invitation; the platform tenant also admits staff by
 `pnpm platform:grant` ([Platform staff](#platform-staff)). An Apex sign-in
-request from a staff invitee mails them their invitation again (outside its
-resend cooldown), never a sign-in link. No route adds a
+request from a staff invitee mails them the invitation's confirm link, never
+a sign-in link. No route adds a
 registered address to a tenant directly
 (`src/services/tenant-invitation.service.ts`).
 

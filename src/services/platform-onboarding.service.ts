@@ -23,6 +23,7 @@ import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { createTrackedEmail, enqueueTrackedEmail } from '@/jobs/email.job'
 import {
@@ -103,8 +104,6 @@ const ONBOARDING_RANGE_DAYS: Readonly<Record<OnboardingRange, number>> = {
  * The states a reminder may be sent in.
  */
 const REMINDABLE_STATES: ReadonlySet<OnboardingState> = new Set(['in_progress', 'stuck'])
-
-const TENANT_NOT_FOUND = 'Tenant not found'
 
 /**
  * The registry as the repository's keys: tenant-scoped, member-scoped and required.
@@ -499,7 +498,7 @@ export async function getTenantOnboardingDetail(
   now: Date = new Date()
 ): Promise<TenantOnboardingDetail> {
   const progress = await platformOnboardingRepository.findProgress(tenantId, progressOptionsAt(now))
-  if (!progress) throw new HttpError(TENANT_NOT_FOUND, 404)
+  if (!progress) throw notFoundError('platformTenant')
   const [members, completions, reminders, people] = await Promise.all([
     platformOnboardingRepository.listMembers(tenantId),
     platformOnboardingRepository.listCompletions(tenantId),
@@ -612,7 +611,7 @@ async function lockActiveCustomerTenant(tenantId: string, tx: DbTransaction): Pr
   const locked = await tenantRepository.lockById(tenantId, tx)
   // lockById skips a soft-deleted row, which is an archived tenant: a 409, not a 404.
   const tenant = locked ?? (await tenantRepository.findByIdIncludingDeleted(tenantId, tx))
-  if (!tenant || tenant.isPlatform) throw new HttpError(TENANT_NOT_FOUND, 404)
+  if (!tenant || tenant.isPlatform) throw notFoundError('platformTenant')
   if (locked === undefined || locked.lifecycleState !== 'active') {
     // Only a suspended tenant can be reactivated; an archived one ends in a purge.
     throw new HttpError(
@@ -836,7 +835,7 @@ export async function sendOnboardingReminder(
       progressOptionsAt(now),
       tx
     )
-    if (!progress) throw new HttpError(TENANT_NOT_FOUND, 404)
+    if (!progress) throw notFoundError('platformTenant')
     const owners = await platformOnboardingRepository.activeOwners([tenantId], tx)
     const lastSentAt = await platformOnboardingRepository.latestReminderAt(tenantId, tx)
     const block = reminderBlockOf({

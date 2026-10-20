@@ -18,6 +18,7 @@ import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { canActorGrantRole, canStaffMailTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
 import {
@@ -103,8 +104,6 @@ const RECIPIENT_SUPPRESSED_CODE = 'recipient_suppressed'
  */
 const ALREADY_LIFTED_CODE = 'already_lifted'
 
-const EMAIL_NOT_FOUND = 'Email not found'
-const SUPPRESSION_NOT_FOUND = 'Suppression not found'
 const DAY_MS = 24 * 60 * 60 * 1000
 const BREAKDOWN_LIMIT = 10
 const GROUP_NAMES = Object.keys(EMAIL_MESSAGE_GROUPS) as EmailMessageGroup[]
@@ -330,7 +329,7 @@ export async function listEmails(
  */
 async function requireMessage(id: string): Promise<PlatformEmailRecord> {
   const message = await platformEmailRepository.findRecord(id)
-  if (!message) throw new HttpError(EMAIL_NOT_FOUND, 404)
+  if (!message) throw notFoundError('email')
   return message
 }
 
@@ -792,7 +791,7 @@ export async function resendEmail(
     }
     case 'invitation': {
       const tenant = await platformEmailRepository.tenantState(target.tenantId)
-      if (tenant?.lifecycleState !== 'active') throw new HttpError('Tenant not found', 404)
+      if (tenant?.lifecycleState !== 'active') throw notFoundError('platformTenant')
       if (!isRecentAuth(authTime, now)) {
         throw new HttpError("Confirm it's you to continue.", 401, REAUTH_REQUIRED_CODE)
       }
@@ -849,7 +848,7 @@ export async function liftSuppression(
     )
     if (!lifted) {
       const existing = await platformEmailRepository.findSuppression(id, tx)
-      if (!existing) throw new HttpError(SUPPRESSION_NOT_FOUND, 404)
+      if (!existing) throw notFoundError('suppression')
       throw new HttpError('This suppression was lifted already', 409, ALREADY_LIFTED_CODE)
     }
     const platform = await platformTenantOrThrow(tx)
@@ -870,6 +869,6 @@ export async function liftSuppression(
     )
   })
   const view = await platformEmailRepository.findSuppression(id)
-  if (!view) throw new HttpError(SUPPRESSION_NOT_FOUND, 404)
+  if (!view) throw notFoundError('suppression')
   return toSuppressionView(view)
 }

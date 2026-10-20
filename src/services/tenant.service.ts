@@ -9,6 +9,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import {
@@ -183,7 +184,7 @@ export async function listForUser(
  */
 export async function getTenant(tenantId: string): Promise<Tenant> {
   const tenant = await tenantRepository.findById(tenantId)
-  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!tenant) throw notFoundError('tenant')
   return tenant
 }
 
@@ -198,7 +199,7 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The tenant after the update.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access or the tenant is gone; 403 (`requireRole`'s answer) when the actor is below admin.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access or the tenant is gone; 403 (`requireRole`'s answer) when the actor is below admin.
  */
 export async function updateTenant(
   actor: Actor,
@@ -209,11 +210,11 @@ export async function updateTenant(
   return withTransaction(async (tx) => {
     const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
     const current = await tenantRepository.lockById(tenantId, tx)
-    if (!current) throw new HttpError('Tenant not found', 404)
+    if (!current) throw notFoundError('tenant')
     const { changes, changed } = changedFields(values, current)
     if (changed.length === 0) return current
     const tenant = await tenantRepository.update(tenantId, changes, {}, tx)
-    if (!tenant) throw new HttpError('Tenant not found', 404)
+    if (!tenant) throw notFoundError('tenant')
     await record(
       {
         action: 'tenant.updated',
@@ -282,7 +283,7 @@ export async function listMembers(
  */
 export async function getSettings(tenantId: string): Promise<TenantSettings> {
   const settings = await tenantSettingsRepository.findByTenantId(tenantId)
-  if (!settings) throw new HttpError('Tenant settings not found', 404)
+  if (!settings) throw notFoundError('tenantSettings')
   return settings
 }
 
@@ -298,7 +299,7 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The settings after the update.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 (`requireRole`'s answer) when the actor is below admin; 404 when no settings row exists.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access; 403 (`requireRole`'s answer) when the actor is below admin; 404 when no settings row exists.
  */
 export async function updateSettings(
   actor: Actor,
@@ -309,11 +310,11 @@ export async function updateSettings(
   const outcome = await withTransaction(async (tx) => {
     const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
     const current = await tenantSettingsRepository.lockByTenantId(tenantId, tx)
-    if (!current) throw new HttpError('Tenant settings not found', 404)
+    if (!current) throw notFoundError('tenantSettings')
     const { changes, changed } = changedFields(values, current)
     if (changed.length === 0) return { settings: current, access, isChanged: false }
     const settings = await tenantSettingsRepository.update(tenantId, changes, tx)
-    if (!settings) throw new HttpError('Tenant settings not found', 404)
+    if (!settings) throw notFoundError('tenantSettings')
     await record(
       {
         action: 'tenant.settings_updated',

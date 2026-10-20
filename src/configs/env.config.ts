@@ -732,7 +732,14 @@ const EnvSchema = z.object({
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name in outbound email copy and notification text: sign-in link, step-up link, welcome, invitation, maintenance-mode and onboarding reminder messages. Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text for the customer app: a sign-in link, welcome or invitation into it, and the maintenance-mode and onboarding reminder messages. Mail whose link opens Apex names APEX_APP_NAME instead. Defaults to "Express Boilerplate".'
+    ),
+  APEX_APP_NAME: z
+    .string()
+    .min(1)
+    .default('Apex')
+    .describe(
+      'Name of the Apex staff dashboard in email copy: the subject and sign-off of every mail whose link opens Apex (a staff sign-in link or welcome, a step-up link, a staff invitation and its confirm link). Chosen by the frontend the link targets, whether or not APEX_URL is set. Defaults to "Apex".'
     ),
 
   /**

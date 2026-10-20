@@ -14,6 +14,7 @@ import {
 } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { requireRecentAuth } from '@/middlewares/auth.middleware'
 import { platformRoleOf } from '@/middlewares/maintenance-mode.middleware'
@@ -122,7 +123,7 @@ async function scopeRequestToTenant(
 
     // Not 403: that would confirm a guessed slug exists.
     if (!principal) {
-      throw new HttpError('Tenant not found', 404)
+      throw notFoundError('tenant')
     }
 
     request.principal = principal
@@ -220,7 +221,7 @@ export function requireRole(
  */
 function admitMembersOnly(request: Request, _response: Response, next: NextFunction): void {
   if (request.principal?.access !== 'member') {
-    next(new HttpError('Tenant not found', 404))
+    next(notFoundError('tenant'))
     return
   }
   next()

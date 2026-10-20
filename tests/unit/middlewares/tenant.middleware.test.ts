@@ -12,6 +12,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import {
   requireMembership,
   requireRecentAuthAndReasonOnPlatformAccess,
@@ -278,7 +279,7 @@ describe('resolveTenant', () => {
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
     // Same message as the nonexistent-tenant case above: a caller must not be able to distinguish the two by response shape.
-    expect((error as HttpError).message).toBe('Tenant not found')
+    expect((error as HttpError).message).toBe(NOT_FOUND.tenant.message)
     expect(request.principal).toBeUndefined()
     expect(findPlatformRoleSpy).toHaveBeenCalledWith('user-1')
     expect(recordPlatformAccessSpy).not.toHaveBeenCalled()
@@ -414,7 +415,7 @@ describe('resolveTenant', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    expect((error as HttpError).message).toBe('Tenant not found')
+    expect((error as HttpError).message).toBe(NOT_FOUND.tenant.message)
     expect(findPlatformRoleSpy).not.toHaveBeenCalled()
     expect(request.principal).toBeUndefined()
   })
@@ -542,7 +543,7 @@ describe('requireMembership', () => {
 
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
-    expect(error).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+    expect(error).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
   })
 
   it('refuses with 404 when request.principal is missing (resolveTenant never ran)', () => {

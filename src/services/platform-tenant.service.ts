@@ -7,6 +7,7 @@ import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import {
   PlatformTenantRepository,
   type PlatformTenantDetailRow,
@@ -63,7 +64,7 @@ export async function listTenants(
  */
 export async function getTenantDetail(tenantId: string): Promise<PlatformTenantDetail> {
   const detail = await platformTenantRepository.findDetail(tenantId)
-  if (!detail) throw new HttpError('Tenant not found', 404)
+  if (!detail) throw notFoundError('platformTenant')
   return detail
 }
 
@@ -153,7 +154,7 @@ export async function reissueOwnerInvitation(
   reason: string
 ): Promise<EmailDelivery> {
   const found = await tenantRepository.findByIdIncludingDeleted(tenantId)
-  if (!found) throw new HttpError('Tenant not found', 404)
+  if (!found) throw notFoundError('platformTenant')
   if (found.isPlatform) throw new HttpError(PLATFORM_OWNER_INVITATION_MESSAGE, 409)
   assertOwnerInvitable(found)
   const dispatch = await withTransaction(async (tx) => {
@@ -164,7 +165,7 @@ export async function reissueOwnerInvitation(
       // lockById skips a soft-deleted row, which is an archived tenant: a 409, not a 404.
       const current = await tenantRepository.findByIdIncludingDeleted(tenantId, tx)
       if (current) assertOwnerInvitable(current)
-      throw new HttpError('Tenant not found', 404)
+      throw notFoundError('platformTenant')
     }
     assertOwnerInvitable(tenant)
     const revoked = await invitationRepository.revokePendingByRole(tenantId, 'owner', tx)
@@ -228,7 +229,7 @@ async function transition(
     const updated = await tenantRepository.transitionLifecycle(tenantId, from, to, tx)
     if (!updated) {
       const current = await tenantRepository.findByIdIncludingDeleted(tenantId, tx)
-      if (!current) throw new HttpError('Tenant not found', 404)
+      if (!current) throw notFoundError('platformTenant')
       const message = current.isPlatform
         ? 'The platform tenant cannot be suspended, reactivated or archived.'
         : `This tenant is ${current.lifecycleState}. Refresh the page to see its current state.`

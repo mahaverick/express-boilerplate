@@ -11,7 +11,7 @@
  */
 import type { NextFunction, Request, Response } from 'express'
 import type { MembershipRole } from '@/constants/tenant.constants'
-import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { platformRoleOf } from '@/middlewares/maintenance-mode.middleware'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { logger } from '@/services/logger.service'
@@ -39,7 +39,7 @@ export function requirePlatformRole(
         ? await platformRoleOf(request.user.id, response)
         : undefined
       if (!platformRole || !isRoleAtLeast(platformRole, minimum)) {
-        next(new HttpError('Not found', 404))
+        next(notFoundError('route'))
         return
       }
       response.locals[ADMITTED_LOCAL] = true
@@ -72,7 +72,7 @@ export function refusePlatformOptions(
   next: NextFunction
 ): void {
   if (request.method === 'OPTIONS') {
-    next(new HttpError('Not found', 404))
+    next(notFoundError('route'))
     return
   }
   next()

@@ -11,6 +11,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -315,7 +316,7 @@ describe('tenant-invitation.service', () => {
 
       await expect(
         invite({ userId: outsider.id }, tenant.id, uniqueEmail(), 'viewer')
-      ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      ).rejects.toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
       expect(await pendingOf(tenant.id)).toEqual([])
     })
   })
@@ -418,7 +419,7 @@ describe('tenant-invitation.service', () => {
       const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
 
       await expect(resend({ userId: outsider.id }, tenant.id, invitation.id)).rejects.toMatchObject(
-        { statusCode: 404, message: 'Tenant not found' }
+        { statusCode: 404, message: NOT_FOUND.tenant.message }
       )
       const stillValid = await preview(rawToken)
       expect(stillValid.email).toBe(invitation.email)
@@ -480,7 +481,7 @@ describe('tenant-invitation.service', () => {
       const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
 
       await expect(revoke({ userId: outsider.id }, tenant.id, invitation.id)).rejects.toMatchObject(
-        { statusCode: 404, message: 'Tenant not found' }
+        { statusCode: 404, message: NOT_FOUND.tenant.message }
       )
       const stillPending = await preview(rawToken)
       expect(stillPending.email).toBe(invitation.email)

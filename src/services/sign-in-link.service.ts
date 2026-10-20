@@ -31,7 +31,7 @@ import {
 import { platformRoleForLogin } from '@/services/auth.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
-import { MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
+import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import {
   buildSignInLinkUrl,
   claimLinkToken,
@@ -52,7 +52,7 @@ import {
   type IssuedRefreshToken,
 } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
-import { resendPlatformInvitationForSignIn } from '@/services/tenant-invitation.service'
+import { mailPlatformInvitationConfirmForSignIn } from '@/services/tenant-invitation.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import type { EmailResendOptions } from '@/types/email-context'
@@ -141,7 +141,7 @@ export async function sendSignInLink(
       reason === 'welcome' ? WELCOME_TEMPLATE_KEY : SIGN_IN_LINK_TEMPLATE_KEY
     ),
     expiresInMinutes: String(Math.round(ttlMs / 60_000)),
-    appName: getEnv().APP_NAME,
+    appName: appNameFor(target.app),
   }
   await addEmailJob(
     reason === 'welcome'
@@ -154,20 +154,22 @@ export async function sendSignInLink(
 
 /**
  * What a request's follow-up does for its address: mail a sign-in link, mail
- * a staff invitee their invitation again, or nothing.
+ * a staff invitee their invitation's confirm link, or nothing.
  */
 type RequestOutcome =
-  { kind: 'link'; user: User | undefined } | { kind: 'invitation' } | { kind: 'nothing' }
+  | { kind: 'link'; user: User | undefined }
+  | { kind: 'invitation'; user: User | undefined }
+  | { kind: 'nothing' }
 
 /**
  * Decide what a request's address gets: an inactive account gets nothing; in
  * `full` maintenance only staff get a link and everyone else nothing; on
  * Apex staff get a link and any other address (an invitee is not staff until
- * they accept) gets its pending staff invitation again, when it holds one;
- * on web everyone else gets a link.
+ * they accept) gets its pending staff invitation's confirm link, when it
+ * holds one; on web everyone else gets a link.
  * @param email - The requested address.
  * @param app - The frontend the link would open.
- * @returns The outcome, with the account the address holds for a link.
+ * @returns The outcome, with the account the address holds for a link or a confirm link.
  */
 async function requestOutcome(email: string, app: FrontendApp): Promise<RequestOutcome> {
   const user = await userRepository.findByEmail(email)
@@ -177,7 +179,7 @@ async function requestOutcome(email: string, app: FrontendApp): Promise<RequestO
   const isStaff = user !== undefined && (await getPlatformMembership(user.id)) !== null
   if (isStaff) return { kind: 'link', user }
   // In `full` a non-staff address gets nothing at all, an invitation included.
-  return { kind: app === 'apex' && !isFull ? 'invitation' : 'nothing' }
+  return app === 'apex' && !isFull ? { kind: 'invitation', user } : { kind: 'nothing' }
 }
 
 /**
@@ -189,9 +191,10 @@ async function requestOutcome(email: string, app: FrontendApp): Promise<RequestO
  * (`SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`), the lookup (an inactive account,
  * or a non-staff or unknown address in `full`, gets nothing), then the mail.
  * An unknown address on web is mailed a link: its click creates the account.
- * On Apex only staff are mailed a link; any other address is mailed its
- * pending staff invitation again (`resendPlatformInvitationForSignIn`, which
- * keeps the invitation's own resend cooldown), or nothing when it holds none.
+ * On Apex only staff are mailed a link; any other address holding a pending
+ * staff invitation is mailed that invitation's confirm link, which joins in
+ * one click (`mailPlatformInvitationConfirmForSignIn`, which shares the
+ * confirm link's cooldown with a Join click), or nothing when it holds none.
  * @param input - The validated request body.
  * @returns The follow-up; it never rejects, and logs its own failure.
  */
@@ -206,7 +209,7 @@ export function requestSignInLink(input: SignInLinkRequestInput): () => Promise<
       if (!canSend || (await spendSignInLinkBudget(input.email)) === 'exhausted') return
       const outcome = await requestOutcome(input.email, input.app)
       if (outcome.kind === 'invitation') {
-        await resendPlatformInvitationForSignIn(input.email)
+        await mailPlatformInvitationConfirmForSignIn(input.email, outcome.user)
         return
       }
       if (outcome.kind === 'nothing') return

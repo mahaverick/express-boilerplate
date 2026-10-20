@@ -12,6 +12,7 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import {
   claimNeverVerifiedAccount,
@@ -30,6 +31,7 @@ import { issueRefreshToken, type IssuedRefreshToken } from '@/services/session.s
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
+const emailMessageRepository = new EmailMessageRepository()
 
 /**
  * The one answer for a Google sign-in that reaches no account it may sign
@@ -213,6 +215,7 @@ async function resolveGoogleUser(
     const createdUser = await userRepository.create({ email }, tx)
 
     await authProviderRepository.releaseEmailOfDeletedUsers(email, tx)
+    await emailMessageRepository.adoptUnowned(createdUser.id, email, tx)
 
     await authProviderRepository.create(
       { userId: createdUser.id, provider: 'email', providerId: email },

@@ -4,6 +4,7 @@
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewUser, User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { UserRepository } from '@/repositories/user.repository'
 import { getPlatformMembership } from '@/services/platform.service'
 import type { UpdateProfileInput } from '@/validators/profile.validators'
@@ -46,7 +47,7 @@ function toUpdateValues(input: UpdateProfileInput): ProfileUpdateValues {
  */
 export async function getProfile(userId: string): Promise<ProfileWithPlatformRole> {
   const user = await userRepository.findById(userId)
-  if (!user) throw new HttpError('User not found', 404)
+  if (!user) throw notFoundError('ownAccount')
   return { user, platformRole: await getPlatformMembership(userId) }
 }
 
@@ -68,6 +69,6 @@ export async function updateProfile(
   const user = hasChanges
     ? await userRepository.update(userId, values)
     : await userRepository.findById(userId)
-  if (!user) throw new HttpError('User not found', 404)
+  if (!user) throw notFoundError('ownAccount')
   return { user, platformRole: await getPlatformMembership(userId) }
 }

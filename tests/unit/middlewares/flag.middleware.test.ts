@@ -7,6 +7,7 @@
 import type { NextFunction, Request, Response } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { evaluateForRequest } from '@/middlewares/flag-context.middleware'
 import { FLAG_GATE_MARK, requireFlag } from '@/middlewares/flag.middleware'
 import { logger } from '@/services/logger.service'
@@ -65,7 +66,7 @@ describe('requireFlag', () => {
     const [[error]] = (await run(false)) as [[unknown]]
 
     expect(error).toBeInstanceOf(HttpError)
-    expect(error).toMatchObject({ message: 'Not found', statusCode: 404 })
+    expect(error).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
   })
 
   it('inverts with shouldBeOn = false', async () => {
@@ -79,7 +80,7 @@ describe('requireFlag', () => {
 
     const [[refused]] = (await run(true, { hasPrincipal: false })) as [[unknown]]
 
-    expect(refused).toMatchObject({ message: 'Not found', statusCode: 404 })
+    expect(refused).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
     expect(error).toHaveBeenCalledWith('flag_gate_no_tenant', { flag: 'example_beta_page' })
     expect(evaluate).not.toHaveBeenCalled()
   })
@@ -110,7 +111,7 @@ describe('requireFlag', () => {
 
     const [[error]] = next.mock.calls as [[HttpError]]
     expect(error).toBeInstanceOf(HttpError)
-    expect(error).toMatchObject({ message: 'Not found', statusCode: 404 })
+    expect(error).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
   })
 
   it('marks its handler with the key and the value that admits', () => {

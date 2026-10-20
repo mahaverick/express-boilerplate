@@ -12,6 +12,7 @@ import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql } from '@/services/database.service'
@@ -342,7 +343,7 @@ describe('a caller outside the tenant', () => {
     for (const token of tokens) {
       const response = await readOnboarding(tenant, token)
       expect(response.status).toBe(404)
-      expect((response.body as { message: string }).message).toBe('Tenant not found')
+      expect((response.body as { message: string }).message).toBe(NOT_FOUND.tenant.message)
     }
   })
 
@@ -357,7 +358,7 @@ describe('a caller outside the tenant', () => {
       for (const token of tokens) {
         const response = await postOnboarding(tenant, path, token)
         expect(response.status).toBe(404)
-        expect((response.body as { message: string }).message).toBe('Tenant not found')
+        expect((response.body as { message: string }).message).toBe(NOT_FOUND.tenant.message)
       }
       expect(
         await sql`select 1 from onboarding_completions where tenant_id = ${tenant.id}`

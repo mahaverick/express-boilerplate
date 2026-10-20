@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import {
   MAX_REASON_LENGTH,
   parseIdParameter,
@@ -54,30 +54,25 @@ describe('reasonBodySchema', () => {
 describe('parseIdParameter', () => {
   it('returns a uuid unchanged', () => {
     const id = '0192f0c1-7a3e-7c3b-8a55-2f1f0d6c9e11'
-    expect(parseIdParameter(id, 'User not found')).toBe(id)
+    expect(parseIdParameter(id, 'user')).toBe(id)
   })
 
   it.each([undefined, '', 'not-a-uuid', '1', ['0192f0c1-7a3e-7c3b-8a55-2f1f0d6c9e11']])(
-    'answers 404 with the given message for %j',
+    'answers %j with the 404 an unknown id of that kind answers',
     (raw) => {
-      expect(() => parseIdParameter(raw, 'Tenant not found')).toThrow(HttpError)
-      try {
-        parseIdParameter(raw, 'Tenant not found')
-      } catch (error) {
-        expect((error as HttpError).statusCode).toBe(404)
-        expect((error as HttpError).message).toBe('Tenant not found')
-        expect((error as HttpError).code).toBeUndefined()
-      }
+      expect(() => parseIdParameter(raw, 'platformTenant')).toThrow(
+        expect.objectContaining({
+          statusCode: 404,
+          code: NOT_FOUND.platformTenant.code,
+          message: NOT_FOUND.platformTenant.message,
+        })
+      )
     }
   )
 
-  it('puts the given code on the 404, and leaves the message as given', () => {
-    expect(() => parseIdParameter('not-a-uuid', 'Member not found', 'member_not_found')).toThrow(
-      expect.objectContaining({
-        statusCode: 404,
-        message: 'Member not found',
-        code: 'member_not_found',
-      })
+  it('answers a malformed member id with member_not_found', () => {
+    expect(() => parseIdParameter('not-a-uuid', 'member')).toThrow(
+      expect.objectContaining({ statusCode: 404, code: 'member_not_found' })
     )
   })
 })

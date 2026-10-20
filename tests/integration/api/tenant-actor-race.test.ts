@@ -15,6 +15,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -217,7 +218,7 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
         .send({ role: 'editor' })
 
       expect(response.status).toBe(404)
-      expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(response.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     })
 
     const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)

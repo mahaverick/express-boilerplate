@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -142,6 +143,6 @@ describe('updateTenant and updateSettings re-read the actor under lock', () => {
 
     await expect(
       updateTenant({ userId: outsiderId }, tenant.id, { name: 'Nope' })
-    ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+    ).rejects.toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
   })
 })

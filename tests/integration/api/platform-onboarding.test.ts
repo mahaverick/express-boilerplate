@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addCompletion,
@@ -372,7 +373,7 @@ describe('GET /api/v1/platform/tenants/:id/onboarding', () => {
     for (const id of ['not-a-uuid', randomUUID(), platform.id]) {
       const response = await get(token, `/tenants/${id}/onboarding`)
       expect({ id, status: response.status }).toEqual({ id, status: 404 })
-      expect((response.body as ApiEnvelope<unknown>).message).toBe('Tenant not found')
+      expect((response.body as ApiEnvelope<unknown>).message).toBe(NOT_FOUND.platformTenant.message)
     }
   })
 })

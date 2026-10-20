@@ -9,6 +9,7 @@
 import type { NextFunction, Request, Response } from 'express'
 import { flagEntry, type BooleanFlagKey } from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { evaluateForRequest } from '@/middlewares/flag-context.middleware'
 import { logger } from '@/services/logger.service'
 
@@ -68,18 +69,18 @@ export function requireFlag(key: BooleanFlagKey, shouldBeOn = true): FlagGateHan
     try {
       if (isTenantScoped && request.principal === undefined) {
         logger.error('flag_gate_no_tenant', { flag: key })
-        next(new HttpError('Not found', 404))
+        next(notFoundError('route'))
         return
       }
       const evaluation = await evaluateForRequest(request, key)
       if (evaluation.value !== shouldBeOn) {
-        next(new HttpError('Not found', 404))
+        next(notFoundError('route'))
         return
       }
       next()
     } catch (error) {
       // A user the evaluation cannot find (deleted since `requireAuth`) closes the gate with the same 404, not an error with its own message.
-      next(isNotFound(error) ? new HttpError('Not found', 404) : error)
+      next(isNotFound(error) ? notFoundError('route') : error)
     }
   }
   return Object.assign(gate, { [FLAG_GATE_MARK]: { key, shouldBeOn } })

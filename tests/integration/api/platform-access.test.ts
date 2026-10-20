@@ -15,6 +15,7 @@ import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { PlatformTenantRepository } from '@/repositories/platform-tenant.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -203,7 +204,7 @@ describe('platform access over the API', () => {
 
       expect(read.status).toBe(404)
       expect(write.status).toBe(404)
-      expect(read.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(read.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     })
 
     it.each(['viewer', 'editor', 'manager'] as const)(
@@ -305,7 +306,7 @@ describe('platform access over the API', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
 
       expect(response.status).toBe(404)
-      expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(response.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     })
 
     it('opens /tenants/platform to a platform member', async () => {

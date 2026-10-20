@@ -24,16 +24,6 @@ import {
 import { parseIdParameter, reasonBodySchema } from '@/validators/platform.validators'
 
 /**
- * The 404 a malformed or unknown message id answers.
- */
-const EMAIL_NOT_FOUND = 'Email not found'
-
-/**
- * The 404 a malformed or unknown suppression id answers.
- */
-const SUPPRESSION_NOT_FOUND = 'Suppression not found'
-
-/**
  * Handlers for the staff email routes.
  */
 class PlatformEmailController extends BaseController {
@@ -57,7 +47,7 @@ class PlatformEmailController extends BaseController {
    * `GET /platform/emails/:id`: one message's timeline.
    */
   getEmail = this.handle(async (request, response) => {
-    const id = parseIdParameter(request.params.id, EMAIL_NOT_FOUND)
+    const id = parseIdParameter(request.params.id, 'email')
     successResponse(response, await getEmailDetail(actorFrom(request), id), 'Email retrieved.')
   })
 
@@ -65,7 +55,7 @@ class PlatformEmailController extends BaseController {
    * `GET /platform/emails/:id/preview`: the stored template re-rendered, with link tokens masked.
    */
   previewEmail = this.handle(async (request, response) => {
-    const id = parseIdParameter(request.params.id, EMAIL_NOT_FOUND)
+    const id = parseIdParameter(request.params.id, 'email')
     successResponse(response, await previewEmail(id), 'Email preview rendered.')
   })
 
@@ -73,7 +63,7 @@ class PlatformEmailController extends BaseController {
    * `POST /platform/emails/:id/resend`: run the action that sent it again. 202: the mail is queued, not sent.
    */
   resendEmail = this.handle(async (request, response) => {
-    const id = parseIdParameter(request.params.id, EMAIL_NOT_FOUND)
+    const id = parseIdParameter(request.params.id, 'email')
     const { reason } = parseBody(reasonBodySchema, request.body)
     const result = await resendEmail(actorFrom(request), id, reason, request.authTime)
     successResponse(response, result, 'Resend requested.', 202)
@@ -91,7 +81,7 @@ class PlatformEmailController extends BaseController {
    * `POST /platform/email-suppressions/:id/lift`: let mail reach the address again.
    */
   liftSuppression = this.handle(async (request, response) => {
-    const id = parseIdParameter(request.params.id, SUPPRESSION_NOT_FOUND)
+    const id = parseIdParameter(request.params.id, 'suppression')
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
       response,

@@ -9,6 +9,7 @@ import type { NextFunction, Request, Response } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import {
   logStaffWrites,
   refusePlatformOptions,
@@ -52,7 +53,7 @@ describe('requirePlatformRole', () => {
     const error = calls[0]?.[0]
 
     expect(error).toBeInstanceOf(HttpError)
-    expect(error).toMatchObject({ message: 'Not found', statusCode: 404 })
+    expect(error).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
     expect(lookup).toHaveBeenCalledWith('user-1')
   })
 
@@ -61,7 +62,7 @@ describe('requirePlatformRole', () => {
     const calls = await run('viewer', null)
     const error = calls[0]?.[0]
 
-    expect(error).toMatchObject({ message: 'Not found', statusCode: 404 })
+    expect(error).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
   })
 
   it('admits an admin at an admin floor, and marks the response admitted', async () => {
@@ -173,7 +174,10 @@ describe('refusePlatformOptions', () => {
     const next = vi.fn()
     refusePlatformOptions({ method: 'OPTIONS' } as Request, {} as Response, next as NextFunction)
 
-    expect(next.mock.calls[0]?.[0]).toMatchObject({ message: 'Not found', statusCode: 404 })
+    expect(next.mock.calls[0]?.[0]).toMatchObject({
+      message: NOT_FOUND.route.message,
+      statusCode: 404,
+    })
   })
 
   it('passes every other method on', () => {

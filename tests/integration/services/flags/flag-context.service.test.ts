@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql } from '@/services/database.service'
@@ -90,6 +91,9 @@ describe('flagContextForUser', () => {
   it('answers 404 for a user that does not exist', async () => {
     const failure = flagContextForUser(randomUUID(), NONE, NONE)
     await expect(failure).rejects.toBeInstanceOf(HttpError)
-    await expect(failure).rejects.toMatchObject({ statusCode: 404, message: 'User not found' })
+    await expect(failure).rejects.toMatchObject({
+      statusCode: 404,
+      message: NOT_FOUND.ownAccount.message,
+    })
   })
 })

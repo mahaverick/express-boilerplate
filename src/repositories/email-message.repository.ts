@@ -3,7 +3,7 @@
  * a message has no `updatedAt`/`deletedAt`, and its one mutable field,
  * `status`, moves only forward, through `advanceStatus` and `markSuppressed`.
  */
-import { and, eq, notExists, or, sql } from 'drizzle-orm'
+import { and, eq, isNull, notExists, or, sql } from 'drizzle-orm'
 import {
   EMAIL_STATUS_RANK,
   SECRET_VARIABLE_PATTERN,
@@ -17,6 +17,7 @@ import {
   type EmailMessage,
   type NewEmailMessage,
 } from '@/database/models/email-message.model'
+import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
@@ -230,6 +231,35 @@ export class EmailMessageRepository {
     const result = await tx
       .delete(emailMessageModel)
       .where(sql`${emailMessageModel.id} = any(array(${batch}))`)
+    return result.count
+  }
+
+  /**
+   * Give a new account the mail its address was sent while no account held
+   * it: every message to the address with no `user_id`, so a staff member's
+   * Emails list for the user shows the invitation that brought them in.
+   * Only mail newer than the latest deletion of an earlier holder of the
+   * address moves: older unowned mail may belong to that person, so it stays
+   * unowned. A message another account owns never moves.
+   * @param userId - The account just created.
+   * @param address - Its address, in any case.
+   * @param tx - The creating transaction.
+   * @returns How many messages it adopted.
+   */
+  async adoptUnowned(userId: string, address: string, tx: DbTransaction): Promise<number> {
+    const result = await tx
+      .update(emailMessageModel)
+      .set({ userId })
+      .where(
+        and(
+          isNull(emailMessageModel.userId),
+          sql`lower(${emailMessageModel.recipient}) = lower(${address})`,
+          sql`${emailMessageModel.createdAt} > coalesce((
+            select max(${userModel.deletedAt}) from ${userModel}
+            where lower(${userModel.email}) = lower(${address}) and ${userModel.deletedAt} is not null
+          ), '-infinity'::timestamptz)`
+        )
+      )
     return result.count
   }
 

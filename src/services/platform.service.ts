@@ -8,6 +8,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -70,7 +71,7 @@ export async function assertStillPlatformRole(
   tx: DbTransaction
 ): Promise<MembershipRole> {
   const role = await userMembershipRepository.lockPlatformRole(actor.userId, tx)
-  if (role === null || !isRoleAtLeast(role, minimum)) throw new HttpError('Not found', 404)
+  if (role === null || !isRoleAtLeast(role, minimum)) throw notFoundError('route')
   const actorUser = await userRepository.lockById(actor.userId, 'share', tx)
   if (!actorUser?.active) throw new HttpError('Account no longer exists or is inactive', 401)
   return role
@@ -102,7 +103,7 @@ async function regrant(
       )
   }
   const updated = await userMembershipRepository.updateRole(existing.id, role, tx)
-  if (!updated) throw new HttpError('Membership not found', 404)
+  if (!updated) throw notFoundError('member')
   if (!isRoleAtLeast(role, existing.role)) {
     const ungrantable = rolesUngrantableBy(role)
     await revokeInvitationsSentIn(
