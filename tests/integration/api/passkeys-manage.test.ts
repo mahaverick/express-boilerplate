@@ -311,6 +311,38 @@ describe('creating and listing passkeys', () => {
     expect(row?.total).toBe(0)
   })
 
+  it('answers 403 EMAIL_UNVERIFIED on options, and on verify once the address is no longer verified', async () => {
+    const user = await createTrackedUser({ verified: false })
+    usedEmails.push(user.email.toLowerCase())
+    const token = recentAuthTokenFor(user)
+    const verified = await createTrackedUser()
+    usedEmails.push(verified.email.toLowerCase())
+    const asked = await options(recentAuthTokenFor(verified))
+
+    const refusedOptions = await options(token)
+    // A challenge issued while the address was verified, spent after it was lost: the lock still refuses.
+    await sql`update users set email_verified_at = null where id = ${verified.id}`
+    const lost = await request(app)
+      .post(`${BASE}/registration/verify`)
+      .set('Authorization', `Bearer ${recentAuthTokenFor(verified)}`)
+      .send({
+        app: 'web',
+        challengeId: envelope(asked).data.challengeId,
+        response: new SoftwareAuthenticator().registrationResponse(
+          envelope(asked).data.options.challenge
+        ),
+      })
+
+    expect(refusedOptions.status).toBe(403)
+    expect(envelope(refusedOptions).code).toBe('EMAIL_UNVERIFIED')
+    expect(lost.status).toBe(403)
+    expect(envelope(lost).code).toBe('EMAIL_UNVERIFIED')
+    const [row] = await sql<{ total: number }[]>`
+      select count(*)::int as total from user_passkeys where user_id = ${verified.id}
+    `
+    expect(row?.total).toBe(0)
+  })
+
   it('answers 409 for a credential another user holds, and stores and audits nothing', async () => {
     const owner = await makeUser()
     const other = await makeUser()

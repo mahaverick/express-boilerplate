@@ -4,13 +4,14 @@
  * over a never-verified account that holds the address
  * (`claimNeverVerifiedAccount`), which a sign-in link, an invitation link and
  * a verified Google identity all do. A link's claim also clears the
- * squatter's federated links (`clearSquatterCredentials`). `markEmailVerified`
+ * squatter's federated links and passkeys (`clearSquatterCredentials`). `markEmailVerified`
  * stays the only writer of `email_verified_at`.
  */
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
+import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import {
   db,
@@ -24,6 +25,7 @@ import { denySessionsAfterCommit, revokeSessionRows } from '@/services/session.s
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
 const emailMessageRepository = new EmailMessageRepository()
+const userPasskeyRepository = new UserPasskeyRepository()
 
 /**
  * Mark a user's email verified. The only writer of users.email_verified_at;
@@ -165,14 +167,15 @@ export async function claimNeverVerifiedAccount(
 
 /**
  * The writes a link makes on a never-verified account it claims, in the
- * claim's locked transaction: a squatter who linked a federated identity to
- * the address first loses it, since the click proves the mailbox is someone
- * else's.
+ * claim's locked transaction: a squatter who linked a federated identity or
+ * created a passkey on the address first loses both, since the click proves
+ * the mailbox is someone else's.
  * @param userId - The never-verified account.
  * @returns The callback for `claimNeverVerifiedAccount`.
  */
 export function clearSquatterCredentials(userId: string): (tx: DbTransaction) => Promise<void> {
   return async (tx) => {
     await authProviderRepository.deleteFederatedForUser(userId, tx)
+    await userPasskeyRepository.deleteAllForUser(userId, tx)
   }
 }

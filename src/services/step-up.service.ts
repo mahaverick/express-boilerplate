@@ -284,7 +284,7 @@ export async function startPasskeyStepUp(
  * @param input.challengeId - The id the options call answered.
  * @param input.response - The browser's assertion response.
  * @returns A new access token for the same session.
- * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid`, an account gone or inactive, or a session that has ended; 400 `PASSKEY_VERIFICATION_FAILED` for a challenge that is missing, used, expired or not this session's, a credential that is not the caller's, and a response that does not verify.
+ * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid`, an account gone or inactive, or a session that has ended; 400 `PASSKEY_VERIFICATION_FAILED` for a never-verified account, a challenge that is missing, used, expired or not this session's, a credential that is not the caller's, and a response that does not verify.
  */
 export async function finishPasskeyStepUp(
   userId: string,
@@ -297,7 +297,8 @@ export async function finishPasskeyStepUp(
     userId,
     sessionId,
   })
-  if (challenge === undefined) throw passkeyVerificationFailed()
+  // A never-verified account may hold a squatter's passkey; only a claim by link clears it.
+  if (challenge === undefined || user.emailVerifiedAt === null) throw passkeyVerificationFailed()
   const response = input.response as AuthenticationResponseJSON
   const stored = await userPasskeyRepository.findByCredentialId(response.id)
   if (stored?.userId !== userId) throw passkeyVerificationFailed()

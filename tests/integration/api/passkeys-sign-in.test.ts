@@ -24,7 +24,7 @@ import {
   recentAuthTokenFor,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
-import { clearRateLimiter } from '../../helpers/sign-in'
+import { clearRateLimiter, signInByLink } from '../../helpers/sign-in'
 
 const mode = vi.hoisted(() => ({ current: 'optional' }))
 
@@ -251,6 +251,34 @@ describe('POST /sign-in/verify', () => {
     expect(response.status).toBe(400)
     expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
     expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
+  it('answers 400 PASSKEY_UNKNOWN, with no cookie, for a user whose address was never verified', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const user = await userWithPasskey(authenticator)
+    await sql`update users set email_verified_at = null where id = ${user.id}`
+
+    const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
+
+    expect(response.status).toBe(400)
+    expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
+  it("drops a squatter's passkeys when a sign-in link claims the account, and the passkey then signs nobody in", async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const user = await userWithPasskey(authenticator)
+    await sql`update users set email_verified_at = null where id = ${user.id}`
+
+    const claimed = await signInByLink(user.email, 'web')
+
+    expect(claimed.userId).toBe(user.id)
+    const rows = await sql`select 1 from user_passkeys where user_id = ${user.id}`
+    expect(rows).toHaveLength(0)
+    await clearRateLimiter('passkey-sign-in')
+    const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
+    expect(response.status).toBe(400)
+    expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
   })
 
   it('answers 400 PASSKEY_UNKNOWN, with no cookie, for a soft-deleted user', async () => {

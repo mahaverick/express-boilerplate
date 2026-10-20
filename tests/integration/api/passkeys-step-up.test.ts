@@ -435,6 +435,20 @@ describe('POST /step-up/verify', () => {
     expect(again.status).toBe(200)
   })
 
+  it('answers 400 PASSKEY_VERIFICATION_FAILED for an account whose address was never verified', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const session = await customerWithPasskey(authenticator)
+    await sql`update users set email_verified_at = null where id = ${session.userId}`
+
+    const response = await stepUp(session, (challenge) =>
+      authenticator.assertionResponse(challenge)
+    )
+
+    expect(response.status).toBe(400)
+    expect(envelope(response).code).toBe('PASSKEY_VERIFICATION_FAILED')
+    expect(await stepUpAudits(session.userId)).toEqual([])
+  })
+
   it('answers 401 with no bearer', async () => {
     const response = await request(app)
       .post(`${BASE}/step-up/verify`)

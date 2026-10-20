@@ -126,6 +126,16 @@ export class UserPasskeyRepository {
   }
 
   /**
+   * Delete every passkey a user holds.
+   * @param userId - The owner.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns Resolves once the rows are gone.
+   */
+  async deleteAllForUser(userId: string, executor: DbExecutor = db): Promise<void> {
+    await executor.delete(userPasskeyModel).where(eq(userPasskeyModel.userId, userId))
+  }
+
+  /**
    * Record a successful sign-in with a passkey.
    * @param id - The passkey's row ID.
    * @param use - The new signature counter, the new backup state and when it happened.

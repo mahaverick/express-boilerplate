@@ -153,11 +153,13 @@ async function assertBelowLimit(userId: string, executor?: DbTransaction): Promi
  * verification and no attestation, and exclude the user's own credentials.
  * @param user - The signed-in user.
  * @returns The challenge id for the verify call, and the options for the browser.
- * @throws {HttpError} 409 `PASSKEY_LIMIT` at 20 passkeys.
+ * @throws {HttpError} 403 `EMAIL_UNVERIFIED` when the address was never verified; 409 `PASSKEY_LIMIT` at 20 passkeys.
  */
 export async function startPasskeyRegistration(
   user: AuthenticatedUser
 ): Promise<{ challengeId: string; options: PublicKeyCredentialCreationOptionsJSON }> {
+  const account = await userRepository.findById(user.id)
+  if (account?.emailVerifiedAt === null) throw emailUnverified()
   await assertBelowLimit(user.id)
   const existing = await userPasskeyRepository.listByUser(user.id)
   const rp = passkeyRelyingParty()
@@ -243,9 +245,28 @@ async function sendPasskeyNotice(
  * @param tx - The transaction.
  * @throws {HttpError} 401 when the account is gone or inactive.
  */
-async function lockUser(userId: string, tx: DbTransaction): Promise<void> {
+async function lockUser(userId: string, tx: DbTransaction): Promise<User> {
   const locked = await userRepository.lockById(userId, 'no key update', tx)
   if (!locked?.active) throw new HttpError('Sign in to continue.', 401)
+  return locked
+}
+
+/**
+ * The code of a passkey created by an account whose address is unverified.
+ */
+const EMAIL_UNVERIFIED_CODE = 'EMAIL_UNVERIFIED'
+
+/**
+ * The 403 for a create by an account whose address no link has verified yet:
+ * a passkey there could belong to someone who never held the mailbox.
+ * @returns The error to throw.
+ */
+function emailUnverified(): HttpError {
+  return new HttpError(
+    'Verify your email address before you create a passkey. Sign in with an email link.',
+    403,
+    EMAIL_UNVERIFIED_CODE
+  )
 }
 
 /**
@@ -269,7 +290,7 @@ async function platformTenantId(tx: DbTransaction): Promise<string> {
  * @param input.response - The browser's registration response.
  * @param input.app - The frontend the request came from.
  * @returns The stored row.
- * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` for a challenge that is missing, used, expired or not the caller's, and for a response that does not verify; 409 `PASSKEY_LIMIT` at 20 passkeys.
+ * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` for a challenge that is missing, used, expired or not the caller's, and for a response that does not verify; 403 `EMAIL_UNVERIFIED` when the address was never verified; 409 `PASSKEY_LIMIT` at 20 passkeys.
  */
 export async function finishPasskeyRegistration(
   user: AuthenticatedUser,
@@ -297,7 +318,8 @@ export async function finishPasskeyRegistration(
   const { aaguid, credential, credentialDeviceType, credentialBackedUp } = verified.registrationInfo
   const provider = passkeyProvider(aaguid)
   const created = await withTransaction(async (tx) => {
-    await lockUser(user.id, tx)
+    const locked = await lockUser(user.id, tx)
+    if (locked.emailVerifiedAt === null) throw emailUnverified()
     await assertBelowLimit(user.id, tx)
     const existing = await userPasskeyRepository.listByUser(user.id, tx)
     const taken = existing.map((row) => row.name)
@@ -402,8 +424,8 @@ const PASSKEY_UNKNOWN_CODE = 'PASSKEY_UNKNOWN'
 
 /**
  * The 400 for a passkey that signs nobody in: one this API does not know, one
- * whose account is inactive or deleted, and an Apex sign-in by a non-staff
- * account. One answer for all, so a caller learns nothing about which. A 400,
+ * whose account is inactive, deleted or never verified, and an Apex sign-in
+ * by a non-staff account. One answer for all, so a caller learns nothing about which. A 400,
  * never a 401, because the apps sign out on a 401.
  * @returns The error to throw.
  */
@@ -502,8 +524,8 @@ export async function verifyStoredAssertion(
  * Finish a sign-in with a passkey and issue the session.
  *
  * Order: the challenge is spent (`sign_in` only); the credential is looked up;
- * the account is loaded and refused when unknown, inactive or deleted, and on
- * Apex when not staff, all before the signature check; the response is
+ * the account is loaded and refused when unknown, inactive, deleted or never
+ * verified, and on Apex when not staff, all before the signature check; the response is
  * verified (origin, RP ID, user verification, signature); the counter rule
  * runs; `assertSignInAllowed` enforces the maintenance mode; the use is
  * stored; the session is issued; `user_signed_in` is emitted.
@@ -525,7 +547,7 @@ export async function finishPasskeySignIn(input: {
   const stored = await userPasskeyRepository.findByCredentialId(response.id)
   if (!stored) throw passkeyUnknown()
   const user = await userRepository.findById(stored.userId)
-  if (!user?.active) throw passkeyUnknown()
+  if (!user?.active || user.emailVerifiedAt === null) throw passkeyUnknown()
   if (input.app === 'apex' && (await getPlatformMembership(user.id)) === null) {
     throw passkeyUnknown()
   }
