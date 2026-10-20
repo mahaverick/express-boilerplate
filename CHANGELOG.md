@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.0.1](https://github.com/mahaverick/express-boilerplate/compare/v7.0.0...v7.0.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* name apex in its mail, join staff by one mail, adopt pre-account mail, code every 404 ([#136](https://github.com/mahaverick/express-boilerplate/issues/136)) ([596b9cd](https://github.com/mahaverick/express-boilerplate/commit/596b9cd1e503ab47b9ff44959b40b1adda6ab863))
+
 ## [7.0.0](https://github.com/mahaverick/express-boilerplate/compare/v6.1.1...v7.0.0) (2026-10-20)
 
 
