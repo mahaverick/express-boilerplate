@@ -31,7 +31,9 @@ export async function runOnboardingReconcile(argv: readonly string[]): Promise<n
       `Checked ${result.tenantsChecked} tenants; restored ${result.stepsRestored} steps.\n`
     )
     if (result.failures === 0) return 0
-    process.stderr.write(`${result.failures} steps could not be restored; see the log.\n`)
+    process.stderr.write(
+      `${result.failures} steps weren't restored. Check the log for each one, then run the command again.\n`
+    )
     return 1
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)

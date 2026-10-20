@@ -158,13 +158,18 @@ async function listExistingFlags(): Promise<Map<string, ExistingFlag>> {
   let offset: number | undefined = 0
   let pages = 0
   while (offset !== undefined) {
-    if (pages === MAX_PAGES) throw new SyncFailure('PostHog flag list did not end')
+    if (pages === MAX_PAGES)
+      throw new SyncFailure(
+        `PostHog's flag list didn't end after ${String(MAX_PAGES)} pages. Run the sync again.`
+      )
     pages += 1
     const result = await posthogApi('GET', posthogProjectPath('feature_flags/'), undefined, {
       query: { limit: String(PAGE_LIMIT), offset: String(offset) },
     })
     if (result.kind !== 'ok') {
-      throw new SyncFailure(`Could not list PostHog feature flags: ${describeFailure(result)}`)
+      throw new SyncFailure(
+        `PostHog didn't list its feature flags (${describeFailure(result)}). Check POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID, then run the sync again.`
+      )
     }
     const { results, next } = (result.json ?? {}) as { results?: unknown; next?: unknown }
     if (!Array.isArray(results)) {
@@ -190,7 +195,9 @@ async function tenantIndexIfNeeded(): Promise<number | undefined> {
     return await tenantGroupTypeIndex()
   } catch (error) {
     if (error instanceof PosthogUnavailableError) {
-      throw new SyncFailure('Could not read PostHog group types')
+      throw new SyncFailure(
+        "PostHog didn't return its group types. Check POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID, then run the sync again."
+      )
     }
     throw error
   }
@@ -271,7 +278,9 @@ async function createFlag(
     result.kind === 'http_error' ? (result.json as { code?: unknown } | undefined)?.code : undefined
   if (code === 'unique' && result.kind === 'http_error' && result.status === 400) return 'present'
   const suffix = typeof code === 'string' ? ` ${code}` : ''
-  throw new SyncFailure(`Could not create ${entry.key}: ${describeFailure(result)}${suffix}`)
+  throw new SyncFailure(
+    `PostHog didn't create ${entry.key} (${describeFailure(result)}${suffix}). Check its registry entry, then run the sync again.`
+  )
 }
 
 /**
