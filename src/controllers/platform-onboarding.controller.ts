@@ -74,10 +74,13 @@ class PlatformOnboardingController extends BaseController {
     const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { reason } = parseBody(reasonBodySchema, request.body)
     const result = await sendOnboardingReminder(actorFrom(request), tenantId, reason)
+    const owners = result.recipientCount === 1 ? 'owner' : 'owners'
     successResponse(
       response,
       result,
-      result.emailSent ? 'Reminder sent.' : 'The reminder could not be queued for every owner.'
+      result.emailSent
+        ? `Reminder sent to ${String(result.recipientCount)} ${owners}.`
+        : `We queued the reminder for ${String(result.queuedCount)} of ${String(result.recipientCount)} ${owners}. The rest show as failed on Emails.`
     )
   })
 }

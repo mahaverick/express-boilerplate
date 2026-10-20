@@ -26,6 +26,7 @@ export interface StepUpLinkVariables {
   firstName: string
   confirmUrl: string
   expiresInMinutes: string
+  expiresAt: string
   appName: string
 }
 
@@ -37,7 +38,7 @@ export interface StepUpLinkVariables {
  */
 export const STEP_UP_LINK_TEMPLATE_META: EmailTemplateMeta<StepUpLinkVariables> = {
   senderClass: 'transactional',
-  previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+  previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
   // eslint-disable-next-line unicorn/no-null -- no staff resend re-runs this flow
   resendAction: null,
 }
@@ -46,6 +47,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof StepUpLinkVariables> = [
   'firstName',
   'confirmUrl',
   'expiresInMinutes',
+  'expiresAt',
   'appName',
 ]
 
@@ -61,7 +63,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof StepUpLinkVariables> = [
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderStepUpLinkTemplate(variables: StepUpLinkVariables): RenderedEmail {
-  const { firstName, confirmUrl, expiresInMinutes, appName } = requireEmailVariables(
+  const { firstName, confirmUrl, expiresInMinutes, expiresAt, appName } = requireEmailVariables(
     variables,
     REQUIRED_VARIABLE_NAMES,
     STEP_UP_LINK_TEMPLATE_KEY
@@ -72,7 +74,7 @@ export function renderStepUpLinkTemplate(variables: StepUpLinkVariables): Render
   const text = [
     `Hi ${firstName},`,
     '',
-    `Confirm it's you to continue in ${appName}. Open this link in the browser you asked from. It works once and expires in ${expiresInMinutes} minutes.`,
+    `Confirm it's you to continue in ${appName}. Open this link in the browser you asked from. It works once and expires in ${expiresInMinutes} minutes, at ${expiresAt}.`,
     '',
     confirmUrl,
     '',
@@ -90,7 +92,7 @@ export function renderStepUpLinkTemplate(variables: StepUpLinkVariables): Render
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-    <p>Confirm it's you to continue in ${escapedAppName}. Open this link in the browser you asked from. It works once and expires in ${escapedMinutes} minutes.</p>
+    <p>Confirm it's you to continue in ${escapedAppName}. Open this link in the browser you asked from. It works once and expires in ${escapedMinutes} minutes, at ${escapeHtmlForEmail(expiresAt)}.</p>
     <p><a href="${escapedConfirmUrl}">${escapedConfirmUrl}</a></p>
     <p>If you didn't ask for this, someone else is signed in to your account. Don't open the link, and tell your team admin.</p>
     <p>— The ${escapedAppName} team</p>

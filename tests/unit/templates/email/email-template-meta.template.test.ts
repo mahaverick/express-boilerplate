@@ -31,12 +31,15 @@ const SAMPLE_VARIABLES: {
     role: 'viewer',
     acceptUrl: 'https://x.test/a',
     expiresInDays: '7',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'App',
   },
   onboarding_reminder: {
     tenantName: 'Acme',
     appName: 'App',
     nextStep: 'Invite a teammate',
+    stepsDone: '1',
+    stepsTotal: '3',
     overviewLink: 'https://x.test/tenants/acme',
   },
   maintenance_mode_changed: {
@@ -51,6 +54,7 @@ const SAMPLE_VARIABLES: {
     firstName: 'Ada',
     signInUrl: 'https://x.test/auth/link?token=t&email=a%40x.test',
     expiresInMinutes: '15',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'App',
     reason: 'self',
   },
@@ -58,12 +62,14 @@ const SAMPLE_VARIABLES: {
     firstName: 'Ada',
     confirmUrl: 'https://x.test/auth/confirm?token=t',
     expiresInMinutes: '15',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'App',
   },
   welcome: {
     firstName: 'Ada',
     signInUrl: 'https://x.test/auth/link?token=t&email=a%40x.test',
     expiresInMinutes: '15',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'App',
   },
   invitation_confirm: {
@@ -72,6 +78,7 @@ const SAMPLE_VARIABLES: {
     role: 'editor',
     confirmUrl: 'https://x.test/invitations/confirm?token=t&email=a%40x.test',
     expiresInMinutes: '15',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'App',
   },
 }
@@ -87,12 +94,19 @@ describe('EMAIL_TEMPLATE_META', () => {
     expect(EMAIL_TEMPLATE_META).toEqual({
       tenant_invitation: {
         senderClass: 'transactional',
-        previewVariables: ['tenantName', 'role', 'expiresInDays', 'appName'],
+        previewVariables: ['tenantName', 'role', 'expiresInDays', 'expiresAt', 'appName'],
         resendAction: 'invitation',
       },
       onboarding_reminder: {
         senderClass: 'general',
-        previewVariables: ['tenantName', 'appName', 'nextStep', 'overviewLink'],
+        previewVariables: [
+          'tenantName',
+          'appName',
+          'nextStep',
+          'stepsDone',
+          'stepsTotal',
+          'overviewLink',
+        ],
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
@@ -104,23 +118,30 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       sign_in_link: {
         senderClass: 'transactional',
-        previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
+        previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName', 'reason'],
         resendAction: 'sign_in_link',
       },
       step_up_link: {
         senderClass: 'transactional',
-        previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+        previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       welcome: {
         senderClass: 'transactional',
-        previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+        previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
         resendAction: 'sign_in_link',
       },
       invitation_confirm: {
         senderClass: 'transactional',
-        previewVariables: ['firstName', 'tenantName', 'role', 'expiresInMinutes', 'appName'],
+        previewVariables: [
+          'firstName',
+          'tenantName',
+          'role',
+          'expiresInMinutes',
+          'expiresAt',
+          'appName',
+        ],
         resendAction: 'invitation',
       },
     })

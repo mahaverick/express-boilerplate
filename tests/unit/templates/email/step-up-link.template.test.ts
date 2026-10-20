@@ -18,6 +18,7 @@ const VARIABLES: StepUpLinkVariables = {
   firstName: 'Ada',
   confirmUrl: 'https://apex.example.test/auth/confirm?token=abc&x=1',
   expiresInMinutes: '15',
+  expiresAt: '15:42 UTC on 20 October 2026',
   appName: 'Acme',
 }
 
@@ -29,10 +30,12 @@ describe('renderStepUpLinkTemplate', () => {
     expect(rendered.subject).toBe("Confirm it's you on Acme")
     expect(rendered.subject).not.toContain('token')
     expect(rendered.text).toContain(VARIABLES.confirmUrl)
-    expect(rendered.text).toContain('It works once and expires in 15 minutes.')
+    expect(rendered.text).toContain(
+      'It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.'
+    )
     expect(rendered.text).toContain('Open this link in the browser you asked from.')
     expect(rendered.html).toContain('https://apex.example.test/auth/confirm?token=abc&amp;x=1')
-    expect(rendered.html).toContain('expires in 15 minutes')
+    expect(rendered.html).toContain('expires in 15 minutes, at 15:42 UTC on 20 October 2026.')
   })
 
   it('escapes the variables in the HTML part only', () => {
@@ -46,7 +49,7 @@ describe('renderStepUpLinkTemplate', () => {
   it('has senderClass transactional, stores no …Url variable and never resends', () => {
     expect(STEP_UP_LINK_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
-      previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+      previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
       // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     })

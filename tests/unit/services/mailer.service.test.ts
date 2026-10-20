@@ -134,6 +134,7 @@ describe('MailMessage', () => {
     firstName: 'Ada',
     confirmUrl: 'https://example.test/auth/confirm',
     expiresInMinutes: '15',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'Test App',
   }
 
@@ -158,6 +159,7 @@ describe('MailMessage', () => {
         // @ts-expect-error — StepUpLinkVariables has no `signInUrl` and requires `confirmUrl`: this object is WelcomeVariables-shaped. TS reports the excess property on its own line, so the directive sits directly above it.
         signInUrl: 'https://example.test/auth/link',
         expiresInMinutes: '15',
+        expiresAt: '15:42 UTC on 20 October 2026',
         appName: 'Test App',
       },
     }

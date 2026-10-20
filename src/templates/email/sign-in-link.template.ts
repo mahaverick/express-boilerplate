@@ -27,6 +27,7 @@ export interface SignInLinkVariables {
   firstName: string
   signInUrl: string
   expiresInMinutes: string
+  expiresAt: string
   appName: string
   reason: 'self' | 'staff'
 }
@@ -38,7 +39,7 @@ export interface SignInLinkVariables {
  */
 export const SIGN_IN_LINK_TEMPLATE_META: EmailTemplateMeta<SignInLinkVariables> = {
   senderClass: 'transactional',
-  previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
+  previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName', 'reason'],
   resendAction: 'sign_in_link',
 }
 
@@ -46,6 +47,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof SignInLinkVariables> = [
   'firstName',
   'signInUrl',
   'expiresInMinutes',
+  'expiresAt',
   'appName',
   'reason',
 ]
@@ -68,11 +70,8 @@ const STAFF_SENT_SENTENCE = 'A team admin sent you this link.'
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderSignInLinkTemplate(variables: SignInLinkVariables): RenderedEmail {
-  const { firstName, signInUrl, expiresInMinutes, appName, reason } = requireEmailVariables(
-    variables,
-    REQUIRED_VARIABLE_NAMES,
-    SIGN_IN_LINK_TEMPLATE_KEY
-  )
+  const { firstName, signInUrl, expiresInMinutes, expiresAt, appName, reason } =
+    requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, SIGN_IN_LINK_TEMPLATE_KEY)
 
   const subject = `Sign in to ${appName}`
   const isStaffSent = reason === 'staff'
@@ -81,7 +80,7 @@ export function renderSignInLinkTemplate(variables: SignInLinkVariables): Render
     `Hi ${firstName},`,
     '',
     ...(isStaffSent ? [STAFF_SENT_SENTENCE, ''] : []),
-    `Sign in to ${appName}. This link works once and expires in ${expiresInMinutes} minutes.`,
+    `Sign in to ${appName}. This link works once and expires in ${expiresInMinutes} minutes, at ${expiresAt}.`,
     '',
     signInUrl,
     '',
@@ -99,7 +98,7 @@ export function renderSignInLinkTemplate(variables: SignInLinkVariables): Render
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-${isStaffSent ? `    <p>${STAFF_SENT_SENTENCE}</p>\n` : ''}    <p>Sign in to ${escapedAppName}. This link works once and expires in ${escapedMinutes} minutes.</p>
+${isStaffSent ? `    <p>${STAFF_SENT_SENTENCE}</p>\n` : ''}    <p>Sign in to ${escapedAppName}. This link works once and expires in ${escapedMinutes} minutes, at ${escapeHtmlForEmail(expiresAt)}.</p>
     <p><a href="${escapedSignInUrl}">${escapedSignInUrl}</a></p>
     <p>If you didn't ask to sign in, ignore this email. Nothing changes unless someone opens the link.</p>
     <p>— The ${escapedAppName} team</p>

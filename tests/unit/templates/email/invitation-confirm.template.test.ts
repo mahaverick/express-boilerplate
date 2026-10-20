@@ -28,6 +28,7 @@ const VARIABLES: InvitationConfirmVariables = {
   role: 'editor',
   confirmUrl: withEmailUtm(BARE_URL, 'invitation_confirm', 'primary_button'),
   expiresInMinutes: '15',
+  expiresAt: '15:42 UTC on 20 October 2026',
   appName: 'Acme',
 }
 
@@ -48,7 +49,7 @@ describe('renderInvitationConfirmTemplate', () => {
     expect(rendered.text.split('\n')).toEqual([
       'Hi Ada,',
       '',
-      'Sign in and join Acme Inc as editor with this link. It works once and expires in 15 minutes.',
+      'Sign in and join Acme Inc as editor with this link. It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.',
       '',
       VARIABLES.confirmUrl,
       '',
@@ -64,7 +65,7 @@ describe('renderInvitationConfirmTemplate', () => {
 
     expect(rendered.html).toContain('<p>Hi Ada,</p>')
     expect(rendered.html).toContain(
-      '<p>Sign in and join Acme Inc as editor with this link. It works once and expires in 15 minutes.</p>'
+      '<p>Sign in and join Acme Inc as editor with this link. It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.</p>'
     )
     expect(rendered.html).toContain(`<a href="${escapedUrl}"`)
     expect(rendered.html).toContain('>Join Acme Inc</a>')
@@ -108,7 +109,14 @@ describe('renderInvitationConfirmTemplate', () => {
   it('has senderClass transactional, resends the invitation and stores no …Url variable', () => {
     expect(INVITATION_CONFIRM_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
-      previewVariables: ['firstName', 'tenantName', 'role', 'expiresInMinutes', 'appName'],
+      previewVariables: [
+        'firstName',
+        'tenantName',
+        'role',
+        'expiresInMinutes',
+        'expiresAt',
+        'appName',
+      ],
       resendAction: 'invitation',
     })
     expect(INVITATION_CONFIRM_TEMPLATE_META.previewVariables).not.toContain('confirmUrl')

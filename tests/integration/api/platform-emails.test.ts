@@ -482,6 +482,7 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
         tenantName: 'Acme',
         role: 'editor',
         expiresInDays: '7',
+        expiresAt: '15:42 UTC on 20 October 2026',
         appName: 'Acme',
         inviterName: 'Grace Hopper',
       },

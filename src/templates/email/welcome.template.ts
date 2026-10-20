@@ -27,6 +27,7 @@ export interface WelcomeVariables {
   firstName: string
   signInUrl: string
   expiresInMinutes: string
+  expiresAt: string
   appName: string
 }
 
@@ -37,7 +38,7 @@ export interface WelcomeVariables {
  */
 export const WELCOME_TEMPLATE_META: EmailTemplateMeta<WelcomeVariables> = {
   senderClass: 'transactional',
-  previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+  previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
   resendAction: 'sign_in_link',
 }
 
@@ -45,6 +46,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof WelcomeVariables> = [
   'firstName',
   'signInUrl',
   'expiresInMinutes',
+  'expiresAt',
   'appName',
 ]
 
@@ -60,7 +62,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof WelcomeVariables> = [
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderWelcomeTemplate(variables: WelcomeVariables): RenderedEmail {
-  const { firstName, signInUrl, expiresInMinutes, appName } = requireEmailVariables(
+  const { firstName, signInUrl, expiresInMinutes, expiresAt, appName } = requireEmailVariables(
     variables,
     REQUIRED_VARIABLE_NAMES,
     WELCOME_TEMPLATE_KEY
@@ -71,7 +73,7 @@ export function renderWelcomeTemplate(variables: WelcomeVariables): RenderedEmai
   const text = [
     `Hi ${firstName},`,
     '',
-    `Your ${appName} account is ready. Sign in with this link. It works once and expires in ${expiresInMinutes} minutes.`,
+    `Your ${appName} account is ready. Sign in with this link. It works once and expires in ${expiresInMinutes} minutes, at ${expiresAt}.`,
     '',
     signInUrl,
     '',
@@ -89,7 +91,7 @@ export function renderWelcomeTemplate(variables: WelcomeVariables): RenderedEmai
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-    <p>Your ${escapedAppName} account is ready. Sign in with this link. It works once and expires in ${escapedMinutes} minutes.</p>
+    <p>Your ${escapedAppName} account is ready. Sign in with this link. It works once and expires in ${escapedMinutes} minutes, at ${escapeHtmlForEmail(expiresAt)}.</p>
     <p><a href="${escapedSignInUrl}">${escapedSignInUrl}</a></p>
     <p>If the link expires, enter your email address on the ${escapedAppName} sign-in page to get a new one.</p>
     <p>— The ${escapedAppName} team</p>

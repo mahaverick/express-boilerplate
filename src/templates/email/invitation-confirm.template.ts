@@ -29,6 +29,7 @@ export interface InvitationConfirmVariables {
   role: string
   confirmUrl: string
   expiresInMinutes: string
+  expiresAt: string
   appName: string
 }
 
@@ -39,7 +40,7 @@ export interface InvitationConfirmVariables {
  */
 export const INVITATION_CONFIRM_TEMPLATE_META: EmailTemplateMeta<InvitationConfirmVariables> = {
   senderClass: 'transactional',
-  previewVariables: ['firstName', 'tenantName', 'role', 'expiresInMinutes', 'appName'],
+  previewVariables: ['firstName', 'tenantName', 'role', 'expiresInMinutes', 'expiresAt', 'appName'],
   resendAction: 'invitation',
 }
 
@@ -49,6 +50,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof InvitationConfirmVariables> =
   'role',
   'confirmUrl',
   'expiresInMinutes',
+  'expiresAt',
   'appName',
 ]
 
@@ -66,7 +68,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof InvitationConfirmVariables> =
 export function renderInvitationConfirmTemplate(
   variables: InvitationConfirmVariables
 ): RenderedEmail {
-  const { firstName, tenantName, role, confirmUrl, expiresInMinutes, appName } =
+  const { firstName, tenantName, role, confirmUrl, expiresInMinutes, expiresAt, appName } =
     requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, INVITATION_CONFIRM_TEMPLATE_KEY)
 
   const subject = `Finish joining your team on ${appName}`
@@ -74,7 +76,7 @@ export function renderInvitationConfirmTemplate(
   const text = [
     `Hi ${firstName},`,
     '',
-    `Sign in and join ${tenantName} as ${role} with this link. It works once and expires in ${expiresInMinutes} minutes.`,
+    `Sign in and join ${tenantName} as ${role} with this link. It works once and expires in ${expiresInMinutes} minutes, at ${expiresAt}.`,
     '',
     confirmUrl,
     '',
@@ -97,7 +99,7 @@ export function renderInvitationConfirmTemplate(
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-    <p>Sign in and join ${escapedTenantName} as ${escapedRole} with this link. It works once and expires in ${escapedMinutes} minutes.</p>
+    <p>Sign in and join ${escapedTenantName} as ${escapedRole} with this link. It works once and expires in ${escapedMinutes} minutes, at ${escapeHtmlForEmail(expiresAt)}.</p>
     <p><a href="${escapedConfirmUrl}" style="display: inline-block; padding: 10px 16px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 6px;">Join ${escapedTenantName}</a></p>
     <p>Or paste this link into your browser: ${escapedConfirmUrl}</p>
     <p>${reason}</p>

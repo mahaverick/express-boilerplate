@@ -13,6 +13,8 @@ const validVariables: OnboardingReminderVariables = {
   tenantName: 'Acme Rockets',
   appName: 'Acme',
   nextStep: 'Invite a teammate',
+  stepsDone: '1',
+  stepsTotal: '3',
   overviewLink: 'https://app.example.test/tenants/acme-rockets',
 }
 
@@ -31,6 +33,13 @@ describe('renderOnboardingReminderTemplate', () => {
       expect(part).toContain('https://app.example.test/tenants/acme-rockets')
     }
     expect(rendered.html).toContain('<a href="https://app.example.test/tenants/acme-rockets">')
+  })
+
+  it('counts the steps done, so the owner reads where the tenant stands', () => {
+    const rendered = renderOnboardingReminderTemplate(validVariables)
+    for (const part of [rendered.text, rendered.html]) {
+      expect(part).toContain('Acme Rockets has finished 1 of 3 getting-started steps on Acme.')
+    }
   })
 
   it('keeps the user-chosen tenant name out of the subject', () => {
@@ -58,11 +67,15 @@ describe('renderOnboardingReminderTemplate', () => {
     expect(rendered.html).toContain('&quot; onclick=&quot;')
   })
 
-  it.each(['tenantName', 'appName', 'nextStep', 'overviewLink'] as const)(
-    'throws, naming %s, when it is missing',
-    (name) => {
-      const variables = { ...validVariables, [name]: undefined as unknown as string }
-      expect(() => renderOnboardingReminderTemplate(variables)).toThrow(new RegExp(name))
-    }
-  )
+  it.each([
+    'tenantName',
+    'appName',
+    'nextStep',
+    'stepsDone',
+    'stepsTotal',
+    'overviewLink',
+  ] as const)('throws, naming %s, when it is missing', (name) => {
+    const variables = { ...validVariables, [name]: undefined as unknown as string }
+    expect(() => renderOnboardingReminderTemplate(variables)).toThrow(new RegExp(name))
+  })
 })

@@ -83,6 +83,7 @@ import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
@@ -449,6 +450,7 @@ async function dispatchInvitationMessages(
           role: invitation.role,
           acceptUrl: buildInvitationAcceptUrl(rawToken, acceptOrigin),
           expiresInDays: context.expiresInDays ?? expiresInDays(),
+          expiresAt: formatUtcDateTime(invitation.expiresAt),
           appName: appNameFor(linkApp),
         },
       },
@@ -470,7 +472,7 @@ async function dispatchInvitationMessages(
             userId: notifyUser.id,
             type: 'tenant_invitation',
             title: `Invitation to ${tenant.name}`,
-            body: `${inviterName} invited you to join as ${invitation.role}.`,
+            body: `${inviterName} invited you to join ${tenant.name} as ${invitation.role}. The invitation expires at ${formatUtcDateTime(invitation.expiresAt)}.`,
             metadata: { tenantSlug: tenant.slug, invitationId: invitation.id },
           }),
         ]
@@ -978,7 +980,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
   const tokenHash = hashToken(rawToken)
   // Before the transaction: this row needs no lock, and a pool query inside one can starve the pool.
   const user = await userRepository.findById(userId)
-  if (!user?.active) throw new HttpError('Authentication required', 401)
+  if (!user?.active) throw new HttpError('Sign in to continue.', 401)
 
   const outcome = await db.transaction(async (tx): Promise<AcceptOutcome> => {
     const valid = await invitationRepository.findValidByTokenHash(tokenHash, tx)
@@ -987,7 +989,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     assertInvitedAddress(user, valid.invitation.email)
     // Before the claim: a delete takes the user row, then the invitations the user sent, and this one may be among them. A platform invitation of any role makes the user staff, which the delete's rank rule must see.
     if (valid.invitation.role === 'owner' || valid.tenant.isPlatform) {
-      await lockUserForOwnership(user.id, () => new HttpError('Authentication required', 401), tx)
+      await lockUserForOwnership(user.id, () => new HttpError('Sign in to continue.', 401), tx)
     }
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
@@ -1295,6 +1297,7 @@ async function mailInvitationConfirm(
         role: invitation.role,
         confirmUrl: buildInvitationConfirmUrl(raw, row),
         expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+        expiresAt: formatUtcDateTime(row.expiresAt),
         appName: appNameFor(linkApp),
       },
     },

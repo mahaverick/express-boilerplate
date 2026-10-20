@@ -39,6 +39,14 @@ export interface OnboardingReminderVariables {
    */
   nextStep: string
   /**
+   * How many required onboarding steps the tenant has done, as digits.
+   */
+  stepsDone: string
+  /**
+   * How many required onboarding steps there are, as digits.
+   */
+  stepsTotal: string
+  /**
    * The tenant's overview page in the customer app. Named `…Link`, not
    * `…Url`: it carries no token, so it is stored and previewed.
    */
@@ -52,7 +60,14 @@ export interface OnboardingReminderVariables {
  */
 export const ONBOARDING_REMINDER_TEMPLATE_META: EmailTemplateMeta<OnboardingReminderVariables> = {
   senderClass: 'general',
-  previewVariables: ['tenantName', 'appName', 'nextStep', 'overviewLink'],
+  previewVariables: [
+    'tenantName',
+    'appName',
+    'nextStep',
+    'stepsDone',
+    'stepsTotal',
+    'overviewLink',
+  ],
   // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
   resendAction: null,
 }
@@ -61,12 +76,14 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof OnboardingReminderVariables> 
   'tenantName',
   'appName',
   'nextStep',
+  'stepsDone',
+  'stepsTotal',
   'overviewLink',
 ]
 
 /**
  * Render the onboarding reminder: plain-text and HTML parts, both naming
- * the next step and carrying the overview link.
+ * the steps done, the next step and the overview link.
  * @param variables - See `OnboardingReminderVariables`.
  * @returns The rendered subject, text and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
@@ -74,18 +91,15 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof OnboardingReminderVariables> 
 export function renderOnboardingReminderTemplate(
   variables: OnboardingReminderVariables
 ): RenderedEmail {
-  const { tenantName, appName, nextStep, overviewLink } = requireEmailVariables(
-    variables,
-    REQUIRED_VARIABLE_NAMES,
-    ONBOARDING_REMINDER_TEMPLATE_KEY
-  )
+  const { tenantName, appName, nextStep, stepsDone, stepsTotal, overviewLink } =
+    requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, ONBOARDING_REMINDER_TEMPLATE_KEY)
 
   const subject = `Finish getting started on ${appName}`
 
   const text = [
     'Hi,',
     '',
-    `${tenantName} is part of the way through getting started on ${appName}.`,
+    `${tenantName} has finished ${stepsDone} of ${stepsTotal} getting-started steps on ${appName}.`,
     '',
     `Next step: ${nextStep}`,
     '',
@@ -105,7 +119,7 @@ export function renderOnboardingReminderTemplate(
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi,</p>
-    <p>${escapedTenantName} is part of the way through getting started on ${escapedAppName}.</p>
+    <p>${escapedTenantName} has finished ${escapeHtmlForEmail(stepsDone)} of ${escapeHtmlForEmail(stepsTotal)} getting-started steps on ${escapedAppName}.</p>
     <p>Next step: ${escapedNextStep}</p>
     <p><a href="${escapedOverviewLink}">Pick up where you left off</a></p>
     <p>Or paste this link into your browser: ${escapedOverviewLink}</p>

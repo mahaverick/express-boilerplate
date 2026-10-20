@@ -69,6 +69,7 @@ function untrackedData(): EmailJobData {
       firstName: 'Ada',
       confirmUrl: 'https://example.com/auth/confirm?token=abc',
       expiresInMinutes: '15',
+      expiresAt: '15:42 UTC on 20 October 2026',
       appName: 'Test',
     },
     userId: 'user-123',

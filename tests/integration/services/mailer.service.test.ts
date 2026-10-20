@@ -50,12 +50,14 @@ function validStepUpLinkVariables(): {
   firstName: string
   confirmUrl: string
   expiresInMinutes: string
+  expiresAt: string
   appName: string
 } {
   return {
     firstName: 'Ada',
     confirmUrl: `https://example.test/auth/confirm?token=${randomUUID()}`,
     expiresInMinutes: '15',
+    expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'Test App',
   }
 }
@@ -220,6 +222,7 @@ describe('sendMail', () => {
       firstName: 'Grace',
       signInUrl: `https://example.test/auth/link?token=${randomUUID()}`,
       expiresInMinutes: '15',
+      expiresAt: '15:42 UTC on 20 October 2026',
       appName: 'Test App',
       reason: 'self' as const,
     }
@@ -252,6 +255,7 @@ describe('sendMail', () => {
       firstName: 'Alan',
       signInUrl: `https://example.test/auth/link?token=${randomUUID()}`,
       expiresInMinutes: '15',
+      expiresAt: '15:42 UTC on 20 October 2026',
       appName: 'Test App',
     }
     await sendMail({ to: welcomeRecipient, templateKey: 'welcome', variables: welcomeVariables })
@@ -631,6 +635,7 @@ describe('sendMail', () => {
                 firstName: 'Ada',
                 confirmUrl,
                 expiresInMinutes: '15',
+                expiresAt: '15:42 UTC on 20 October 2026',
                 appName: 'Test App',
               },
             })

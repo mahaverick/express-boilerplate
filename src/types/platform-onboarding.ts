@@ -178,10 +178,11 @@ export interface TenantOnboardingDetail {
 }
 
 /**
- * What a reminder reports: whether every owner's email was queued, and how
- * many active owners it addressed.
+ * What a reminder reports: whether every owner's email was queued, how many
+ * active owners it addressed, and how many of their emails were queued.
  */
 export interface OnboardingReminderResult {
   emailSent: boolean
   recipientCount: number
+  queuedCount: number
 }

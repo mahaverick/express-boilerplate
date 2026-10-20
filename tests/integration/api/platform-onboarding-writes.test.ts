@@ -18,6 +18,7 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { PlatformOnboardingRepository } from '@/repositories/platform-onboarding.repository'
 import { sql, type DbTransaction } from '@/services/database.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { STEP_NOT_FOUND_MESSAGE } from '@/validators/platform-onboarding.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
@@ -324,7 +325,9 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
     expect((response.body as ApiEnvelope<unknown>).data).toEqual({
       emailSent: true,
       recipientCount: 2,
+      queuedCount: 2,
     })
+    expect((response.body as ApiEnvelope<unknown>).message).toBe('Reminder sent to 2 owners.')
     const messages = await messagesFor(tenant.id)
     expect(messages.map((row) => row.recipient).toSorted(byText)).toEqual(
       [owner.email, secondOwner.email].toSorted(byText)
@@ -338,6 +341,8 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
           tenantName: 'Acme Rockets',
           appName: getEnv().APP_NAME,
           nextStep: onboardingStepByKey('configure_settings')?.title,
+          stepsDone: '0',
+          stepsTotal: '2',
           overviewLink: `${getEnv().WEB_URL.replace(/\/$/, '')}/tenants/${tenant.slug}?utm_source=email&utm_medium=email&utm_campaign=onboarding_reminder&utm_content=primary_button`,
         },
       })
@@ -368,6 +373,7 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
 
     const [message] = await messagesFor(tenant.id)
     expect(message?.variables.nextStep).toBe(onboardingStepByKey('invite_teammate')?.title)
+    expect(message?.variables).toMatchObject({ stepsDone: '1', stepsTotal: '2' })
   })
 
   it('answers 409 reminded_recently within 24 hours of the last reminder, with retryAfter', async () => {
@@ -380,9 +386,13 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
 
     expect(response.status).toBe(409)
     expect(codeOf(response)).toBe('reminded_recently')
+    const nextAt = new Date(lastAt.getTime() + 24 * 60 * 60 * 1000)
     expect((response.body as ApiEnvelope<unknown>).errors).toEqual({
-      retryAfter: new Date(lastAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+      retryAfter: nextAt.toISOString(),
     })
+    expect((response.body as ApiEnvelope<unknown>).message).toBe(
+      `This tenant got a reminder in the last 24 hours. You can send the next one after ${formatUtcDateTime(nextAt, 'up')}.`
+    )
     expect(await messagesFor(tenant.id)).toEqual([])
   })
 
@@ -578,17 +588,23 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
 
     let status: number | undefined
     let data: unknown
+    let reply: unknown
     await withMutatedMethod(Queue.prototype, 'add', addUnavailable, async () => {
       const response = await remind(token, tenant.id)
       status = response.status
       data = (response.body as ApiEnvelope<unknown>).data
+      reply = (response.body as ApiEnvelope<unknown>).message
     })
 
     expect(status).toBe(200)
     expect(data).toEqual({
       emailSent: false,
       recipientCount: 1,
+      queuedCount: 0,
     })
+    expect(reply).toBe(
+      'We queued the reminder for 0 of 1 owner. The rest show as failed on Emails.'
+    )
     const [message] = await sql<{ id: string; status: string; failure_origin: string }[]>`
       select id, status, failure_origin from email_messages where tenant_id = ${tenant.id}
     `

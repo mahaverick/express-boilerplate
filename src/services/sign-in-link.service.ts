@@ -56,6 +56,7 @@ import { mailPlatformInvitationConfirmForSignIn } from '@/services/tenant-invita
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
 import type { EmailResendOptions } from '@/types/email-context'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import type { SignInLinkRequestInput } from '@/validators/sign-in-link.validators'
 
@@ -141,6 +142,7 @@ export async function sendSignInLink(
       reason === 'welcome' ? WELCOME_TEMPLATE_KEY : SIGN_IN_LINK_TEMPLATE_KEY
     ),
     expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+    expiresAt: formatUtcDateTime(row.expiresAt),
     appName: appNameFor(target.app),
   }
   await addEmailJob(

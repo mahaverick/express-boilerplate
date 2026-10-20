@@ -53,6 +53,7 @@ function invitationMessage(to: string, token: string): MailMessage {
       role: 'editor',
       acceptUrl: `https://web.example.test/invitations/accept?token=${token}`,
       expiresInDays: '7',
+      expiresAt: '15:42 UTC on 20 October 2026',
       appName: 'Test App',
     },
   }
@@ -99,6 +100,7 @@ describe('addEmailJob', () => {
         tenantName: 'Acme Inc',
         role: 'editor',
         expiresInDays: '7',
+        expiresAt: '15:42 UTC on 20 October 2026',
         appName: 'Test App',
       },
     })
@@ -117,6 +119,8 @@ describe('addEmailJob', () => {
           tenantName: 'Acme',
           appName: 'Test',
           nextStep: 'Invite a teammate',
+          stepsDone: '1',
+          stepsTotal: '2',
           overviewLink: 'https://example.test/tenants/acme',
         },
       },

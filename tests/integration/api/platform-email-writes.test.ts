@@ -221,6 +221,7 @@ async function invitationMessage(
             tenantName: tenant.name,
             role,
             expiresInMinutes: '15',
+            expiresAt: '15:42 UTC on 20 October 2026',
             appName: 'Acme',
           },
   })
