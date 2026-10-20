@@ -3,6 +3,8 @@
 ## [6.1.1](https://github.com/mahaverick/express-boilerplate/compare/v6.1.0...v6.1.1) (2026-10-20)
 
 
+**Note:** this release also contains the breaking removal of Google step-up ([#133](https://github.com/mahaverick/express-boilerplate/issues/133)), which merged just before it was cut. 7.0.0 records that change and its migration steps.
+
 ### Bug Fixes
 
 * **analytics:** raise Node's 250 ms connect-attempt timeout that made the proxy 504 ([#129](https://github.com/mahaverick/express-boilerplate/issues/129)) ([55af052](https://github.com/mahaverick/express-boilerplate/commit/55af052d8611e41dfab523681948540effcfc035))
