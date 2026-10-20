@@ -6,8 +6,8 @@ OpenTelemetry traces and logs, and a git-hook and CI pipeline that enforces
 all of it.
 
 On top of that platform it ships sign-in by emailed link, with the account
-created on the first click, optional Google sign-in, staff step-up by emailed
-link, JWT access tokens with rotating opaque refresh tokens, multi-tenancy
+created on the first click, optional Google sign-in, passkeys, a "confirm it's
+you" step by emailed link or passkey for every signed-in user, JWT access tokens with rotating opaque refresh tokens, multi-tenancy
 with roles and one-click invitations, an audit log, platform staff access,
 in-app notifications over server-sent events, BullMQ jobs and a daily
 data-retention purge. A staff directory, email delivery tracking, onboarding,
@@ -84,7 +84,21 @@ answers `data.user` and `data.accessToken`, and sets the refresh-token cookie.
 A link works once and expires in 15 minutes; send the first request again for
 a new one. Send the token as `Authorization: Bearer <accessToken>` to reach an
 authenticated route such as `GET /api/v1/profile`. Every `/api/v1/auth` route
-refuses a non-JSON body with 415. See
+refuses a non-JSON body with 415.
+
+**Passkeys.** `PASSKEY_MODE` is `optional` by default: a signed-in person
+creates a passkey (`POST /api/v1/auth/passkeys/registration/options`, then
+`/registration/verify`) and signs in with it later
+(`POST /api/v1/auth/passkeys/sign-in/options`, then `/sign-in/verify`). `off`
+hides the passkey routes; `required` makes every account create a passkey
+before anything else. `GET /api/v1/auth/passkeys/config` answers the mode.
+`WEBAUTHN_RP_ID` defaults to the host of `WEB_URL`; set it to a parent domain
+when `APEX_URL` sits on another subdomain. A browser has to run the ceremony,
+so the curl flow above covers links only. Sensitive actions ask a signed-in
+user to confirm it's them within 10 minutes: by emailed link
+(`POST /api/v1/auth/step-up/link/request` with `{"app":"web"}`) or by passkey
+(`/api/v1/auth/passkeys/step-up/options`). The rules are in
+[SECURITY.md](SECURITY.md#passkeys). See
 [ARCHITECTURE.md](ARCHITECTURE.md#request-path-auth-and-beyond) for the rest.
 
 ## Run everything with Docker
@@ -505,7 +519,7 @@ Runbook:
    reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
 4. **Before database work, check "0 running" on every paused queue** on the
    Maintenance page. `full` pauses every queue but `auth-email`, which keeps
-   sending sign-in, step-up, invitation and invitation confirm mail. Jobs already running finish
+   sending sign-in, step-up, invitation, invitation confirm and passkey notice mail. Jobs already running finish
    first.
 5. **Staff keep working.** Staff actions in Apex and staff sign-ins keep
    working and writing during maintenance.

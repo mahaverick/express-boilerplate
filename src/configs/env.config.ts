@@ -284,7 +284,7 @@ const EnvSchema = z.object({
         'STEP_UP_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
     })
     .describe(
-      'How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a staff session and a new one is one click away. Defaults to 15m.'
+      'How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a session and a new one is one click away. Defaults to 15m.'
     ),
 
   STEP_UP_LINK_COOLDOWN: z
@@ -295,7 +295,7 @@ const EnvSchema = z.object({
         'STEP_UP_LINK_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
     })
     .describe(
-      'Shortest gap between two step-up confirmation mails for one staff member, across all their sessions, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own sessions. Defaults to 1m.'
+      'Shortest gap between two step-up confirmation mails for one account, across all its sessions, as an ms()-parseable duration (e.g. "1m"), so an account cannot be mail-bombed through its own sessions. Defaults to 1m.'
     ),
 
   INVITATION_TTL: z

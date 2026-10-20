@@ -41,10 +41,24 @@ points at the code or doc that holds the detail. How things work is in
   (`confirmInvitation`) locks the user row before it claims the link, the
   order a deactivation takes; claiming first deadlocks against it. See
   [SECURITY.md](SECURITY.md#invitation-links-are-single-use).
-- **A dead link answers 400 `LINK_INVALID`, never 401** (sign-in and step-up
-  verify): clients sign out on a 401. Keep one body for every dead link, and
-  keep every check that refuses before the claim on a read-only peek, so the
-  refusal spends nothing.
+- **A dead link or credential answers 400, never 401** (`LINK_INVALID`;
+  `PASSKEY_VERIFICATION_FAILED`, `PASSKEY_UNKNOWN`): clients sign out on a 401. Keep one body for every dead link, and keep every check that refuses
+  before the claim on a read-only peek, so the refusal spends nothing.
+- **Passkeys follow `PASSKEY_MODE`** (`off`, `optional`, `required`). Under
+  `off` every passkey route but the public config read answers the
+  unknown-route 404 (`requirePasskeysEnabled`) and the rows stay. Every
+  ceremony needs user verification and a single-use challenge bound to its
+  purpose, user and session (`passkey-challenge.service.ts`): a challenge that
+  crosses ceremonies answers `PASSKEY_VERIFICATION_FAILED`. Another user's
+  passkey answers the passkey 404, never 403. `claimNeverVerifiedAccount`
+  deletes the squatter's passkeys, and an unverified account can use none.
+  `PASSKEY_SETUP_ALLOWED` is the only list of routes a required-mode account
+  without a passkey may reach; add a route there only if the lockout path needs
+  it. See [SECURITY.md](SECURITY.md#passkeys).
+- **Confirm it's you is open to every signed-in user,** by link or passkey.
+  The link request takes `{ app }`, and `apex` is refused for an account
+  without a platform role. User-facing copy says "Confirm it's you", never
+  "step-up".
 - **The refresh cookie's name, path and domain come only from
   `refreshCookieSpec`** (`src/constants/auth.constants.ts`), and the
   controller reads it only through `currentRefreshCookie(env)`. A browser
@@ -111,15 +125,13 @@ points at the code or doc that holds the detail. How things work is in
   route that means the role gate runs first: `requirePlatformRole`, then
   `requireJsonContentType`, then `requireRecentAuth()` where it applies, then
   the limiter. Anything earlier answers a non-staff caller a 415, `RateLimit-*`
-  headers or a 401 `REAUTH_REQUIRED`. A staff route inside another router,
-  today the step-up routes under `/auth/step-up`, keeps that router's shared
-  gates ahead of its role gate, because an unknown sibling path meets them too: the
-  auth router's JSON gate gives a non-JSON body the same 415 an unknown
-  `/auth/*` path gets, and the role gate then comes before the limiter. Keep
-  `refusePlatformOptions` on every staff route's path, after any shared gate
-  that would answer first, or Express answers OPTIONS with an `Allow` header.
-  Pin each staff route by comparing it with an unknown sibling path, not with
-  `/api/v1/<unknown>`: `tests/integration/api/platform-route-gates.test.ts`.
+  headers or a 401 `REAUTH_REQUIRED`. The step-up routes under `/auth/step-up`
+  and `/auth/passkeys/step-up` are not staff routes: any signed-in user may
+  call them, so they run `requireAuth` and a limiter with no role gate. They
+  keep `refusePlatformOptions`, so an OPTIONS gets the unknown path's 404 and
+  not Express's `Allow` answer. Pin each staff route by comparing it with an
+  unknown sibling path, not with `/api/v1/<unknown>`:
+  `tests/integration/api/platform-route-gates.test.ts`.
   See [SECURITY.md](SECURITY.md#platform-staff).
 - **Only `src/services/platform-*.service.ts` import the five cross-tenant
   `platform-*` repositories** (lint enforces it). "Your tenants" stays on

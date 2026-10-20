@@ -495,23 +495,31 @@ new feature router is one more `router.use(...)` there, never a change to
 
 ### Sign-in, step-up and their tokens
 
-A person signs in by an emailed link or by Google; there is no other
-credential. The auth routes, all under `/api/v1`:
+A person signs in by an emailed link, by Google or by a passkey
+(`PASSKEY_MODE`; [SECURITY.md](SECURITY.md#passkeys)). The auth routes, all
+under `/api/v1`:
 
-| Route                                                          | Service                                                         | What it does                                                                                                                                                         |
-| -------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/link/request`                                      | `requestSignInLink` (`sign-in-link.service.ts`)                 | Answers 202 before any lookup, then mails a link (or, on Apex, a staff invitee's invitation) in the follow-up.                                                       |
-| `POST /auth/link/verify`                                       | `verifySignInLink`                                              | Spends the link and signs in the account its address holds, creating a verified one on the first web click.                                                          |
-| `POST /invitations/verify`                                     | `verifyInvitation` (`tenant-invitation.service.ts`)             | A new address on a customer invitation joins in one transaction; any other click answers 202 and mails a confirm link in the follow-up (`requestInvitationConfirm`). |
-| `POST /invitations/confirm`                                    | `confirmInvitation` (`tenant-invitation.service.ts`)            | Spends the confirm link and the invitation, signs the invitee in as a recent sign-in, and joins them.                                                                |
-| `GET /auth/google`, `GET /auth/google/callback`                | `completeGoogleSignIn` (`google-auth.service.ts`)               | Google sign-in.                                                                                                                                                      |
-| `POST /auth/step-up/link/request`, `/auth/step-up/link/verify` | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`) | Staff only: mails a link bound to the calling session, and confirms it for that session alone.                                                                       |
-| `POST /platform/users/:id/sign-in-link`                        | `platform-user.service.ts`                                      | Staff send a user an ordinary sign-in link: Apex for staff, `WEB_URL` for anyone else.                                                                               |
-| `POST /auth/refresh`, `POST /auth/logout`                      | `session.service.ts`                                            | Rotate or revoke the refresh cookie's session.                                                                                                                       |
+| Route                                                                                                                             | Service                                                            | What it does                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/link/request`                                                                                                         | `requestSignInLink` (`sign-in-link.service.ts`)                    | Answers 202 before any lookup, then mails a link (or, on Apex, a staff invitee's invitation) in the follow-up.                                                       |
+| `POST /auth/link/verify`                                                                                                          | `verifySignInLink`                                                 | Spends the link and signs in the account its address holds, creating a verified one on the first web click.                                                          |
+| `POST /invitations/verify`                                                                                                        | `verifyInvitation` (`tenant-invitation.service.ts`)                | A new address on a customer invitation joins in one transaction; any other click answers 202 and mails a confirm link in the follow-up (`requestInvitationConfirm`). |
+| `POST /invitations/confirm`                                                                                                       | `confirmInvitation` (`tenant-invitation.service.ts`)               | Spends the confirm link and the invitation, signs the invitee in as a recent sign-in, and joins them.                                                                |
+| `GET /auth/google`, `GET /auth/google/callback`                                                                                   | `completeGoogleSignIn` (`google-auth.service.ts`)                  | Google sign-in.                                                                                                                                                      |
+| `POST /auth/step-up/link/request`, `/auth/step-up/link/verify`                                                                    | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`)    | Any signed-in user: the request takes `{ app }`, mails a link bound to the calling session, and the verify confirms it for that session alone.                       |
+| `POST /auth/passkeys/step-up/options`, `/step-up/verify`                                                                          | `startPasskeyStepUp`, `finishPasskeyStepUp` (`step-up.service.ts`) | Any signed-in user: confirms it's them with a passkey, for the calling session alone.                                                                                |
+| `GET /auth/passkeys/config`                                                                                                       | `passkey.controller.ts`                                            | Public: answers `PASSKEY_MODE` in every mode.                                                                                                                        |
+| `POST /auth/passkeys/sign-in/options`, `/sign-in/verify`                                                                          | `startPasskeySignIn`, `finishPasskeySignIn` (`passkey.service.ts`) | Public: signs in the account that owns the passkey, as a recent sign-in.                                                                                             |
+| `GET /auth/passkeys`, `POST /auth/passkeys/registration/options`, `/registration/verify`, `PATCH` and `DELETE /auth/passkeys/:id` | `passkey.service.ts`                                               | List, create, rename and delete the caller's passkeys. Create and delete need a recent sign-in.                                                                      |
+| `POST /platform/users/:id/sign-in-link`                                                                                           | `platform-user.service.ts`                                         | Staff send a user an ordinary sign-in link: Apex for staff, `WEB_URL` for anyone else.                                                                               |
+| `POST /auth/refresh`, `POST /auth/logout`                                                                                         | `session.service.ts`                                               | Rotate or revoke the refresh cookie's session.                                                                                                                       |
 
 **The tokens.** `user_tokens` holds three purposes: `refresh` (the session
 chain), `sign_in_link` (an address and an app, never a user) and
-`step_up_link` (a user and the session it elevates). `tenant_invitations`
+`step_up_link` (a user and the session it elevates). `user_passkeys` holds the
+passkeys (a public key and counters, never a private key), and single-use
+passkey challenges live in Redis for 5 minutes
+(`passkey-challenge.service.ts`). `tenant_invitations`
 holds the invitation links. Every one is 32 random bytes with only its SHA-256
 stored; [DATABASE.md](DATABASE.md#user_tokens) has the columns and the shape
 CHECK, and [SECURITY.md](SECURITY.md#email-links) the lifetimes and claims.
@@ -519,14 +527,22 @@ CHECK, and [SECURITY.md](SECURITY.md#email-links) the lifetimes and claims.
 builds their URLs, each through `withUtm` (`src/utilities/utm.utilities.ts`),
 the one place UTM parameters are added to a link a user receives.
 
-**The step-up flow.** A staff route behind `requireRecentAuth()` answers
+**The step-up flow.** A route behind `requireRecentAuth()` answers
 `401 REAUTH_REQUIRED` once the session's `auth_time` is older than 10 minutes.
-Apex then confirms by link: request, then verify from the mailed page, which
-returns a new access token. The waiting tab refreshes to pick up the new
-`auth_time` and retries the action once. The confirm mints no session.
-Google is not a step-up method: Google documents no account
-re-authentication, so a Google round-trip cannot prove the person is present.
-The checks are in [SECURITY.md](SECURITY.md#step-up-by-link).
+Every signed-in user can then confirm it's them, staff and customers alike.
+The client picks a method: a link (request, then verify from the mailed page)
+or a passkey (options, then verify). Both return a new access token and mint
+no session. The link request names the app (`web` or `apex`) the page opens
+on; Apex is for staff only. The waiting tab refreshes to pick up the new
+`auth_time` and retries the action once. Google is not a step-up method:
+Google documents no account re-authentication, so a Google round-trip cannot
+prove the person is present. The checks are in
+[SECURITY.md](SECURITY.md#confirm-its-you).
+
+**Required mode.** With `PASSKEY_MODE=required`, `requireAuth` ends with
+`assertPasskeySetupDone`: an account with no passkey gets
+`403 PASSKEY_SETUP_REQUIRED` outside `PASSKEY_SETUP_ALLOWED`
+(`passkey.constants.ts`). The count query runs only in that mode.
 
 ### Errors and the response envelope
 
@@ -784,13 +800,13 @@ missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                             | Worker concurrency   | Job options                                                        |
-| -------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                           | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation` and `invitation_confirm`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                         | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
-| `maintenance`  | The retention purge                                                                                                 | 1                    | 3 attempts, backoff from 60 s                                      |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                          | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
+| Queue          | Carries                                                                                                                                                   | Worker concurrency   | Job options                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                 | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                               | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
+| `maintenance`  | The retention purge                                                                                                                                       | 1                    | 3 attempts, backoff from 60 s                                      |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
@@ -954,7 +970,10 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   email events from the webhook transaction. The event builder
   (`analytics-event-builder.service.ts`) holds every PII rule.
   `enqueueAnalyticsOrThrow` is for a caller that handles the failure itself:
-  the groups backfill and flag exposure.
+  the groups backfill and flag exposure. A passkey sign-in emits the same
+  `user_signed_in` event as a link, with `method: 'passkey'`; creating and
+  deleting a passkey send `passkey_created` and `passkey_deleted`
+  (`AUDIT_EVENT_RENAMES`), with the provider name and never a credential ID.
 - **The drain** (`analytics-drain.service.ts`) deletes an acknowledged row.
   A retryable answer (no answer, 429, 5xx, or an endpoint-level 401, 403, 404,
   405, 407 or 408) keeps every row under its lease with a backoff of
@@ -1203,7 +1222,7 @@ let-through list, and the controls on changing the mode, are in
 - **Queues** (`maintenance-mode-queues.service.ts`). `full` pauses every queue
   in `getPausableQueues()` with BullMQ's queue-wide `pause()`. That is every
   queue but `auth-email`, which carries the sign-in, step-up, welcome,
-  invitation and invitation confirm mail (`AUTH_EMAIL_TEMPLATE_KEYS`,
+  invitation, invitation confirm and passkey notice mail (`AUTH_EMAIL_TEMPLATE_KEYS`,
   `src/jobs/email.job.ts`), so
   staff can still sign in to switch maintenance off. The pause is a flag in
   Redis that every replica's Workers obey: running jobs finish, waiting ones
@@ -1281,8 +1300,8 @@ what `pnpm env:table` prints.
 | `SIGN_IN_LINK_TTL`                    | no       | `15m`                      | How long an emailed sign-in link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because the link is a full credential and a new one is one click away; staff-sent and welcome links use it too, and so does the invitation confirm link. Defaults to 15m.                                                                                                                                                                                                                                                                                                                            |
 | `SIGN_IN_LINK_MAIL_COOLDOWN`          | no       | `1m`                       | Shortest gap between two sign-in link mails to one address, as an ms()-parseable duration (e.g. "1m"). A request inside the gap answers the same 202 and mails nothing. Also the gap between two invitation confirm links to one address, counted separately. Defaults to 1m, matching the sign-in page's 60-second resend countdown.                                                                                                                                                                                                                                                                     |
 | `SIGN_IN_LINK_RECIPIENT_DAILY_LIMIT`  | no       | `10`                       | Most sign-in link mails one address may receive in 24 hours. A request past it answers the same 202 and mails nothing, so nobody can mail-bomb an address through the sign-in form. Defaults to 10.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `STEP_UP_LINK_TTL`                    | no       | `15m`                      | How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a staff session and a new one is one click away. Defaults to 15m.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `STEP_UP_LINK_COOLDOWN`               | no       | `1m`                       | Shortest gap between two step-up confirmation mails for one staff member, across all their sessions, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own sessions. Defaults to 1m.                                                                                                                                                                                                                                                                                                                                                                       |
+| `STEP_UP_LINK_TTL`                    | no       | `15m`                      | How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a session and a new one is one click away. Defaults to 15m.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `STEP_UP_LINK_COOLDOWN`               | no       | `1m`                       | Shortest gap between two step-up confirmation mails for one account, across all its sessions, as an ms()-parseable duration (e.g. "1m"), so an account cannot be mail-bombed through its own sessions. Defaults to 1m.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `INVITATION_TTL`                      | no       | `3d`                       | How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "3d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 3d.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `INVITATION_RESEND_COOLDOWN`          | no       | `10m`                      | How long after an invitation is mailed before it can be resent, as an ms()-parseable duration string. A resend sooner answers 429 invitation_resend_cooldown. Defaults to 10m.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `INVITATION_RECIPIENT_DAILY_LIMIT`    | no       | `10`                       | Most tenant invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender, of which one tenant may send at most 3; past either the sender gets 429 RATE_LIMITED. Staff owner-invitations of new tenants are not counted. Defaults to 10.                                                                                                                                                                                                                                                                                                                     |

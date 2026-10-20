@@ -362,6 +362,81 @@ A link or Google sign-in stamps `last_logged_in_at` before that re-read,
 outside the lock, so a sign-in the re-read refuses has still stamped it. An
 invitation verify stamps it after its transaction commits, best effort.
 
+### Passkeys
+
+`PASSKEY_MODE` sets how far passkeys reach. `off` hides every passkey route
+behind the unknown-route 404 and keeps the stored rows. `optional` (the
+default) lets a person create passkeys and sign in with one. `required` also
+refuses every signed-in route outside a short allowlist until the account has
+one ([Required mode](#passkeys)). Switching back to `optional` restores
+the rows. `GET /auth/passkeys/config` is public and answers the mode in every
+mode, so a frontend knows whether to show the passkey screens.
+
+- **The relying party.** `WEBAUTHN_RP_ID` defaults to the host of `WEB_URL`.
+  The expected origins are `WEB_URL` and, when set, `APEX_URL`. The
+  `CORS_ALLOWED_ORIGINS` extras are not passkey origins. Boot refuses an RP ID
+  that is neither equal to nor a parent domain of each expected origin's host,
+  unless the mode is `off` (`passkeyRpIdProblem`,
+  `src/configs/env-consistency.config.ts`). A passkey is bound to the RP ID,
+  so changing it orphans every stored passkey.
+- **What the browser must prove.** Every ceremony asks for user verification
+  (`userVerification: 'required'`) and no attestation (`attestation: 'none'`).
+  Creation also asks for a discoverable credential (`residentKey: 'required'`)
+  and excludes the user's existing passkeys, so one device is not registered
+  twice. The server stores the public key, the counters and a name taken from
+  the authenticator's listed provider name. It never holds a private key, and
+  audit metadata never carries key material or the credential ID.
+- **Single-use challenges.** Each ceremony starts with an options call that
+  stores a challenge in Redis for 5 minutes (`PASSKEY_CHALLENGE_TTL_MS`).
+  The verify call deletes it on the first read, so a replay finds nothing. A
+  challenge is bound to its purpose (`sign_in`, `create` or `step_up`), and
+  the last two to the user and, for step-up, the session. A challenge
+  presented to the wrong ceremony, by another user or from another session
+  answers `400 PASSKEY_VERIFICATION_FAILED`.
+- **Another user's passkey.** A passkey that is not the caller's answers as if
+  it did not exist: rename and delete answer the passkey 404, and a step-up
+  assertion by another user's credential answers `PASSKEY_VERIFICATION_FAILED`.
+- **The signature counter.** A regression is refused only for a passkey that
+  is not backup eligible and whose stored count is above 0. Synced passkeys
+  report 0 or a count that does not advance, so refusing them would lock out
+  honest users.
+- **Sign-in** (`POST /auth/passkeys/sign-in/options`, `.../verify`; public, one
+  per-IP limiter) issues a session the way a link click does: a recent
+  sign-in (`auth_time` set), a refresh cookie, `lastLoggedInAt`, and a
+  `user_signed_in` event with `method: 'passkey'`. A deactivated, soft-deleted
+  or never-verified account, and a credential that was deleted mid-request,
+  answer `400 PASSKEY_UNKNOWN` and issue no session. The account is re-read
+  under the row lock, as in a link sign-in. In `full` maintenance a non-staff
+  account is refused by `assertSignInAllowed`. A dead credential answers 400,
+  never 401, because the clients sign out on a 401.
+- **Create, rename and delete** (`POST /auth/passkeys/registration/options`,
+  `.../verify`, `PATCH` and `DELETE /auth/passkeys/:id`) need a signed-in
+  user, share the `passkey-manage` limiter, and need a recent sign-in for
+  create and delete (`requireRecentAuth`). An account holds at most 20 passkeys
+  (`409 PASSKEY_LIMIT`). An address that was never verified cannot create one
+  (`403 EMAIL_UNVERIFIED`). In `required` mode the last passkey cannot be
+  deleted (`409 LAST_PASSKEY`). Create and delete write
+  `user.passkey_created` and `user.passkey_deleted` to the platform tenant's
+  audit log, with the row id and the provider name, and mail the owner a
+  notice (`passkey_created`, `passkey_deleted`) so a passkey added by someone
+  else is visible.
+- **A claim drops passkeys.** When a sign-in claims a never-verified account
+  ([Account creation on click](#account-creation-on-click)), the claim deletes
+  every passkey on it in the same transaction, for every claim path: link,
+  invitation, Google and the platform grant script. An address squatted with a
+  passkey cannot keep a way in after its owner proves the mailbox.
+  Passkey sign-in and step-up refuse an unverified account for the same reason.
+- **Required mode.** `requireAuth` ends with `assertPasskeySetupDone`. With
+  `PASSKEY_MODE=required`, an account with no passkey gets
+  `403 PASSKEY_SETUP_REQUIRED` on every route outside `PASSKEY_SETUP_ALLOWED`
+  (`src/constants/passkey.constants.ts`): listing and creating passkeys, the
+  config read, both link confirm routes, logout, `GET /profile` and
+  `GET /auth/providers`. The match is on method and the lower-cased path
+  without a trailing slash or query. The count query runs only in required mode
+  and only off the allowlist. A person signed in by a one-click invitation has
+  no recent sign-in, so they confirm it's them by link, then create a passkey;
+  nothing else is needed to leave the lockout.
+
 ## Email links
 
 Sign-in, step-up and invitation mails carry a link to a frontend page, never
@@ -650,8 +725,8 @@ that last authenticated more than `STEP_UP_MAX_AGE_MS` (10 minutes) ago with
 `401 REAUTH_REQUIRED`. The time comes from the token's `auth_time`, which the
 refresh row records at sign-in (a one-click invitation join records none) and
 rotation carries forward; a token without it counts as stale. Staff move it
-forward by confirming it's them by an emailed link
-([Step-up by link](#step-up-by-link)).
+forward by confirming it's them, by an emailed link or a passkey
+([Confirm it's you](#confirm-its-you)). Every signed-in user can.
 A client must not sign out on `REAUTH_REQUIRED`.
 
 Step-up guards:
@@ -678,43 +753,54 @@ Staff acting in a customer tenant through their platform role send it in the
 body or get `400 REASON_REQUIRED`, and the services check it again under the
 lock.
 
-### Step-up by link
+### Confirm it's you
 
-Step-up is for staff only (`requirePlatformRole('viewer')` on each route), and
-moves the calling session's `authenticated_at` to now without minting a
-session (`src/services/step-up.service.ts`). An emailed link is the only
-method.
+Any signed-in user can confirm it's them, by an emailed link or by a passkey.
+Either moves the calling session's `authenticated_at` to now without minting a
+session (`src/services/step-up.service.ts`), and answers a new access token
+carrying the new `auth_time`. Staff need it for the guards above. A customer
+needs it to create or delete a passkey.
 
-- **By link, bound to the session.** `POST /auth/step-up/link/request` mails a
-  link to the account's own address and answers `202` with
-  `resendAvailableAt`. Another request by the same staff member, from any of
-  their sessions, inside `STEP_UP_LINK_COOLDOWN` (default `1m`) answers
-  `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
+- **By link, bound to the session.** `POST /auth/step-up/link/request` takes
+  `{ app }` (`web` or `apex`; a missing or unknown value answers 400). It mails
+  a link to the account's own address and answers `202` with
+  `resendAvailableAt`. A request for `apex` by an account with no platform role
+  answers the unknown-route 404 and mails nothing. Another request by the same
+  user, from any of their sessions, inside `STEP_UP_LINK_COOLDOWN` (default
+  `1m`) answers `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
   `step_up_link` row names the user and the session (the token's `sid`) that
   asked: a new link revokes that session's earlier one, and a sign-out revokes
   it. `POST /auth/step-up/link/verify` claims it only for that user and
   session, so a bearer from another session, the same user's included, gets
   `400 LINK_INVALID` and leaves the link unspent. The confirm is one
-  transaction: it locks the user row, claims the link, re-checks the platform
-  role, moves the session's `authenticated_at` and audits
-  `auth.step_up_confirmed { method: 'link' }`, so a refusal after the claim
-  rolls the claim back. A caller who lost the role since the gate gets the
-  gate's 404, audited `auth.step_up_refused`. A dead link writes no audit
-  entry: it is not attributable beyond the bearer, and the limiter bounds it.
-  The reply is a new access token carrying the new `auth_time`.
+  transaction: it locks the user row, claims the link, moves the session's
+  `authenticated_at` and audits `auth.step_up_confirmed { method: 'link' }`. A
+  dead link writes no audit entry: it is not attributable beyond the bearer,
+  and the limiter bounds it.
+- **By passkey, bound to the session.** `POST /auth/passkeys/step-up/options`
+  answers a challenge bound to the user and session, with the user's own
+  credentials as the allowed list (`409 NO_PASSKEY` when there are none).
+  `POST /auth/passkeys/step-up/verify` accepts only an assertion by one of the
+  caller's credentials and applies the same counter rule as sign-in. In one
+  transaction it moves `authenticated_at`, records the use and audits
+  `auth.step_up_confirmed { method: 'passkey' }`. A refusal answers
+  `400 PASSKEY_VERIFICATION_FAILED`, never 401. An unverified account is
+  refused. A passkey sign-in counts as a recent sign-in, so it needs no
+  step-up for the next 10 minutes (`STEP_UP_MAX_AGE_MS`).
+- **One audit home.** Step-up rows go to the platform tenant. `auth.step_up_refused`
+  has no writer today; the action stays so earlier rows read back.
 - **No Google step-up.** Google documents no account re-authentication: it
   ignores `max_age`, and `auth_time`, when Google sends it at all, is the
   user's last Google sign-in on that browser, not a fresh one. A Google
   round-trip therefore cannot prove the person is present, and an unattended,
   signed-in browser would pass it. Google stays a sign-in method only. Audit
-  rows written before this removal keep `method: 'google'`; new ones are
-  always `method: 'link'`.
+  rows with `method: 'google'` are old; new ones are `link` or `passkey`.
 
 ### The audit log
 
 `audit_logs` records every tenant, settings, member and invitation change in the
 same transaction as the change, platform joins and grants, every staff action on
-a user, a tenant, an email or a suppression, each staff step-up, staff visits,
+a user, a tenant, an email or a suppression, each step-up, each passkey created or deleted, staff visits,
 and throttled staff reads of a flag evaluation.
 Each action's metadata has a strict schema (`src/constants/audit.constants.ts`);
 invitation entries keep the address's domain, never the address or the token. A
@@ -965,7 +1051,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 23 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 26 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -1009,8 +1095,16 @@ The auth limiters each answer a specific threat:
 - **Sign-in link verify and invitation verify** count by IP (20 in 15 minutes
   each). A link carries 256 random bits, so they bound a client working through
   dead links, not guessing.
-- **Step-up** counts per staff member: one `step-up-link` budget shared by the
-  link request and its verify (10 in 15 minutes; a normal confirm spends two).
+- **Confirm it's you** counts per user: one `step-up-link` budget shared by the
+  link request and its verify (10 in 15 minutes; a normal confirm spends two),
+  and one `passkey-step-up` budget shared by the passkey options and verify
+  (10 in 15 minutes).
+- **Passkey sign-in** counts by IP: one `passkey-sign-in` budget shared by the
+  options and verify (20 in 15 minutes; a sign-in spends two). The Origin
+  check runs before the limiter, so a refused page spends nothing.
+- **Passkey create, rename and delete** count per user: one `passkey-manage`
+  budget across all four writes (20 in 15 minutes). Listing passkeys has no
+  limiter: it reads the caller's own rows.
 - **Refresh and logout** are volume protection (300 in 5 minutes per IP): a
   refresh token is 256 random bits. Logout's budget is generous because a 429
   leaves the cookie uncleared.
@@ -1028,10 +1122,11 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 `src/constants/maintenance-mode.constants.ts`), before any router runs. In
 `read_only` it refuses writes outside a short allowlist; in `full` it refuses
 everything but health, the email webhook, the collect proxy, the public status,
-`/platform`, the sign-in link routes, Google sign-in, the step-up routes,
-refresh, logout, `GET /auth/providers`, `GET /auth/passkeys/config` and
-`GET /profile`. On the customer
-routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
+`/platform`, the sign-in link routes, Google sign-in, the step-up routes
+(link and passkey), the passkey sign-in routes, refresh, logout,
+`GET /auth/providers`, `GET /auth/passkeys/config` and `GET /profile`. Listing,
+creating, renaming and deleting a passkey are customer routes: `read_only`
+refuses the writes, and on the routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
 staff through. The let-through list is visible during maintenance: a route on
 it reaches its router while an unknown path gets the 503, which is accepted,
 since the list names only routes the frontends already call.
@@ -1064,7 +1159,7 @@ since the list names only routes the frontends already call.
   without its Google link being written; a never-verified one is still
   claimed, as a link click claims it.
 - Auth mail keeps flowing. `full` pauses every queue but `auth-email`, which
-  carries the sign-in, step-up, welcome and invitation mail
+  carries the sign-in, step-up, welcome, invitation and passkey notice mail
   (`AUTH_EMAIL_TEMPLATE_KEYS`, `src/jobs/email.job.ts`), so staff can still
   sign in to switch the mode off.
 - Changing the mode needs a platform owner, a recent sign-in, JSON, its own
@@ -1079,18 +1174,18 @@ reload and the queue pause.
 
 ## What this boilerplate does not implement
 
-| Control                                               | Status              | What it means for you                                                                                                                                                                   |
-| ----------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. The one step-up is a fresh emailed link before staff actions.                                                                                               |
-| CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                  |
-| Global rate limiting                                  | **Partial**         | 23 limiters, and every write route has one. Most authenticated reads have none.                                                                                                         |
-| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`) and each staff step-up (`auth.step_up_confirmed`, `auth.step_up_refused`). |
-| Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                  |
-| Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                  |
-| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                                                            |
-| HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                                                                      |
-| Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                                                            |
-| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role, creating a verified account when needed.                                                  |
+| Control                                               | Status              | What it means for you                                                                                                                                                                                                                       |
+| ----------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                               |
+| CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                      |
+| Global rate limiting                                  | **Partial**         | 26 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                             |
+| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`). |
+| Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                      |
+| Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                      |
+| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                                                                                                                |
+| HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                                                                                                                          |
+| Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                                                                                                                |
+| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role, creating a verified account when needed.                                                                                                      |
 
 ## Reporting a vulnerability
 
