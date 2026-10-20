@@ -26,12 +26,13 @@ export function createPasskeyRouter(): Router {
   router.use(requirePasskeysEnabled)
   // One instance on every write, so one budget covers create, rename and delete; requireAuth first, as it keys on request.user.id.
   const manageLimiter = createRateLimiter(RATE_LIMITS.passkeyManage)
-  // Public: sign-in has no session. The Origin check runs before the limiter, as on /auth/link/verify, so a refused page spends no budget; one instance covers options and verify.
+  // Public: sign-in has no session. The Origin check runs before the limiter, as on /auth/link/verify, so a refused page spends no budget; options and verify have separate budgets.
+  const signInOptionsLimiter = createRateLimiter(RATE_LIMITS.passkeySignInOptions)
   const signInLimiter = createRateLimiter(RATE_LIMITS.passkeySignIn)
   router.post(
     '/sign-in/options',
     requireAllowedOriginWhenPresent,
-    signInLimiter,
+    signInOptionsLimiter,
     passkeyController.signInOptions
   )
   router.post(
@@ -49,18 +50,18 @@ export function createPasskeyRouter(): Router {
   router.post(
     '/registration/options',
     requireAuth,
-    manageLimiter,
     requireRecentAuth(),
+    manageLimiter,
     passkeyController.registrationOptions
   )
   router.post(
     '/registration/verify',
     requireAuth,
-    manageLimiter,
     requireRecentAuth(),
+    manageLimiter,
     passkeyController.registrationVerify
   )
   router.patch('/:id', requireAuth, manageLimiter, passkeyController.rename)
-  router.delete('/:id', requireAuth, manageLimiter, requireRecentAuth(), passkeyController.remove)
+  router.delete('/:id', requireAuth, requireRecentAuth(), manageLimiter, passkeyController.remove)
   return router
 }

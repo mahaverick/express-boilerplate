@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 26 limiters in `RATE_LIMITS`.
+ * The names of the 27 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -79,6 +79,7 @@ export type RateLimitName =
   | 'invitationVerify'
   | 'stepUpLink'
   | 'passkeyManage'
+  | 'passkeySignInOptions'
   | 'passkeySignIn'
   | 'passkeyStepUp'
 
@@ -158,7 +159,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 26 rate-limit specs this API enforces, each commented with the reason
+ * The 27 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -484,10 +485,21 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     unit: 'requests',
   },
   /**
-   * 20 per 15 minutes per IP, one instance shared by `POST
-   * /auth/passkeys/sign-in/options` and `.../verify`. A sign-in spends two
-   * (the options, then the verify), so this allows about ten tries; a script
-   * working through challenges stops there.
+   * 300 per 15 minutes per IP on `POST /auth/passkeys/sign-in/options` only.
+   * The call is cheap, holds no secret and runs on every sign-in page load, so
+   * a shared office address needs room; the verify call has the tighter budget.
+   */
+  passkeySignInOptions: {
+    name: 'passkey-sign-in-options',
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    keyBy: 'ip',
+    unit: 'requests',
+  },
+  /**
+   * 20 per 15 minutes per IP on `POST /auth/passkeys/sign-in/verify` only.
+   * Each try is one assertion, so this allows 20 tries; a script working
+   * through challenges stops there.
    */
   passkeySignIn: {
     name: 'passkey-sign-in',

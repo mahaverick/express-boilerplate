@@ -96,6 +96,7 @@ interface Envelope {
   data: {
     passkey: PasskeyJson
     passkeys: PasskeyJson[]
+    userHandle: string
     challengeId: string
     options: { challenge: string }
   }
@@ -159,10 +160,15 @@ describe('creating and listing passkeys', () => {
       // eslint-disable-next-line unicorn/no-null -- the API's JSON null for "never used"
       lastUsedAt: null,
     })
-    expect(envelope(created).data.passkey).not.toHaveProperty('credentialId')
+    expect(envelope(created).data.passkey).toMatchObject({
+      credentialId: authenticator.credentialId,
+    })
     expect(listed.status).toBe(200)
     expect(envelope(listed).message).toBe('Passkeys retrieved.')
     expect(envelope(listed).data.passkeys).toEqual([envelope(created).data.passkey])
+    expect(envelope(listed).data.userHandle).toBe(
+      Buffer.from(user.id.replaceAll('-', ''), 'hex').toString('base64url')
+    )
   })
 
   it('shapes the options: resident key, user verification, no attestation, the user handle and the exclude list', async () => {
@@ -411,6 +417,24 @@ describe('refusals while creating', () => {
     }
   })
 
+  it('spends no passkey-manage budget on a REAUTH_REQUIRED refusal', async () => {
+    const user = await makeUser()
+    const stale = staleAuthTokenFor(user)
+    const refused = await Promise.all(
+      Array.from({ length: 25 }, () =>
+        request(app)
+          .post(`${BASE}/registration/options`)
+          .set('Authorization', `Bearer ${stale}`)
+          .send({ app: 'web' })
+      )
+    )
+
+    const allowed = await options(recentAuthTokenFor(user))
+
+    expect(refused.every((response) => response.status === 401)).toBe(true)
+    expect(allowed.status).toBe(200)
+  })
+
   it('answers 400 PASSKEY_VERIFICATION_FAILED for a replayed challengeId', async () => {
     const user = await makeUser()
     const token = recentAuthTokenFor(user)
@@ -570,6 +594,9 @@ describe('deleting', () => {
     expect(removed.status).toBe(200)
     expect(envelope(removed).message).toBe('Passkey deleted.')
     expect(envelope(removed).data.passkeys).toEqual([envelope(second).data.passkey])
+    expect(envelope(removed).data.userHandle).toBe(
+      Buffer.from(user.id.replaceAll('-', ''), 'hex').toString('base64url')
+    )
     const rows = await sql<{ metadata: Record<string, unknown> }[]>`
       select metadata from audit_logs where action = 'user.passkey_deleted'
     `
