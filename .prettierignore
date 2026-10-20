@@ -19,6 +19,6 @@ src/database/migrations
 # the next release-please run would write it straight back.
 CHANGELOG.md
 
-# Vendored community AAGUID list (about 7 MB of icon data URIs); refresh
+# Vendored community AAGUID list (about 1 MB of deduplicated icon data URIs); refresh
 # steps are in src/constants/passkey.constants.ts.
 src/data/passkey-aaguids.json

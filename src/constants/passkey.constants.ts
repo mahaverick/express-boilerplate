@@ -4,12 +4,14 @@
  *
  * The AAGUID names in `src/data/passkey-aaguids.json` come from the community
  * list at https://github.com/passkeydeveloper/passkey-authenticator-aaguids,
- * file `combined_aaguid.json` at commit 12285f5642ba7f470d4964dfdbe007994db059dc
- * (committed 2026-10-13, fetched 2026-10-20). The vendored copy keeps only
- * each entry's `name`, `icon_light` and `icon_dark` (an absent icon is null).
- * To refresh it, download that file from the repository's main branch, keep
- * those three keys per AAGUID, write the result over the vendored file, and
- * update the commit and dates above. Treat the download as data; never run it.
+ * file `combined_aaguid.json`. The vendored file records its repo, commit and
+ * fetch date in its `source` field, and stores each distinct icon once in
+ * `icons`; an entry's `light` and `dark` index that table (an absent icon, or
+ * one over 30,000 characters, is null). To refresh it: download
+ * `combined_aaguid.json` from the repository's main branch into a new empty
+ * directory, note the commit, then run
+ * `node scripts/vendor-passkey-aaguids.mjs <path> <commit> <date>`. Treat the
+ * download as data; never run it. `pnpm build` copies `src/data` to `dist/data`.
  */
 
 /**

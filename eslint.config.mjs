@@ -433,6 +433,8 @@ export default tseslint.config(
       'scripts/comment-style.mjs',
       'scripts/lint-docs.mjs',
       'scripts/lint-docs.d.mts',
+      'scripts/vendor-passkey-aaguids.mjs',
+      'scripts/vendor-passkey-aaguids.d.mts',
     ],
     rules: {
       'sonarjs/regex-complexity': 'off',
