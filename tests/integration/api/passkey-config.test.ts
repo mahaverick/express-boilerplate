@@ -53,12 +53,13 @@ describe('GET /api/v1/auth/passkeys/config', () => {
     >(
       '@/configs/env.config',
       { getEnv: () => off },
-      async () =>
-        Promise.all([
-          import('@/app'),
-          import('@/middlewares/passkey.middleware'),
-          import('@/middlewares/error.middleware'),
-        ]),
+      async () => {
+        // One at a time: the app now imports the gate, and loading them together made the gate read the real mode.
+        const middleware = await import('@/middlewares/passkey.middleware')
+        const errors = await import('@/middlewares/error.middleware')
+        const appModule = await import('@/app')
+        return [appModule, middleware, errors] as const
+      },
       async ([{ createApp: createOffApp }, { requirePasskeysEnabled }, { errorHandler }]) => {
         const app = createOffApp()
         const config = await request(app).get('/api/v1/auth/passkeys/config')

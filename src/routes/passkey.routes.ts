@@ -1,11 +1,16 @@
 /**
  * @file The `/api/v1/auth/passkeys` router. `GET /config` is public and
  * answers in every mode; every other passkey route runs
- * `requirePasskeysEnabled` first. A public read of fixed settings takes no
+ * `requirePasskeysEnabled` first, then `requireAuth`. Creating and deleting a
+ * passkey also needs a recent sign-in. A public read of fixed settings takes no
  * limiter: it has no oracle to probe.
  */
 import { Router } from 'express'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { passkeyController } from '@/controllers/passkey.controller'
+import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
+import { requirePasskeysEnabled } from '@/middlewares/passkey.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
  * Build the passkey routes.
@@ -14,5 +19,27 @@ import { passkeyController } from '@/controllers/passkey.controller'
 export function createPasskeyRouter(): Router {
   const router = Router()
   router.get('/config', passkeyController.getConfig)
+  // Everything below is hidden in `off` mode: the gate runs before any auth or limiter.
+  router.use(requirePasskeysEnabled)
+  // One instance on every write, so one budget covers create, rename and delete; requireAuth first, as it keys on request.user.id.
+  const manageLimiter = createRateLimiter(RATE_LIMITS.passkeyManage)
+  // A read of the caller's own list: no oracle to probe, so no limiter.
+  router.get('/', requireAuth, passkeyController.list)
+  router.post(
+    '/registration/options',
+    requireAuth,
+    manageLimiter,
+    requireRecentAuth(),
+    passkeyController.registrationOptions
+  )
+  router.post(
+    '/registration/verify',
+    requireAuth,
+    manageLimiter,
+    requireRecentAuth(),
+    passkeyController.registrationVerify
+  )
+  router.patch('/:id', requireAuth, manageLimiter, passkeyController.rename)
+  router.delete('/:id', requireAuth, manageLimiter, requireRecentAuth(), passkeyController.remove)
   return router
 }

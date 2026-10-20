@@ -64,6 +64,10 @@ export const NOT_FOUND = {
     message:
       "We couldn't find this email. It may have been purged. Go back to Emails and search again.",
   },
+  passkey: {
+    code: 'passkey_not_found',
+    message: "We couldn't find this passkey. It may have been deleted. Refresh your passkey list.",
+  },
   suppression: {
     code: 'suppression_not_found',
     message:

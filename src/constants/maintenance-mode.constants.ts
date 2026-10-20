@@ -116,6 +116,11 @@ export interface MaintenanceRouteRule {
 export const MAINTENANCE_STAFF_ROUTES: readonly string[] = [
   'PATCH /api/v1/profile',
   'POST /api/v1/auth/sessions/revoke-others',
+  'GET /api/v1/auth/passkeys',
+  'POST /api/v1/auth/passkeys/registration/options',
+  'POST /api/v1/auth/passkeys/registration/verify',
+  'PATCH /api/v1/auth/passkeys/:id',
+  'DELETE /api/v1/auth/passkeys/:id',
   'POST /api/v1/invitations/accept',
   'GET /api/v1/tenants/:slug',
   'PATCH /api/v1/tenants/:slug',
@@ -234,6 +239,11 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('GET', '/api/v1/profile'),
   // Account writes: refused in both modes.
   write('POST', '/api/v1/auth/sessions/revoke-others'),
+  read('/api/v1/auth/passkeys'),
+  write('POST', '/api/v1/auth/passkeys/registration/options'),
+  write('POST', '/api/v1/auth/passkeys/registration/verify'),
+  write('PATCH', '/api/v1/auth/passkeys/:id'),
+  write('DELETE', '/api/v1/auth/passkeys/:id'),
   write('PATCH', '/api/v1/profile'),
   read('/api/v1/notifications/stream'),
   read('/api/v1/notifications'),

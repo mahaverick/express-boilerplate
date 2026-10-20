@@ -161,6 +161,23 @@ export const AUDIT_ACTIONS = {
     target: 'user',
     metadata: z.strictObject({ app: z.enum(FRONTEND_APPS) }),
   },
+  // A user created or deleted a passkey. `passkeyId` is the row id, never the credential ID; `provider` is the authenticator's listed name.
+  'user.passkey_created': {
+    target: 'user',
+    metadata: z.strictObject({
+      passkeyId: id,
+      provider: z.string().max(100),
+      app: z.enum(FRONTEND_APPS),
+    }),
+  },
+  'user.passkey_deleted': {
+    target: 'user',
+    metadata: z.strictObject({
+      passkeyId: id,
+      provider: z.string().max(100),
+      app: z.enum(FRONTEND_APPS),
+    }),
+  },
   'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
   'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },

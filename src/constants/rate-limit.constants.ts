@@ -78,6 +78,7 @@ export type RateLimitName =
   | 'signInLinkVerify'
   | 'invitationVerify'
   | 'stepUpLink'
+  | 'passkeyManage'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -467,5 +468,17 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 10,
     keyBy: 'user',
     unit: 'attempts',
+  },
+  /**
+   * 20 per 15 minutes per user, one instance shared by every passkey write
+   * (create options and verify, rename, delete). A person sets up a few
+   * passkeys and tidies a list; 20 covers that, and a script stops at 20.
+   */
+  passkeyManage: {
+    name: 'passkey-manage',
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    keyBy: 'user',
+    unit: 'requests',
   },
 }

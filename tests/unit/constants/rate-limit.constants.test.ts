@@ -46,6 +46,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'sign-in-link-verify',
   'invitation-verify',
   'step-up-link',
+  'passkey-manage',
 ]
 
 /**
@@ -169,6 +170,7 @@ const EXPECTED_RATE_LIMITS: {
     keyBy: 'ip',
   },
   { key: 'stepUpLink', name: 'step-up-link', windowMs: 900_000, limit: 10, keyBy: 'user' },
+  { key: 'passkeyManage', name: 'passkey-manage', windowMs: 900_000, limit: 20, keyBy: 'user' },
 ]
 
 describe('RATE_LIMITS key stability', () => {
