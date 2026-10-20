@@ -296,6 +296,13 @@ points at the code or doc that holds the detail. How things work is in
   autocommit statement for that reason;
   `tests/integration/services/analytics/analytics-drain-outage.test.ts` runs a
   hanging PostHog against a one-connection pool.
+- **Keep `applyNetworkDefaults()` first in `main()`** (`src/index.ts`,
+  `src/configs/network.config.ts`). Node abandons each address after 250 ms by
+  default, so a host whose handshake takes longer (PostHog's US ingest from
+  the dev container: 256 ms) is never reached, and the proxy answers 504
+  after about 2 s. `ipv4first` changes nothing, since IPv4 is already tried
+  first; `family: 4` on one agent leaves `fetch` broken and IPv6-only hosts
+  unreachable.
 - **Keep the analytics proxy ahead of `express.json` and give it no
   `on.error`** (`src/app.ts`, `analytics-proxy.routes.ts`). A body parser
   ahead of it consumes or refuses replay bodies; an `on.error` handler makes
