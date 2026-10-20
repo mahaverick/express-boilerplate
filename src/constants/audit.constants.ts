@@ -178,6 +178,11 @@ export const AUDIT_ACTIONS = {
       app: z.enum(FRONTEND_APPS),
     }),
   },
+  // A claim of a never-verified account deleted the passkeys on it. Only the count: no row id, no credential ID.
+  'user.passkeys_cleared_on_claim': {
+    target: 'user',
+    metadata: z.strictObject({ count: z.number().int().positive() }),
+  },
   'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
   'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },

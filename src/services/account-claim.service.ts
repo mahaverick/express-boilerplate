@@ -5,15 +5,17 @@
  * (`claimNeverVerifiedAccount`), which a sign-in link, an invitation link and
  * a verified Google identity all do. A link's claim also clears the
  * squatter's federated links (`clearSquatterCredentials`), and every claim, by
- * link, invitation, Google or the grant script, deletes the squatter's passkeys. `markEmailVerified`
+ * link, invitation, Google or the grant script, deletes the squatter's passkeys and audits the count. `markEmailVerified`
  * stays the only writer of `email_verified_at`.
  */
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { record } from '@/services/audit.service'
 import {
   db,
   withTransaction,
@@ -27,6 +29,7 @@ const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
 const emailMessageRepository = new EmailMessageRepository()
 const userPasskeyRepository = new UserPasskeyRepository()
+const tenantRepository = new TenantRepository()
 
 /**
  * Mark a user's email verified. The only writer of users.email_verified_at;
@@ -153,7 +156,22 @@ export async function claimNeverVerifiedAccount(
       return { claimed: locked, verifiedNow: false, revokedSessionIds: [] }
     }
     // A passkey on a never-verified account may be a squatter's; whoever proves the mailbox starts clean.
-    await userPasskeyRepository.deleteAllForUser(userId, tx)
+    const clearedPasskeys = await userPasskeyRepository.deleteAllForUser(userId, tx)
+    if (clearedPasskeys > 0) {
+      const platform = await tenantRepository.findPlatformTenant(tx)
+      if (!platform) throw new HttpError('The platform tenant is missing', 500)
+      await record(
+        {
+          action: 'user.passkeys_cleared_on_claim',
+          actor: 'system',
+          access: 'system',
+          tenantId: platform.id,
+          targetId: userId,
+          metadata: { count: clearedPasskeys },
+        },
+        tx
+      )
+    }
     await inLock?.(tx)
     const verified = await markEmailVerified(userId, tx)
     const sessionIds = await revokeSessionRows(userId, {}, tx)

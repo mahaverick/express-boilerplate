@@ -454,12 +454,17 @@ const PASSKEY_NO_ACCESS_CODE = 'PASSKEY_NO_ACCESS'
  * The 403 for a passkey that verified but may not sign in: its account is
  * inactive, deleted or never verified, or it is not staff on Apex. It follows
  * the signature check, so only the holder of the key sees it, and the apps
- * keep the passkey instead of deleting it.
+ * keep the passkey instead of deleting it. Both answers share the code and
+ * the status; an active, verified account that is not staff gets its own
+ * message on Apex.
+ * @param isNotStaff - True for an active, verified account with no platform membership on Apex.
  * @returns The error to throw.
  */
-function passkeyNoAccess(): HttpError {
+function passkeyNoAccess(isNotStaff = false): HttpError {
   return new HttpError(
-    "This passkey can't sign you in here. Sign in with an email link instead.",
+    isNotStaff
+      ? "This account doesn't have staff access. Ask a staff owner to invite you."
+      : "This passkey can't sign you in here. Sign in with an email link instead.",
     403,
     PASSKEY_NO_ACCESS_CODE
   )
@@ -582,22 +587,26 @@ export async function finishPasskeySignIn(input: {
   const user = await userRepository.findById(stored.userId)
   if (!user?.active || user.emailVerifiedAt === null) throw passkeyNoAccess()
   if (input.app === 'apex' && (await getPlatformMembership(user.id)) === null) {
-    throw passkeyNoAccess()
+    throw passkeyNoAccess(true)
   }
   await assertSignInAllowed(user.id)
   // Under the user lock: a claim that deleted the passkey or verified the account since the checks above wins.
-  const session = await issueSignInSession(user, passkeyNoAccess, async (locked, tx) => {
-    if (locked.emailVerifiedAt === null) throw passkeyNoAccess()
-    const outcome = await userPasskeyRepository.recordUse(
-      stored.id,
-      user.id,
-      { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
-      tx
-    )
-    if (outcome === 'missing') throw passkeyUnknown()
-    if (outcome === 'regressed') throw passkeyVerificationFailed()
-    return true
-  })
+  const session = await issueSignInSession(
+    user,
+    () => passkeyNoAccess(),
+    async (locked, tx) => {
+      if (locked.emailVerifiedAt === null) throw passkeyNoAccess()
+      const outcome = await userPasskeyRepository.recordUse(
+        stored.id,
+        user.id,
+        { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
+        tx
+      )
+      if (outcome === 'missing') throw passkeyUnknown()
+      if (outcome === 'regressed') throw passkeyVerificationFailed()
+      return true
+    }
+  )
   await emitDomainEvent({
     type: 'user_signed_in',
     userId: user.id,

@@ -412,7 +412,10 @@ mode, so a frontend knows whether to show the passkey screens.
   `400 PASSKEY_VERIFICATION_FAILED`. Only then are the account checks run: a
   deactivated, soft-deleted or never-verified account, and a non-staff account
   on Apex, answer `403 PASSKEY_NO_ACCESS` ("This passkey can't sign you in
-  here. Sign in with an email link instead.") and issue no session; the apps
+  here. Sign in with an email link instead.") and issue no session. On Apex an
+  active, verified account with no platform membership gets the same code and
+  status with "This account doesn't have staff access. Ask a staff owner to
+  invite you."; the apps
   keep the passkey instead of deleting it. The account is re-read under the
   row lock, as in a link sign-in. In `full` maintenance a non-staff
   account is refused by `assertSignInAllowed`. A dead credential answers 400,
@@ -433,7 +436,10 @@ mode, so a frontend knows whether to show the passkey screens.
   ([Account creation on click](#account-creation-on-click)), the claim deletes
   every passkey on it in the same transaction, for every claim path: link,
   invitation, Google and the platform grant script. An address squatted with a
-  passkey cannot keep a way in after its owner proves the mailbox.
+  passkey cannot keep a way in after its owner proves the mailbox. A claim
+  that deletes at least one writes one `user.passkeys_cleared_on_claim` row to
+  the platform tenant's audit log, in the same transaction, with only the
+  `count` (no row IDs, no credential IDs).
   Passkey sign-in and step-up refuse an unverified account for the same reason.
 - **Required mode.** `requireAuth` ends with `assertPasskeySetupDone`. With
   `PASSKEY_MODE=required`, an account with no passkey gets
@@ -809,7 +815,7 @@ needs it to create or delete a passkey.
 
 `audit_logs` records every tenant, settings, member and invitation change in the
 same transaction as the change, platform joins and grants, every staff action on
-a user, a tenant, an email or a suppression, each step-up, each passkey created or deleted, staff visits,
+a user, a tenant, an email or a suppression, each step-up, each passkey created or deleted, the passkeys a claim clears, staff visits,
 and throttled staff reads of a flag evaluation.
 Each action's metadata has a strict schema (`src/constants/audit.constants.ts`);
 invitation entries keep the address's domain, never the address or the token. A
@@ -1186,18 +1192,18 @@ reload and the queue pause.
 
 ## What this boilerplate does not implement
 
-| Control                                               | Status              | What it means for you                                                                                                                                                                                                                       |
-| ----------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                               |
-| CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                      |
-| Global rate limiting                                  | **Partial**         | 27 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                             |
-| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`). |
-| Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                      |
-| Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                      |
-| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                                                                                                                |
-| HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                                                                                                                          |
-| Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                                                                                                                |
-| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role, creating a verified account when needed.                                                                                                      |
+| Control                                               | Status              | What it means for you                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                                                                                                  |
+| CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                                                                                         |
+| Global rate limiting                                  | **Partial**         | 27 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
+| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`) and the passkeys a claim clears (`user.passkeys_cleared_on_claim`). |
+| Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                                                                                         |
+| Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                                                                                         |
+| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through their platform role; tenant isolation is enforced in the application.                                                                                                                                                                                                                   |
+| HSTS                                                  | **Not in the API**  | The TLS-terminating edge sends it.                                                                                                                                                                                                                                                                             |
+| Uniform logout timing                                 | **Not implemented** | A logout whose cookie matches a row takes longer than one that does not. Every logout answers the same body.                                                                                                                                                                                                   |
+| OpenAPI documentation and seed data                   | **Not implemented** | No spec is generated or served. No seed script; `pnpm platform:grant` grants a platform role, creating a verified account when needed.                                                                                                                                                                         |
 
 ## Reporting a vulnerability
 

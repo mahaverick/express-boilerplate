@@ -546,11 +546,25 @@ describe('POST /sign-in/verify', () => {
     expect(response.status).toBe(403)
     expect(envelope(response).code).toBe('PASSKEY_NO_ACCESS')
     expect(envelope(response).message).toBe(
-      "This passkey can't sign you in here. Sign in with an email link instead."
+      "This account doesn't have staff access. Ask a staff owner to invite you."
     )
     expect(response.headers['set-cookie']).toBeUndefined()
     const use = await storedUse(user.id)
     expect(use.lastUsedAt).toBeNull()
+  })
+
+  it('keeps the generic PASSKEY_NO_ACCESS message for a deactivated account on apex', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const user = await userWithPasskey(authenticator)
+    await sql`update users set active = false where id = ${user.id}`
+
+    const response = await signIn((challenge) => authenticator.assertionResponse(challenge), 'apex')
+
+    expect(response.status).toBe(403)
+    expect(envelope(response).code).toBe('PASSKEY_NO_ACCESS')
+    expect(envelope(response).message).toBe(
+      "This passkey can't sign you in here. Sign in with an email link instead."
+    )
   })
 
   it('keeps the options budget apart from the verify budget', async () => {

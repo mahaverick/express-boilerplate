@@ -12,6 +12,7 @@ import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
 import { sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { issueRefreshToken } from '@/services/session.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
 
 const authProviderRepository = new AuthProviderRepository()
@@ -25,6 +26,7 @@ subscribeDomainEvent('email_verified', (event) => {
 })
 
 afterEach(async () => {
+  await truncateAuditLogs()
   await deleteTrackedUsers()
 })
 
@@ -69,5 +71,36 @@ describe('claimNeverVerifiedAccount', () => {
     `
     expect(row?.count).toBe(0)
     expect(verifiedUserIds.filter((id) => id === user.id)).toHaveLength(1)
+  })
+
+  it('audits the passkeys a claim deletes: one row with the count, none for a claim with no passkeys', async () => {
+    const withPasskeys = await createTrackedUser({ verified: false })
+    const without = await createTrackedUser({ verified: false })
+    await sql`
+      insert into user_passkeys (user_id, credential_id, public_key, aaguid, backup_eligible, backup_state, name)
+      values
+        (${withPasskeys.id}, ${randomUUID()}, '\\x00', ${randomUUID()}, false, false, 'One'),
+        (${withPasskeys.id}, ${randomUUID()}, '\\x00', ${randomUUID()}, false, false, 'Two')
+    `
+
+    await claimNeverVerifiedAccount(withPasskeys.id)
+    await claimNeverVerifiedAccount(without.id)
+
+    const rows = await sql<{ metadata: unknown; actor_kind: string; access: string }[]>`
+      select metadata, actor_kind, access from audit_logs
+      where action = 'user.passkeys_cleared_on_claim' and target_id = ${withPasskeys.id}
+    `
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.metadata).toEqual({ count: 2 })
+    expect(rows[0]?.actor_kind).toBe('system')
+    const none = await sql<{ count: number }[]>`
+      select count(*)::int as count from audit_logs
+      where action = 'user.passkeys_cleared_on_claim' and target_id = ${without.id}
+    `
+    expect(none[0]?.count).toBe(0)
+    const left = await sql<{ count: number }[]>`
+      select count(*)::int as count from user_passkeys where user_id = ${withPasskeys.id}
+    `
+    expect(left[0]?.count).toBe(0)
   })
 })
