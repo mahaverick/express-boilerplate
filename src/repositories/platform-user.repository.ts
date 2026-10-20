@@ -94,6 +94,10 @@ export interface PlatformUserPendingInvitation {
   id: string
   tenantId: string
   tenantName: string
+  /**
+   * The tenant's slug, so Apex can tell a staff invitation (the platform tenant's) from a customer one.
+   */
+  tenantSlug: string
   role: MembershipRole
   expiresAt: Date
   /**
@@ -354,6 +358,7 @@ export class PlatformUserRepository {
         id: tenantInvitationModel.id,
         tenantId: tenantModel.id,
         tenantName: tenantModel.name,
+        tenantSlug: tenantModel.slug,
         role: tenantInvitationModel.role,
         expiresAt: tenantInvitationModel.expiresAt,
         lastSentAt: tenantInvitationModel.lastSentAt,
