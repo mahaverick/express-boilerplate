@@ -53,11 +53,23 @@ describe('sendMail sender', () => {
     ],
     [
       'step_up_link',
-      { firstName: 'Ada', confirmUrl: 'https://x.test/c', expiresInMinutes: '15', appName: 'A' },
+      {
+        firstName: 'Ada',
+        confirmUrl: 'https://x.test/c',
+        expiresInMinutes: '15',
+        expiresAt: '15:42 UTC on 20 October 2026',
+        appName: 'A',
+      },
     ],
     [
       'welcome',
-      { firstName: 'Ada', signInUrl: 'https://x.test/l', expiresInMinutes: '15', appName: 'A' },
+      {
+        firstName: 'Ada',
+        signInUrl: 'https://x.test/l',
+        expiresInMinutes: '15',
+        expiresAt: '15:42 UTC on 20 October 2026',
+        appName: 'A',
+      },
     ],
     [
       'invitation_confirm',

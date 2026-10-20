@@ -215,7 +215,13 @@ async function invitationMessage(
     linkApp: tenant.isPlatform ? 'apex' : 'web',
     variables:
       templateKey === 'tenant_invitation'
-        ? { tenantName: tenant.name, role, expiresInDays: '7', appName: 'Acme' }
+        ? {
+            tenantName: tenant.name,
+            role,
+            expiresInDays: '7',
+            expiresAt: '15:42 UTC on 20 October 2026',
+            appName: 'Acme',
+          }
         : {
             firstName: 'Grace',
             tenantName: tenant.name,

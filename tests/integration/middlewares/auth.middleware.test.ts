@@ -88,7 +88,7 @@ describe('requireAuth', () => {
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
     // On top of statusCode deliberately: verifyAccessToken also rejects an empty token with its own generic 401, so only the message proves THIS guard fired, not that fallback.
-    expect((error as HttpError).message).toMatch(/authorization header/i)
+    expect((error as HttpError).message).toBe('Sign in to continue.')
   })
 
   it.each([
@@ -106,7 +106,7 @@ describe('requireAuth', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
-    expect((error as HttpError).message).toMatch(/authorization header/i)
+    expect((error as HttpError).message).toBe('Sign in to continue.')
   })
 
   it('rejects a well-formed but invalid token without the expired-token code', async () => {

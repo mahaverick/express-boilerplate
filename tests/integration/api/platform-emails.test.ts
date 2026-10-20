@@ -446,7 +446,13 @@ describe('GET /api/v1/platform/emails/:id/preview', () => {
     const message = await createTrackedMessage({
       templateKey: 'sign_in_link',
       linkApp: 'web',
-      variables: { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15', reason: 'self' },
+      variables: {
+        firstName: 'Ada',
+        appName: 'Acme',
+        expiresInMinutes: '15',
+        expiresAt: '15:42 UTC on 20 October 2026',
+        reason: 'self',
+      },
     })
 
     const preview = dataOf<{ subject: string; html: string; text: string; partial: boolean }>(
