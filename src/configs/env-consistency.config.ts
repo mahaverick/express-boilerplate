@@ -3,6 +3,7 @@
  * outside `EnvSchema` because an object-level `.refine()` would break
  * `getDatabaseUrl()`'s `.pick()`.
  */
+import { isIP } from 'node:net'
 import { isCookieSecure, isProxyTrustOff, type Env } from '@/configs/env.config'
 import { passkeyRelyingParty } from '@/configs/passkey.config'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
@@ -121,6 +122,9 @@ function cookieDomainProblem(env: Env): string | undefined {
 function passkeyRpIdProblem(env: Env): string | undefined {
   if (env.PASSKEY_MODE === 'off') return undefined
   const { rpId, origins } = passkeyRelyingParty(env)
+  if (isIP(rpId.replaceAll(/^\[|\]$/g, '')) !== 0) {
+    return `WEBAUTHN_RP_ID is ${rpId}, an IP address, but browsers refuse a passkey for an IP address. Use a domain name such as localhost or domain.com, or set PASSKEY_MODE=off.`
+  }
   if (!BARE_LOWERCASE_HOST.test(rpId)) {
     return `WEBAUTHN_RP_ID is ${rpId}, but it must be a bare lowercase domain such as domain.com, with no scheme, port, path or leading dot, or every passkey ceremony fails. Fix WEBAUTHN_RP_ID, or set PASSKEY_MODE=off.`
   }

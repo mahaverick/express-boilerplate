@@ -539,6 +539,18 @@ describe('WEBAUTHN_RP_ID', () => {
     }
   )
 
+  it.each(['127.0.0.1', '[::1]', '::1'])(
+    'refuses the IP address %s as an RP ID, naming WEBAUTHN_RP_ID',
+    (rpId) => {
+      const { error } = runChecks({ ...local, WEBAUTHN_RP_ID: rpId })
+      expect(error).toMatch(/WEBAUTHN_RP_ID is .*IP address/)
+    }
+  )
+
+  it('still accepts localhost as the RP ID', () => {
+    expect(runChecks({ ...local, WEBAUTHN_RP_ID: 'localhost' }).error).toBeUndefined()
+  })
+
   it.each(['optional', 'required'])('checks the RP ID when PASSKEY_MODE is %s', (mode) => {
     expect(runChecks({ ...split, PASSKEY_MODE: mode }).error).toMatch(/WEBAUTHN_RP_ID/)
   })
