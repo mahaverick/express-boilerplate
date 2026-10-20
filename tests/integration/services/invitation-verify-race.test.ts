@@ -171,6 +171,42 @@ describe('invitation verify races', () => {
     expect(refresh[0]?.count).toBe(1)
   })
 
+  it('answers invitation_invalid, not 202, when a concurrent join creates the account between the lookup and the account read', async () => {
+    const email = `invite-race-late-${randomUUID()}@example.test`
+    usedEmails.push(email)
+    const { tenant, rawToken } = await invitedTo(email)
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    const realFind = UserRepository.prototype.findByEmail
+    const winner: { started: boolean; response?: Response } = { started: false }
+    /**
+     * Stands in for `UserRepository.findByEmail`: on the losing click's
+     * account read, the winning click runs to the end first. The winner's
+     * own read goes straight through.
+     */
+    const lateFind: typeof realFind = async function (this: UserRepository, ...arguments_) {
+      if (!winner.started && arguments_[0] === email) {
+        winner.started = true
+        winner.response = await postVerify(rawToken)
+      }
+      return realFind.apply(this, arguments_)
+    }
+
+    let loser: Response | undefined
+    await withMutatedMethod(UserRepository.prototype, 'findByEmail', lateFind, async () => {
+      loser = await postVerify(rawToken)
+    })
+
+    expect(winner.response?.status).toBe(200)
+    expect(loser?.status).toBe(404)
+    expect(loser?.body).toMatchObject({ code: 'invitation_invalid' })
+    expect(hasRefreshCookie(loser)).toBe(false)
+    const memberships = await sql<{ count: number }[]>`
+      select count(*)::int as count from user_memberships where tenant_id = ${tenant.id}
+        and user_id in (select id from users where lower(email) = ${email})
+    `
+    expect(memberships[0]?.count).toBe(1)
+  })
+
   it('answers invitation_invalid, not 409, when the address is taken mid-click, and leaves the link usable', async () => {
     const email = `invite-race-taken-${randomUUID()}@example.test`
     usedEmails.push(email)
