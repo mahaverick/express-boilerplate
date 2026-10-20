@@ -10,15 +10,15 @@ import { getEnv, type Env } from '@/configs/env.config'
  */
 export interface PasskeyRelyingParty {
   /**
-  The RP ID: `WEBAUTHN_RP_ID`, else the host of `WEB_URL`.
+   * The RP ID: `WEBAUTHN_RP_ID`, else the host of `WEB_URL`.
    */
   rpId: string
   /**
-  The name an authenticator shows, `APP_NAME`.
+   * The name an authenticator shows, `APP_NAME`.
    */
   rpName: string
   /**
-  The browser origins that may present a passkey: `WEB_URL`, plus `APEX_URL` when set.
+   * The browser origins that may present a passkey: `WEB_URL`, plus `APEX_URL` when set.
    */
   origins: string[]
 }

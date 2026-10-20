@@ -16,6 +16,9 @@ import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
  */
 const SHUTDOWN_HEADROOM_MS = 5000
 
+// Lowercase letters, digits and hyphens in dot-separated labels: what a browser compares an RP ID against.
+const BARE_LOWERCASE_HOST = /^[a-z\d]([a-z\d-]*[a-z\d])?(\.[a-z\d]([a-z\d-]*[a-z\d])?)*$/
+
 const LOCAL_SMTP_HOSTS = new Set(['localhost', '127.0.0.1'])
 const MAILPIT_SMTP_PORT = 1025
 const PLACEHOLDER_MAIL_FROM = 'no-reply@example.com'
@@ -71,6 +74,18 @@ function warnOnSharedSenderDomain(env: Env, warn: (message: string) => void): vo
 }
 
 /**
+ * Whether a host is a domain or one of its subdomains, matched on whole labels.
+ * @param domain - A bare domain, compared as given apart from case.
+ * @param host - The host name.
+ * @returns True when the host equals the domain or ends with it after a dot, ignoring case.
+ */
+function isHostWithinDomain(domain: string, host: string): boolean {
+  const bare = domain.toLowerCase()
+  const lowerHost = host.toLowerCase()
+  return lowerHost === bare || lowerHost.endsWith(`.${bare}`)
+}
+
+/**
  * Whether a browser would accept a cookie with this Domain attribute from a
  * response by this host.
  * @param domain - A `COOKIE_DOMAIN` value, with or without one leading dot.
@@ -79,9 +94,7 @@ function warnOnSharedSenderDomain(env: Env, warn: (message: string) => void): vo
  */
 function isHostWithinCookieDomain(domain: string, host: string): boolean {
   // Browsers strip one leading dot (RFC 6265 §5.2.3).
-  const bare = domain.replace(/^\./, '').toLowerCase()
-  const lowerHost = host.toLowerCase()
-  return lowerHost === bare || lowerHost.endsWith(`.${bare}`)
+  return isHostWithinDomain(domain.replace(/^\./, ''), host)
 }
 
 /**
@@ -108,9 +121,12 @@ function cookieDomainProblem(env: Env): string | undefined {
 function passkeyRpIdProblem(env: Env): string | undefined {
   if (env.PASSKEY_MODE === 'off') return undefined
   const { rpId, origins } = passkeyRelyingParty(env)
+  if (!BARE_LOWERCASE_HOST.test(rpId)) {
+    return `WEBAUTHN_RP_ID is ${rpId}, but it must be a bare lowercase domain such as domain.com, with no scheme, port, path or leading dot, or every passkey ceremony fails. Fix WEBAUTHN_RP_ID, or set PASSKEY_MODE=off.`
+  }
   for (const origin of origins) {
     const host = new URL(origin).hostname.toLowerCase()
-    if (isHostWithinCookieDomain(rpId, host)) continue
+    if (isHostWithinDomain(rpId, host)) continue
     return `WEBAUTHN_RP_ID is ${rpId}, but ${origin}'s host ${host} is not within it, so browsers refuse every passkey there. Set WEBAUTHN_RP_ID to ${host} or a parent domain of every host in WEB_URL and APEX_URL, or set PASSKEY_MODE=off.`
   }
   return undefined

@@ -518,6 +518,27 @@ describe('WEBAUTHN_RP_ID', () => {
     }
   )
 
+  it('refuses a parent that is not on a label boundary (evil-domain.com vs domain.com)', () => {
+    const { error } = runChecks({
+      ...local,
+      WEB_URL: 'https://evil-domain.com',
+      WEBAUTHN_RP_ID: 'domain.com',
+    })
+    expect(error).toMatch(/WEBAUTHN_RP_ID/)
+  })
+
+  it.each(['.domain.com', 'Domain.com', 'https://domain.com', 'domain.com:443', 'domain.com/x'])(
+    'refuses the malformed RP ID %s, naming WEBAUTHN_RP_ID',
+    (rpId) => {
+      const { error } = runChecks({
+        ...local,
+        WEB_URL: 'https://app.domain.com',
+        WEBAUTHN_RP_ID: rpId,
+      })
+      expect(error).toMatch(/WEBAUTHN_RP_ID is .*bare lowercase domain/)
+    }
+  )
+
   it.each(['optional', 'required'])('checks the RP ID when PASSKEY_MODE is %s', (mode) => {
     expect(runChecks({ ...split, PASSKEY_MODE: mode }).error).toMatch(/WEBAUTHN_RP_ID/)
   })
