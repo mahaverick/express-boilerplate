@@ -39,7 +39,7 @@ vi.mock('@/jobs/email.job', async (importOriginal) => {
 
 const app = createApp()
 const BASE = '/api/v1/auth/passkeys'
-const REQUIRED_MESSAGE = 'Create a passkey to continue. Your team requires one for every account.'
+const REQUIRED_MESSAGE = 'Create a passkey to continue. Every account here needs one.'
 const countSpy = vi.spyOn(UserPasskeyRepository.prototype, 'countByUser')
 
 afterAll(async () => {

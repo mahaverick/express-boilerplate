@@ -126,7 +126,7 @@ async function assertPasskeySetupDone(request: Request, userId: string): Promise
     return
   }
   throw new HttpError(
-    'Create a passkey to continue. Your team requires one for every account.',
+    'Create a passkey to continue. Every account here needs one.',
     403,
     'PASSKEY_SETUP_REQUIRED'
   )
