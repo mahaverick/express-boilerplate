@@ -2,7 +2,7 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 23 literal strings, in order; (2) every entry's
+ * stays exactly the 26 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
  * (3) the four key-derivation functions produce byte-identical output

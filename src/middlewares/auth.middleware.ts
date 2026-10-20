@@ -102,6 +102,7 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  */
 function isPasskeySetupRoute(request: Request): boolean {
   let path = `${request.baseUrl}${request.path}`.toLowerCase()
+  // A loop, not `replace(/\/+$/, '')`: sonarjs/super-linear-regex flags that pattern.
   while (path.endsWith('/')) path = path.slice(0, -1)
   const method = request.method === 'HEAD' ? 'GET' : request.method
   return PASSKEY_SETUP_ALLOWED.has(`${method} ${path}`)

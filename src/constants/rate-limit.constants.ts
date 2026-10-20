@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 23 limiters in `RATE_LIMITS`.
+ * The names of the 26 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -158,7 +158,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 24 rate-limit specs this API enforces, each commented with the reason
+ * The 26 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts

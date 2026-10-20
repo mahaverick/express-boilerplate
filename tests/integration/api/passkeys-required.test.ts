@@ -293,6 +293,14 @@ describe('modes', () => {
     }
   })
 
+  it('makes no count query for an allowlisted route in required mode', async () => {
+    const token = tokenFor(await makeUser())
+
+    expect(await statusOf('/api/v1/profile', token)).toBe(200)
+
+    expect(countSpy).not.toHaveBeenCalled()
+  })
+
   it('hides the passkey routes under off, keeps the stored row, and lists it again under optional', async () => {
     const user = await makeUser()
     await seedPasskey(user.id)
