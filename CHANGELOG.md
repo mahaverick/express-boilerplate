@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.1.0](https://github.com/mahaverick/express-boilerplate/compare/v7.0.1...v7.1.0) (2026-10-20)
+
+
+### Features
+
+* **platform:** carry the tenant slug on a user's pending invitations ([#138](https://github.com/mahaverick/express-boilerplate/issues/138)) ([43d0662](https://github.com/mahaverick/express-boilerplate/commit/43d0662116bb1627f1218b11f75848a26dbab952))
+
 ## [7.0.1](https://github.com/mahaverick/express-boilerplate/compare/v7.0.0...v7.0.1) (2026-10-20)
 
 
