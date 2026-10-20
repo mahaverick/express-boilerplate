@@ -1,5 +1,16 @@
 # Changelog
 
+## [7.0.0](https://github.com/mahaverick/express-boilerplate/compare/v6.1.1...v7.0.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** POST /api/v1/auth/step-up/google/start and GET /api/v1/auth/step-up/google are removed and now answer 404, so the 409 google_not_linked and the popup redirects to <apex>/auth/confirm?result=confirmed or ?error=step_up_failed no longer happen; clients confirm it's you only with POST /api/v1/auth/step-up/link/request and POST /api/v1/auth/step-up/link/verify, and must drop the Google button and popup from the step-up dialog. auth.step_up_confirmed and auth.step_up_refused now always carry method 'link' (older rows keep 'google'), and the step-up-google rate limiter is gone. No environment variables are removed: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET stay for Google sign-in, and the Google Console redirect URI is unchanged. This change already shipped in v6.1.1, which was cut moments after it merged; 7.0.0 records it.
+
+### Features
+
+* **auth:** drop Google step-up; confirm it's you by email link only ([0bb4e75](https://github.com/mahaverick/express-boilerplate/commit/0bb4e75f760e2fcbdef8f69787cd58d12b82836f))
+
 ## [6.1.1](https://github.com/mahaverick/express-boilerplate/compare/v6.1.0...v6.1.1) (2026-10-20)
 
 
