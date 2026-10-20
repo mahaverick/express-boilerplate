@@ -111,6 +111,7 @@ describe('UserPasskeyRepository', () => {
 
       expect(error).toBeInstanceOf(HttpError)
       expect((error as HttpError).statusCode).toBe(409)
+      expect((error as HttpError).code).toBe('PASSKEY_EXISTS')
     })
   })
 
@@ -185,12 +186,12 @@ describe('UserPasskeyRepository', () => {
       const row = await passkeyRepository.create(passkeyFor(userId))
       const at = new Date('2026-10-20T10:00:00.000Z')
 
-      const didUpdate = await passkeyRepository.recordUse(row.id, userId, {
+      const outcome = await passkeyRepository.recordUse(row.id, userId, {
         signCount: 42,
         backupState: true,
         at,
       })
-      expect(didUpdate).toBe(true)
+      expect(outcome).toBe('recorded')
 
       const found = await passkeyRepository.findByCredentialId(row.credentialId)
       expect(found?.signCount).toBe(42)
@@ -198,25 +199,89 @@ describe('UserPasskeyRepository', () => {
       expect(found?.lastUsedAt).toEqual(at)
     })
 
-    it('changes nothing and answers false for another user, or a row that is gone', async () => {
+    it('changes nothing and answers missing for another user, or a row that is gone', async () => {
       const userId = await createUser()
       const row = await passkeyRepository.create(passkeyFor(userId))
       const at = new Date('2026-10-20T10:00:00.000Z')
 
-      const didUpdateOther = await passkeyRepository.recordUse(row.id, await createUser(), {
+      const outcomeOther = await passkeyRepository.recordUse(row.id, await createUser(), {
         signCount: 99,
         backupState: true,
         at,
       })
       await passkeyRepository.deleteForUser(row.id, userId)
-      const didUpdateGone = await passkeyRepository.recordUse(row.id, userId, {
+      const outcomeGone = await passkeyRepository.recordUse(row.id, userId, {
         signCount: 99,
         backupState: true,
         at,
       })
 
-      expect(didUpdateOther).toBe(false)
-      expect(didUpdateGone).toBe(false)
+      expect(outcomeOther).toBe('missing')
+      expect(outcomeGone).toBe('missing')
+    })
+
+    it('refuses a device-bound passkey whose count does not rise, and keeps the stored count', async () => {
+      const userId = await createUser()
+      const row = await passkeyRepository.create(
+        passkeyFor(userId, { backupEligible: false, signCount: 5 })
+      )
+      const at = new Date('2026-10-20T10:00:00.000Z')
+
+      const same = await passkeyRepository.recordUse(row.id, userId, {
+        signCount: 5,
+        backupState: false,
+        at,
+      })
+      const lower = await passkeyRepository.recordUse(row.id, userId, {
+        signCount: 3,
+        backupState: false,
+        at,
+      })
+
+      expect(same).toBe('regressed')
+      expect(lower).toBe('regressed')
+      const kept = await passkeyRepository.findByCredentialId(row.credentialId)
+      expect(kept?.signCount).toBe(5)
+    })
+
+    it('accepts a count of 0 on a never-counted device-bound passkey, and any count on a synced one', async () => {
+      const userId = await createUser()
+      const bound = await passkeyRepository.create(
+        passkeyFor(userId, { backupEligible: false, signCount: 0 })
+      )
+      const synced = await passkeyRepository.create(
+        passkeyFor(userId, { backupEligible: true, signCount: 9 })
+      )
+      const at = new Date('2026-10-20T10:00:00.000Z')
+
+      const first = await passkeyRepository.recordUse(bound.id, userId, {
+        signCount: 0,
+        backupState: false,
+        at,
+      })
+      const copied = await passkeyRepository.recordUse(synced.id, userId, {
+        signCount: 9,
+        backupState: true,
+        at,
+      })
+
+      expect(first).toBe('recorded')
+      expect(copied).toBe('recorded')
+    })
+
+    it('lets exactly one of two parallel uses with the same count win on a device-bound passkey', async () => {
+      const userId = await createUser()
+      const row = await passkeyRepository.create(
+        passkeyFor(userId, { backupEligible: false, signCount: 5 })
+      )
+      const use = { signCount: 6, backupState: false, at: new Date('2026-10-20T10:00:00.000Z') }
+
+      const outcomes = await Promise.all([
+        passkeyRepository.recordUse(row.id, userId, use),
+        passkeyRepository.recordUse(row.id, userId, use),
+      ])
+
+      expect(outcomes.toSorted((a, b) => a.localeCompare(b))).toEqual(['recorded', 'regressed'])
     })
   })
 

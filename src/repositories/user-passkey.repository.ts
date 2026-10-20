@@ -2,7 +2,7 @@
  * @file Query access to `user_passkeys`. It does not extend `BaseRepository`,
  * which requires a `deletedAt` column this table has no use for.
  */
-import { and, asc, count, eq } from 'drizzle-orm'
+import { and, asc, count, eq, lt, or } from 'drizzle-orm'
 import {
   userPasskeyModel,
   type NewUserPasskey,
@@ -33,7 +33,11 @@ export class UserPasskeyRepository {
       return created
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError('This passkey is already saved. Create a new one.', 409)
+        throw new HttpError(
+          'This passkey is already saved. Create a new one.',
+          409,
+          'PASSKEY_EXISTS'
+        )
       }
       throw error
     }
@@ -136,25 +140,40 @@ export class UserPasskeyRepository {
   }
 
   /**
-   * Record a successful use of a passkey. The write matches the owner too, so
-   * a row a claim deleted (or that never was this user's) changes nothing.
+   * Record a successful use of a passkey. The signature-counter rule is in the
+   * UPDATE's WHERE, so two parallel assertions with the same count cannot both
+   * win on a device-bound passkey: a synced (backup-eligible) passkey, a
+   * stored count of 0 or a higher new count updates; anything else changes
+   * nothing. The write matches the owner too, so a row a claim deleted (or
+   * that never was this user's) changes nothing.
    * @param id - The passkey's row ID.
    * @param userId - The owner the caller verified it for.
    * @param use - The new signature counter, the new backup state and when it happened.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns True when the row existed for that user and was updated.
+   * @returns `recorded` when the row was updated; `regressed` when the row exists but the counter rule refused it; `missing` when no such row exists for that user.
    */
   async recordUse(
     id: string,
     userId: string,
     use: { signCount: number; backupState: boolean; at: Date },
     executor: DbExecutor = db
-  ): Promise<boolean> {
+  ): Promise<'recorded' | 'regressed' | 'missing'> {
+    const owned = and(eq(userPasskeyModel.id, id), eq(userPasskeyModel.userId, userId))
+    const counterAllows = or(
+      eq(userPasskeyModel.backupEligible, true),
+      eq(userPasskeyModel.signCount, 0),
+      lt(userPasskeyModel.signCount, use.signCount)
+    )
     const updated = await executor
       .update(userPasskeyModel)
       .set({ signCount: use.signCount, backupState: use.backupState, lastUsedAt: use.at })
-      .where(and(eq(userPasskeyModel.id, id), eq(userPasskeyModel.userId, userId)))
+      .where(and(owned, counterAllows))
       .returning({ id: userPasskeyModel.id })
-    return updated.length > 0
+    if (updated.length > 0) return 'recorded'
+    const [still] = await executor
+      .select({ id: userPasskeyModel.id })
+      .from(userPasskeyModel)
+      .where(owned)
+    return still === undefined ? 'missing' : 'regressed'
   }
 }

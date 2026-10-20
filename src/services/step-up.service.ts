@@ -318,13 +318,13 @@ export async function finishPasskeyStepUp(
     const authenticatedAt = await markSessionReauthenticated(userId, sessionId, tx)
     // Under the user lock markSessionReauthenticated took: a claim that deleted the passkey, or left the account unverified, since the checks above refuses and rolls back.
     const locked = await userRepository.lockById(userId, 'no key update', tx)
-    const wasRecorded = await userPasskeyRepository.recordUse(
+    const outcome = await userPasskeyRepository.recordUse(
       stored.id,
       userId,
       { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
       tx
     )
-    if (!wasRecorded || !locked?.emailVerifiedAt) throw passkeyVerificationFailed()
+    if (outcome !== 'recorded' || !locked?.emailVerifiedAt) throw passkeyVerificationFailed()
     await recordStepUp(userId, 'passkey', tx)
     return authenticatedAt
   })
