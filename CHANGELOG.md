@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.0.1](https://github.com/mahaverick/express-boilerplate/compare/v8.0.0...v8.0.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **passkeys:** staff-access copy on apex, and audit passkeys a claim clears ([#144](https://github.com/mahaverick/express-boilerplate/issues/144)) ([e224bbc](https://github.com/mahaverick/express-boilerplate/commit/e224bbcc029b468edab08716eee70a6d30284521))
+
 ## [8.0.0](https://github.com/mahaverick/express-boilerplate/compare/v7.1.1...v8.0.0) (2026-10-20)
 
 
