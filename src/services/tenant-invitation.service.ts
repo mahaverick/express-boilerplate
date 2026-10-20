@@ -1383,7 +1383,10 @@ function requestInvitationConfirm(
  * expired, revoked, suspended-tenant or archived-tenant link touches no
  * account; the maintenance mode is re-checked (`assertJoinAllowedByMode`);
  * the address's account is read and passed through `assertSignInAllowed`
- * (`existingInvitee`); then, for a one-click join, the mode is checked once
+ * (`existingInvitee`), and when it holds one the link is looked up again,
+ * so the loser of two concurrent clicks, which reads the account the
+ * winner just created, mails no confirm link for an accepted invitation;
+ * then, for a one-click join, the mode is checked once
  * more and one transaction creates the account, claims the invitation, adds
  * the membership, audits `invitation.accepted` and issues a session that
  * does not count as a recent sign-in. A claim that loses (the link went dead
@@ -1399,6 +1402,10 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
   if (!valid) throw invitationInvalid()
   assertJoinAllowedByMode()
   const existing = await existingInvitee(valid.invitation.email)
+  // A concurrent one-click join commits the account and its claim together, so once the account shows, a second read shows the claim too.
+  if (existing && !(await invitationRepository.findValidByTokenHash(tokenHash))) {
+    throw invitationInvalid()
+  }
   if (existing || valid.tenant.isPlatform) {
     return {
       kind: 'confirm',
