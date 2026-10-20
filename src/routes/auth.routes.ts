@@ -22,6 +22,7 @@ import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { refusePlatformOptions, requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
+import { createPasskeyRouter } from '@/routes/passkey.routes'
 
 /**
  * Build the auth routes. A person signs in by an emailed link
@@ -118,6 +119,9 @@ export function createAuthRouter(): Router {
 
   // No limiter: a read of the caller's own data, with no oracle to probe.
   router.get('/providers', requireAuth, authController.getAuthProviders)
+
+  // Passkeys: the settings read is public; the rest gate on PASSKEY_MODE (passkey.routes.ts).
+  router.use('/passkeys', createPasskeyRouter())
 
   if (isGoogleOAuthEnabled()) {
     configurePassport()

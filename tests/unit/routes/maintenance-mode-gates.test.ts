@@ -65,6 +65,7 @@ const KNOWN_MOUNTS = [
   '/api/v1/webhooks/email',
   '/api/v1/collect',
   '/auth',
+  '/passkeys',
   '/profile',
   '/notifications',
   '/tenants',
@@ -288,6 +289,7 @@ describe('maintenance-mode route classification', () => {
         'POST /api/v1/auth/refresh',
         'POST /api/v1/auth/logout',
         'GET /api/v1/auth/providers',
+        'GET /api/v1/auth/passkeys/config',
         'GET /api/v1/profile',
       ].toSorted(byText)
     )

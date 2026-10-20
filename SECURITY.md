@@ -1029,7 +1029,8 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 `read_only` it refuses writes outside a short allowlist; in `full` it refuses
 everything but health, the email webhook, the collect proxy, the public status,
 `/platform`, the sign-in link routes, Google sign-in, the step-up routes,
-refresh, logout, `GET /auth/providers` and `GET /profile`. On the customer
+refresh, logout, `GET /auth/providers`, `GET /auth/passkeys/config` and
+`GET /profile`. On the customer
 routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
 staff through. The let-through list is visible during maintenance: a route on
 it reaches its router while an unknown path gets the 503, which is accepted,

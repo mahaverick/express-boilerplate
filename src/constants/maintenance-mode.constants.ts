@@ -228,6 +228,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('POST', '/api/v1/auth/refresh'),
   letThrough('POST', '/api/v1/auth/logout'),
   letThrough('GET', '/api/v1/auth/providers'),
+  // The apps read the passkey mode before sign-in to show or hide the passkey UI.
+  letThrough('GET', '/api/v1/auth/passkeys/config'),
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),
   // Account writes: refused in both modes.
