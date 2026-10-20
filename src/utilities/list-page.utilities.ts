@@ -616,7 +616,10 @@ export function textSort(
     value: z
       .string()
       .max(1024)
-      .refine((text) => !text.includes('\0'), 'cursor text must not contain a NUL character.'),
+      .refine(
+        (text) => !text.includes('\0'),
+        'cursor text must not contain a null character (U+0000).'
+      ),
   }
 }
 

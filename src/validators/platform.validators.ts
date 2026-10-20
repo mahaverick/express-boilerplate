@@ -184,7 +184,7 @@ export const updatePlatformUserSchema = z
     lastName: updateProfileSchema.shape.lastName,
   })
   .refine((input) => input.firstName !== undefined || input.lastName !== undefined, {
-    message: 'Provide firstName or lastName.',
+    message: 'Enter a first name or a last name.',
   })
 
 /**

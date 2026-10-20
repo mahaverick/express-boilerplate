@@ -85,7 +85,12 @@ app.get('/things', (request: Request, response: Response, next: NextFunction) =>
   }
 })
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-  const http = error instanceof HttpError ? error : new HttpError('Internal server error')
+  const http =
+    error instanceof HttpError
+      ? error
+      : new HttpError(
+          'Our server hit an error. Try again, and contact support with the error ID if it happens again.'
+        )
   response
     .status(http.statusCode)
     .json({ success: false, message: http.message, code: http.code, errors: http.errors })

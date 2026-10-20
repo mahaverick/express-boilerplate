@@ -107,8 +107,13 @@ function httpUrlField(label: string, maxLength: number) {
       if (!URL.canParse(value)) return true
       const { username, password } = new URL(value)
       return username === '' && password === ''
-    }, `${label} must be an http or https URL.`)
-    .pipe(z.url({ protocol: /^https?$/, message: `${label} must be an http or https URL.` }))
+    }, `${label} must be a web address that starts with http:// or https://.`)
+    .pipe(
+      z.url({
+        protocol: /^https?$/,
+        message: `${label} must be a web address that starts with http:// or https://.`,
+      })
+    )
 }
 
 /**
@@ -182,7 +187,7 @@ export const inviteMemberSchema = z.object({
  * The `:id` path parameter of `/tenants/:slug/invitations/:id` routes.
  */
 export const invitationIdSchema = z.object({
-  id: z.uuid('id must be a valid UUID.'),
+  id: z.uuid('id must be a 36-character ID.'),
 })
 
 /**

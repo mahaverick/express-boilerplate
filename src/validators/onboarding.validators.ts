@@ -14,6 +14,9 @@ import {
 export const onboardingStepParametersSchema = z.object({
   key: z
     .string()
-    .max(ONBOARDING_STEP_KEY_MAX_LENGTH, 'Step key is too long.')
+    .max(
+      ONBOARDING_STEP_KEY_MAX_LENGTH,
+      `Step key must be at most ${String(ONBOARDING_STEP_KEY_MAX_LENGTH)} characters.`
+    )
     .regex(ONBOARDING_STEP_KEY_PATTERN, 'Step key must be lowercase snake_case.'),
 })

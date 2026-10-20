@@ -4,6 +4,13 @@
  */
 import { z } from 'zod'
 import { HttpError } from '@/errors/http-error'
+// For its side effect: zod's own messages read as plain copy from here on.
+import '@/validators/zod-messages.validators'
+
+/**
+ * The message every 400 with field-level `errors` carries.
+ */
+export const VALIDATION_FAILED_MESSAGE = 'Check the highlighted fields, then try again.'
 
 /**
  * Parse request input (a body, query or params) against a schema,
@@ -26,7 +33,7 @@ export function parseBody<TSchema extends z.ZodType>(
   const result = schema.safeParse(input)
   if (!result.success) {
     const { fieldErrors, formErrors } = z.flattenError(result.error)
-    throw new HttpError('Validation failed', 400, undefined, {
+    throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
       ...fieldErrors,
       ...(formErrors.length > 0 && { formErrors }),
     })
