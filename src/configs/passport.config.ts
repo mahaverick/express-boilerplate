@@ -1,8 +1,7 @@
 /**
  * @file Google OAuth wiring: whether it is enabled, the pass-through Google
- * strategy (able to ask for a fresh login, for step-up), and the
- * Redis-backed express-session middleware that carries the OAuth `state`
- * across the redirect round-trip.
+ * strategy, and the Redis-backed express-session middleware that carries the
+ * OAuth `state` across the redirect round-trip.
  */
 import { RedisStore } from 'connect-redis'
 import type { RequestHandler } from 'express'
@@ -10,8 +9,6 @@ import session, { type SessionOptions } from 'express-session'
 import passport from 'passport'
 import {
   Strategy as GoogleStrategy,
-  type AuthenticateOptionsGoogle,
-  type GoogleCallbackParameters,
   type Profile as GoogleProfile,
   type VerifyCallback,
 } from 'passport-google-oauth20'
@@ -26,9 +23,9 @@ export { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 /**
  * Whether Google login is configured for this deployment.
  *
- * `auth.routes.ts` mounts `/auth/google`, `/auth/google/callback` and the
- * two Google step-up routes only when this is true, so an unconfigured
- * deployment never exposes a route that would fail on first use.
+ * `auth.routes.ts` mounts `/auth/google` and `/auth/google/callback` only when
+ * this is true, so an unconfigured deployment never exposes a route that
+ * would fail on first use.
  * @returns True when `GOOGLE_CLIENT_ID` is set.
  */
 export function isGoogleOAuthEnabled(): boolean {
@@ -36,69 +33,24 @@ export function isGoogleOAuthEnabled(): boolean {
 }
 
 /**
- * What the Google verify hands the callback route: the raw profile, and the
- * ID token the token endpoint returned with it (undefined when it returned
- * none). Only the step-up branch reads `idToken`, so a sign-in never depends
- * on one.
- */
-export interface GoogleCallbackResult {
-  profile: GoogleProfile
-  idToken: string | undefined
-}
-
-/**
  * The Google strategy's verify function: a deliberate pass-through that hands
- * the raw Google profile and the token endpoint's ID token to Passport as the
- * "user", ignoring the access and refresh tokens. Its five parameters are
- * load-bearing: passport-oauth2 passes the token endpoint's `params`, which
- * carry `id_token`, only to a verify of arity 5.
+ * the raw Google profile to Passport as the "user" and ignores both tokens.
  *
  * No database lookup: the callback route's account-linking policy
- * (`resolveGoogleUser`, google-auth.service.ts) and the step-up checks
- * (step-up.service.ts) need the raw values, which reach that route's custom
- * `passport.authenticate` callback. They never become `request.user`: the
- * callback authenticates with `session: false`, so Passport never calls
- * `req.login()` with them.
+ * (`resolveGoogleUser`, google-auth.service.ts) needs the raw profile,
+ * which reaches that route's custom `passport.authenticate` callback. The
+ * profile never becomes `request.user`: the callback authenticates with
+ * `session: false`, so Passport never calls `req.login()` with it.
  */
 function passthroughGoogleProfile(
   _accessToken: string,
   _refreshToken: string,
-  params: GoogleCallbackParameters,
   profile: GoogleProfile,
   done: VerifyCallback
 ): void {
-  const result: GoogleCallbackResult = { profile, idToken: params.id_token }
   // Cast: Passport's `VerifyCallback` names `Express.User`, which this codebase types as the JWT user.
   // eslint-disable-next-line unicorn/no-null -- Passport's own Node-style callback convention uses `null` as the "no error" sentinel; `VerifyCallback` is a third-party signature this file must match exactly
-  done(null, result as unknown as Express.User)
-}
-
-/**
- * The options `passport.authenticate` takes for the Google strategy, plus
- * `maxAge`: the OIDC `max_age` in seconds, sent only when set, so a step-up
- * can ask Google for a fresh login (0) while a sign-in sends none.
- */
-export interface StepUpAuthenticateOptions extends AuthenticateOptionsGoogle {
-  maxAge?: number
-}
-
-/**
- * The Google strategy, also passing `max_age` to Google's authorization
- * endpoint, which `GoogleStrategy.authorizationParams` does not. The check
- * is `!== undefined`, not truthiness: the one value step-up sends is 0.
- */
-class StepUpCapableGoogleStrategy extends GoogleStrategy {
-  /**
-   * The authorization request's extra parameters: Google's own, plus
-   * `max_age` when the options carry `maxAge`.
-   * @param options - The options `passport.authenticate` was called with.
-   * @returns The parameters to add to the authorization URL.
-   */
-  override authorizationParams(options: StepUpAuthenticateOptions): object {
-    const params = super.authorizationParams(options) as Record<string, unknown>
-    if (options.maxAge !== undefined) params.max_age = options.maxAge
-    return params
-  }
+  done(null, profile as unknown as Express.User)
 }
 
 /**
@@ -121,7 +73,7 @@ export function configurePassport(): void {
 
   passport.use(
     GOOGLE_STRATEGY_NAME,
-    new StepUpCapableGoogleStrategy(
+    new GoogleStrategy(
       {
         clientID: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
@@ -140,9 +92,9 @@ export function configurePassport(): void {
 const OAUTH_SESSION_COOKIE_NAME = 'oauth.sid'
 /**
  * How long one OAuth round-trip's session lives: the Google start must reach
- * the callback within it, and a step-up intent older than it is refused.
+ * the callback within it.
  */
-export const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
+const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
 
 /**
  * The OAuth session cookie's name, with the strongest prefix the deployment
@@ -245,8 +197,7 @@ function buildOAuthSessionOptions(client: RedisClient): SessionOptions {
 
 /**
  * Build the express-session middleware for the OAuth round-trip, for the
- * Google routes only (`/auth/google`, its callback and the two step-up
- * starts): the rest of the API is stateless JWT, so never mount it globally.
+ * Google routes only (`/auth/google` and its callback): the rest of the API is stateless JWT, so never mount it globally.
  *
  * The router is assembled synchronously, but connect-redis's `RedisStore`
  * needs a connected client (it stores whatever `client` it is given, so a

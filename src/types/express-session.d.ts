@@ -6,8 +6,8 @@ import type { OAuthIntent } from '@/types/oauth-intent'
 declare module 'express-session' {
   /**
    * This app's own fields on one Google round-trip's session, from
-   * `/auth/google` or `/auth/step-up/google/start` to the callback
-   * (passport keeps the OAuth `state` beside them).
+   * `/auth/google` to the callback (passport keeps the OAuth `state` beside
+   * them).
    */
   interface SessionData {
     /**

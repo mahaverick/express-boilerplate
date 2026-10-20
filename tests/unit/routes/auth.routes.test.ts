@@ -4,9 +4,9 @@
  * JSON gate runs first for every path, an OPTIONS refusal follows it on
  * `/step-up`, and each bearer route comes after both, with `requireAuth`,
  * then the role gate ahead of its limiter. The two link routes share one
- * limiter instance; the popup's `GET /step-up/google` shares `/google`'s.
- * Google is configured for the whole file, before anything reads the
- * environment, so its routes are mounted.
+ * limiter instance. Google is configured for the whole file, before anything
+ * reads the environment, so a Google step-up route would be mounted if one
+ * existed.
  */
 import type { RequestHandler, Router } from 'express'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -84,7 +84,6 @@ function gateIndex(layers: RouteLayer[]): number {
 const BEARER_STEP_UP_ROUTES = [
   { path: '/step-up/link/request', handler: authController.requestStepUpLink },
   { path: '/step-up/link/verify', handler: authController.verifyStepUpLink },
-  { path: '/step-up/google/start', handler: authController.startGoogleStepUp },
 ]
 
 describe('createAuthRouter: the step-up routes', () => {
@@ -103,7 +102,7 @@ describe('createAuthRouter: the step-up routes', () => {
     )
 
     expect(refusalAt).toBe(gateIndex(layers) + 1)
-    for (const path of ['/step-up', '/step-up/link/request', '/step-up/google']) {
+    for (const path of ['/step-up', '/step-up/link/request', '/step-up/link/verify']) {
       expect(layers[refusalAt]?.match(path)).toBe(true)
     }
     expect(layers[refusalAt]?.match('/login')).toBe(false)
@@ -134,21 +133,13 @@ describe('createAuthRouter: the step-up routes', () => {
     )
   })
 
-  it('runs the OAuth session after the limiter on the Google start', () => {
-    const handlers = handlersOf(layersOf(createAuthRouter()), 'post', '/step-up/google/start')
-
-    expect(handlers).toHaveLength(5)
-    expect(isLimiter(handlers[3])).toBe(false)
-  })
-
-  it("mounts GET /step-up/google on /google's own limiter instance, with no bearer gate", () => {
+  it('mounts no Google step-up route, with Google sign-in configured', () => {
     const layers = layersOf(createAuthRouter())
-    const popup = handlersOf(layers, 'get', '/step-up/google')
+    const paths = layers.map((layer) => layer.route?.path)
 
-    expect(isLimiter(popup[0])).toBe(true)
-    expect(popup[0]).toBe(handlersOf(layers, 'get', '/google')[0])
-    expect(popup).not.toContain(requireAuth)
-    expect(popup.at(-1)).toBe(authController.openGoogleStepUp)
+    expect(paths).toContain('/google/callback')
+    expect(paths).not.toContain('/step-up/google')
+    expect(paths).not.toContain('/step-up/google/start')
   })
 
   it('mounts no /reauthenticate route', () => {

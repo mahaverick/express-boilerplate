@@ -5,8 +5,8 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import passport from 'passport'
+import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv } from '@/configs/env.config'
-import type { GoogleCallbackResult, StepUpAuthenticateOptions } from '@/configs/passport.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
 import {
@@ -30,14 +30,7 @@ import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
 import { revokeOtherSessions } from '@/services/session.service'
 import { requestSignInLink, verifySignInLink } from '@/services/sign-in-link.service'
-import {
-  confirmGoogleStepUp,
-  confirmStepUpLink,
-  isStepUpIntentFresh,
-  requestStepUpLink,
-  startGoogleStepUp,
-  type StepUpIntent,
-} from '@/services/step-up.service'
+import { confirmStepUpLink, requestStepUpLink } from '@/services/step-up.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { revokeOtherSessionsSchema } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'
@@ -152,27 +145,6 @@ function callbackQuery(redirect: string | undefined, isNewUser: boolean): string
   if (isNewUser) query.set('new', '1')
   const text = query.toString()
   return text === '' ? '' : `?${text}`
-}
-
-/**
- * Where a Google step-up popup lands: Apex's confirm page, with
- * `result=confirmed` or `error=step_up_failed`.
- * @param query - The page's query, without the `?`.
- * @returns The absolute URL.
- */
-function stepUpConfirmPage(query: 'result=confirmed' | 'error=step_up_failed'): string {
-  return `${withoutTrailingSlashes(frontendUrl('apex'))}/auth/confirm?${query}`
-}
-
-/**
- * The Google authorization a step-up asks for: `openid` for the ID token,
- * `max_age=0` for a fresh login whose `auth_time` the callback checks, and
- * `prompt=select_account`, which Google documents, for the account choice.
- */
-const STEP_UP_GOOGLE_OPTIONS: StepUpAuthenticateOptions = {
-  scope: ['openid', 'email', 'profile'],
-  prompt: 'select_account',
-  maxAge: 0,
 }
 
 /**
@@ -334,48 +306,6 @@ class AuthController extends BaseController {
   })
 
   /**
-   * `POST /auth/step-up/google/start`: record a Google step-up for the
-   * caller's session in the OAuth session, behind `requireAuth`,
-   * `requirePlatformRole('viewer')` and the OAuth session middleware, and
-   * answer 204 with the OAuth session cookie. The Apex popup then opens
-   * `GET /auth/step-up/google`, a navigation, which carries that cookie but
-   * no bearer: that is why the start is a call of its own. Takes `{}` or no
-   * body.
-   */
-  startGoogleStepUp = this.handle(async (request, response) => {
-    parseBody(stepUpEmptyBodySchema, request.body ?? {})
-    const intent = await startGoogleStepUp(authenticatedUserId(request), request.sessionId)
-    request.session.oauthIntent = intent
-
-    response.status(204).end()
-  })
-
-  /**
-   * `GET /auth/step-up/google`: the Apex popup's navigation to Google for a
-   * step-up the start recorded, no older than the OAuth session lasts. It
-   * asks Google for a fresh login (`STEP_UP_GOOGLE_OPTIONS`). With no such
-   * intent the popup lands on Apex's confirm page with
-   * `error=step_up_failed`. Not wrapped in `handle()`: it answers with a
-   * redirect, never the JSON envelope.
-   * @param request - The popup's request, after the OAuth session middleware and `passport.initialize()`.
-   * @param response - The response.
-   * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
-   */
-  openGoogleStepUp = (request: Request, response: Response, next: NextFunction): void => {
-    const intent = oauthIntentOf(request)
-    if (intent.kind !== 'step_up' || !isStepUpIntentFresh(intent)) {
-      response.redirect(stepUpConfirmPage('error=step_up_failed'))
-      return
-    }
-    // Cast for the same reason as the `/google` route in auth.routes.ts: @types/passport types authenticate() as any.
-    const authenticate = passport.authenticate(
-      GOOGLE_STRATEGY_NAME,
-      STEP_UP_GOOGLE_OPTIONS
-    ) as RequestHandler
-    authenticate(request, response, next)
-  }
-
-  /**
    * `POST /auth/sessions/revoke-others`: sign the caller out of every other
    * session, behind `requireAuth`, keeping the one this request came from
    * (`request.sessionId`): only the chain its refresh cookie names, when the
@@ -415,12 +345,6 @@ class AuthController extends BaseController {
    * `GET /auth/google/callback`: handle Google's redirect back to this API
    * once the user completes (or abandons) Google's consent screen.
    *
-   * The stored intent picks the branch. A step-up goes to
-   * `completeGoogleStepUp`, which never
-   * sets a cookie or issues a session; a stored step-up whose fields do not
-   * check out is refused as a failed step-up, never read as a sign-in.
-   * Everything below describes the sign-in branch.
-   *
    * `session: false`: the OAuth express-session exists only to carry the CSRF
    * `state`; letting Passport call `req.login()` would serialize the profile
    * into it for nothing. Passport does not await the custom callback, so its
@@ -448,34 +372,21 @@ class AuthController extends BaseController {
    */
   handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
     const intent = oauthIntentOf(request)
-    if (intent.kind === 'invalid_step_up') {
-      // A tampered step-up never reads as a sign-in: refuse before Google's answer is even read.
-      delete request.session.oauthIntent
-      response.redirect(stepUpConfirmPage('error=step_up_failed'))
-      return
-    }
-    if (intent.kind === 'step_up') {
-      this.completeGoogleStepUp(intent, request, response, next)
-      return
-    }
     const frontend = withoutTrailingSlashes(frontendUrl(intent.app))
 
     const authenticate = passport.authenticate(
       GOOGLE_STRATEGY_NAME,
       { session: false },
-      (error: unknown, result: GoogleCallbackResult | false | null) => {
+      (error: unknown, profile: GoogleProfile | false | null) => {
         void (async () => {
-          if (error || !result) {
+          if (error || !profile) {
             logger.error('Google OAuth callback failed', { error })
             response.redirect(`${frontend}/login?error=google_auth_failed`)
             return
           }
 
           try {
-            const { refreshToken, isNewUser } = await completeGoogleSignIn(
-              result.profile,
-              intent.app
-            )
+            const { refreshToken, isNewUser } = await completeGoogleSignIn(profile, intent.app)
             await revokePresentedSession(request, { emitSignedOut: false })
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
@@ -491,54 +402,6 @@ class AuthController extends BaseController {
                 ? innerError.code
                 : 'processing_failed'
             response.redirect(`${frontend}/login?error=${code}`)
-          }
-        })()
-      }
-      // Cast for the same reason as the `/google` route in auth.routes.ts: @types/passport types authenticate() as any.
-    ) as RequestHandler
-
-    authenticate(request, response, next)
-  }
-
-  /**
-   * The callback's step-up branch: the intent is removed from the OAuth
-   * session first, so the round-trip confirms at most once, then
-   * `confirmGoogleStepUp` checks the ID token and the linked identity and
-   * marks the session. The popup lands on Apex's confirm page, with
-   * `result=confirmed` or `error=step_up_failed`. This branch sets no cookie,
-   * issues no token and revokes nothing: the session that asked is the one
-   * confirmed, and the popup's own cookies are left as they are.
-   * @param intent - The stored step-up intent.
-   * @param request - The callback request.
-   * @param response - The response.
-   * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
-   */
-  private completeGoogleStepUp(
-    intent: StepUpIntent,
-    request: Request,
-    response: Response,
-    next: NextFunction
-  ): void {
-    delete request.session.oauthIntent
-    const authenticate = passport.authenticate(
-      GOOGLE_STRATEGY_NAME,
-      { session: false },
-      (error: unknown, result: GoogleCallbackResult | false | null) => {
-        void (async () => {
-          if (error || !result) {
-            logger.warn('Google step-up callback failed', { error })
-            response.redirect(stepUpConfirmPage('error=step_up_failed'))
-            return
-          }
-          try {
-            await confirmGoogleStepUp(intent, result.profile, result.idToken)
-            response.redirect(stepUpConfirmPage('result=confirmed'))
-          } catch (innerError) {
-            // A refusal is logged where its reason is known; anything else is a fault.
-            if (!(innerError instanceof HttpError && innerError.code === 'step_up_failed')) {
-              logger.error('Google step-up callback failed', { error: redactedForLog(innerError) })
-            }
-            response.redirect(stepUpConfirmPage('error=step_up_failed'))
           }
         })()
       }

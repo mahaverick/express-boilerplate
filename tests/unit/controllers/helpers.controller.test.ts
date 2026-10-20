@@ -1,8 +1,7 @@
 /**
  * @file Unit tests for the controller request accessors that need no
  * database: `oauthIntentOf` reads the stored Google intent and never trusts
- * it, falling back to a plain web sign-in, except that a stored step-up never
- * reads as a sign-in, however it was tampered with.
+ * it, falling back to a plain web sign-in.
  */
 import type { Request } from 'express'
 import { describe, expect, it } from 'vitest'
@@ -37,6 +36,11 @@ describe('oauthIntentOf', () => {
   it.each([
     ['an unknown app', { kind: 'sign_in', app: 'https://evil.example' }, WEB_SIGN_IN],
     ['an unknown kind', { kind: 'other', app: 'apex' }, WEB_SIGN_IN],
+    [
+      'a step-up stored before Google step-up was removed',
+      { kind: 'step_up', userId: 'u', sessionId: 's', startedAt: 1_900_000_000_000 },
+      WEB_SIGN_IN,
+    ],
     ['a non-object', 'apex', WEB_SIGN_IN],
     [
       'an off-origin redirect',
@@ -45,40 +49,5 @@ describe('oauthIntentOf', () => {
     ],
   ])('answers a safe intent for a tampered session value: %s', (_label, stored, expected) => {
     expect(oauthIntentOf(requestWithSession({ oauthIntent: stored }))).toEqual(expected)
-  })
-
-  describe('a stored step-up', () => {
-    const STEP_UP = {
-      kind: 'step_up',
-      userId: '0190a8e2-0000-7000-8000-000000000001',
-      sessionId: '0190a8e2-0000-7000-8000-000000000002',
-      startedAt: 1_900_000_000_000,
-    }
-
-    it('answers the stored step-up', () => {
-      expect(oauthIntentOf(requestWithSession({ oauthIntent: STEP_UP }))).toEqual(STEP_UP)
-    })
-
-    it('drops fields a step-up does not carry', () => {
-      expect(
-        oauthIntentOf(
-          requestWithSession({ oauthIntent: { ...STEP_UP, app: 'web', redirect: '/x' } })
-        )
-      ).toEqual(STEP_UP)
-    })
-
-    it.each([
-      ['a missing userId', { ...STEP_UP, userId: undefined }],
-      ['a numeric userId', { ...STEP_UP, userId: 7 }],
-      ['an empty sessionId', { ...STEP_UP, sessionId: '' }],
-      ['a missing sessionId', { ...STEP_UP, sessionId: undefined }],
-      ['a string startedAt', { ...STEP_UP, startedAt: '1900000000000' }],
-      ['a non-finite startedAt', { ...STEP_UP, startedAt: Infinity }],
-      ['a missing startedAt', { ...STEP_UP, startedAt: undefined }],
-    ])('never reads a malformed step-up as a sign-in: %s', (_label, stored) => {
-      expect(oauthIntentOf(requestWithSession({ oauthIntent: stored }))).toEqual({
-        kind: 'invalid_step_up',
-      })
-    })
   })
 })
