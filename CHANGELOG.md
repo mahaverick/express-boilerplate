@@ -1,5 +1,13 @@
 # Changelog
 
+## [6.1.1](https://github.com/mahaverick/express-boilerplate/compare/v6.1.0...v6.1.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **analytics:** raise Node's 250 ms connect-attempt timeout that made the proxy 504 ([#129](https://github.com/mahaverick/express-boilerplate/issues/129)) ([55af052](https://github.com/mahaverick/express-boilerplate/commit/55af052d8611e41dfab523681948540effcfc035))
+* **invitations:** refuse a verify that lost to a concurrent join, instead of mailing a confirm link ([#132](https://github.com/mahaverick/express-boilerplate/issues/132)) ([4be10bb](https://github.com/mahaverick/express-boilerplate/commit/4be10bb5d6522ccdeb54f02f19062bc588ecea57))
+
 ## [6.1.0](https://github.com/mahaverick/express-boilerplate/compare/v6.0.0...v6.1.0) (2026-10-19)
 
 
