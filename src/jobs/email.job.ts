@@ -31,6 +31,8 @@ export const AUTH_EMAIL_TEMPLATE_KEYS = [
   'welcome',
   'tenant_invitation',
   'invitation_confirm',
+  'passkey_created',
+  'passkey_deleted',
 ] as const satisfies readonly EmailTemplateKey[]
 
 /**

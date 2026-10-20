@@ -66,6 +66,28 @@ describe('buildPreviewMessage', () => {
     expect(rendered.text).not.toMatch(HEX_TOKEN)
   })
 
+  it.each<EmailTemplateKey>(['passkey_created', 'passkey_deleted'])(
+    '%s previews the Security settings page with no token and stored values',
+    (templateKey) => {
+      const { message, isPartial } = buildPreviewMessage(
+        templateKey,
+        {
+          firstName: 'Ada',
+          providerName: 'iCloud Keychain',
+          occurredAt: '15:42 UTC on 20 October 2026',
+          appName: 'Acme',
+        },
+        ORIGIN
+      )
+      const rendered = renderForMessage(message)
+
+      expect(isPartial).toBe(false)
+      expect(rendered.text).toContain(`${ORIGIN}/settings/account/security?utm_source=email`)
+      expect(rendered.text).toContain('iCloud Keychain')
+      expect(rendered.text).not.toContain(TOKEN_MASK)
+    }
+  )
+
   it('uses the stored first name and product name and is not partial', () => {
     const { message, isPartial } = buildPreviewMessage(
       'step_up_link',

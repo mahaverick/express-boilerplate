@@ -22,6 +22,8 @@ import { describe, expect, it } from 'vitest'
 import { renderInvitationConfirmTemplate } from '@/templates/email/invitation-confirm.template'
 import { renderMaintenanceModeChangedTemplate } from '@/templates/email/maintenance-mode-changed.template'
 import { renderOnboardingReminderTemplate } from '@/templates/email/onboarding-reminder.template'
+import { renderPasskeyCreatedTemplate } from '@/templates/email/passkey-created.template'
+import { renderPasskeyDeletedTemplate } from '@/templates/email/passkey-deleted.template'
 import { renderSignInLinkTemplate } from '@/templates/email/sign-in-link.template'
 import { renderStepUpLinkTemplate } from '@/templates/email/step-up-link.template'
 import { renderTenantInvitationTemplate } from '@/templates/email/tenant-invitation.template'
@@ -351,6 +353,24 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       expiresInMinutes: '10',
       expiresAt: EXPIRES_AT,
       appName: 'Apex',
+    }),
+  ],
+  passkey_created: [
+    renderPasskeyCreatedTemplate({
+      firstName: 'Ada',
+      providerName: 'iCloud Keychain',
+      occurredAt: EXPIRES_AT,
+      settingsUrl: 'https://app.example.test/settings/account/security',
+      appName: 'Acme',
+    }),
+  ],
+  passkey_deleted: [
+    renderPasskeyDeletedTemplate({
+      firstName: 'Ada',
+      providerName: 'iCloud Keychain',
+      occurredAt: EXPIRES_AT,
+      settingsUrl: 'https://app.example.test/settings/account/security',
+      appName: 'Acme',
     }),
   ],
   invitation_confirm: [

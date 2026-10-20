@@ -9,6 +9,7 @@ import { getEnv } from '@/configs/env.config'
 import { buildInvitationAcceptUrl } from '@/services/frontend-links.service'
 import {
   buildInvitationConfirmUrl,
+  buildSecuritySettingsUrl,
   buildSignInLinkUrl,
   buildStepUpConfirmUrl,
 } from '@/services/link-token.service'
@@ -141,6 +142,34 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
       },
     },
     contents: ['text_link'],
+  }),
+  passkey_created: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'passkey_created',
+      variables: {
+        firstName: 'Ada',
+        providerName: 'iCloud Keychain',
+        occurredAt: '15:42 UTC on 20 October 2026',
+        settingsUrl: buildSecuritySettingsUrl('web', 'passkey_created'),
+        appName: 'App',
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  passkey_deleted: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'passkey_deleted',
+      variables: {
+        firstName: 'Ada',
+        providerName: 'iCloud Keychain',
+        occurredAt: '15:42 UTC on 20 October 2026',
+        settingsUrl: buildSecuritySettingsUrl('apex', 'passkey_deleted'),
+        appName: 'App',
+      },
+    },
+    contents: ['primary_button'],
   }),
   welcome: () => ({
     message: {

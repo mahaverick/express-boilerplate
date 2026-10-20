@@ -8,6 +8,8 @@ import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
 import { INVITATION_CONFIRM_TEMPLATE_META } from '@/templates/email/invitation-confirm.template'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_META } from '@/templates/email/maintenance-mode-changed.template'
 import { ONBOARDING_REMINDER_TEMPLATE_META } from '@/templates/email/onboarding-reminder.template'
+import { PASSKEY_CREATED_TEMPLATE_META } from '@/templates/email/passkey-created.template'
+import { PASSKEY_DELETED_TEMPLATE_META } from '@/templates/email/passkey-deleted.template'
 import { SIGN_IN_LINK_TEMPLATE_META } from '@/templates/email/sign-in-link.template'
 import { STEP_UP_LINK_TEMPLATE_META } from '@/templates/email/step-up-link.template'
 import { TENANT_INVITATION_TEMPLATE_META } from '@/templates/email/tenant-invitation.template'
@@ -52,4 +54,6 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     step_up_link: STEP_UP_LINK_TEMPLATE_META,
     welcome: WELCOME_TEMPLATE_META,
     invitation_confirm: INVITATION_CONFIRM_TEMPLATE_META,
+    passkey_created: PASSKEY_CREATED_TEMPLATE_META,
+    passkey_deleted: PASSKEY_DELETED_TEMPLATE_META,
   })

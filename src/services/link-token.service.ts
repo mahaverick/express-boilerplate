@@ -46,6 +46,12 @@ const STEP_UP_CONFIRM_PATH = 'auth/confirm'
 const INVITATION_CONFIRM_PATH = 'invitations/confirm'
 
 /**
+ * The Security settings page, where a passkey is created and deleted. The
+ * same path in both frontends.
+ */
+const SECURITY_SETTINGS_PATH = 'settings/account/security'
+
+/**
  * What a link is issued for. A `step_up` link names the user and session it
  * elevates; an `invitation` link names the invitation it joins; a `sign_in`
  * link names none of them, and only it carries a redirect.
@@ -232,4 +238,23 @@ export function buildInvitationConfirmUrl(
   url.searchParams.set('token', raw)
   url.searchParams.set('email', email)
   return withEmailUtm(url.href, 'invitation_confirm', 'primary_button')
+}
+
+/**
+ * The Security settings link a passkey mail carries:
+ * `<frontend>/settings/account/security`. It holds no token: signing in is
+ * the proof.
+ * @param app - The frontend the passkey was created or deleted in.
+ * @param templateKey - The mail that carries the link: its key is the `utm_campaign`.
+ * @returns The absolute URL, with UTM parameters.
+ */
+export function buildSecuritySettingsUrl(
+  app: FrontendApp,
+  templateKey: 'passkey_created' | 'passkey_deleted'
+): string {
+  return withEmailUtm(
+    frontendPageUrl(app, SECURITY_SETTINGS_PATH).href,
+    templateKey,
+    'primary_button'
+  )
 }

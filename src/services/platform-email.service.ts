@@ -421,6 +421,21 @@ function invitationConfirmPageUrl(rawToken: string, origin: string): string {
 }
 
 /**
+ * The Security settings page a passkey mail links to. It carries no token,
+ * so a preview shows it as sent.
+ * @param origin - The frontend origin the real link pointed at.
+ * @param templateKey - The mail the link is in: its key is the `utm_campaign`.
+ * @returns The URL.
+ */
+function securitySettingsPageUrl(
+  origin: string,
+  templateKey: 'passkey_created' | 'passkey_deleted'
+): string {
+  const base = new URL('settings/account/security', origin.endsWith('/') ? origin : `${origin}/`)
+  return withEmailUtm(base.href, templateKey, 'primary_button')
+}
+
+/**
  * The mail a preview renders, and whether a stored preview variable was
  * missing (a message migrated from an old send attempt, whose variables are
  * `{}`, or one written with empty variables) and read as the mask. The
@@ -555,6 +570,20 @@ export function buildPreviewMessage(
             confirmUrl: maskedLink(invitationConfirmPageUrl, origin),
             expiresInMinutes: fill('expiresInMinutes'),
             expiresAt: fill('expiresAt'),
+            appName: fill('appName'),
+          },
+        }
+      }
+      case 'passkey_created':
+      case 'passkey_deleted': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            providerName: fill('providerName'),
+            occurredAt: fill('occurredAt'),
+            settingsUrl: securitySettingsPageUrl(origin, templateKey),
             appName: fill('appName'),
           },
         }

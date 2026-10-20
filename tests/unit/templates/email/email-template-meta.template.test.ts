@@ -58,6 +58,20 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     reason: 'self',
   },
+  passkey_created: {
+    firstName: 'Ada',
+    providerName: 'iCloud Keychain',
+    occurredAt: '15:42 UTC on 20 October 2026',
+    settingsUrl: 'https://x.test/settings/account/security',
+    appName: 'App',
+  },
+  passkey_deleted: {
+    firstName: 'Ada',
+    providerName: 'iCloud Keychain',
+    occurredAt: '15:42 UTC on 20 October 2026',
+    settingsUrl: 'https://x.test/settings/account/security',
+    appName: 'App',
+  },
   step_up_link: {
     firstName: 'Ada',
     confirmUrl: 'https://x.test/auth/confirm?token=t',
@@ -127,6 +141,18 @@ describe('EMAIL_TEMPLATE_META', () => {
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
+      passkey_created: {
+        senderClass: 'transactional',
+        previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
+      },
+      passkey_deleted: {
+        senderClass: 'transactional',
+        previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
+      },
       welcome: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
@@ -170,6 +196,8 @@ describe('EMAIL_TEMPLATE_META', () => {
   it('offers no resend for the maintenance notice or a step-up link', () => {
     expect(EMAIL_TEMPLATE_META.maintenance_mode_changed.resendAction).toBeNull()
     expect(EMAIL_TEMPLATE_META.step_up_link.resendAction).toBeNull()
+    expect(EMAIL_TEMPLATE_META.passkey_created.resendAction).toBeNull()
+    expect(EMAIL_TEMPLATE_META.passkey_deleted.resendAction).toBeNull()
   })
 
   it('stores every onboarding reminder variable: its link carries no token', () => {
