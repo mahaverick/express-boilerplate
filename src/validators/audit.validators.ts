@@ -10,7 +10,7 @@ import { listFilter, listParamsSchema } from '@/validators/list.validators'
  */
 const auditFilters = {
   action: listFilter('action', STORED_AUDIT_ACTION_NAMES).optional(),
-  actor: z.uuid('actor must be a valid UUID.').optional(),
+  actor: z.uuid('actor must be a 36-character user ID.').optional(),
   access: listFilter('access', AUDIT_ACCESS_KINDS).optional(),
 }
 
@@ -37,8 +37,8 @@ export const platformAuditLogListSchema = listParamsSchema({
   defaultSort: '-occurred',
   filters: {
     ...auditFilters,
-    tenant: z.uuid('tenant must be a valid UUID.').optional(),
-    target: z.uuid('target must be a valid UUID.').optional(),
+    tenant: z.uuid('tenant must be a 36-character tenant ID.').optional(),
+    target: z.uuid('target must be a 36-character ID.').optional(),
   },
 })
 

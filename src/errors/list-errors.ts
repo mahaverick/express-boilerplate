@@ -10,13 +10,18 @@ import { HttpError } from '@/errors/http-error'
 export const CURSOR_INVALID_CODE = 'CURSOR_INVALID'
 
 /**
+ * What a refused cursor answers, as the message and as `errors.cursor`.
+ */
+const CURSOR_INVALID_MESSAGE = 'This list link is out of date. Reload the list from its first page.'
+
+/**
  * A cursor that is oversize, unsigned, tampered with, from another version,
  * or issued under another sort, search or filter. The body is the
  * validation 400's (`errors.cursor`), plus `code: 'CURSOR_INVALID'`.
  */
 export class InvalidCursorError extends HttpError {
   constructor() {
-    super('Validation failed', 400, CURSOR_INVALID_CODE, { cursor: ['cursor is invalid.'] })
+    super(CURSOR_INVALID_MESSAGE, 400, CURSOR_INVALID_CODE, { cursor: [CURSOR_INVALID_MESSAGE] })
     this.name = 'InvalidCursorError'
   }
 }

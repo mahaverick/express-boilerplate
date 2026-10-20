@@ -466,6 +466,7 @@ export function buildPreviewMessage(
             role: fill('role'),
             acceptUrl: maskedLink(buildInvitationAcceptUrl, origin),
             expiresInDays: fill('expiresInDays'),
+            expiresAt: fill('expiresAt'),
             appName: fill('appName'),
           },
         }
@@ -478,6 +479,8 @@ export function buildPreviewMessage(
             tenantName: fill('tenantName'),
             appName: fill('appName'),
             nextStep: fill('nextStep'),
+            stepsDone: fill('stepsDone'),
+            stepsTotal: fill('stepsTotal'),
             // Carries no token, so it is stored and shown as it was sent.
             overviewLink: fill('overviewLink'),
           },
@@ -509,6 +512,7 @@ export function buildPreviewMessage(
               origin
             ),
             expiresInMinutes: fill('expiresInMinutes'),
+            expiresAt: fill('expiresAt'),
             appName: fill('appName'),
             reason: fill('reason') === 'staff' ? 'staff' : 'self',
           },
@@ -522,6 +526,7 @@ export function buildPreviewMessage(
             firstName: fill('firstName'),
             signInUrl: maskedLink((token, from) => signInPageUrl(token, from, 'welcome'), origin),
             expiresInMinutes: fill('expiresInMinutes'),
+            expiresAt: fill('expiresAt'),
             appName: fill('appName'),
           },
         }
@@ -534,6 +539,7 @@ export function buildPreviewMessage(
             firstName: fill('firstName'),
             confirmUrl: maskedLink(stepUpConfirmPageUrl, origin),
             expiresInMinutes: fill('expiresInMinutes'),
+            expiresAt: fill('expiresAt'),
             appName: fill('appName'),
           },
         }
@@ -548,6 +554,7 @@ export function buildPreviewMessage(
             role: fill('role'),
             confirmUrl: maskedLink(invitationConfirmPageUrl, origin),
             expiresInMinutes: fill('expiresInMinutes'),
+            expiresAt: fill('expiresAt'),
             appName: fill('appName'),
           },
         }
@@ -849,7 +856,11 @@ export async function liftSuppression(
     if (!lifted) {
       const existing = await platformEmailRepository.findSuppression(id, tx)
       if (!existing) throw notFoundError('suppression')
-      throw new HttpError('This suppression was lifted already', 409, ALREADY_LIFTED_CODE)
+      throw new HttpError(
+        'This suppression was lifted already. Refresh the suppression list.',
+        409,
+        ALREADY_LIFTED_CODE
+      )
     }
     const platform = await platformTenantOrThrow(tx)
     await record(

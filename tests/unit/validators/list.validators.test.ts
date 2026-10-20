@@ -13,7 +13,7 @@ const schema = listParamsSchema({
   filters: {
     status: listFilter('status', ['active', 'inactive', 'deleted']).default(['active', 'inactive']),
     staff: booleanFilter.optional(),
-    user: z.uuid('user must be a valid UUID.').optional(),
+    user: z.uuid('user must be a 36-character user ID.').optional(),
   },
 })
 
@@ -67,7 +67,7 @@ describe('listParamsSchema', () => {
       'search must be at most 100 characters.',
     ])
     expect(errorsOf({ search: 'a\0b' }).search).toEqual([
-      'search must not contain a NUL character.',
+      'search must not contain a null character (U+0000).',
     ])
   })
 
@@ -92,8 +92,8 @@ describe('listParamsSchema', () => {
   })
 
   it('bounds limit to 1–100', () => {
-    expect(errorsOf({ limit: '0' }).limit).toEqual(['limit must be at least 1.'])
-    expect(errorsOf({ limit: '101' }).limit).toEqual(['limit must be at most 100.'])
+    expect(errorsOf({ limit: '0' }).limit).toEqual(['limit must be at least 1 row.'])
+    expect(errorsOf({ limit: '101' }).limit).toEqual(['limit must be at most 100 rows.'])
     expect(schema.parse({ limit: '100' }).params.limit).toBe(100)
   })
 

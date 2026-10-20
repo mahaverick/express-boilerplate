@@ -69,7 +69,12 @@ describe('buildPreviewMessage', () => {
   it('uses the stored first name and product name and is not partial', () => {
     const { message, isPartial } = buildPreviewMessage(
       'step_up_link',
-      { firstName: 'Ada', appName: 'Acme', expiresInMinutes: '15' },
+      {
+        firstName: 'Ada',
+        appName: 'Acme',
+        expiresInMinutes: '15',
+        expiresAt: '15:42 UTC on 20 October 2026',
+      },
       ORIGIN
     )
     const rendered = renderForMessage(message)
@@ -102,7 +107,13 @@ describe('buildPreviewMessage', () => {
   it('names the inviter "A teammate" and is not partial when every stored variable is present', () => {
     const { message, isPartial } = buildPreviewMessage(
       'tenant_invitation',
-      { tenantName: 'Acme', role: 'editor', expiresInDays: '7', appName: 'Acme' },
+      {
+        tenantName: 'Acme',
+        role: 'editor',
+        expiresInDays: '7',
+        expiresAt: '15:42 UTC on 20 October 2026',
+        appName: 'Acme',
+      },
       ORIGIN
     )
 
@@ -120,6 +131,8 @@ describe('buildPreviewMessage', () => {
       tenantName: 'Acme Rockets',
       appName: 'Acme',
       nextStep: 'Invite a teammate',
+      stepsDone: '1',
+      stepsTotal: '2',
       overviewLink: 'https://web.example.test/tenants/acme-rockets',
     }
     const { message, isPartial } = buildPreviewMessage('onboarding_reminder', stored, ORIGIN)

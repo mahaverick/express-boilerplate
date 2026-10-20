@@ -20,7 +20,7 @@ const searchField = z
   .trim()
   .min(1, 'search must not be empty.')
   .max(MAX_SEARCH_LENGTH, `search must be at most ${MAX_SEARCH_LENGTH} characters.`)
-  .refine((value) => !value.includes('\0'), 'search must not contain a NUL character.')
+  .refine((value) => !value.includes('\0'), 'search must not contain a null character (U+0000).')
 
 /**
  * `limit`: 1–100, 20 by default.
@@ -28,8 +28,8 @@ const searchField = z
 const limitField = z.coerce
   .number({ error: 'limit must be a whole number.' })
   .int('limit must be a whole number.')
-  .min(1, 'limit must be at least 1.')
-  .max(MAX_LIMIT, `limit must be at most ${MAX_LIMIT}.`)
+  .min(1, 'limit must be at least 1 row.')
+  .max(MAX_LIMIT, `limit must be at most ${MAX_LIMIT} rows.`)
   .default(DEFAULT_LIMIT)
 
 /**

@@ -119,7 +119,11 @@ describe('concurrent staff deletes', () => {
       expect(outcomes[0]?.status).toBe('fulfilled')
       expect(outcomes[1]).toMatchObject({
         status: 'rejected',
-        reason: { statusCode: 401, message: 'Account no longer exists or is inactive' },
+        reason: {
+          statusCode: 401,
+          message:
+            'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+        },
       })
       const deleted = await sql<{ id: string }[]>`
         select id from users where id = any(${[a.user.id, b.user.id]}) and deleted_at is not null`
@@ -141,7 +145,8 @@ describe('an actor whose account went inactive after the route gates', () => {
 
     await expect(run({ userId: admin.id }, target.id, REASON)).rejects.toMatchObject({
       statusCode: 401,
-      message: 'Account no longer exists or is inactive',
+      message:
+        'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
     })
     const [row] = await sql<{ active: boolean; deleted: boolean }[]>`
       select active, deleted_at is not null as deleted from users where id = ${target.id}`
@@ -176,7 +181,8 @@ describe('a delete whose target came to own a tenant after the first ownership r
     await withMutatedMethod(PlatformUserRepository.prototype, 'listOwnedTenants', lateList, () =>
       expect(deleteUser({ userId: admin.id }, target.id, REASON)).rejects.toMatchObject({
         statusCode: 409,
-        message: "This user's owned tenants changed meanwhile; try again",
+        message:
+          "This user's owned tenants changed during the delete. Refresh the page, then try again.",
       })
     )
 
@@ -335,7 +341,7 @@ interface OwnerGrant {
   refusal: { statusCode: number; message: string }
 }
 
-const AUTHENTICATION_REQUIRED = { statusCode: 401, message: 'Authentication required' }
+const AUTHENTICATION_REQUIRED = { statusCode: 401, message: 'Sign in to continue.' }
 
 /**
  * `createTenant` by the target: they own the new tenant from its first write.
@@ -466,7 +472,8 @@ describe('a delete racing a grant of ownership', () => {
         status: 'rejected',
         reason: {
           statusCode: 409,
-          message: "This user's owned tenants changed meanwhile; try again",
+          message:
+            "This user's owned tenants changed during the delete. Refresh the page, then try again.",
         },
       })
       expect(await isDeleted(target.id)).toBe(false)

@@ -40,6 +40,8 @@ const message: MailMessage = {
     tenantName: 'Acme',
     appName: 'Test',
     nextStep: 'Invite a teammate',
+    stepsDone: '1',
+    stepsTotal: '2',
     overviewLink: 'https://example.com/tenants/acme',
   },
 }

@@ -47,6 +47,7 @@ import {
   type ListPage,
 } from '@/utilities/list-page.utilities'
 import type { ParsedDefinition } from '@/validators/flag-definition.validators'
+import { VALIDATION_FAILED_MESSAGE } from '@/validators/parse.validators'
 import type {
   PlatformFlagListQuery,
   PlatformFlagsEvaluateQuery,
@@ -243,8 +244,8 @@ export async function evaluateFlagsFor(
   const user = await userRepository.findById(query.userId)
   if (!user) throw notFoundError('user')
   if (query.tenantId !== undefined && query.app === 'apex') {
-    throw new HttpError('Validation failed', 400, undefined, {
-      tenantId: ['apex flags are evaluated with no tenant.'],
+    throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
+      tenantId: ['Apex flags take no tenant. Clear the tenant, then evaluate again.'],
     })
   }
   if (query.tenantId !== undefined) {
@@ -253,8 +254,10 @@ export async function evaluateFlagsFor(
       query.tenantId
     )
     if (!membership) {
-      throw new HttpError('Validation failed', 400, undefined, {
-        tenantId: ['The user is not a member of this tenant.'],
+      throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
+        tenantId: [
+          "This user isn't a member of this tenant. Pick one of their tenants, or clear the tenant.",
+        ],
       })
     }
   }

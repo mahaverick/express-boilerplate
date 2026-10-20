@@ -55,12 +55,12 @@ describe('successResponse', () => {
 describe('messageResponse', () => {
   it('sends data: null, never an omitted data key', () => {
     const { response, body, status } = mockResponse()
-    messageResponse(response, 'Logged out.')
+    messageResponse(response, 'Signed out.')
 
     expect(status).toHaveBeenCalledWith(200)
     expect(body()).toStrictEqual({
       success: true,
-      message: 'Logged out.',
+      message: 'Signed out.',
       statusCode: 200,
       // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
       data: null,
@@ -114,7 +114,12 @@ describe('errorResponse', () => {
 
   it('includes a code when supplied, independent of errors', () => {
     const { response, body } = mockResponse()
-    errorResponse(response, 'Access token expired', 401, 'ACCESS_TOKEN_EXPIRED')
+    errorResponse(
+      response,
+      'Your sign-in expired. Sign in again to continue.',
+      401,
+      'ACCESS_TOKEN_EXPIRED'
+    )
 
     expect(body()).toMatchObject({ statusCode: 401, code: 'ACCESS_TOKEN_EXPIRED' })
     // No field-level detail was supplied, so errors must stay absent even though code is present — the two are independent fields, not one overloaded one.

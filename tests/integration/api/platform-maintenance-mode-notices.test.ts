@@ -96,6 +96,14 @@ describe('entering and leaving full', () => {
       select count(*)::int as count from notifications
       where user_id = ${admin.id} and type = 'maintenance_mode_changed'`
     expect(row?.count).toBe(1)
+    const [notice] = await sql<{ title: string; body: string }[]>`
+      select title, body from notifications
+      where user_id = ${admin.id} and type = 'maintenance_mode_changed'`
+    expect(notice?.title).toBe('Maintenance mode is now full')
+    // The time is absolute, in UTC: a notification is read long after it is sent.
+    expect(notice?.body).toMatch(
+      / set maintenance mode to full at \d{2}:\d{2} UTC on \d{1,2} [A-Z][a-z]+ \d{4}\. Reason: Database upgrade$/
+    )
     expect(await hasPendingNotices()).toBe(false)
 
     const off = await request(app)

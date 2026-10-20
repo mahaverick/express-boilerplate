@@ -228,7 +228,7 @@ describe('PUT /platform/maintenance-mode', () => {
 
     expect(noReason.status).toBe(400)
     expect(noReason.body).toMatchObject({
-      message: 'Validation failed',
+      message: 'Check the highlighted fields, then try again.',
       errors: { reason: [expect.any(String)] },
     })
     expect(noMessage.status).toBe(400)

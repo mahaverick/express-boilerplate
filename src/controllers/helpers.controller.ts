@@ -27,7 +27,7 @@ import { redirectPathSchema } from '@/validators/redirect.validators'
  */
 export function authenticatedUserId(request: Request): string {
   if (!request.user) {
-    throw new HttpError('Authentication required', 401)
+    throw new HttpError('Sign in to continue.', 401)
   }
   return request.user.id
 }

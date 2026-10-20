@@ -24,7 +24,7 @@ function denylistKey(sessionId: string): string {
  */
 export type DenyOutcome = 'denied' | 'pending' | 'failed'
 
-const DENY_FAILED_MESSAGE = 'Could not deny session; access tokens stay valid until they expire'
+const DENY_FAILED_LOG_LINE = 'Could not deny session; access tokens stay valid until they expire'
 
 /**
  * Stop honouring a session's access tokens.
@@ -78,7 +78,7 @@ export async function denySession(sessionId: string, userId?: string): Promise<D
     )
     return outcome === STILL_PENDING ? 'pending' : 'denied'
   } catch (error) {
-    logger.warn(DENY_FAILED_MESSAGE, { sessionId, error })
+    logger.warn(DENY_FAILED_LOG_LINE, { sessionId, error })
     return 'failed'
   }
 }

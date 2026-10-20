@@ -87,7 +87,10 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
       return await write()
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError('A record with this value already exists', 409)
+        throw new HttpError(
+          'Another record already uses this value. Change it, then try again.',
+          409
+        )
       }
       throw error
     }

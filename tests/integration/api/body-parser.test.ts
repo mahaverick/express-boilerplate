@@ -33,7 +33,12 @@ describe('body-parser errors reach the client as client errors', () => {
       .send('{"broken":')
 
     expect(response.status).toBe(400)
-    expect(response.body).toMatchObject({ success: false, statusCode: 400 })
+    expect(response.body).toMatchObject({
+      success: false,
+      statusCode: 400,
+      code: 'malformed_json',
+      message: "We couldn't read the request body as JSON. Fix its syntax, then send it again.",
+    })
   })
 
   it('does not log malformed JSON at server severity', async () => {
@@ -52,7 +57,12 @@ describe('body-parser errors reach the client as client errors', () => {
       .send(oversize)
 
     expect(response.status).toBe(413)
-    expect(response.body).toMatchObject({ success: false, statusCode: 413 })
+    expect(response.body).toMatchObject({
+      success: false,
+      statusCode: 413,
+      code: 'payload_too_large',
+      message: 'The request body is over the 1 MB limit. Send a smaller body.',
+    })
   })
 
   it('does not log an oversize body at server severity', async () => {
@@ -88,7 +98,12 @@ describe('express.urlencoded is configured with an explicit limit', () => {
       .send(oversize)
 
     expect(response.status).toBe(413)
-    expect(response.body).toMatchObject({ success: false, statusCode: 413 })
+    expect(response.body).toMatchObject({
+      success: false,
+      statusCode: 413,
+      code: 'payload_too_large',
+      message: 'The request body is over the 100 KB limit. Send a smaller body.',
+    })
   })
 
   it('reaches the 404 catch-all for a well-formed urlencoded body on an unknown route', async () => {

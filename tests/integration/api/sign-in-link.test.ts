@@ -468,9 +468,27 @@ describe('POST /auth/link/request', () => {
     expect(message?.variables).toEqual({
       firstName: 'Grace',
       expiresInMinutes: '15',
+      expiresAt: expect.stringMatching(/^\d{2}:\d{2} UTC on \d{1,2} [A-Z][a-z]+ \d{4}$/) as unknown,
       appName: expect.any(String) as unknown,
       reason: 'staff',
     })
+  })
+
+  it('states the absolute expiry in UTC, read from the clock at send', async () => {
+    const user = await createTrackedUser({ email: uniqueEmail('expiry'), firstName: 'Grace' })
+    // The TTL is 15 minutes, so a link sent at 15:27 UTC expires at 15:42 UTC.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-20T15:27:00.000Z') })
+    try {
+      await sendSignInLink({ email: user.email, app: 'web', userId: user.id })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const [message] = await sql<{ variables: Record<string, unknown> }[]>`
+      select variables from email_messages
+      where recipient = ${user.email} and template_key = 'sign_in_link'
+    `
+    expect(message?.variables.expiresAt).toBe('15:42 UTC on 20 October 2026')
   })
 
   it('mails the welcome template for the welcome reason, with no reason variable', async () => {
@@ -491,6 +509,9 @@ describe('POST /auth/link/request', () => {
         variables: {
           firstName: 'Grace',
           expiresInMinutes: '15',
+          expiresAt: expect.stringMatching(
+            /^\d{2}:\d{2} UTC on \d{1,2} [A-Z][a-z]+ \d{4}$/
+          ) as unknown,
           appName: expect.any(String) as unknown,
         },
       },
@@ -672,7 +693,7 @@ describe('POST /auth/link/verify', () => {
       expect(refusalBody(response)).toStrictEqual(refusalBody(responses[0] as Response))
     }
     expect(refusalBody(responses[0] as Response)).toMatchObject({
-      message: 'This link has expired or was already used.',
+      message: 'This link expired or was already used. Ask for a new link.',
     })
   })
 

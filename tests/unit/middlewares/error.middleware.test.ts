@@ -109,7 +109,8 @@ describe('errorHandler', () => {
     expect(status).toHaveBeenCalledWith(502)
     expect(body()).toMatchObject({
       success: false,
-      message: 'Internal server error',
+      message:
+        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
       statusCode: 502,
       code: 'POSTHOG_UNAVAILABLE',
     })
@@ -126,7 +127,11 @@ describe('errorHandler', () => {
   it('includes a machine-readable code when HttpError carries one', () => {
     const { response, body } = mockResponse()
     errorHandler(
-      new HttpError('Access token expired', 401, 'ACCESS_TOKEN_EXPIRED'),
+      new HttpError(
+        'Your sign-in expired. Sign in again to continue.',
+        401,
+        'ACCESS_TOKEN_EXPIRED'
+      ),
       {} as never,
       response,
       vi.fn()
@@ -197,7 +202,11 @@ describe('errorHandler', () => {
     errorHandler(new Error('leaked implementation detail'), {} as never, response, vi.fn())
 
     expect(status).toHaveBeenCalledWith(500)
-    expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
+    expect(body()).toMatchObject({
+      success: false,
+      message:
+        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+    })
   })
 
   it.each([
@@ -240,7 +249,11 @@ describe('errorHandler', () => {
     errorHandler(original, {} as never, response, vi.fn())
 
     expect(status).toHaveBeenCalledWith(500)
-    expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
+    expect(body()).toMatchObject({
+      success: false,
+      message:
+        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+    })
     // The ORIGINAL error object is logged, not the masked message: masking is for the client; the whole point of logging is that the real cause stays recoverable server-side.
     expect(loggerError).toHaveBeenCalledWith('Unhandled server error', {
       error: original,
@@ -269,7 +282,11 @@ describe('errorHandler', () => {
     const { response, body } = mockResponse()
     errorHandler(new HttpError('db exploded', 500), {} as never, response, vi.fn())
 
-    expect(body()).toMatchObject({ message: 'Internal server error', statusCode: 500 })
+    expect(body()).toMatchObject({
+      message:
+        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      statusCode: 500,
+    })
   })
 
   it('handles a thrown non-Error value', () => {
@@ -277,7 +294,10 @@ describe('errorHandler', () => {
     errorHandler('just a string', {} as never, response, vi.fn())
 
     expect(status).toHaveBeenCalledWith(500)
-    expect(body()).toMatchObject({ message: 'Internal server error' })
+    expect(body()).toMatchObject({
+      message:
+        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+    })
   })
 
   it('stamps the request id read back off the response', () => {
@@ -410,7 +430,11 @@ describe('errorHandler', () => {
       errorHandler(failedInsert(), {} as never, response, vi.fn())
 
       expect(status).toHaveBeenCalledWith(500)
-      expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
+      expect(body()).toMatchObject({
+        success: false,
+        message:
+          'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      })
       expect(JSON.stringify(body())).not.toContain(email)
     })
   })
@@ -473,7 +497,10 @@ describe('errorHandler', () => {
       )
 
       expect(status).toHaveBeenCalledWith(500)
-      expect(body()).toMatchObject({ message: 'Internal server error' })
+      expect(body()).toMatchObject({
+        message:
+          'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      })
       expect(loggerError).toHaveBeenCalled()
     })
 

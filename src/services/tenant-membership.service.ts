@@ -419,7 +419,7 @@ export async function changeRole(
         targetUserId,
         options,
         tx,
-        'Cannot change role: you are the last owner'
+        "You're the last owner. Make someone else an owner before you change your role."
       )
     }
     const updated = await userMembershipRepository.updateRole(target.id, role, tx)
@@ -489,7 +489,7 @@ export async function removeMember(
         targetUserId,
         options,
         tx,
-        'Cannot remove the last owner'
+        'This member is the last owner. Make someone else an owner before you remove them.'
       )
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
@@ -552,7 +552,7 @@ export async function leaveTenant(
         actor.userId,
         options,
         tx,
-        'You are the last owner: make someone else an owner before you leave.',
+        "You're the last owner. Make someone else an owner before you leave.",
         LAST_OWNER_CODE
       )
     }

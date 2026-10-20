@@ -292,7 +292,9 @@ describe('runFlagsSync', () => {
     posthog().groupTypesStatus = 500
     const { code, stderr } = await run()
     expect(code).toBe(1)
-    expect(stderr).toBe('Could not read PostHog group types\n')
+    expect(stderr).toBe(
+      "PostHog didn't return its group types. Check POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID, then run the sync again.\n"
+    )
     expect(createRequests()).toEqual([])
   })
 
@@ -314,7 +316,7 @@ describe('runFlagsSync', () => {
     )
     const { code, stderr } = await run()
     expect(code).toBe(1)
-    expect(stderr).toBe('PostHog flag list did not end\n')
+    expect(stderr).toBe("PostHog's flag list didn't end after 50 pages. Run the sync again.\n")
   })
 
   it('refuses before creating anything when a tenant-scoped flag needs a missing tenant group type', async () => {
@@ -382,7 +384,9 @@ describe('runFlagsSync', () => {
     const { code, stderr } = await run()
 
     expect(code).toBe(1)
-    expect(stderr).toBe('Could not create example_beta_page: HTTP 400 invalid_input\n')
+    expect(stderr).toBe(
+      "PostHog didn't create example_beta_page (HTTP 400 invalid_input). Check its registry entry, then run the sync again.\n"
+    )
   })
 
   it('exits 1 when the list is refused, as with a key that lacks feature_flag:read', async () => {
@@ -391,7 +395,9 @@ describe('runFlagsSync', () => {
     const { code, stderr } = await run()
 
     expect(code).toBe(1)
-    expect(stderr).toBe('Could not list PostHog feature flags: HTTP 403\n')
+    expect(stderr).toBe(
+      "PostHog didn't list its feature flags (HTTP 403). Check POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID, then run the sync again.\n"
+    )
   })
 
   it('exits 1 without a personal key, before any request', async () => {

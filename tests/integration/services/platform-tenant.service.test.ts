@@ -86,7 +86,11 @@ describe('the actor re-check under lock', () => {
         { userId: admin.id },
         { name: 'Nope', slug, ownerEmail: `o-${randomUUID()}@example.test` }
       )
-    ).rejects.toMatchObject({ statusCode: 401, message: 'Account no longer exists or is inactive' })
+    ).rejects.toMatchObject({
+      statusCode: 401,
+      message:
+        'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+    })
 
     expect(await sql`select id from tenants where slug = ${slug}`).toHaveLength(0)
   })

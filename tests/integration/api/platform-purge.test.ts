@@ -330,7 +330,7 @@ describe('POST /api/v1/platform/users/:id/purge', () => {
 
     expect(response.status).toBe(409)
     expect((response.body as { message: string }).message).toBe(
-      'Delete the user before purging them'
+      'Delete this user before you purge them.'
     )
   })
 
@@ -420,7 +420,9 @@ describe('POST /api/v1/platform/tenants/:id/purge', () => {
 
     const live = await purgeTenant(token, tenant.id)
     expect(live.status).toBe(409)
-    expect((live.body as { message: string }).message).toBe('Archive the tenant before purging it')
+    expect((live.body as { message: string }).message).toBe(
+      'Archive this tenant before you purge it.'
+    )
     const response = await purgeTenant(token, platform.id)
     expect(response.status).toBe(409)
   })
@@ -449,7 +451,11 @@ describe('the purge actor re-check under lock', () => {
     })
     tenantIds.push(tenant.id)
     await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
-    const refused = { statusCode: 401, message: 'Account no longer exists or is inactive' }
+    const refused = {
+      statusCode: 401,
+      message:
+        'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+    }
 
     await expect(purgeUserAs({ userId: owner.id }, gone.id, REASON)).rejects.toMatchObject(refused)
     await expect(purgeTenantAs({ userId: owner.id }, tenant.id, REASON)).rejects.toMatchObject(

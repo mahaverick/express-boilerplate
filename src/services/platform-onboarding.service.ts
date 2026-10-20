@@ -67,6 +67,7 @@ import type {
   OnboardingTenantRow,
   TenantOnboardingDetail,
 } from '@/types/platform-onboarding'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import { withEmailUtm } from '@/utilities/utm.utilities'
@@ -722,8 +723,12 @@ function reminderRefusal(block: {
     }
     case 'reminded_recently': {
       const retryAfter = block.nextAllowedAt?.toISOString()
+      const nextAt =
+        block.nextAllowedAt === null
+          ? 'in 24 hours'
+          : `after ${formatUtcDateTime(block.nextAllowedAt, 'up')}`
       return new HttpError(
-        `A reminder went less than 24 hours ago; the next can go after ${retryAfter ?? 'a day'}.`,
+        `This tenant got a reminder in the last 24 hours. You can send the next one ${nextAt}.`,
         409,
         REMINDED_RECENTLY_CODE,
         { retryAfter }
@@ -860,6 +865,8 @@ export async function sendOnboardingReminder(
         tenantName: tenant.name,
         appName: getEnv().APP_NAME,
         nextStep: nextStep.title,
+        stepsDone: String(progress.requiredDone),
+        stepsTotal: String(registryKeysOf().requiredKeys.length),
         overviewLink: buildTenantOverviewLink(tenant.slug),
       },
       tenantId,
@@ -884,7 +891,11 @@ export async function sendOnboardingReminder(
     return messages
   })
   const enqueued = await enqueueReminders(pending, tenantId)
-  return { emailSent: enqueued === pending.length, recipientCount: pending.length }
+  return {
+    emailSent: enqueued === pending.length,
+    recipientCount: pending.length,
+    queuedCount: enqueued,
+  }
 }
 
 /**

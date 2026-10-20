@@ -507,6 +507,7 @@ describe('POST /api/v1/invitations/verify', () => {
       tenantName: 'Acme Inc',
       role: 'editor',
       expiresInMinutes: '15',
+      expiresAt: expect.stringMatching(/^\d{2}:\d{2} UTC on \d{1,2} [A-Z][a-z]+ \d{4}$/) as unknown,
     })
     const link = new URL(job.variables.confirmUrl)
     expect(link.pathname).toBe('/invitations/confirm')

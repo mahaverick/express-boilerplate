@@ -9,7 +9,7 @@ import { z } from 'zod'
 import { clientFlagsFor, FLAG_KEY_MAX, type MultivariateFlagKey } from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
 import type { FlagApp } from '@/types/flags'
-import { parseBody } from '@/validators/parse.validators'
+import { parseBody, VALIDATION_FAILED_MESSAGE } from '@/validators/parse.validators'
 
 /**
  * The most keys one exposure report may carry.
@@ -40,7 +40,7 @@ const exposureBodySchema = z.strictObject({
  * @param body - The raw request body.
  * @param app - The app whose exposure route was called.
  * @returns The keys, each a multivariate experiment flag of `app`.
- * @throws {HttpError} 400 `Validation failed` when the body is malformed or a key is outside the allowlist.
+ * @throws {HttpError} 400 `Check the highlighted fields, then try again.` when the body is malformed or a key is outside the allowlist.
  */
 export function parseExposureKeys(body: unknown, app: FlagApp): MultivariateFlagKey[] {
   const { keys } = parseBody(exposureBodySchema, body)
@@ -50,7 +50,9 @@ export function parseExposureKeys(body: unknown, app: FlagApp): MultivariateFlag
       .map((entry) => entry.key)
   )
   if (keys.some((key) => !allowed.has(key))) {
-    throw new HttpError('Validation failed', 400, undefined, { keys: [EXPOSURE_KEY_MESSAGE] })
+    throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
+      keys: [EXPOSURE_KEY_MESSAGE],
+    })
   }
   // Every key is a registered multivariate entry's key, checked just above.
   return keys as MultivariateFlagKey[]

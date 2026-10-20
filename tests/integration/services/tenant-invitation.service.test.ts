@@ -35,6 +35,7 @@ import {
   resendCooldownError,
   revoke,
 } from '@/services/tenant-invitation.service'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -206,6 +207,7 @@ describe('tenant-invitation.service', () => {
         role: 'editor',
         acceptUrl: `http://localhost:5173/invitations/accept?token=${queued.token}&utm_source=email&utm_medium=email&utm_campaign=tenant_invitation&utm_content=primary_button`,
         expiresInDays: '3',
+        expiresAt: formatUtcDateTime(pending?.expiresAt ?? new Date(0)),
         appName: queued.variables.appName,
       })
       expect(queued.token).toMatch(/^[\w-]{43}$/)
@@ -249,7 +251,7 @@ describe('tenant-invitation.service', () => {
         userId: invitee.id,
         type: 'tenant_invitation',
         title: 'Invitation to Acme Inc',
-        body: 'Ada Lovelace invited you to join as manager.',
+        body: `Ada Lovelace invited you to join Acme Inc as manager. The invitation expires at ${formatUtcDateTime(pending?.expiresAt ?? new Date(0))}.`,
         metadata: { tenantSlug: tenant.slug, invitationId: pending?.id },
       })
       expect(JSON.stringify(job.data)).not.toContain(queued.token)

@@ -80,9 +80,9 @@ describe('signCursor and verifyCursor', () => {
     expect(error).toBeInstanceOf(InvalidCursorError)
     expect(error).toMatchObject({
       statusCode: 400,
-      message: 'Validation failed',
+      message: 'This list link is out of date. Reload the list from its first page.',
       code: CURSOR_INVALID_CODE,
-      errors: { cursor: ['cursor is invalid.'] },
+      errors: { cursor: ['This list link is out of date. Reload the list from its first page.'] },
     })
   })
 

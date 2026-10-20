@@ -30,7 +30,7 @@ describe('parseExposureKeys', () => {
 
   it('refuses every key for apex, which registers no experiment', () => {
     expect(() => parseExposureKeys({ keys: ['example_cta_experiment'] }, 'apex')).toThrow(
-      'Validation failed'
+      'Check the highlighted fields, then try again.'
     )
   })
 
@@ -42,7 +42,9 @@ describe('parseExposureKeys', () => {
       { keys: Array.from({ length: 11 }, (_, index) => `k${String(index)}`) },
       { keys: ['example_cta_experiment'], app: 'react' },
     ]) {
-      expect(() => parseExposureKeys(body, 'react')).toThrow('Validation failed')
+      expect(() => parseExposureKeys(body, 'react')).toThrow(
+        'Check the highlighted fields, then try again.'
+      )
     }
   })
 
@@ -50,7 +52,7 @@ describe('parseExposureKeys', () => {
     registry.hasPlainMultivariate = true
     try {
       expect(() => parseExposureKeys({ keys: ['plain_multivariate'] }, 'react')).toThrow(
-        'Validation failed'
+        'Check the highlighted fields, then try again.'
       )
       expect(parseExposureKeys({ keys: ['example_cta_experiment'] }, 'react')).toEqual([
         'example_cta_experiment',

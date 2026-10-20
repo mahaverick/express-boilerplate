@@ -64,7 +64,10 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
   const rotated = await rotateRefreshToken(rawToken)
   const user = await userRepository.findById(rotated.userId)
   if (!user || !user.active) {
-    throw new HttpError('Account no longer exists or is inactive', 401)
+    throw new HttpError(
+      'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+      401
+    )
   }
   return {
     accessToken: signAccessToken(user, rotated.sessionId, rotated.authenticatedAt),

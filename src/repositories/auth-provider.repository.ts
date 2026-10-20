@@ -73,7 +73,10 @@ export class AuthProviderRepository {
       return row
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError('This account is already linked', 409)
+        throw new HttpError(
+          'This Google account is already linked to another account. Sign in with that account instead.',
+          409
+        )
       }
       throw error
     }

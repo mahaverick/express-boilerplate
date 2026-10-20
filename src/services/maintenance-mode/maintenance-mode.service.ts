@@ -62,7 +62,9 @@ import type {
   PublicMaintenanceStatus,
   QueuePauseState,
 } from '@/types/maintenance-mode'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import type { ChangeMaintenanceModeBody } from '@/validators/maintenance-mode.validators'
+import { VALIDATION_FAILED_MESSAGE } from '@/validators/parse.validators'
 import { emailJobIdFor } from '@/workers/notification.worker'
 
 const tenantRepository = new TenantRepository()
@@ -213,18 +215,18 @@ function nameOf(staff: MaintenanceModeStaff): string {
  * equal to `APP_ENV`.
  * @param kind - The kind of change.
  * @param body - The validated body.
- * @throws {HttpError} 400 `Validation failed` for a missing message or reason; 400
+ * @throws {HttpError} 400 `Check the highlighted fields, then try again.` for a missing message or reason; 400
  * `CONFIRMATION_MISMATCH` for a wrong or missing confirm.
  */
 function assertChangeAllowed(kind: ChangeKind, body: ChangeMaintenanceModeBody): void {
   if (body.mode !== 'off' && body.message === undefined) {
-    throw new HttpError('Validation failed', 400, undefined, {
+    throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
       message: ['message is required while maintenance mode is on.'],
     })
   }
   if (kind !== 'switch_on' && kind !== 'escalate') return
   if (body.reason === undefined || body.reason === null) {
-    throw new HttpError('Validation failed', 400, undefined, {
+    throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
       reason: ['reason is required to switch maintenance mode on or escalate it.'],
     })
   }
@@ -329,7 +331,7 @@ async function queueNotices(actor: Actor, change: CommittedChange): Promise<Job[
   const actorName = actorRow ? nameOf(actorRow) : MAINTENANCE_ACTOR_PLACEHOLDER
   const appName = getEnv().APP_NAME
   const mode = MODE_WORDS[change.to]
-  const changedAt = change.changedAt.toISOString()
+  const changedAt = formatUtcDateTime(change.changedAt)
   const reason = change.reason ?? NO_REASON
   const jobs: Job[] = []
   for (const recipient of recipients) {

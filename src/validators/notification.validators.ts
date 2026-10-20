@@ -27,7 +27,7 @@ export type NotificationListQuery = z.output<typeof notificationListSchema>
  * A notification id path parameter (`PATCH /:id/read`, `DELETE /:id`).
  */
 export const notificationIdSchema = z.object({
-  id: z.uuid('id must be a valid UUID.'),
+  id: z.uuid('id must be a 36-character ID.'),
 })
 
 /**

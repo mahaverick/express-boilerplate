@@ -18,6 +18,7 @@ const VARIABLES: WelcomeVariables = {
   firstName: 'Ada',
   signInUrl: 'https://app.example.test/auth/link?token=abc&email=ada%40example.test',
   expiresInMinutes: '15',
+  expiresAt: '15:42 UTC on 20 October 2026',
   appName: 'Acme',
 }
 
@@ -29,7 +30,9 @@ describe('renderWelcomeTemplate', () => {
     expect(rendered.subject).toBe('Your Acme account is ready')
     expect(rendered.subject).not.toContain('token')
     expect(rendered.text).toContain('Your Acme account is ready. Sign in with this link.')
-    expect(rendered.text).toContain('It works once and expires in 15 minutes.')
+    expect(rendered.text).toContain(
+      'It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.'
+    )
     expect(rendered.text).toContain(VARIABLES.signInUrl)
     expect(rendered.text).toContain(
       'If the link expires, enter your email address on the Acme sign-in page to get a new one.'
@@ -38,7 +41,7 @@ describe('renderWelcomeTemplate', () => {
     expect(rendered.html).toContain(
       'https://app.example.test/auth/link?token=abc&amp;email=ada%40example.test'
     )
-    expect(rendered.html).toContain('expires in 15 minutes')
+    expect(rendered.html).toContain('expires in 15 minutes, at 15:42 UTC on 20 October 2026.')
   })
 
   it('escapes the variables in the HTML part only', () => {
@@ -52,7 +55,7 @@ describe('renderWelcomeTemplate', () => {
   it('has senderClass transactional, resends as a fresh sign-in link and stores no …Url variable', () => {
     expect(WELCOME_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
-      previewVariables: ['firstName', 'expiresInMinutes', 'appName'],
+      previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
       resendAction: 'sign_in_link',
     })
   })

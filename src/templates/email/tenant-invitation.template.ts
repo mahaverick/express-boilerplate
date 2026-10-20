@@ -46,6 +46,7 @@ export interface TenantInvitationVariables {
    * the days left (rounded down, at least 1) for one that keeps its expiry.
    */
   expiresInDays: string
+  expiresAt: string
   /**
    * The product name, for the subject and the sign-off.
    */
@@ -60,7 +61,7 @@ export interface TenantInvitationVariables {
  */
 export const TENANT_INVITATION_TEMPLATE_META: EmailTemplateMeta<TenantInvitationVariables> = {
   senderClass: 'transactional',
-  previewVariables: ['tenantName', 'role', 'expiresInDays', 'appName'],
+  previewVariables: ['tenantName', 'role', 'expiresInDays', 'expiresAt', 'appName'],
   resendAction: 'invitation',
 }
 
@@ -70,6 +71,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TenantInvitationVariables> = 
   'role',
   'acceptUrl',
   'expiresInDays',
+  'expiresAt',
   'appName',
 ]
 
@@ -83,7 +85,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TenantInvitationVariables> = 
 export function renderTenantInvitationTemplate(
   variables: TenantInvitationVariables
 ): RenderedEmail {
-  const { tenantName, inviterName, role, acceptUrl, expiresInDays, appName } =
+  const { tenantName, inviterName, role, acceptUrl, expiresInDays, expiresAt, appName } =
     requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, TENANT_INVITATION_TEMPLATE_KEY)
 
   const lifetime = expiresInDays === '1' ? '1 day' : `${expiresInDays} days`
@@ -98,7 +100,7 @@ export function renderTenantInvitationTemplate(
     '',
     acceptUrl,
     '',
-    `This link expires in ${lifetime}.`,
+    `This link expires in ${lifetime}, at ${expiresAt}.`,
     '',
     "If you weren't expecting this invitation, ignore this email. Nothing happens unless you open the link.",
     '',
@@ -119,7 +121,7 @@ export function renderTenantInvitationTemplate(
     <p>${escapedInviterName} invited you to join ${escapedTenantName} as ${escapedRole}.</p>
     <p><a href="${escapedAcceptUrl}">Join ${escapedTenantName}</a></p>
     <p>Or paste this link into your browser: ${escapedAcceptUrl}</p>
-    <p>This link expires in ${escapedLifetime}.</p>
+    <p>This link expires in ${escapedLifetime}, at ${escapeHtmlForEmail(expiresAt)}.</p>
     <p>If you weren't expecting this invitation, ignore this email. Nothing happens unless you open the link.</p>
     <p>— The ${escapedAppName} team</p>
   </body>

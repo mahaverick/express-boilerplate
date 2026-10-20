@@ -43,5 +43,11 @@ export function requireAllowedOriginWhenPresent(
     next()
     return
   }
-  next(new HttpError('Origin not allowed', 403, ORIGIN_NOT_ALLOWED_CODE))
+  next(
+    new HttpError(
+      "Requests from this website aren't allowed. Open the app at its own address, then try again.",
+      403,
+      ORIGIN_NOT_ALLOWED_CODE
+    )
+  )
 }

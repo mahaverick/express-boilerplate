@@ -73,7 +73,11 @@ export async function assertStillPlatformRole(
   const role = await userMembershipRepository.lockPlatformRole(actor.userId, tx)
   if (role === null || !isRoleAtLeast(role, minimum)) throw notFoundError('route')
   const actorUser = await userRepository.lockById(actor.userId, 'share', tx)
-  if (!actorUser?.active) throw new HttpError('Account no longer exists or is inactive', 401)
+  if (!actorUser?.active)
+    throw new HttpError(
+      'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+      401
+    )
   return role
 }
 

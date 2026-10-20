@@ -537,7 +537,7 @@ defined once in
 ```json
 { "success": true, "message": "Success", "statusCode": 200, "data": {} }
 { "success": false, "message": "No route matches this method and path. Check both, then try again.", "statusCode": 404, "code": "not_found", "requestId": "…" }
-{ "success": false, "message": "Access token expired", "statusCode": 401, "code": "ACCESS_TOKEN_EXPIRED", "requestId": "…" }
+{ "success": false, "message": "Your sign-in expired. Sign in again to continue.", "statusCode": 401, "code": "ACCESS_TOKEN_EXPIRED", "requestId": "…" }
 ```
 
 `code` is one stable token a client branches on. Every 404 carries one, from
@@ -564,9 +564,10 @@ handler by arity. It decides:
 - **The status** is the `HttpError`'s, else a foreign error's 4xx `status` (the
   body parser's 400 or 413), else 400 for text Postgres cannot store, else 500.
 - **A 4xx** shows the `HttpError`'s message, or a foreign error's only when it
-  marks it `expose`, and is not logged, except one value-free `warn` when
+  marks it `expose`; a body-parser refusal answers its own copy and code
+  (`malformed_json`, `payload_too_large`). It is not logged, except one value-free `warn` when
   Postgres refused a character in client text.
-- **A 5xx** is masked (`Internal server error`), gets an `errorId`, and is
+- **A 5xx** is masked ("Our server hit an error. Try again, and contact support with the error ID if it happens again."), gets an `errorId`, and is
   logged redacted (`redactedForLog`, `src/errors/postgres-errors.ts`), except a
   `PosthogUnavailableError`, whose thrower already logged why. It is reported
   to error tracking only when the capture rule admits it
@@ -656,7 +657,7 @@ bind the tenant, my tenants and notifications bind the user. A cursor from
 another tenant, user or list, even one with the same sort and filters, is
 therefore refused as `CURSOR_INVALID`, never read as a seek. Anything else is
 the one `400` `InvalidCursorError` (`code: 'CURSOR_INVALID'`,
-`errors.cursor: ['cursor is invalid.']`): empty, over 4,096 characters, a bad
+`errors.cursor: ['This list link is out of date. Reload the list from its first page.']`): empty, over 4,096 characters, a bad
 signature, another version, sort or scope, or keys of the wrong count or type.
 A client drops the cursor and reloads the first page.
 [SECURITY.md](SECURITY.md#input-and-output) has the threat.

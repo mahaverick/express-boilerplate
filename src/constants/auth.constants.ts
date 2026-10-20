@@ -153,4 +153,4 @@ export const LINK_INVALID_CODE = 'LINK_INVALID'
 /**
  * The message `LINK_INVALID_CODE` is answered with.
  */
-export const LINK_INVALID_MESSAGE = 'This link has expired or was already used.'
+export const LINK_INVALID_MESSAGE = 'This link expired or was already used. Ask for a new link.'

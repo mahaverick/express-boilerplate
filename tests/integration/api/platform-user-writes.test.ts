@@ -229,7 +229,7 @@ describe('POST /api/v1/platform/users', () => {
 
     expect(response.status).toBe(409)
     expect((response.body as ApiEnvelope<unknown>).message).toBe(
-      'An account already uses that email address'
+      'An account already uses that email address. Search Users to open it.'
     )
     const [row] =
       await sql`select count(*)::int as n from users where lower(email) = lower(${existing.email})`

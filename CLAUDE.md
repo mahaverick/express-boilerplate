@@ -497,6 +497,15 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   has a documented, file-local reason not to (a redirect, an SSE stream).
 - **helmet is the first middleware** (`src/app.ts`), so its headers are on a
   preflight, a 404 and an error response too.
+- **Every message a person reads follows the copy rules:** an `HttpError` or
+  success message, a field error, an email, a notification and CLI output.
+  Under 30 words a sentence; no vague failure words, weasel, peacock or filler
+  words, or jargon such as "token"; a next step on every error; an absolute
+  UTC time from `formatUtcDateTime` (`src/utilities/date-text.utilities.ts`) in
+  mail and notifications. `tests/unit/copy-style.test.ts` fails on a banned
+  phrase or a long sentence. zod's own messages come from
+  `src/validators/zod-messages.validators.ts`; a schema's own message wins.
+  Never rename a `code` to change copy: clients branch on codes.
 - **Comments.** Every named function, method, class, interface, type alias and
   exported const has a JSDoc description, tests included
   (`jsdoc/require-jsdoc`). Describe behaviour in prose; don't repeat the types

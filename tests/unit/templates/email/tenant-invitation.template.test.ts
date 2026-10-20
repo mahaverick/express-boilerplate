@@ -15,6 +15,7 @@ const validVariables: TenantInvitationVariables = {
   role: 'editor',
   acceptUrl: ACCEPT_URL,
   expiresInDays: '7',
+  expiresAt: '15:42 UTC on 20 October 2026',
   appName: 'Boilerplate',
 }
 
@@ -27,7 +28,7 @@ describe('renderTenantInvitationTemplate', () => {
     const rendered = renderTenantInvitationTemplate(validVariables)
     for (const part of [rendered.text, rendered.html]) {
       expect(part).toContain('Ada Lovelace invited you to join Acme Inc as editor.')
-      expect(part).toContain('This link expires in 7 days.')
+      expect(part).toContain('This link expires in 7 days, at 15:42 UTC on 20 October 2026.')
     }
   })
 
@@ -62,7 +63,7 @@ describe('renderTenantInvitationTemplate', () => {
 
   it('says "1 day" for a one-day lifetime', () => {
     const rendered = renderTenantInvitationTemplate({ ...validVariables, expiresInDays: '1' })
-    expect(rendered.text).toContain('This link expires in 1 day.')
+    expect(rendered.text).toContain('This link expires in 1 day, at 15:42 UTC on 20 October 2026.')
   })
 
   it.each(['tenantName', 'inviterName'] as const)(

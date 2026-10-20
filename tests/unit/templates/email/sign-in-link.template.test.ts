@@ -18,6 +18,7 @@ const VARIABLES: SignInLinkVariables = {
   firstName: 'Ada',
   signInUrl: 'https://app.example.test/auth/link?token=abc&email=ada%40example.test',
   expiresInMinutes: '15',
+  expiresAt: '15:42 UTC on 20 October 2026',
   appName: 'Acme',
   reason: 'self',
 }
@@ -31,14 +32,16 @@ describe('renderSignInLinkTemplate', () => {
     expect(rendered.subject).not.toContain('token')
     expect(rendered.text).toContain(VARIABLES.signInUrl)
     expect(rendered.text).toContain('Sign in to Acme.')
-    expect(rendered.text).toContain('This link works once and expires in 15 minutes.')
+    expect(rendered.text).toContain(
+      'This link works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.'
+    )
     expect(rendered.text).toContain(
       "If you didn't ask to sign in, ignore this email. Nothing changes unless someone opens the link."
     )
     expect(rendered.html).toContain(
       'https://app.example.test/auth/link?token=abc&amp;email=ada%40example.test'
     )
-    expect(rendered.html).toContain('expires in 15 minutes')
+    expect(rendered.html).toContain('expires in 15 minutes, at 15:42 UTC on 20 October 2026.')
     expect(rendered.html).toContain('Acme')
     expect(rendered.text).not.toContain('team admin')
   })
@@ -54,7 +57,7 @@ describe('renderSignInLinkTemplate', () => {
   it('has senderClass transactional, resends as a fresh link and stores no …Url variable', () => {
     expect(SIGN_IN_LINK_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
-      previewVariables: ['firstName', 'expiresInMinutes', 'appName', 'reason'],
+      previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName', 'reason'],
       resendAction: 'sign_in_link',
     })
     expect(SIGN_IN_LINK_TEMPLATE_META.previewVariables).not.toContain('signInUrl')

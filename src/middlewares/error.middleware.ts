@@ -68,6 +68,48 @@ function clientStatusOf(error: unknown): number | undefined {
 }
 
 /**
+ * Bytes in a kilobyte and a megabyte, for the oversize-body message.
+ */
+const BYTES_PER_KB = 1024
+const BYTES_PER_MB = 1024 * 1024
+
+/**
+ * A body-parser limit as a person reads it.
+ * @param bytes - The limit in bytes.
+ * @returns For example "1 MB" or "100 KB".
+ */
+function formatByteLimit(bytes: number): string {
+  if (bytes >= BYTES_PER_MB && bytes % BYTES_PER_MB === 0)
+    return `${String(bytes / BYTES_PER_MB)} MB`
+  return `${String(Math.round(bytes / BYTES_PER_KB))} KB`
+}
+
+/**
+ * The answer a body-parser refusal gets: its own copy and a stable code, so
+ * a client never reads the parser's raw text ("Unexpected end of JSON input",
+ * "request entity too large").
+ * @param error - The thrown or forwarded error.
+ * @returns The message and code, or undefined for any other error.
+ */
+function bodyParserAnswerOf(error: unknown): { message: string; code: string } | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const { type, limit } = error as { type?: unknown; limit?: unknown }
+  if (type === 'entity.parse.failed') {
+    return {
+      code: 'malformed_json',
+      message: "We couldn't read the request body as JSON. Fix its syntax, then send it again.",
+    }
+  }
+  if (type === 'entity.too.large' && typeof limit === 'number') {
+    return {
+      code: 'payload_too_large',
+      message: `The request body is over the ${formatByteLimit(limit)} limit. Send a smaller body.`,
+    }
+  }
+  return undefined
+}
+
+/**
  * The message a 4xx from a foreign error may show the client.
  *
  * `expose === true` is http-errors' own explicit marker for "this message was
@@ -207,13 +249,8 @@ export function errorHandler(
         route: routeTemplateOf(request),
       })
     }
-    errorResponse(
-      response,
-      messageFor(error, httpError, statusCode),
-      statusCode,
-      httpError?.code,
-      httpError?.errors
-    )
+    const answer = clientAnswerOf(error, httpError, statusCode)
+    errorResponse(response, answer.message, statusCode, answer.code, httpError?.errors)
     return
   }
 
@@ -234,6 +271,25 @@ export function errorHandler(
 }
 
 /**
+ * The message and code a 4xx answers: a body-parser refusal's own copy and
+ * code, or else `messageFor`'s message and the `HttpError`'s code.
+ * @param error - The thrown or forwarded error.
+ * @param httpError - The same error when it is an HttpError.
+ * @param statusCode - The already-resolved 4xx status.
+ * @returns The message, and the code if any.
+ */
+function clientAnswerOf(
+  error: unknown,
+  httpError: HttpError | undefined,
+  statusCode: number
+): { message: string; code: string | undefined } {
+  const parserAnswer = httpError === undefined ? bodyParserAnswerOf(error) : undefined
+  return (
+    parserAnswer ?? { message: messageFor(error, httpError, statusCode), code: httpError?.code }
+  )
+}
+
+/**
  * Resolve the client-facing message for a resolved status.
  *
  * Every status of 500 or above is masked, whatever the error; a maintenance
@@ -246,7 +302,8 @@ export function errorHandler(
  * @returns A message safe to return to the client.
  */
 function messageFor(error: unknown, httpError: HttpError | undefined, statusCode: number): string {
-  if (statusCode >= 500) return 'Internal server error'
+  if (statusCode >= 500)
+    return 'Our server hit an error. Try again, and contact support with the error ID if it happens again.'
   if (httpError) return httpError.message
   return clientMessageOf(error, statusCode)
 }

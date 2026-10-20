@@ -420,7 +420,9 @@ export function describeListContract(contract: ListContract): void {
         const { status, body } = await get(contract, { limit: size, ...query })
         expect(status, JSON.stringify(query)).toBe(400)
         expect(body.code).toBe('CURSOR_INVALID')
-        expect(body.errors).toEqual({ cursor: ['cursor is invalid.'] })
+        expect(body.errors).toEqual({
+          cursor: ['This list link is out of date. Reload the list from its first page.'],
+        })
       }
 
       it('refuses a tampered, oversize or empty cursor with one body', async () => {
@@ -451,7 +453,9 @@ export function describeListContract(contract: ListContract): void {
           const body = response.body as Envelope
           expect(response.status).toBe(400)
           expect(body.code).toBe('CURSOR_INVALID')
-          expect(body.errors).toEqual({ cursor: ['cursor is invalid.'] })
+          expect(body.errors).toEqual({
+            cursor: ['This list link is out of date. Reload the list from its first page.'],
+          })
         })
       }
 

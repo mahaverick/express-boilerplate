@@ -210,7 +210,9 @@ describe('/api/v1/notifications', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(400)
-      expect(envelopeOf(response).errors).toEqual({ cursor: ['cursor is invalid.'] })
+      expect(envelopeOf(response).errors).toEqual({
+        cursor: ['This list link is out of date. Reload the list from its first page.'],
+      })
       expect(envelopeOf(response).code).toBe('CURSOR_INVALID')
     })
 
@@ -728,7 +730,9 @@ describe('/api/v1/notifications', () => {
         })
 
       expect(response.status).toBe(400)
-      expect(response.body).toMatchObject({ message: 'Validation failed' })
+      expect(response.body).toMatchObject({
+        message: 'Check the highlighted fields, then try again.',
+      })
       const rows = await sql`select * from notification_preferences where user_id = ${user.id}`
       expect(rows).toHaveLength(0)
     })
@@ -757,7 +761,9 @@ describe('/api/v1/notifications', () => {
           })
 
         expect(response.status).toBe(400)
-        expect(response.body).toMatchObject({ message: 'Validation failed' })
+        expect(response.body).toMatchObject({
+          message: 'Check the highlighted fields, then try again.',
+        })
         const rows = await sql`select 1 from notification_preferences where user_id = ${user.id}`
         expect(rows).toHaveLength(0)
       }

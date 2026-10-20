@@ -34,6 +34,7 @@ import { claimCooldown, releaseCooldown } from '@/services/mail-cooldown.service
 import { getPlatformMembership } from '@/services/platform.service'
 import { markSessionReauthenticated, signAccessToken } from '@/services/session.service'
 import { STEP_UP_LINK_TEMPLATE_KEY } from '@/templates/email/step-up-link.template'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'
 
 const userRepository = new UserRepository()
@@ -59,7 +60,11 @@ const MS_PER_SECOND = 1000
  * @returns A 401 `ACCESS_TOKEN_EXPIRED`.
  */
 function sessionEnded(): HttpError {
-  return new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+  return new HttpError(
+    'This session ended. Sign in again to continue.',
+    401,
+    ACCESS_TOKEN_EXPIRED_CODE
+  )
 }
 
 /**
@@ -139,7 +144,7 @@ export async function requestStepUpLink(
   const claimedAt = Date.now()
   try {
     const ttlMs = requireDurationMs(env.STEP_UP_LINK_TTL)
-    const { raw } = await issueLinkToken(
+    const { raw, row } = await issueLinkToken(
       { intent: 'step_up', userId, sessionId, email: user.email, app: 'apex' },
       ttlMs
     )
@@ -151,6 +156,7 @@ export async function requestStepUpLink(
           firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
           confirmUrl: buildStepUpConfirmUrl(raw),
           expiresInMinutes: String(Math.round(ttlMs / 60_000)),
+          expiresAt: formatUtcDateTime(row.expiresAt),
           appName: appNameFor('apex'),
         },
       },
