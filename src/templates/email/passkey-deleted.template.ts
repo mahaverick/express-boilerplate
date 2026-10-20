@@ -55,12 +55,12 @@ export function renderPasskeyDeletedTemplate(variables: PasskeySecurityVariables
     PASSKEY_DELETED_TEMPLATE_KEY
   )
 
-  const subject = `A passkey was deleted for your ${appName} account`
+  const subject = `Passkey deleted from your ${appName} account`
 
   const text = [
     `Hi ${firstName},`,
     '',
-    `A passkey (${providerName}) was deleted for your account at ${occurredAt}.`,
+    `You, or someone signed in as you, deleted a passkey (${providerName}) from your ${appName} account at ${occurredAt}.`,
     '',
     `If this wasn't you, sign in and check your passkeys in Security settings: ${settingsUrl}`,
     '',
@@ -77,7 +77,7 @@ export function renderPasskeyDeletedTemplate(variables: PasskeySecurityVariables
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-    <p>A passkey (${escapedProviderName}) was deleted for your account at ${escapedOccurredAt}.</p>
+    <p>You, or someone signed in as you, deleted a passkey (${escapedProviderName}) from your ${escapedAppName} account at ${escapedOccurredAt}.</p>
     <p>If this wasn't you, sign in and check your passkeys in Security settings: <a href="${escapedSettingsUrl}">${escapedSettingsUrl}</a></p>
     <p>— The ${escapedAppName} team</p>
   </body>

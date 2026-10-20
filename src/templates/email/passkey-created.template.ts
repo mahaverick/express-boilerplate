@@ -67,12 +67,12 @@ export function renderPasskeyCreatedTemplate(variables: PasskeySecurityVariables
     PASSKEY_CREATED_TEMPLATE_KEY
   )
 
-  const subject = `A passkey was created for your ${appName} account`
+  const subject = `Passkey created for your ${appName} account`
 
   const text = [
     `Hi ${firstName},`,
     '',
-    `A passkey (${providerName}) was created for your account at ${occurredAt}.`,
+    `You, or someone signed in as you, created a passkey (${providerName}) for your ${appName} account at ${occurredAt}.`,
     '',
     `If this wasn't you, sign in and delete it in Security settings: ${settingsUrl}`,
     '',
@@ -89,7 +89,7 @@ export function renderPasskeyCreatedTemplate(variables: PasskeySecurityVariables
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-    <p>A passkey (${escapedProviderName}) was created for your account at ${escapedOccurredAt}.</p>
+    <p>You, or someone signed in as you, created a passkey (${escapedProviderName}) for your ${escapedAppName} account at ${escapedOccurredAt}.</p>
     <p>If this wasn't you, sign in and delete it in Security settings: <a href="${escapedSettingsUrl}">${escapedSettingsUrl}</a></p>
     <p>— The ${escapedAppName} team</p>
   </body>

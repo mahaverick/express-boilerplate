@@ -31,6 +31,7 @@ import {
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
+import { SECURITY_SETTINGS_PATH } from '@/services/link-token.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { utcDays } from '@/services/platform-stats.service'
 import { platformTenantOrThrow, sendSignInLinkByStaff } from '@/services/platform-user.service'
@@ -431,7 +432,7 @@ function securitySettingsPageUrl(
   origin: string,
   templateKey: 'passkey_created' | 'passkey_deleted'
 ): string {
-  const base = new URL('settings/account/security', origin.endsWith('/') ? origin : `${origin}/`)
+  const base = new URL(SECURITY_SETTINGS_PATH, origin.endsWith('/') ? origin : `${origin}/`)
   return withEmailUtm(base.href, templateKey, 'primary_button')
 }
 

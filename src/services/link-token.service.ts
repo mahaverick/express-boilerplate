@@ -49,7 +49,7 @@ const INVITATION_CONFIRM_PATH = 'invitations/confirm'
  * The Security settings page, where a passkey is created and deleted. The
  * same path in both frontends.
  */
-const SECURITY_SETTINGS_PATH = 'settings/account/security'
+export const SECURITY_SETTINGS_PATH = 'settings/account/security'
 
 /**
  * What a link is issued for. A `step_up` link names the user and session it

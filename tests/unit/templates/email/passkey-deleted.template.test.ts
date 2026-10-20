@@ -28,12 +28,12 @@ describe('renderPasskeyDeletedTemplate', () => {
     const rendered = renderPasskeyDeletedTemplate(VARIABLES)
 
     expect(rendered.templateKey).toBe(PASSKEY_DELETED_TEMPLATE_KEY)
-    expect(rendered.subject).toBe('A passkey was deleted for your Acme account')
+    expect(rendered.subject).toBe('Passkey deleted from your Acme account')
     expect(rendered.text).toBe(
       [
         'Hi Ada,',
         '',
-        'A passkey (iCloud Keychain) was deleted for your account at 15:42 UTC on 20 October 2026.',
+        'You, or someone signed in as you, deleted a passkey (iCloud Keychain) from your Acme account at 15:42 UTC on 20 October 2026.',
         '',
         "If this wasn't you, sign in and check your passkeys in Security settings: https://app.example.test/settings/account/security?utm_source=email&utm_medium=email",
         '',

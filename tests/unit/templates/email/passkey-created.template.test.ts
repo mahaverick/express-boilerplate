@@ -28,12 +28,12 @@ describe('renderPasskeyCreatedTemplate', () => {
     const rendered = renderPasskeyCreatedTemplate(VARIABLES)
 
     expect(rendered.templateKey).toBe(PASSKEY_CREATED_TEMPLATE_KEY)
-    expect(rendered.subject).toBe('A passkey was created for your Acme account')
+    expect(rendered.subject).toBe('Passkey created for your Acme account')
     expect(rendered.text).toBe(
       [
         'Hi Ada,',
         '',
-        'A passkey (iCloud Keychain) was created for your account at 15:42 UTC on 20 October 2026.',
+        'You, or someone signed in as you, created a passkey (iCloud Keychain) for your Acme account at 15:42 UTC on 20 October 2026.',
         '',
         "If this wasn't you, sign in and delete it in Security settings: https://app.example.test/settings/account/security?utm_source=email&utm_medium=email",
         '',
