@@ -7,15 +7,20 @@
  * after commit and never fails the request.
  */
 import {
+  generateAuthenticationOptions,
   generateRegistrationOptions,
+  verifyAuthenticationResponse,
   verifyRegistrationResponse,
+  type AuthenticationResponseJSON,
   type PublicKeyCredentialCreationOptionsJSON,
+  type PublicKeyCredentialRequestOptionsJSON,
   type RegistrationResponseJSON,
 } from '@simplewebauthn/server'
 import { getEnv } from '@/configs/env.config'
 import { passkeyRelyingParty } from '@/configs/passkey.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
 import type { UserPasskeyRecord } from '@/database/models/user-passkey.model'
+import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { addEmailJob } from '@/jobs/email.job'
@@ -25,14 +30,18 @@ import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import { buildSecuritySettingsUrl } from '@/services/link-token.service'
 import { logger } from '@/services/logger.service'
+import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import {
   consumePasskeyChallenge,
   issuePasskeyChallenge,
 } from '@/services/passkey-challenge.service'
 import { passkeyProvider } from '@/services/passkey-provider.service'
+import { getPlatformMembership } from '@/services/platform.service'
+import { issueSignInSession, type IssuedSignInSession } from '@/services/sign-in-session.service'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { PASSKEY_NAME_MAX_LENGTH } from '@/validators/passkey.validators'
 
@@ -384,4 +393,135 @@ export async function deletePasskey(
   })
   await sendPasskeyNotice(user, 'passkey_deleted', removed, app)
   return remaining
+}
+
+/**
+ * The code of a sign-in with a passkey no account here holds.
+ */
+const PASSKEY_UNKNOWN_CODE = 'PASSKEY_UNKNOWN'
+
+/**
+ * The 400 for a passkey that signs nobody in: one this API does not know, one
+ * whose account is inactive or deleted, and an Apex sign-in by a non-staff
+ * account. One answer for all, so a caller learns nothing about which. A 400,
+ * never a 401, because the apps sign out on a 401.
+ * @returns The error to throw.
+ */
+function passkeyUnknown(): HttpError {
+  return new HttpError(
+    "This passkey isn't linked to an account here. Sign in with an email link, then create a new passkey in Security settings.",
+    400,
+    PASSKEY_UNKNOWN_CODE
+  )
+}
+
+/**
+ * Start a sign-in: issue a single-use challenge bound to nothing and build
+ * options that name no credential, so the browser offers any passkey it holds
+ * for this site.
+ * @returns The challenge id for the verify call, and the options for the browser.
+ */
+export async function startPasskeySignIn(): Promise<{
+  challengeId: string
+  options: PublicKeyCredentialRequestOptionsJSON
+}> {
+  const rp = passkeyRelyingParty()
+  const { challengeId, challenge } = await issuePasskeyChallenge('sign_in', {})
+  const options = await generateAuthenticationOptions({
+    rpID: rp.rpId,
+    // The stored challenge is already base64url; decode it so the options carry it unchanged.
+    challenge: new Uint8Array(Buffer.from(challenge, 'base64url')),
+    allowCredentials: [],
+    userVerification: 'required',
+  })
+  return { challengeId, options }
+}
+
+/**
+ * Whether a new signature counter is a regression that refuses the sign-in.
+ * Synced (backup-eligible) passkeys are never refused: they report 0 or a
+ * shared count. A device-bound one is refused when it had counted and the new
+ * count does not exceed the stored one, which marks a cloned key.
+ * @param stored - The stored passkey.
+ * @param newCount - The count the authenticator reported.
+ * @returns True when the sign-in must be refused.
+ */
+function isCounterRegression(stored: UserPasskeyRecord, newCount: number): boolean {
+  return !stored.backupEligible && stored.signCount > 0 && newCount <= stored.signCount
+}
+
+/**
+ * Finish a sign-in with a passkey and issue the session.
+ *
+ * Order: the challenge is spent (`sign_in` only); the credential is looked up;
+ * the account is loaded and refused when unknown, inactive or deleted, and on
+ * Apex when not staff, all before the signature check; the response is
+ * verified (origin, RP ID, user verification, signature); the counter rule
+ * runs; `assertSignInAllowed` enforces the maintenance mode; the use is
+ * stored; the session is issued; `user_signed_in` is emitted.
+ * @param input - The challenge id, the browser's response and the frontend.
+ * @param input.challengeId - The id the options call answered.
+ * @param input.response - The browser's assertion response.
+ * @param input.app - The frontend the request came from.
+ * @returns The account and its new session.
+ * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` or `PASSKEY_UNKNOWN`; 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
+ */
+export async function finishPasskeySignIn(input: {
+  challengeId: string
+  response: unknown
+  app: FrontendApp
+}): Promise<IssuedSignInSession & { user: User }> {
+  const challenge = await consumePasskeyChallenge(input.challengeId, 'sign_in', {})
+  if (challenge === undefined) throw passkeyVerificationFailed()
+  const response = input.response as AuthenticationResponseJSON
+  const stored = await userPasskeyRepository.findByCredentialId(response.id)
+  if (!stored) throw passkeyUnknown()
+  const user = await userRepository.findById(stored.userId)
+  if (!user?.active) throw passkeyUnknown()
+  if (input.app === 'apex' && (await getPlatformMembership(user.id)) === null) {
+    throw passkeyUnknown()
+  }
+  const rp = passkeyRelyingParty()
+  let verified: Awaited<ReturnType<typeof verifyAuthenticationResponse>>
+  try {
+    verified = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge,
+      expectedOrigin: rp.origins,
+      expectedRPID: rp.rpId,
+      // The library's own counter check refuses a synced passkey; the rule below is the one this API applies.
+      credential: {
+        id: stored.credentialId,
+        publicKey: new Uint8Array(stored.publicKey),
+        counter: 0,
+      },
+      requireUserVerification: true,
+    })
+  } catch {
+    throw passkeyVerificationFailed()
+  }
+  if (!verified.verified) throw passkeyVerificationFailed()
+  const handle = response.response.userHandle
+  if (
+    handle !== undefined &&
+    handle !== Buffer.from(userHandleBytes(user.id)).toString('base64url')
+  ) {
+    throw passkeyVerificationFailed()
+  }
+  const { newCounter, credentialBackedUp } = verified.authenticationInfo
+  if (isCounterRegression(stored, newCounter)) throw passkeyVerificationFailed()
+  await assertSignInAllowed(user.id)
+  await userPasskeyRepository.recordUse(stored.id, {
+    signCount: newCounter,
+    backupState: credentialBackedUp,
+    at: new Date(),
+  })
+  const session = await issueSignInSession(user, passkeyUnknown)
+  await emitDomainEvent({
+    type: 'user_signed_in',
+    userId: user.id,
+    method: 'passkey',
+    at: new Date(),
+  })
+  return { ...session, user }
 }

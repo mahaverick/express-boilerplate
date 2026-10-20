@@ -5,16 +5,22 @@ import type { Request } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { passkeyRelyingParty } from '@/configs/passkey.config'
 import { BaseController } from '@/controllers/base.controller'
-import { authenticatedUserId } from '@/controllers/helpers.controller'
+import {
+  authenticatedUserId,
+  revokePresentedSession,
+  setRefreshTokenCookie,
+} from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toPublicPasskey } from '@/presenters/passkey.presenter'
-import type { AuthenticatedUser } from '@/presenters/user.presenter'
+import { toProfileResponse, type AuthenticatedUser } from '@/presenters/user.presenter'
 import {
   deletePasskey,
   finishPasskeyRegistration,
+  finishPasskeySignIn,
   listPasskeys,
   renamePasskey,
   startPasskeyRegistration,
+  startPasskeySignIn,
 } from '@/services/passkey.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
@@ -23,6 +29,8 @@ import {
   passkeyRegistrationOptionsSchema,
   passkeyRegistrationVerifySchema,
   passkeyRenameSchema,
+  passkeySignInOptionsSchema,
+  passkeySignInVerifySchema,
 } from '@/validators/passkey.validators'
 
 /**
@@ -75,6 +83,46 @@ class PasskeyController extends BaseController {
     const input = parseBody(passkeyRegistrationVerifySchema, request.body)
     const created = await finishPasskeyRegistration(requireUser(request), input)
     successResponse(response, { passkey: toPublicPasskey(created) }, 'Passkey created.', 201)
+  })
+
+  /**
+   * `POST /auth/passkeys/sign-in/options`: a challenge and the WebAuthn request
+   * options with no named credential, as `{ challengeId, options }`. Public.
+   */
+  signInOptions = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    parseBody(passkeySignInOptionsSchema, request.body)
+    successResponse(response, await startPasskeySignIn(), 'Passkey options created.')
+  })
+
+  /**
+   * `POST /auth/passkeys/sign-in/verify`: verify the browser's assertion and
+   * sign in, answering exactly what `/auth/link/verify` does. A refresh cookie
+   * the browser still presented has its session revoked once the new one is
+   * issued. `no-store`, as every token response (RFC 6749 §5.1).
+   */
+  signInVerify = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    const input = parseBody(passkeySignInVerifySchema, request.body)
+    const session = await finishPasskeySignIn(input)
+    await revokePresentedSession(request, { emitSignedOut: false })
+    setRefreshTokenCookie(
+      request,
+      response,
+      session.refreshToken.raw,
+      session.refreshToken.expiresAt
+    )
+    successResponse(
+      response,
+      {
+        user: toProfileResponse(session.user, session.platformRole),
+        accessToken: session.accessToken,
+        // eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
+        redirect: null,
+        isNewUser: false,
+      },
+      'Signed in.'
+    )
   })
 
   /**

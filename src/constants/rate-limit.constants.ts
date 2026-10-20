@@ -79,6 +79,7 @@ export type RateLimitName =
   | 'invitationVerify'
   | 'stepUpLink'
   | 'passkeyManage'
+  | 'passkeySignIn'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -480,5 +481,18 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 20,
     keyBy: 'user',
     unit: 'requests',
+  },
+  /**
+   * 20 per 15 minutes per IP, one instance shared by `POST
+   * /auth/passkeys/sign-in/options` and `.../verify`. A sign-in spends two
+   * (the options, then the verify), so this allows about ten tries; a script
+   * working through challenges stops there.
+   */
+  passkeySignIn: {
+    name: 'passkey-sign-in',
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    keyBy: 'ip',
+    unit: 'attempts',
   },
 }

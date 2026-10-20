@@ -67,3 +67,32 @@ export const passkeyRenameSchema = z.strictObject({
 export const passkeyDeleteQuerySchema = z.object({
   app: frontendAppSchema,
 })
+
+/**
+ * The body of `POST /auth/passkeys/sign-in/options`: nothing. The options are
+ * anonymous, so a body that names an account is refused.
+ */
+export const passkeySignInOptionsSchema = z.strictObject({})
+
+const assertionResponseSchema = z.object({
+  id: z.string().min(1).max(1400),
+  rawId: z.string().min(1).max(1400),
+  type: z.literal('public-key'),
+  authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
+  clientExtensionResults: z.record(z.string(), z.unknown()).default({}),
+  response: z.looseObject({
+    clientDataJSON: z.string().min(1).max(4096),
+    authenticatorData: z.string().min(1).max(4096),
+    signature: z.string().min(1).max(2048),
+    userHandle: z.string().max(256).optional(),
+  }),
+})
+
+/**
+ * The body of `POST /auth/passkeys/sign-in/verify`.
+ */
+export const passkeySignInVerifySchema = z.object({
+  challengeId: z.string().min(1).max(64),
+  response: assertionResponseSchema,
+  app: frontendAppSchema,
+})

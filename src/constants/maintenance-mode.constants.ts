@@ -235,6 +235,9 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('GET', '/api/v1/auth/providers'),
   // The apps read the passkey mode before sign-in to show or hide the passkey UI.
   letThrough('GET', '/api/v1/auth/passkeys/config'),
+  // A passkey sign-in; `assertSignInAllowed` refuses non-staff in full, as link verify does.
+  letThrough('POST', '/api/v1/auth/passkeys/sign-in/options'),
+  letThrough('POST', '/api/v1/auth/passkeys/sign-in/verify'),
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),
   // Account writes: refused in both modes.

@@ -9,7 +9,6 @@
  * click when there is none. Every dead link, and every account it may not
  * sign in, answers one `LINK_INVALID`.
  */
-import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { LINK_INVALID_CODE, LINK_INVALID_MESSAGE } from '@/constants/auth.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
@@ -28,7 +27,6 @@ import {
   isAddressTaken,
   isClaimedAccountGone,
 } from '@/services/account-claim.service'
-import { platformRoleForLogin } from '@/services/auth.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
@@ -46,12 +44,9 @@ import {
   assertSignInAllowed,
 } from '@/services/maintenance-mode/maintenance-mode.service'
 import { getPlatformMembership } from '@/services/platform.service'
-import {
-  issueRefreshToken,
-  signAccessToken,
-  type IssuedRefreshToken,
-} from '@/services/session.service'
+import type { IssuedRefreshToken } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
+import { issueSignInSession } from '@/services/sign-in-session.service'
 import { mailPlatformInvitationConfirmForSignIn } from '@/services/tenant-invitation.service'
 import { SIGN_IN_LINK_TEMPLATE_KEY } from '@/templates/email/sign-in-link.template'
 import { WELCOME_TEMPLATE_KEY } from '@/templates/email/welcome.template'
@@ -385,18 +380,8 @@ export async function verifySignInLink(raw: string, shownEmail?: string): Promis
   const { user, isNew } = await resolveLinkAccount({ email: row.email, app: row.app })
   await assertSignInAllowed(user.id)
 
-  // After the checks, so a refused click leaves no trace; before the session, so a failed UPDATE sets no cookie.
-  await userRepository.update(user.id, { lastLoggedInAt: new Date() })
-
-  const sessionId = randomUUID()
-  const refreshToken = await withTransaction(async (tx) => {
-    const locked = await userRepository.lockById(user.id, 'share', tx)
-    // Re-checked under the lock: a deactivation or delete that committed since the lookup wins.
-    if (!locked?.active) throw linkInvalid()
-    return issueRefreshToken(user.id, sessionId, tx)
-  })
-  const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
-  const platformRole = await platformRoleForLogin(user.id)
+  // After the checks, so a refused click leaves no trace.
+  const { accessToken, refreshToken, platformRole } = await issueSignInSession(user, linkInvalid)
   if (isNew) {
     await emitDomainEvent({
       type: 'user_signed_up',
