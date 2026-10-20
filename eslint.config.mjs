@@ -116,7 +116,9 @@ export default tseslint.config(
       ],
 
       // No import order rule: the Prettier sort-imports plugin owns ordering.
-      'import-x/no-cycle': 'error',
+
+      // Following imports into node_modules ran lint out of memory at the default heap (@simplewebauthn/server's asn1 graph).
+      'import-x/no-cycle': ['error', { ignoreExternal: true }],
       'import-x/no-self-import': 'error',
       'import-x/no-useless-path-segments': 'error',
       'import-x/no-duplicates': 'error',
@@ -433,6 +435,8 @@ export default tseslint.config(
       'scripts/comment-style.mjs',
       'scripts/lint-docs.mjs',
       'scripts/lint-docs.d.mts',
+      'scripts/vendor-passkey-aaguids.mjs',
+      'scripts/vendor-passkey-aaguids.d.mts',
     ],
     rules: {
       'sonarjs/regex-complexity': 'off',

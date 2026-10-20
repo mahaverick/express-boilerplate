@@ -116,6 +116,11 @@ export interface MaintenanceRouteRule {
 export const MAINTENANCE_STAFF_ROUTES: readonly string[] = [
   'PATCH /api/v1/profile',
   'POST /api/v1/auth/sessions/revoke-others',
+  'GET /api/v1/auth/passkeys',
+  'POST /api/v1/auth/passkeys/registration/options',
+  'POST /api/v1/auth/passkeys/registration/verify',
+  'PATCH /api/v1/auth/passkeys/:id',
+  'DELETE /api/v1/auth/passkeys/:id',
   'POST /api/v1/invitations/accept',
   'GET /api/v1/tenants/:slug',
   'PATCH /api/v1/tenants/:slug',
@@ -221,17 +226,30 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // The link routes decide in the service: a request for a non-staff address in `full` mails nothing, and verify peeks before it claims.
   letThrough('POST', '/api/v1/auth/link/request'),
   letThrough('POST', '/api/v1/auth/link/verify'),
-  // Staff step-up by link: the service decides, and only staff reach it.
+  // Step-up by link, any signed-in user: the service decides.
   letThrough('POST', '/api/v1/auth/step-up/link/request'),
   letThrough('POST', '/api/v1/auth/step-up/link/verify'),
   // Session upkeep and sign-in methods: let through in both modes.
   letThrough('POST', '/api/v1/auth/refresh'),
   letThrough('POST', '/api/v1/auth/logout'),
   letThrough('GET', '/api/v1/auth/providers'),
+  // The apps read the passkey mode before sign-in to show or hide the passkey UI.
+  letThrough('GET', '/api/v1/auth/passkeys/config'),
+  // A passkey sign-in; `assertSignInAllowed` refuses non-staff in full, as link verify does.
+  letThrough('POST', '/api/v1/auth/passkeys/sign-in/options'),
+  letThrough('POST', '/api/v1/auth/passkeys/sign-in/verify'),
+  // Step-up by passkey: let through in both modes, like the link step-up.
+  letThrough('POST', '/api/v1/auth/passkeys/step-up/options'),
+  letThrough('POST', '/api/v1/auth/passkeys/step-up/verify'),
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),
   // Account writes: refused in both modes.
   write('POST', '/api/v1/auth/sessions/revoke-others'),
+  read('/api/v1/auth/passkeys'),
+  write('POST', '/api/v1/auth/passkeys/registration/options'),
+  write('POST', '/api/v1/auth/passkeys/registration/verify'),
+  write('PATCH', '/api/v1/auth/passkeys/:id'),
+  write('DELETE', '/api/v1/auth/passkeys/:id'),
   write('PATCH', '/api/v1/profile'),
   read('/api/v1/notifications/stream'),
   read('/api/v1/notifications'),

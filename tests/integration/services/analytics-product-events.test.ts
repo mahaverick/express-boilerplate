@@ -33,13 +33,15 @@ import { createInvitationRow } from '../../helpers/analytics-invitation'
 import { clearOutbox, outboxRows, outboxRowsOf } from '../../helpers/analytics-outbox'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deleteTrackingRows, insertTestMessage, signedFakeBody } from '../../helpers/email-tracking'
+import { SoftwareAuthenticator } from '../../helpers/passkey-authenticator'
 import {
   createTrackedStaff,
   createTrackedUser,
   deleteTrackedUsers,
+  recentAuthTokenFor,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
-import { issueTestLink } from '../../helpers/sign-in'
+import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 const analytics = vi.hoisted(() => ({ isEnabled: true }))
 
@@ -233,6 +235,45 @@ describe('user_signed_in', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]?.properties).toMatchObject({ $session_id: sessionId })
     expect(rows[1]?.properties).not.toHaveProperty('$session_id')
+  })
+
+  it('is written by a passkey sign-in with method passkey and auth_provider passkey', async () => {
+    const app = createApp()
+    const user = await createTrackedUser()
+    const authenticator = new SoftwareAuthenticator()
+    const token = recentAuthTokenFor(user)
+    const asked = await request(app)
+      .post('/api/v1/auth/passkeys/registration/options')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ app: 'web' })
+    await request(app)
+      .post('/api/v1/auth/passkeys/registration/verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        app: 'web',
+        challengeId: (asked.body as { data: { challengeId: string } }).data.challengeId,
+        response: authenticator.registrationResponse(
+          (asked.body as { data: { options: { challenge: string } } }).data.options.challenge
+        ),
+      })
+    await clearOutbox()
+    await clearRateLimiter('passkey-sign-in')
+    const options = await request(app).post('/api/v1/auth/passkeys/sign-in/options').send({})
+    const body = options.body as { data: { challengeId: string; options: { challenge: string } } }
+
+    const verified = await request(app)
+      .post('/api/v1/auth/passkeys/sign-in/verify')
+      .send({
+        app: 'web',
+        challengeId: body.data.challengeId,
+        response: authenticator.assertionResponse(body.data.options.challenge),
+      })
+
+    expect(verified.status).toBe(200)
+    const [row, ...rest] = await outboxRows()
+    expect(rest).toEqual([])
+    expect(row).toMatchObject({ event: 'user_signed_in', distinctId: user.id })
+    expect(row?.properties).toMatchObject({ method: 'passkey', $set: { auth_provider: 'passkey' } })
   })
 
   it('is not written by a link that signs nobody in', async () => {

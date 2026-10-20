@@ -4,14 +4,17 @@
  * Later middleware (`resolveTenant`) composes after it by reading `request.user`.
  */
 import { type NextFunction, type Request, type Response } from 'express'
+import { getEnv } from '@/configs/env.config'
 import {
   ACCESS_TOKEN_EXPIRED_CODE,
   REAUTH_REQUIRED_CODE,
   STEP_UP_MAX_AGE_MS,
 } from '@/constants/auth.constants'
+import { PASSKEY_SETUP_ALLOWED } from '@/constants/passkey.constants'
 import { HttpError } from '@/errors/http-error'
 import { maintenanceRefusalFor } from '@/middlewares/maintenance-mode.middleware'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
+import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { requestContextStore } from '@/services/request-context.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
@@ -19,6 +22,7 @@ import { verifyAccessToken } from '@/services/session.service'
 import { isRecentAuth } from '@/utilities/recent-auth.utilities'
 
 const userRepository = new UserRepository()
+const userPasskeyRepository = new UserPasskeyRepository()
 
 /**
  * RFC 6750 `Authorization: Bearer <token>`. `\S+` rejects a header that is
@@ -86,6 +90,49 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
 }
 
 /**
+ * Whether a request is one of the routes `PASSKEY_SETUP_ALLOWED` lets through.
+ * `requireAuth` often runs as router-level middleware, where `request.route`
+ * is not set yet, so the key is built from the mount path and the rest:
+ * `baseUrl + path`, which carries no query string. Express routes ignore case
+ * and a trailing slash, and answer HEAD from the GET route, so the key
+ * lower-cases the path, drops trailing slashes and reads HEAD as GET; a
+ * request Express would route to an allowlisted handler therefore matches.
+ * @param request - The incoming request.
+ * @returns True when the request may proceed without a passkey.
+ */
+function isPasskeySetupRoute(request: Request): boolean {
+  let path = `${request.baseUrl}${request.path}`.toLowerCase()
+  // A loop, not `replace(/\/+$/, '')`: sonarjs/super-linear-regex flags that pattern.
+  while (path.endsWith('/')) path = path.slice(0, -1)
+  const method = request.method === 'HEAD' ? 'GET' : request.method
+  return PASSKEY_SETUP_ALLOWED.has(`${method} ${path}`)
+}
+
+/**
+ * In `PASSKEY_MODE=required`, refuse an account with no passkey on every route
+ * outside `PASSKEY_SETUP_ALLOWED`. The count query runs only in that mode, and
+ * only for a route that is not allowlisted, so `optional` and `off` pay no
+ * query.
+ * @param request - The incoming request, with `request.user` set.
+ * @param userId - The authenticated account.
+ * @throws {HttpError} 403 `PASSKEY_SETUP_REQUIRED`, when the account has no passkey.
+ */
+async function assertPasskeySetupDone(request: Request, userId: string): Promise<void> {
+  if (
+    getEnv().PASSKEY_MODE !== 'required' ||
+    isPasskeySetupRoute(request) ||
+    (await userPasskeyRepository.countByUser(userId)) > 0
+  ) {
+    return
+  }
+  throw new HttpError(
+    'Create a passkey to continue. Every account here needs one.',
+    403,
+    'PASSKEY_SETUP_REQUIRED'
+  )
+}
+
+/**
  * Require a valid, live-user-backed access token. Populates `request.user`
  * on success; forwards a rejection to `next` otherwise.
  *
@@ -113,6 +160,10 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * is answered here unless the user holds a platform role
  * (`maintenanceRefusalFor`), so staff keep working in Apex during
  * maintenance; an unauthenticated call is still answered 401 first.
+ *
+ * With `PASSKEY_MODE=required`, an account with no passkey is refused 403
+ * `PASSKEY_SETUP_REQUIRED` on every route outside `PASSKEY_SETUP_ALLOWED`
+ * (`assertPasskeySetupDone`), after the maintenance pass.
  *
  * Every response behind it, refusal included, is `Cache-Control: no-store`
  * (ASVS 5.0 14.3.2): without it a browser keeps an authenticated body on disk,
@@ -159,6 +210,7 @@ export async function requireAuth(
       next(refusal)
       return
     }
+    await assertPasskeySetupDone(request, request.user.id)
     next()
   } catch (error) {
     next(error)

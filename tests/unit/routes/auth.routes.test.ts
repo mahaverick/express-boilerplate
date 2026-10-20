@@ -1,9 +1,10 @@
 /**
- * @file The auth router's staff routes, the step-up routes under `/step-up`,
- * answer a refused caller what an unknown auth path answers: the router-wide
+ * @file The auth router's step-up routes under `/step-up`, which any signed-in
+ * user may call. An OPTIONS under `/step-up` answers what an unknown auth path answers: the router-wide
  * JSON gate runs first for every path, an OPTIONS refusal follows it on
  * `/step-up`, and each bearer route comes after both, with `requireAuth`,
- * then the role gate ahead of its limiter. The two link routes share one
+ * then its limiter, with no role gate: any signed-in user may confirm it's
+ * them. The two link routes share one
  * limiter instance. Google is configured for the whole file, before anything
  * reads the environment, so a Google step-up route would be mounted if one
  * existed.
@@ -110,17 +111,15 @@ describe('createAuthRouter: the step-up routes', () => {
   })
 
   it.each(BEARER_STEP_UP_ROUTES)(
-    'registers POST $path after both, with requireAuth, the role gate, then the limiter',
+    'registers POST $path after both, with requireAuth then the limiter and no role gate',
     ({ path, handler }) => {
       const layers = layersOf(createAuthRouter())
       const handlers = handlersOf(layers, 'post', path)
 
       expect(routeIndex(layers, 'post', path)).toBeGreaterThan(gateIndex(layers) + 1)
       expect(handlers[0]).toBe(requireAuth)
-      // requirePlatformRole builds a fresh closure per route, so the role gate is known by what it is not.
-      expect([requireAuth, requireJsonContentType]).not.toContain(handlers[1])
-      expect(isLimiter(handlers[1])).toBe(false)
-      expect(isLimiter(handlers[2])).toBe(true)
+      expect(isLimiter(handlers[1])).toBe(true)
+      expect(handlers).toHaveLength(3)
       expect(handlers.at(-1)).toBe(handler)
     }
   )
@@ -128,8 +127,8 @@ describe('createAuthRouter: the step-up routes', () => {
   it('mounts the two link routes on one shared limiter instance', () => {
     const layers = layersOf(createAuthRouter())
 
-    expect(handlersOf(layers, 'post', '/step-up/link/request')[2]).toBe(
-      handlersOf(layers, 'post', '/step-up/link/verify')[2]
+    expect(handlersOf(layers, 'post', '/step-up/link/request')[1]).toBe(
+      handlersOf(layers, 'post', '/step-up/link/verify')[1]
     )
   })
 

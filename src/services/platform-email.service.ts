@@ -31,6 +31,7 @@ import {
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
+import { SECURITY_SETTINGS_PATH } from '@/services/link-token.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { utcDays } from '@/services/platform-stats.service'
 import { platformTenantOrThrow, sendSignInLinkByStaff } from '@/services/platform-user.service'
@@ -396,7 +397,7 @@ function signInPageUrl(
 }
 
 /**
- * The Apex page a step-up link opens, carrying `rawToken`: the shape of
+ * The frontend page a step-up link opens, carrying `rawToken`: the shape of
  * `buildStepUpConfirmUrl`'s link.
  * @param rawToken - The token text, empty for a preview's masked link.
  * @param origin - The frontend origin the real link pointed at.
@@ -418,6 +419,21 @@ function stepUpConfirmPageUrl(rawToken: string, origin: string): string {
 function invitationConfirmPageUrl(rawToken: string, origin: string): string {
   const base = new URL('invitations/confirm', origin.endsWith('/') ? origin : `${origin}/`)
   return withEmailUtm(`${base.href}?token=${rawToken}`, 'invitation_confirm', 'primary_button')
+}
+
+/**
+ * The Security settings page a passkey mail links to. It carries no token,
+ * so a preview shows it as sent.
+ * @param origin - The frontend origin the real link pointed at.
+ * @param templateKey - The mail the link is in: its key is the `utm_campaign`.
+ * @returns The URL.
+ */
+function securitySettingsPageUrl(
+  origin: string,
+  templateKey: 'passkey_created' | 'passkey_deleted'
+): string {
+  const base = new URL(SECURITY_SETTINGS_PATH, origin.endsWith('/') ? origin : `${origin}/`)
+  return withEmailUtm(base.href, templateKey, 'primary_button')
 }
 
 /**
@@ -555,6 +571,20 @@ export function buildPreviewMessage(
             confirmUrl: maskedLink(invitationConfirmPageUrl, origin),
             expiresInMinutes: fill('expiresInMinutes'),
             expiresAt: fill('expiresAt'),
+            appName: fill('appName'),
+          },
+        }
+      }
+      case 'passkey_created':
+      case 'passkey_deleted': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            providerName: fill('providerName'),
+            occurredAt: fill('occurredAt'),
+            settingsUrl: securitySettingsPageUrl(origin, templateKey),
             appName: fill('appName'),
           },
         }

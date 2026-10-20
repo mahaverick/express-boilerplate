@@ -38,7 +38,7 @@ import {
   signInLinkRequestSchema,
   signInLinkVerifySchema,
 } from '@/validators/sign-in-link.validators'
-import { stepUpEmptyBodySchema, stepUpLinkVerifySchema } from '@/validators/step-up.validators'
+import { stepUpLinkRequestSchema, stepUpLinkVerifySchema } from '@/validators/step-up.validators'
 
 /**
  * A URL without any trailing slashes, so `${base}/path` never doubles one.
@@ -272,22 +272,21 @@ class AuthController extends BaseController {
 
   /**
    * `POST /auth/step-up/link/request`: mail a "confirm it's you" link for the
-   * caller's session, behind `requireAuth` and `requirePlatformRole('viewer')`.
-   * Takes `{}` or no body. Answers 202 with when the next request may mail
+   * caller's session, behind `requireAuth`.
+   * Takes `{ app }`, the frontend the link opens (a 400 without it). Answers 202 with when the next request may mail
    * again; inside the cooldown a 429 `STEP_UP_LINK_COOLDOWN` with
    * `Retry-After`.
    */
   requestStepUpLink = this.handle(async (request, response) => {
-    // A body-less POST leaves request.body undefined; it means the same as `{}`.
-    parseBody(stepUpEmptyBodySchema, request.body ?? {})
-    const result = await requestStepUpLink(authenticatedUserId(request), request.sessionId)
+    const { app } = parseBody(stepUpLinkRequestSchema, request.body)
+    const result = await requestStepUpLink(authenticatedUserId(request), request.sessionId, app)
 
     successResponse(response, result, 'Check your inbox for a confirmation link.', 202)
   })
 
   /**
    * `POST /auth/step-up/link/verify`: confirm a step-up link for the caller's
-   * session, behind `requireAuth` and `requirePlatformRole('viewer')`, and
+   * session, behind `requireAuth`, and
    * reply with a new access token carrying the new `auth_time`. The refresh
    * cookie is untouched: the session is the same. A link this session cannot
    * use answers 400 `LINK_INVALID`, never a 401. `no-store`, as every token

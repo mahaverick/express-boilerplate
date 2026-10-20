@@ -135,7 +135,7 @@ describe('addEmailJob', () => {
 })
 
 describe('emailQueueFor', () => {
-  it('routes sign_in_link, step_up_link, welcome, tenant_invitation and invitation_confirm to auth-email and everything else to email', () => {
+  it('routes sign_in_link, step_up_link, welcome, tenant_invitation, invitation_confirm, passkey_created and passkey_deleted to auth-email and everything else to email', () => {
     const routed = Object.fromEntries(
       EMAIL_TEMPLATE_KEYS.map((key) => [key, (emailQueueFor(key) as { name: string }).name])
     )
@@ -146,6 +146,8 @@ describe('emailQueueFor', () => {
       welcome: 'auth-email',
       tenant_invitation: 'auth-email',
       invitation_confirm: 'auth-email',
+      passkey_created: 'auth-email',
+      passkey_deleted: 'auth-email',
       onboarding_reminder: 'email',
       maintenance_mode_changed: 'email',
     })
@@ -155,6 +157,8 @@ describe('emailQueueFor', () => {
       'welcome',
       'tenant_invitation',
       'invitation_confirm',
+      'passkey_created',
+      'passkey_deleted',
     ])
   })
 

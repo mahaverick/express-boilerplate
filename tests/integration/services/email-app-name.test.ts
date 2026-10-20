@@ -162,7 +162,7 @@ describe('the product name each mail carries', () => {
     const user = await createTrackedUser({ email: uniqueEmail('step-up') })
     await makeStaff(user.id, 'admin')
 
-    await requestStepUpLink(user.id, randomUUID())
+    await requestStepUpLink(user.id, randomUUID(), 'apex')
 
     expect(queuedAppName(user.email)).toBe('Apex')
   })

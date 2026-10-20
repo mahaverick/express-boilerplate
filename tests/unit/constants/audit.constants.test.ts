@@ -38,6 +38,8 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'user.reactivated': { reason: 'Cleared by support' },
   'user.signed_out': { reason: 'Lost laptop' },
   'user.sign_in_link_sent': { app: 'web' },
+  'user.passkey_created': { passkeyId: 'passkey-1', provider: 'Apple Passwords', app: 'web' },
+  'user.passkey_deleted': { passkeyId: 'passkey-1', provider: 'Apple Passwords', app: 'web' },
   'user.deleted': { reason: 'Erasure request' },
   'tenant.suspended': { reason: 'Unpaid invoice' },
   'tenant.reactivated': { reason: 'Invoice paid' },
@@ -120,6 +122,8 @@ describe('AUDIT_ACTIONS', () => {
       'user.deactivated',
       'user.deleted',
       'user.flags_evaluated',
+      'user.passkey_created',
+      'user.passkey_deleted',
       'user.purged',
       'user.reactivated',
       'user.sign_in_link_sent',
@@ -218,8 +222,25 @@ describe('AUDIT_ACTIONS', () => {
       AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'link' }).success
     ).toBe(true)
     expect(
+      AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'passkey' }).success
+    ).toBe(true)
+    expect(
+      AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'passkey' }).success
+    ).toBe(false)
+    expect(
       AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'password' }).success
     ).toBe(false)
+  })
+
+  it('pins the closed value sets of the passkey actions', () => {
+    for (const action of ['user.passkey_created', 'user.passkey_deleted'] as const) {
+      const schema = AUDIT_ACTIONS[action].metadata
+      const valid = VALID_METADATA[action]
+      expect(AUDIT_ACTIONS[action].target).toBe('user')
+      expect(schema.safeParse({ ...valid, app: 'mobile' }).success).toBe(false)
+      expect(schema.safeParse({ ...valid, provider: 'x'.repeat(101) }).success).toBe(false)
+      expect(schema.safeParse({ ...valid, credentialId: 'abc' }).success).toBe(false)
+    }
   })
 
   it('records only a known template key on email.resent', () => {

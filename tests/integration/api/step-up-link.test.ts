@@ -1,6 +1,6 @@
 /**
  * @file `POST /api/v1/auth/step-up/link/request` and `/step-up/link/verify`:
- * a staff member confirms it is them by an emailed link bound to the session
+ * any signed-in user confirms it is them by an emailed link bound to the session
  * that asked. The link moves that session's `authenticated_at` and answers a
  * fresh access token; another session of the same user, another user, a used,
  * expired or unknown link, and a link whose session signed out are refused
@@ -18,6 +18,7 @@ import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE, LINK_INVALID_CODE } from '@/constants/auth.constants'
 import { addEmailJob } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
+import { appNameFor, frontendUrl } from '@/services/frontend-links.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { verifyAccessToken } from '@/services/session.service'
@@ -126,15 +127,35 @@ async function signIn(email: string): Promise<StaffSession> {
 }
 
 /**
+ * Sign a customer (a non-staff address) in to the web app by a real link.
+ * @returns The session.
+ */
+async function signInCustomer(): Promise<StaffSession> {
+  const email = `step-up-link-${randomUUID()}@example.test`
+  usedEmails.push(email)
+  const session = await signInByLink(email, 'web')
+  const { sid } = claims(session.accessToken)
+  if (sid === undefined) throw new Error('the sign-in issued a token without sid')
+  return {
+    userId: session.userId,
+    email,
+    token: session.accessToken,
+    sid,
+    refreshCookie: session.refreshCookie,
+  }
+}
+
+/**
  * Ask for a step-up link as one session.
  * @param token - The session's bearer token.
+ * @param body - The request body; the frontend the link opens (`apex`) by default.
  * @returns The response.
  */
-function requestLink(token: string): Promise<Response> {
+function requestLink(token: string, body?: object): Promise<Response> {
   return request(app)
     .post('/api/v1/auth/step-up/link/request')
     .set('Authorization', `Bearer ${token}`)
-    .send({})
+    .send(body ?? { app: 'apex' })
 }
 
 /**
@@ -313,9 +334,73 @@ describe('POST /api/v1/auth/step-up/link/request', () => {
   })
 
   it('answers 401 with no bearer', async () => {
-    const response = await request(app).post('/api/v1/auth/step-up/link/request').send({})
+    const response = await request(app)
+      .post('/api/v1/auth/step-up/link/request')
+      .send({ app: 'apex' })
 
     expect(response.status).toBe(401)
+  })
+
+  it('opens the confirm page on the Apex origin for a staff request with app apex', async () => {
+    const session = await signIn(await createStaff())
+
+    const response = await requestLink(session.token, { app: 'apex' })
+
+    expect(response.status).toBe(202)
+    const url = lastConfirmUrl()
+    expect(url.origin).toBe(new URL(frontendUrl('apex')).origin)
+    expect(url.pathname).toBe('/auth/confirm')
+    const [message, , options] = vi.mocked(addEmailJob).mock.calls.at(-1) ?? []
+    expect(message?.templateKey === 'step_up_link' && message.variables.appName).toBe(
+      appNameFor('apex')
+    )
+    expect(options?.context).toMatchObject({ linkApp: 'apex' })
+  })
+
+  it('answers the unknown-route 404 to a caller with no platform role who asks for an Apex link, and mails nothing', async () => {
+    const customer = await signInCustomer()
+
+    const response = await requestLink(customer.token, { app: 'apex' })
+
+    expect(response.status).toBe(404)
+    expect(await linkRows(customer.userId)).toEqual([])
+    expect(addEmailJob).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 for a body with no app, and mails nothing', async () => {
+    const session = await signIn(await createStaff())
+
+    const response = await requestLink(session.token, {})
+
+    expect(response.status).toBe(400)
+    expect(await linkRows(session.userId)).toEqual([])
+    expect(addEmailJob).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 for an unknown app or key', async () => {
+    const session = await signIn(await createStaff())
+
+    for (const body of [{ app: 'mobile' }, { app: 'web', extra: 1 }]) {
+      const response = await requestLink(session.token, body)
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('lets a customer ask, and mails a link on the web origin', async () => {
+    const customer = await signInCustomer()
+
+    const response = await requestLink(customer.token, { app: 'web' })
+
+    expect(response.status).toBe(202)
+    const url = lastConfirmUrl()
+    expect(url.origin).toBe(new URL(getEnv().WEB_URL).origin)
+    expect(url.pathname).toBe('/auth/confirm')
+    const [message, , options] = vi.mocked(addEmailJob).mock.calls.at(-1) ?? []
+    expect(message?.to).toBe(customer.email)
+    expect(message?.templateKey === 'step_up_link' && message.variables.appName).toBe(
+      appNameFor('web')
+    )
+    expect(options?.context).toMatchObject({ linkApp: 'web' })
   })
 })
 
@@ -478,26 +563,38 @@ describe('POST /api/v1/auth/step-up/link/verify', () => {
     expect(await linkRows(session.userId)).toMatchObject([{ consumed: false }])
   })
 
-  it('refuses a caller no longer staff at confirm time, leaving the link unspent', async () => {
+  it('confirms for a customer: a fresh auth_time, audited on the platform tenant as link', async () => {
+    const customer = await signInCustomer()
+    await ageSession(customer.sid)
+    const asked = await requestLink(customer.token, { app: 'web' })
+    expect(asked.status).toBe(202)
+    const linkToken = lastConfirmUrl().searchParams.get('token') ?? ''
+    const before = Date.now()
+
+    const response = await verifyLink(customer.token, linkToken)
+
+    expect(response.status).toBe(200)
+    const fresh = claims((response.body as { data: { accessToken: string } }).data.accessToken)
+    expect(fresh.sid).toBe(customer.sid)
+    expect(fresh.authTime).toBeGreaterThanOrEqual(Math.floor(before / 1000) - 1)
+    const platform = await platformTenant()
+    expect(await stepUpAudits(customer.userId)).toEqual([
+      { action: 'auth.step_up_confirmed', metadata: { method: 'link' }, tenantId: platform.id },
+    ])
+  })
+
+  it('confirms for a caller who is no longer staff, since step-up is open to everyone', async () => {
     const session = await signIn(await createStaff())
     await ageSession(session.sid)
     const linkToken = await issueLink(session)
-    const timesBefore = await refreshAuthenticatedTimes(session.sid)
     await sql`delete from user_memberships where user_id = ${session.userId}`
 
-    // The service directly: over HTTP the route's role gate answers first, so this is the demotion that lands after the gate.
-    await expect(confirmStepUpLink(session.userId, session.sid, linkToken)).rejects.toMatchObject({
-      statusCode: 404,
-    })
+    const response = await verifyLink(session.token, linkToken)
 
-    expect(await refreshAuthenticatedTimes(session.sid)).toEqual(timesBefore)
-    expect(await linkRows(session.userId)).toMatchObject([{ consumed: false, revoked: false }])
+    expect(response.status).toBe(200)
     expect(await stepUpAudits(session.userId)).toMatchObject([
-      { action: 'auth.step_up_refused', metadata: { method: 'link' } },
+      { action: 'auth.step_up_confirmed', metadata: { method: 'link' } },
     ])
-    await makeStaff(session.userId, 'viewer')
-    const restored = await verifyLink(session.token, linkToken)
-    expect(restored.status).toBe(200)
   })
 
   it('rolls the claim back when the session ended before the confirm', async () => {

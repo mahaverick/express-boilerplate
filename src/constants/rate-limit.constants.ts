@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 23 limiters in `RATE_LIMITS`.
+ * The names of the 27 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -78,6 +78,10 @@ export type RateLimitName =
   | 'signInLinkVerify'
   | 'invitationVerify'
   | 'stepUpLink'
+  | 'passkeyManage'
+  | 'passkeySignInOptions'
+  | 'passkeySignIn'
+  | 'passkeyStepUp'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -155,7 +159,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 24 rate-limit specs this API enforces, each commented with the reason
+ * The 27 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -455,7 +459,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     unit: 'attempts',
   },
   /**
-   * 10 per 15 minutes per staff member, one instance shared by
+   * 10 per 15 minutes per signed-in user, one instance shared by
    * `POST /auth/step-up/link/request` and `/step-up/link/verify`: a normal
    * confirm spends two, and the request's own cooldown
    * (`STEP_UP_LINK_COOLDOWN`) bounds the mail. The link carries 256 bits, so
@@ -463,6 +467,56 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
    */
   stepUpLink: {
     name: 'step-up-link',
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    keyBy: 'user',
+    unit: 'attempts',
+  },
+  /**
+   * 20 per 15 minutes per user, one instance shared by every passkey write
+   * (create options and verify, rename, delete). A person sets up a few
+   * passkeys and tidies a list; 20 covers that, and a script stops at 20.
+   */
+  passkeyManage: {
+    name: 'passkey-manage',
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    keyBy: 'user',
+    unit: 'requests',
+  },
+  /**
+   * 300 per 15 minutes per IP on `POST /auth/passkeys/sign-in/options` only.
+   * The call is cheap, holds no secret and runs on every sign-in page load, so
+   * a shared office address needs room; the verify call has the tighter budget.
+   */
+  passkeySignInOptions: {
+    name: 'passkey-sign-in-options',
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    keyBy: 'ip',
+    unit: 'requests',
+  },
+  /**
+   * 20 per 15 minutes per IP on `POST /auth/passkeys/sign-in/verify` only.
+   * Each try is one assertion, so this allows 20 tries; a script working
+   * through challenges stops there.
+   */
+  passkeySignIn: {
+    name: 'passkey-sign-in',
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    keyBy: 'ip',
+    unit: 'attempts',
+  },
+  /**
+   * 10 per 15 minutes per user, one instance shared by
+   * `POST /auth/passkeys/step-up/options` and `/step-up/verify`: a normal
+   * confirm spends two, so this allows about five tries. The user is
+   * signed in, and a wrong assertion costs a spent challenge, so this bounds
+   * a script, not a person who mistouches a few times.
+   */
+  passkeyStepUp: {
+    name: 'passkey-step-up',
     windowMs: 15 * 60 * 1000,
     limit: 10,
     keyBy: 'user',

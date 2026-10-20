@@ -33,6 +33,7 @@ import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { passkeyCount, seedPasskey } from '../../helpers/passkey-rows'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -452,6 +453,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       provider: 'google',
       providerId: randomUUID(),
     })
+    await seedPasskey(invitee.id)
     const { tenant, raw } = await invitedWithLink(invitee.email)
 
     const response = await postConfirm({ token: raw, email: invitee.email })
@@ -459,6 +461,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     expect(response.status).toBe(200)
     expect(confirmData(response).user.id).toBe(invitee.id)
     expect(confirmData(response).isNewUser).toBe(false)
+    expect(await passkeyCount(invitee.id)).toBe(0)
     expect(await refreshRows(invitee.id)).toEqual([
       { revoked: true, recent: true },
       { revoked: false, recent: true },

@@ -552,6 +552,10 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       createdIds.push(existing.id)
       expect(existing.emailVerifiedAt).toBeNull()
       const squatterSession = await issueRefreshToken(existing.id, randomUUID())
+      const credentialId = `cred-${randomUUID()}`
+      await sql`
+        insert into user_passkeys (user_id, credential_id, public_key, sign_count, transports, aaguid, backup_eligible, backup_state, name)
+        values (${existing.id}, ${credentialId}, ${Buffer.from([1, 2, 3])}, 0, '{}', '00000000-0000-0000-0000-000000000000', true, false, 'Seeded')`
       const verifiedEvents: string[] = []
       subscribeDomainEvent('email_verified', (event) => {
         verifiedEvents.push(event.userId)
@@ -564,6 +568,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       // The claim's own write verified the row, so it emits email_verified once.
       expect(verifiedEvents.filter((userId) => userId === existing.id)).toHaveLength(1)
       expect(user.emailVerifiedAt).toBeInstanceOf(Date)
+      expect(await sql`select 1 from user_passkeys where user_id = ${existing.id}`).toHaveLength(0)
       const reread = await userRepository.findById(existing.id)
       expect(reread?.emailVerifiedAt).toBeInstanceOf(Date)
       const link = await authProviderRepository.findByProviderAndId('google', profile.id)

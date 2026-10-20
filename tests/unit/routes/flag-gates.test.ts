@@ -42,6 +42,7 @@ interface FoundGate {
  */
 const KNOWN_MOUNTS = [
   '/auth',
+  '/passkeys',
   '/profile',
   '/notifications',
   '/tenants',

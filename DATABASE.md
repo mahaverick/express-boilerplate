@@ -46,6 +46,7 @@ glob is picked up by `drizzle.config.ts` with no config change.
 | `users`                    | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
 | `user_tokens`              | `user-token.model.ts`             | Refresh tokens and emailed sign-in, step-up and invitation confirm links, as hashes; see below.                                                 |
 | `auth_providers`           | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                  |
+| `user_passkeys`            | `user-passkey.model.ts`           | One row per passkey a user has registered: the public key, counters and a name. No private key exists server-side.                              |
 | `tenants`                  | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
 | `tenant_settings`          | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
 | `user_memberships`         | `user-membership.model.ts`        | One row per (user, tenant) pair, with the user's role in it.                                                                                    |

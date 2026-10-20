@@ -5,10 +5,11 @@
  * admitted, and a stale sign-in refused on step-up routes. A completeness
  * check walks the platform router and its sub-routers, so a route added
  * without a row here fails CI (OWASP API5: every function gets an explicit
- * gate). The staff routes outside /platform, the two bearer step-up routes
- * on the auth router (`/auth/step-up/link/request` and `/link/verify`), have
- * their own block: a refused caller must get exactly what an unknown path on
- * the auth router gets.
+ * gate). The two bearer step-up routes on the auth router
+ * (`/auth/step-up/link/request` and `/link/verify`) are open to every
+ * signed-in user and have their own block: an OPTIONS must get exactly what
+ * an unknown path on the auth router gets, and a non-staff caller reaches the
+ * limiter and the handler.
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
@@ -576,7 +577,7 @@ describe('/api/v1/platform route gates', () => {
   describe.each([
     { path: '/api/v1/auth/step-up/link/request', limiter: RATE_LIMITS.stepUpLink },
     { path: '/api/v1/auth/step-up/link/verify', limiter: RATE_LIMITS.stepUpLink },
-  ])('POST $path, a staff route on the auth router', ({ path: STAFF_PATH, limiter }) => {
+  ])('POST $path, a step-up route on the auth router', ({ path: STAFF_PATH, limiter }) => {
     /**
      * Headers that differ between any two responses, whatever the route.
      */
@@ -691,16 +692,6 @@ describe('/api/v1/platform route gates', () => {
       return { route, sibling }
     }
 
-    it.each(VARIANTS)(
-      'refuses a non-staff caller exactly like an unknown /auth path: $label',
-      async (variant) => {
-        const { route, sibling } = await againstSibling(await tokenFor(undefined), variant)
-
-        expect(observable(route)).toEqual(observable(sibling))
-        expect(route.headers).not.toHaveProperty('ratelimit-limit')
-      }
-    )
-
     it.each(VARIANTS.filter((variant) => variant.method === 'options'))(
       'answers an anonymous caller exactly what an unknown auth path answers: $label',
       async (variant) => {
@@ -710,23 +701,29 @@ describe('/api/v1/platform route gates', () => {
       }
     )
 
-    it.each([JSON_BODY, TEXT_BODY])(
-      'answers non-staff with a stale sign-in exactly what an unknown auth path answers: $label',
-      async (variant) => {
-        const token = await tokenFor(undefined, new Date(Date.now() - ELEVEN_MINUTES_MS))
+    it('admits a non-staff caller to the limiter and the handler: a validation 400 under the limiter headers', async () => {
+      const response = await send(STAFF_PATH, await tokenFor(undefined), JSON_BODY)
 
-        const { route, sibling } = await againstSibling(token, variant)
+      expect(response.status).toBe(400)
+      expect(response.headers).toHaveProperty('ratelimit-limit')
+    })
 
-        expect(observable(route)).toEqual(observable(sibling))
-      }
-    )
+    it('answers a non-staff caller a text/plain body with the router-wide JSON gate', async () => {
+      const response = await send(STAFF_PATH, await tokenFor(undefined), TEXT_BODY)
 
-    it('answers non-staff past the limiter budget exactly what an unknown auth path answers', async () => {
+      expect(response.status).toBe(415)
+    })
+
+    it('answers a non-staff caller 429 past the limiter budget', async () => {
       const token = await tokenFor(undefined)
-      for (let attempt = 0; attempt <= limiter.limit; attempt += 1) {
-        const { route, sibling } = await againstSibling(token, JSON_BODY)
-        expect({ attempt, ...observable(route) }).toEqual({ attempt, ...observable(sibling) })
+      for (let attempt = 0; attempt < limiter.limit; attempt += 1) {
+        const within = await send(STAFF_PATH, token, JSON_BODY)
+        expect(within.status).toBe(400)
       }
+
+      const over = await send(STAFF_PATH, token, JSON_BODY)
+
+      expect(over.status).toBe(429)
     })
 
     it('answers viewer a text/plain body with the router-wide JSON gate', async () => {

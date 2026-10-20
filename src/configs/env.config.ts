@@ -23,6 +23,14 @@ const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
  */
 export type AppEnv = z.infer<typeof AppEnvSchema>
 
+const PasskeyModeSchema = z.enum(['off', 'optional', 'required'])
+
+/**
+ * How passkeys are offered: `off` hides every passkey route, `optional`
+ * lets a user add one, `required` makes every user have one.
+ */
+export type PasskeyMode = z.infer<typeof PasskeyModeSchema>
+
 /**
  * Whether no entry of a comma-separated origin list has an opaque origin.
  * A `file:`, `data:`, `chrome-extension:` or other opaque URL's origin is the string
@@ -103,6 +111,17 @@ const EnvSchema = z.object({
     .optional()
     .describe(
       'Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, step-up links, and the sign-in link and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.'
+    ),
+
+  PASSKEY_MODE: PasskeyModeSchema.default('optional').describe(
+    'Whether users sign in with passkeys. off: every passkey route answers 404 and stored passkeys are kept. optional: users may create passkeys. required: every user must have one. Defaults to optional.'
+  ),
+  WEBAUTHN_RP_ID: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'The domain a passkey is bound to, e.g. domain.com. It must equal the host of WEB_URL and APEX_URL, or be a parent domain of both. Changing it makes every stored passkey unusable. Unset uses the host of WEB_URL.'
     ),
 
   DATABASE_URL: z
@@ -265,7 +284,7 @@ const EnvSchema = z.object({
         'STEP_UP_LINK_TTL must be a positive duration string ms() can parse, e.g. "15m" or "900000".',
     })
     .describe(
-      'How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a staff session and a new one is one click away. Defaults to 15m.'
+      'How long an emailed step-up confirmation link stays valid, as an ms()-parseable duration (e.g. "15m"). Kept short because it elevates a session and a new one is one click away. Defaults to 15m.'
     ),
 
   STEP_UP_LINK_COOLDOWN: z
@@ -276,7 +295,7 @@ const EnvSchema = z.object({
         'STEP_UP_LINK_COOLDOWN must be a positive duration string ms() can parse, e.g. "1m" or "60000".',
     })
     .describe(
-      'Shortest gap between two step-up confirmation mails for one staff member, across all their sessions, as an ms()-parseable duration (e.g. "1m"), so a staff member cannot be mail-bombed through their own sessions. Defaults to 1m.'
+      'Shortest gap between two step-up confirmation mails for one account, across all its sessions, as an ms()-parseable duration (e.g. "1m"), so an account cannot be mail-bombed through its own sessions. Defaults to 1m.'
     ),
 
   INVITATION_TTL: z

@@ -3,7 +3,9 @@
  * outside `EnvSchema` because an object-level `.refine()` would break
  * `getDatabaseUrl()`'s `.pick()`.
  */
+import { isIP } from 'node:net'
 import { isCookieSecure, isProxyTrustOff, type Env } from '@/configs/env.config'
+import { passkeyRelyingParty } from '@/configs/passkey.config'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
 
@@ -14,6 +16,9 @@ import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
  * both hanging it takes 3 s of this.
  */
 const SHUTDOWN_HEADROOM_MS = 5000
+
+// Lowercase letters, digits and hyphens in dot-separated labels: what a browser compares an RP ID against.
+const BARE_LOWERCASE_HOST = /^[a-z\d]([a-z\d-]*[a-z\d])?(\.[a-z\d]([a-z\d-]*[a-z\d])?)*$/
 
 const LOCAL_SMTP_HOSTS = new Set(['localhost', '127.0.0.1'])
 const MAILPIT_SMTP_PORT = 1025
@@ -70,6 +75,18 @@ function warnOnSharedSenderDomain(env: Env, warn: (message: string) => void): vo
 }
 
 /**
+ * Whether a host is a domain or one of its subdomains, matched on whole labels.
+ * @param domain - A bare domain, compared as given apart from case.
+ * @param host - The host name.
+ * @returns True when the host equals the domain or ends with it after a dot, ignoring case.
+ */
+function isHostWithinDomain(domain: string, host: string): boolean {
+  const bare = domain.toLowerCase()
+  const lowerHost = host.toLowerCase()
+  return lowerHost === bare || lowerHost.endsWith(`.${bare}`)
+}
+
+/**
  * Whether a browser would accept a cookie with this Domain attribute from a
  * response by this host.
  * @param domain - A `COOKIE_DOMAIN` value, with or without one leading dot.
@@ -78,9 +95,7 @@ function warnOnSharedSenderDomain(env: Env, warn: (message: string) => void): vo
  */
 function isHostWithinCookieDomain(domain: string, host: string): boolean {
   // Browsers strip one leading dot (RFC 6265 §5.2.3).
-  const bare = domain.replace(/^\./, '').toLowerCase()
-  const lowerHost = host.toLowerCase()
-  return lowerHost === bare || lowerHost.endsWith(`.${bare}`)
+  return isHostWithinDomain(domain.replace(/^\./, ''), host)
 }
 
 /**
@@ -95,6 +110,30 @@ function cookieDomainProblem(env: Env): string | undefined {
   const host = new URL(env.APP_URL).hostname.toLowerCase()
   if (isHostWithinCookieDomain(env.COOKIE_DOMAIN, host)) return undefined
   return `COOKIE_DOMAIN is ${env.COOKIE_DOMAIN}, but APP_URL's host ${host} is not within it, so browsers reject every auth cookie. Set COOKIE_DOMAIN to ${host} or a parent domain of it, or unset it.`
+}
+
+/**
+ * A `WEBAUTHN_RP_ID` that is not equal to, or a parent domain of, the host of
+ * every expected origin (`WEB_URL`, and `APEX_URL` when set). A browser refuses
+ * to create or use a passkey for an origin outside its RP ID.
+ * @param env - The validated environment.
+ * @returns A message naming the first origin host the RP ID does not cover, else undefined.
+ */
+function passkeyRpIdProblem(env: Env): string | undefined {
+  if (env.PASSKEY_MODE === 'off') return undefined
+  const { rpId, origins } = passkeyRelyingParty(env)
+  if (isIP(rpId.replaceAll(/^\[|\]$/g, '')) !== 0) {
+    return `WEBAUTHN_RP_ID is ${rpId}, an IP address, but browsers refuse a passkey for an IP address. Use a domain name such as localhost or domain.com, or set PASSKEY_MODE=off.`
+  }
+  if (!BARE_LOWERCASE_HOST.test(rpId)) {
+    return `WEBAUTHN_RP_ID is ${rpId}, but it must be a bare lowercase domain such as domain.com, with no scheme, port, path or leading dot, or every passkey ceremony fails. Fix WEBAUTHN_RP_ID, or set PASSKEY_MODE=off.`
+  }
+  for (const origin of origins) {
+    const host = new URL(origin).hostname.toLowerCase()
+    if (isHostWithinDomain(rpId, host)) continue
+    return `WEBAUTHN_RP_ID is ${rpId}, but ${origin}'s host ${host} is not within it, so browsers refuse every passkey there. Set WEBAUTHN_RP_ID to ${host} or a parent domain of every host in WEB_URL and APEX_URL, or set PASSKEY_MODE=off.`
+  }
+  return undefined
 }
 
 /**
@@ -113,6 +152,17 @@ function apexCookieDomainProblem(env: Env): string | undefined {
     return undefined
   }
   return `APEX_URL's host ${apexHost} differs from APP_URL's host ${appHost} and Google sign-in is on (GOOGLE_CLIENT_ID), so a sign-in started in Apex loses its session on the way back. Set COOKIE_DOMAIN to a parent domain of both hosts, or serve Apex from APP_URL's host.`
+}
+
+/**
+ * The problems of a host name that a cookie domain or the passkey RP ID must cover.
+ * @param env - The validated environment.
+ * @returns One message per rule that fails, or none.
+ */
+function hostProblems(env: Env): string[] {
+  return [cookieDomainProblem(env), apexCookieDomainProblem(env), passkeyRpIdProblem(env)].filter(
+    (problem) => problem !== undefined
+  )
 }
 
 /**
@@ -223,10 +273,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     warnOnSharedSenderDomain(env, warn)
   }
 
-  const domainProblem = cookieDomainProblem(env)
-  if (domainProblem !== undefined) problems.push(domainProblem)
-  const apexProblem = apexCookieDomainProblem(env)
-  if (apexProblem !== undefined) problems.push(apexProblem)
+  problems.push(...hostProblems(env))
 
   // Half a pair sends no auth, so a provider that requires it refuses every send.
   if ((env.SMTP_USERNAME === undefined) !== (env.SMTP_PASSWORD === undefined)) {

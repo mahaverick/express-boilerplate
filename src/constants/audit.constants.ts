@@ -161,6 +161,23 @@ export const AUDIT_ACTIONS = {
     target: 'user',
     metadata: z.strictObject({ app: z.enum(FRONTEND_APPS) }),
   },
+  // A user created or deleted a passkey. `passkeyId` is the row id, never the credential ID; `provider` is the authenticator's listed name.
+  'user.passkey_created': {
+    target: 'user',
+    metadata: z.strictObject({
+      passkeyId: id,
+      provider: z.string().max(100),
+      app: z.enum(FRONTEND_APPS),
+    }),
+  },
+  'user.passkey_deleted': {
+    target: 'user',
+    metadata: z.strictObject({
+      passkeyId: id,
+      provider: z.string().max(100),
+      app: z.enum(FRONTEND_APPS),
+    }),
+  },
   'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
   'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },
@@ -175,11 +192,12 @@ export const AUDIT_ACTIONS = {
       reason: reason.nullable(),
     }),
   },
-  // A staff step-up, confirmed by an emailed link; a link confirm by a caller no longer staff is audited as refused. Rows written before Google step-up was removed keep `method: 'google'`: metadata is checked only on write.
+  // A step-up by any signed-in user, confirmed by an emailed link or a passkey. Rows written before Google step-up was removed keep `method: 'google'`: metadata is checked only on write.
   'auth.step_up_confirmed': {
     target: 'user',
-    metadata: z.strictObject({ method: z.literal('link') }),
+    metadata: z.strictObject({ method: z.enum(['link', 'passkey']) }),
   },
+  // Nothing writes this today (a link confirm no longer checks for staff, and passkey refusals are not audited); the action stays so old rows read back.
   'auth.step_up_refused': {
     target: 'user',
     metadata: z.strictObject({ method: z.literal('link') }),

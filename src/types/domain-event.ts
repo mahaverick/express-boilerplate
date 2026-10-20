@@ -8,7 +8,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 /**
  * How a user signed up or signed in.
  */
-export type SignInMethod = 'link' | 'google'
+export type SignInMethod = 'link' | 'google' | 'passkey'
 
 /**
  * The product events: what a user or tenant did that the audit log does not

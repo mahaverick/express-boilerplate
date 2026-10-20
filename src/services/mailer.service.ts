@@ -28,6 +28,15 @@ import {
   type OnboardingReminderVariables,
 } from '@/templates/email/onboarding-reminder.template'
 import {
+  PASSKEY_CREATED_TEMPLATE_KEY,
+  renderPasskeyCreatedTemplate,
+  type PasskeySecurityVariables,
+} from '@/templates/email/passkey-created.template'
+import {
+  PASSKEY_DELETED_TEMPLATE_KEY,
+  renderPasskeyDeletedTemplate,
+} from '@/templates/email/passkey-deleted.template'
+import {
   renderSignInLinkTemplate,
   SIGN_IN_LINK_TEMPLATE_KEY,
   type SignInLinkVariables,
@@ -99,6 +108,16 @@ export type MailMessage =
       templateKey: typeof INVITATION_CONFIRM_TEMPLATE_KEY
       variables: InvitationConfirmVariables
     }
+  | {
+      to: string
+      templateKey: typeof PASSKEY_CREATED_TEMPLATE_KEY
+      variables: PasskeySecurityVariables
+    }
+  | {
+      to: string
+      templateKey: typeof PASSKEY_DELETED_TEMPLATE_KEY
+      variables: PasskeySecurityVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -146,6 +165,12 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case INVITATION_CONFIRM_TEMPLATE_KEY: {
       return renderInvitationConfirmTemplate(message.variables)
+    }
+    case PASSKEY_CREATED_TEMPLATE_KEY: {
+      return renderPasskeyCreatedTemplate(message.variables)
+    }
+    case PASSKEY_DELETED_TEMPLATE_KEY: {
+      return renderPasskeyDeletedTemplate(message.variables)
     }
     default: {
       throw new Error(
