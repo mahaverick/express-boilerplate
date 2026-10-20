@@ -137,6 +137,16 @@ function userHandleBytes(userId: string): Uint8Array<ArrayBuffer> {
 }
 
 /**
+ * The user handle as the browser carries it: the base64url of the user's UUID
+ * bytes, the same value registration sets as `user.id`.
+ * @param userId - The account's UUID.
+ * @returns The base64url handle.
+ */
+export function passkeyUserHandle(userId: string): string {
+  return Buffer.from(userHandleBytes(userId)).toString('base64url')
+}
+
+/**
  * Refuse a create when the user already holds the cap.
  * @param userId - The owner.
  * @param executor - Where to count; a transaction holding the user lock makes it exact.
@@ -418,15 +428,13 @@ export async function deletePasskey(
 }
 
 /**
- * The code of a sign-in with a passkey no account here holds.
+ * The code of a sign-in with a passkey that no row here holds.
  */
 const PASSKEY_UNKNOWN_CODE = 'PASSKEY_UNKNOWN'
 
 /**
- * The 400 for a passkey that signs nobody in: one this API does not know, one
- * whose account is inactive, deleted or never verified, and an Apex sign-in
- * by a non-staff account. One answer for all, so a caller learns nothing about which. A 400,
- * never a 401, because the apps sign out on a 401.
+ * The 400 for a passkey this API does not know: no row holds its credential ID.
+ * A 400, never a 401, because the apps sign out on a 401.
  * @returns The error to throw.
  */
 function passkeyUnknown(): HttpError {
@@ -434,6 +442,26 @@ function passkeyUnknown(): HttpError {
     "This passkey isn't linked to an account here. Sign in with an email link, then create a new passkey in Security settings.",
     400,
     PASSKEY_UNKNOWN_CODE
+  )
+}
+
+/**
+ * The code of a sign-in with a verified passkey whose account may not sign in here.
+ */
+const PASSKEY_NO_ACCESS_CODE = 'PASSKEY_NO_ACCESS'
+
+/**
+ * The 403 for a passkey that verified but may not sign in: its account is
+ * inactive, deleted or never verified, or it is not staff on Apex. It follows
+ * the signature check, so only the holder of the key sees it, and the apps
+ * keep the passkey instead of deleting it.
+ * @returns The error to throw.
+ */
+function passkeyNoAccess(): HttpError {
+  return new HttpError(
+    "This passkey can't sign you in here. Sign in with an email link instead.",
+    403,
+    PASSKEY_NO_ACCESS_CODE
   )
 }
 
@@ -509,10 +537,7 @@ export async function verifyStoredAssertion(
   }
   if (!verified.verified) throw passkeyVerificationFailed()
   const handle = response.response.userHandle
-  if (
-    handle !== undefined &&
-    handle !== Buffer.from(userHandleBytes(stored.userId)).toString('base64url')
-  ) {
+  if (handle !== undefined && handle !== passkeyUserHandle(stored.userId)) {
     throw passkeyVerificationFailed()
   }
   const { newCounter, credentialBackedUp } = verified.authenticationInfo
@@ -523,18 +548,20 @@ export async function verifyStoredAssertion(
 /**
  * Finish a sign-in with a passkey and issue the session.
  *
- * Order: the challenge is spent (`sign_in` only); the credential is looked up;
- * the account is loaded and refused when unknown, inactive, deleted or never
- * verified, and on Apex when not staff, all before the signature check; the response is
- * verified (origin, RP ID, user verification, signature); the counter rule
- * runs; `assertSignInAllowed` enforces the maintenance mode; the use is
- * stored; the session is issued; `user_signed_in` is emitted.
+ * Order: the challenge is spent (`sign_in` only); the credential is looked up
+ * (a missing row is `PASSKEY_UNKNOWN`); the response is verified against the
+ * stored row (origin, RP ID, user verification, signature, user handle, counter
+ * rule); then the account is checked, and refused when inactive, deleted or
+ * never verified, and on Apex when not staff (`PASSKEY_NO_ACCESS`);
+ * `assertSignInAllowed` enforces the maintenance mode; the use is stored under
+ * the user lock, where the counter rule is the UPDATE's WHERE; the session is
+ * issued; `user_signed_in` is emitted.
  * @param input - The challenge id, the browser's response and the frontend.
  * @param input.challengeId - The id the options call answered.
  * @param input.response - The browser's assertion response.
  * @param input.app - The frontend the request came from.
  * @returns The account and its new session.
- * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` or `PASSKEY_UNKNOWN`; 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
+ * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` or `PASSKEY_UNKNOWN`; 403 `PASSKEY_NO_ACCESS`; 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
  */
 export async function finishPasskeySignIn(input: {
   challengeId: string
@@ -546,28 +573,31 @@ export async function finishPasskeySignIn(input: {
   const response = input.response as AuthenticationResponseJSON
   const stored = await userPasskeyRepository.findByCredentialId(response.id)
   if (!stored) throw passkeyUnknown()
-  const user = await userRepository.findById(stored.userId)
-  if (!user?.active || user.emailVerifiedAt === null) throw passkeyUnknown()
-  if (input.app === 'apex' && (await getPlatformMembership(user.id)) === null) {
-    throw passkeyUnknown()
-  }
+  // The signature first: a response that doesn't verify learns nothing about the account behind it.
   const { newCounter, credentialBackedUp } = await verifyStoredAssertion(
     stored,
     response,
     challenge
   )
+  const user = await userRepository.findById(stored.userId)
+  if (!user?.active || user.emailVerifiedAt === null) throw passkeyNoAccess()
+  if (input.app === 'apex' && (await getPlatformMembership(user.id)) === null) {
+    throw passkeyNoAccess()
+  }
   await assertSignInAllowed(user.id)
   // Under the user lock: a claim that deleted the passkey or verified the account since the checks above wins.
-  const session = await issueSignInSession(user, passkeyUnknown, (locked, tx) =>
-    locked.emailVerifiedAt === null
-      ? Promise.resolve(false)
-      : userPasskeyRepository.recordUse(
-          stored.id,
-          user.id,
-          { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
-          tx
-        )
-  )
+  const session = await issueSignInSession(user, passkeyNoAccess, async (locked, tx) => {
+    if (locked.emailVerifiedAt === null) throw passkeyNoAccess()
+    const outcome = await userPasskeyRepository.recordUse(
+      stored.id,
+      user.id,
+      { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
+      tx
+    )
+    if (outcome === 'missing') throw passkeyUnknown()
+    if (outcome === 'regressed') throw passkeyVerificationFailed()
+    return true
+  })
   await emitDomainEvent({
     type: 'user_signed_in',
     userId: user.id,

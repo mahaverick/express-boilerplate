@@ -3,7 +3,7 @@
  * software authenticator makes real registration and assertion responses, so
  * `@simplewebauthn/server` verifies every signature for real. Covers the
  * session (cookie, recent `auth_time`), the `user_signed_in` event, the stored
- * use, every refusal (unknown, inactive, deleted, wrong origin, no user
+ * use, every refusal (unknown, inactive, deleted, never verified, non-staff on Apex, wrong origin, no user
  * verification, wrong-purpose and replayed challenges, counter regression),
  * the maintenance mode and the Apex staff rule.
  */
@@ -47,6 +47,7 @@ afterAll(async () => {
 beforeEach(async () => {
   mode.current = 'optional'
   await clearRateLimiter('passkey-sign-in')
+  await clearRateLimiter('passkey-sign-in-options')
   await clearRateLimiter('passkey-manage')
   await resetMaintenanceMode()
   await reloadMaintenanceMode()
@@ -243,27 +244,48 @@ describe('POST /sign-in/verify', () => {
     expect(response.headers['set-cookie']).toBeUndefined()
   })
 
-  it('answers 400 PASSKEY_UNKNOWN, with no cookie, for a deactivated user', async () => {
+  it('answers 403 PASSKEY_NO_ACCESS, with no cookie, for a deactivated user with a valid assertion', async () => {
     const authenticator = new SoftwareAuthenticator()
     const user = await userWithPasskey(authenticator)
     await sql`update users set active = false where id = ${user.id}`
 
     const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
 
-    expect(response.status).toBe(400)
-    expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
+    expect(response.status).toBe(403)
+    expect(envelope(response).code).toBe('PASSKEY_NO_ACCESS')
+    expect(envelope(response).message).toBe(
+      "This passkey can't sign you in here. Sign in with an email link instead."
+    )
     expect(response.headers['set-cookie']).toBeUndefined()
   })
 
-  it('answers 400 PASSKEY_UNKNOWN, with no cookie, for a user whose address was never verified', async () => {
+  it('answers 400 PASSKEY_VERIFICATION_FAILED for a bad signature on an inactive account, so the signature is checked first', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const user = await userWithPasskey(authenticator)
+    await sql`update users set active = false where id = ${user.id}`
+
+    const response = await signIn((challenge) => {
+      const good = authenticator.assertionResponse(challenge)
+      return { ...good, response: { ...good.response, signature: 'AAAA' } }
+    })
+
+    expect(response.status).toBe(400)
+    expect(envelope(response).code).toBe('PASSKEY_VERIFICATION_FAILED')
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
+  it('answers 403 PASSKEY_NO_ACCESS, with no cookie, for a user whose address was never verified', async () => {
     const authenticator = new SoftwareAuthenticator()
     const user = await userWithPasskey(authenticator)
     await sql`update users set email_verified_at = null where id = ${user.id}`
 
     const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
 
-    expect(response.status).toBe(400)
-    expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
+    expect(response.status).toBe(403)
+    expect(envelope(response).code).toBe('PASSKEY_NO_ACCESS')
+    expect(envelope(response).message).toBe(
+      "This passkey can't sign you in here. Sign in with an email link instead."
+    )
     expect(response.headers['set-cookie']).toBeUndefined()
   })
 
@@ -309,15 +331,18 @@ describe('POST /sign-in/verify', () => {
     expect(response?.headers['set-cookie']).toBeUndefined()
   })
 
-  it('answers 400 PASSKEY_UNKNOWN, with no cookie, for a soft-deleted user', async () => {
+  it('answers 403 PASSKEY_NO_ACCESS, with no cookie, for a soft-deleted user', async () => {
     const authenticator = new SoftwareAuthenticator()
     const user = await userWithPasskey(authenticator)
     await sql`update users set deleted_at = now() where id = ${user.id}`
 
     const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
 
-    expect(response.status).toBe(400)
-    expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
+    expect(response.status).toBe(403)
+    expect(envelope(response).code).toBe('PASSKEY_NO_ACCESS')
+    expect(envelope(response).message).toBe(
+      "This passkey can't sign you in here. Sign in with an email link instead."
+    )
     expect(response.headers['set-cookie']).toBeUndefined()
   })
 
@@ -409,6 +434,25 @@ describe('POST /sign-in/verify', () => {
     expect(use.signCount).toBe(5)
   })
 
+  it('lets exactly one of two parallel sign-ins with the same count succeed on a device-bound passkey', async () => {
+    const authenticator = new SoftwareAuthenticator({ backupEligible: false })
+    const user = await userWithPasskey(authenticator)
+    await sql`update user_passkeys set sign_count = 5 where user_id = ${user.id}`
+
+    const responses = await Promise.all([
+      signIn((challenge) => authenticator.assertionResponse(challenge, { signCount: 6 })),
+      signIn((challenge) => authenticator.assertionResponse(challenge, { signCount: 6 })),
+    ])
+
+    expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+      200, 400,
+    ])
+    const refused = responses.find((response) => response.status === 400)
+    expect(refused === undefined ? '' : envelope(refused).code).toBe('PASSKEY_VERIFICATION_FAILED')
+    const use = await storedUse(user.id)
+    expect(use.signCount).toBe(6)
+  })
+
   it('accepts a device-bound passkey whose count rises', async () => {
     const authenticator = new SoftwareAuthenticator({ backupEligible: false })
     const user = await userWithPasskey(authenticator)
@@ -493,17 +537,34 @@ describe('POST /sign-in/verify', () => {
     expect(response.status).toBe(200)
   })
 
-  it('refuses a non-staff account on apex as unknown', async () => {
+  it('refuses a non-staff account on apex with 403 PASSKEY_NO_ACCESS', async () => {
     const authenticator = new SoftwareAuthenticator()
     const user = await userWithPasskey(authenticator)
 
     const response = await signIn((challenge) => authenticator.assertionResponse(challenge), 'apex')
 
-    expect(response.status).toBe(400)
-    expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
+    expect(response.status).toBe(403)
+    expect(envelope(response).code).toBe('PASSKEY_NO_ACCESS')
+    expect(envelope(response).message).toBe(
+      "This passkey can't sign you in here. Sign in with an email link instead."
+    )
     expect(response.headers['set-cookie']).toBeUndefined()
     const use = await storedUse(user.id)
     expect(use.lastUsedAt).toBeNull()
+  })
+
+  it('keeps the options budget apart from the verify budget', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    await userWithPasskey(authenticator)
+    await clearRateLimiter('passkey-sign-in-options')
+    for (let index = 0; index < 25; index += 1) {
+      const asked = await signInOptions()
+      expect(asked.status).toBe(200)
+    }
+
+    const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
+
+    expect(response.status).toBe(200)
   })
 
   it('refuses an origin that is not allowed before the limiter runs', async () => {
