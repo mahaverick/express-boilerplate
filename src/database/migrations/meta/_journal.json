@@ -225,6 +225,13 @@
       "when": 1792483255473,
       "tag": "0031_adopt_unowned_email_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792517392850,
+      "tag": "0032_passkeys",
+      "breakpoints": true
     }
   ]
 }
