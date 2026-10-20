@@ -34,8 +34,7 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * type, which it allows, so the Google routes pass it too.
  *
  * The staff-only step-up routes under `/step-up` that take a bearer
- * (`/step-up/link/request`, `/step-up/link/verify`, `/step-up/google/start`)
- * answer a refused caller exactly what an unknown auth path answers: the
+ * (`/step-up/link/request`, `/step-up/link/verify`) answer a refused caller exactly what an unknown auth path answers: the
  * router-wide JSON gate's 415 for a form body, as on every auth path, and
  * otherwise the platform role gate's 404 before the limiter, so no
  * `RateLimit-*` headers. An OPTIONS anywhere under `/step-up` gets the
@@ -54,17 +53,11 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * attaches on its own, so no other page can make it send one and it needs no
  * Origin check.
  *
- * Google OAuth routes, the two Google step-up routes included, are mounted
- * only when `isGoogleOAuthEnabled()`. `configurePassport()` runs here, before
- * any of them can handle a request; it is idempotent. On every one the
- * limiter runs before `oauthSession`, so an over-budget caller gets a 429
- * before a session is written to Redis. They share one `oauthSession`
- * instance, so the session middleware is built once, and `/google` and the
- * step-up popup's `GET /step-up/google`, the two navigations to Google, share
- * one `googleOAuth` limiter instance. The step-up popup's route carries no
- * bearer: the start (`POST /step-up/google/start`, staff only) wrote the
- * intent it needs into the OAuth session, and without one it redirects to
- * Apex's confirm page with an error.
+ * The Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
+ * `configurePassport()` runs here, before either can handle a request; it is
+ * idempotent. On both the limiter runs before `oauthSession`, so an
+ * over-budget caller gets a 429 before a session is written to Redis. They
+ * share one `oauthSession` instance, so the session middleware is built once.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
 export function createAuthRouter(): Router {
@@ -129,10 +122,9 @@ export function createAuthRouter(): Router {
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
-    const googleOAuthLimiter = createRateLimiter(RATE_LIMITS.googleOAuth)
     router.get(
       '/google',
-      googleOAuthLimiter,
+      createRateLimiter(RATE_LIMITS.googleOAuth),
       oauthSession,
       rememberOAuthApp,
       passport.initialize(),
@@ -147,22 +139,6 @@ export function createAuthRouter(): Router {
       oauthSession,
       passport.initialize(),
       authController.handleGoogleCallback
-    )
-    // Staff-only, as the link routes: the role gate before the limiter, and the session written last.
-    router.post(
-      '/step-up/google/start',
-      requireAuth,
-      requirePlatformRole('viewer'),
-      createRateLimiter(RATE_LIMITS.stepUpGoogle),
-      oauthSession,
-      authController.startGoogleStepUp
-    )
-    router.get(
-      '/step-up/google',
-      googleOAuthLimiter,
-      oauthSession,
-      passport.initialize(),
-      authController.openGoogleStepUp
     )
   }
 

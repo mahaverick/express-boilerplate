@@ -130,9 +130,8 @@ export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
  * Machine-readable code for a request refused because its session last
  * authenticated too long ago (`requireRecentAuth`, auth.middleware.ts). The
  * 401 asks the client to confirm the user's identity by step-up (an emailed
- * link, `POST /auth/step-up/link/request`, or a fresh Google login,
- * `POST /auth/step-up/google/start`) and retry. It is not a verdict on the session, so a
- * client must not sign out on it.
+ * link, `POST /auth/step-up/link/request`) and retry. It is not a verdict on
+ * the session, so a client must not sign out on it.
  */
 export const REAUTH_REQUIRED_CODE = 'REAUTH_REQUIRED'
 

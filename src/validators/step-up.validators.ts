@@ -1,12 +1,11 @@
 /**
  * @file The bodies of the staff step-up routes: `POST /auth/step-up/link/request`
- * and `/step-up/google/start` take none, and `/step-up/link/verify` takes the
- * link's token.
+ * takes none, and `/step-up/link/verify` takes the link's token.
  */
 import { z } from 'zod'
 
 /**
- * A body-less step-up request or Google start: empty. Strict, so an unknown
+ * A body-less step-up link request: empty. Strict, so an unknown
  * key is a 400 rather than silently ignored.
  */
 export const stepUpEmptyBodySchema = z.strictObject({})

@@ -6,8 +6,8 @@ OpenTelemetry traces and logs, and a git-hook and CI pipeline that enforces
 all of it.
 
 On top of that platform it ships sign-in by emailed link, with the account
-created on the first click, optional Google sign-in, staff step-up by link or
-Google, JWT access tokens with rotating opaque refresh tokens, multi-tenancy
+created on the first click, optional Google sign-in, staff step-up by emailed
+link, JWT access tokens with rotating opaque refresh tokens, multi-tenancy
 with roles and one-click invitations, an audit log, platform staff access,
 in-app notifications over server-sent events, BullMQ jobs and a daily
 data-retention purge. A staff directory, email delivery tracking, onboarding,

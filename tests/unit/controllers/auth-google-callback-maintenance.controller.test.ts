@@ -16,7 +16,7 @@ vi.mock('passport', () => ({
     authenticate:
       (_name: string, _options: unknown, callback: (error: unknown, result: object) => void) =>
       () => {
-        callback(undefined, { profile: { id: 'google-id' }, idToken: undefined })
+        callback(undefined, { id: 'google-id' })
       },
   },
 }))

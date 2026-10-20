@@ -504,9 +504,8 @@ credential. The auth routes, all under `/api/v1`:
 | `POST /auth/link/verify`                                       | `verifySignInLink`                                              | Spends the link and signs in the account its address holds, creating a verified one on the first web click.                                                          |
 | `POST /invitations/verify`                                     | `verifyInvitation` (`tenant-invitation.service.ts`)             | A new address on a customer invitation joins in one transaction; any other click answers 202 and mails a confirm link in the follow-up (`requestInvitationConfirm`). |
 | `POST /invitations/confirm`                                    | `confirmInvitation` (`tenant-invitation.service.ts`)            | Spends the confirm link and the invitation, signs the invitee in as a recent sign-in, and joins them.                                                                |
-| `GET /auth/google`, `GET /auth/google/callback`                | `completeGoogleSignIn` (`google-auth.service.ts`)               | Google sign-in; the callback also serves the Google step-up.                                                                                                         |
+| `GET /auth/google`, `GET /auth/google/callback`                | `completeGoogleSignIn` (`google-auth.service.ts`)               | Google sign-in.                                                                                                                                                      |
 | `POST /auth/step-up/link/request`, `/auth/step-up/link/verify` | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`) | Staff only: mails a link bound to the calling session, and confirms it for that session alone.                                                                       |
-| `POST /auth/step-up/google/start`, `GET /auth/step-up/google`  | `startGoogleStepUp`, `confirmGoogleStepUp`                      | Staff only: writes the step-up intent into the OAuth session, then the popup goes to Google with `max_age=0`.                                                        |
 | `POST /platform/users/:id/sign-in-link`                        | `platform-user.service.ts`                                      | Staff send a user an ordinary sign-in link: Apex for staff, `WEB_URL` for anyone else.                                                                               |
 | `POST /auth/refresh`, `POST /auth/logout`                      | `session.service.ts`                                            | Rotate or revoke the refresh cookie's session.                                                                                                                       |
 
@@ -522,12 +521,12 @@ the one place UTM parameters are added to a link a user receives.
 
 **The step-up flow.** A staff route behind `requireRecentAuth()` answers
 `401 REAUTH_REQUIRED` once the session's `auth_time` is older than 10 minutes.
-Apex then confirms by link (request, then verify from the mailed page, which
-returns a new access token) or by Google (start, then the popup, whose
-callback marks the session and redirects to Apex's `/auth/confirm`). The
-waiting tab refreshes to pick up the new `auth_time` and retries the action
-once. Neither way mints a session. The checks are in
-[SECURITY.md](SECURITY.md#step-up-by-link-and-by-google).
+Apex then confirms by link: request, then verify from the mailed page, which
+returns a new access token. The waiting tab refreshes to pick up the new
+`auth_time` and retries the action once. The confirm mints no session.
+Google is not a step-up method: Google documents no account
+re-authentication, so a Google round-trip cannot prove the person is present.
+The checks are in [SECURITY.md](SECURITY.md#step-up-by-link).
 
 ### Errors and the response envelope
 

@@ -604,10 +604,7 @@ their role there is their platform role (`src/services/platform.service.ts`).
   gate's 404 comes before the limiter. Every error response is `no-store`, so
   no header tells the gates apart. An anonymous caller can tell the step-up
   routes exist, since `requireAuth` must run before the role gate and answers
-  401, as on every `/platform` route; the route table is public anyway. The
-  popup's `GET /auth/step-up/google` carries no bearer: it needs the intent the
-  staff-only start wrote, and without one it redirects to Apex's confirm page
-  with `error=step_up_failed`. `cors` answers an `OPTIONS` with no `Origin` or
+  401, as on every `/platform` route; the route table is public anyway. `cors` answers an `OPTIONS` with no `Origin` or
   an allowed one itself, with the same 204 for every path; any other
   authenticated `OPTIONS` that reaches the platform router, and any other
   `OPTIONS` under `/auth/step-up`, gets the same 404 (`refusePlatformOptions`).
@@ -648,9 +645,9 @@ their role there is their platform role (`src/services/platform.service.ts`).
 that last authenticated more than `STEP_UP_MAX_AGE_MS` (10 minutes) ago with
 `401 REAUTH_REQUIRED`. The time comes from the token's `auth_time`, which the
 refresh row records at sign-in (a one-click invitation join records none) and
-rotation carries forward; a token without it counts as stale. Staff move it forward by confirming it's them, by an emailed
-link or by Google
-([Step-up by link and by Google](#step-up-by-link-and-by-google)).
+rotation carries forward; a token without it counts as stale. Staff move it
+forward by confirming it's them by an emailed link
+([Step-up by link](#step-up-by-link)).
 A client must not sign out on `REAUTH_REQUIRED`.
 
 Step-up guards:
@@ -677,11 +674,12 @@ Staff acting in a customer tenant through their platform role send it in the
 body or get `400 REASON_REQUIRED`, and the services check it again under the
 lock.
 
-### Step-up by link and by Google
+### Step-up by link
 
-Both ways are for staff only (`requirePlatformRole('viewer')` on each route),
-and both move the calling session's `authenticated_at` to now without minting a
-session (`src/services/step-up.service.ts`).
+Step-up is for staff only (`requirePlatformRole('viewer')` on each route), and
+moves the calling session's `authenticated_at` to now without minting a
+session (`src/services/step-up.service.ts`). An emailed link is the only
+method.
 
 - **By link, bound to the session.** `POST /auth/step-up/link/request` mails a
   link to the account's own address and answers `202` with
@@ -700,30 +698,13 @@ session (`src/services/step-up.service.ts`).
   gate's 404, audited `auth.step_up_refused`. A dead link writes no audit
   entry: it is not attributable beyond the bearer, and the limiter bounds it.
   The reply is a new access token carrying the new `auth_time`.
-- **By Google, a fresh login of the linked identity.** A popup carries no
-  bearer, so the start takes two calls. `POST /auth/step-up/google/start`
-  (bearer, staff, a linked Google account, else `409 google_not_linked`) writes
-  `{ kind: 'step_up', userId, sessionId, startedAt }` into the OAuth session
-  and answers `204`. The popup's `GET /auth/step-up/google` needs that intent,
-  no older than the 5-minute OAuth session, and redirects to Google with
-  `prompt=select_account` and `max_age=0`. The callback decodes the ID token
-  without a signature check, which OIDC Core §3.1.3.7 (step 6) allows for a
-  token received straight from Google's token endpoint over TLS. It checks
-  `iss` (`accounts.google.com`, with or without `https://`), `aud`
-  (`GOOGLE_CLIENT_ID`), `sub` against the profile, and `auth_time` no earlier
-  than the start less 60 seconds of clock skew; a missing `auth_time` fails
-  closed. The profile's `sub` must be the account's linked Google identity: an
-  address match is not enough. On success one transaction moves the session's
-  `authenticated_at` under the user-row lock, re-checks the platform role
-  there, as the link confirm does, and audits
-  `auth.step_up_confirmed { method: 'google' }`; the callback then
-  redirects the popup to `<apex>/auth/confirm?result=confirmed`, setting no
-  cookie. Every refusal redirects to `?error=step_up_failed` and is audited
-  `auth.step_up_refused { method: 'google' }`.
-- **`max_age=0`, not `prompt=login`.** Google documents only `none`, `consent`
-  and `select_account` for `prompt`, so the forced login comes from
-  `max_age=0` and the `auth_time` check. If Google omits `auth_time`, every
-  Google step-up fails closed and staff confirm by link.
+- **No Google step-up.** Google documents no account re-authentication: it
+  ignores `max_age`, and `auth_time`, when Google sends it at all, is the
+  user's last Google sign-in on that browser, not a fresh one. A Google
+  round-trip therefore cannot prove the person is present, and an unattended,
+  signed-in browser would pass it. Google stays a sign-in method only. Audit
+  rows written before this removal keep `method: 'google'`; new ones are
+  always `method: 'link'`.
 
 ### The audit log
 
@@ -980,7 +961,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 24 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 23 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -1025,9 +1006,7 @@ The auth limiters each answer a specific threat:
   each). A link carries 256 random bits, so they bound a client working through
   dead links, not guessing.
 - **Step-up** counts per staff member: one `step-up-link` budget shared by the
-  link request and its verify (10 in 15 minutes; a normal confirm spends two),
-  and `step-up-google` for the Google start (10 in 15 minutes), each of which
-  writes an OAuth session to Redis.
+  link request and its verify (10 in 15 minutes; a normal confirm spends two).
 - **Refresh and logout** are volume protection (300 in 5 minutes per IP): a
   refresh token is 256 random bits. Logout's budget is generous because a 429
   leaves the cookie uncleared.
@@ -1097,9 +1076,9 @@ reload and the queue pause.
 
 | Control                                               | Status              | What it means for you                                                                                                                                                                   |
 | ----------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. The one step-up is a fresh emailed link or a fresh Google login before staff actions.                                                                       |
+| MFA                                                   | **Not implemented** | No TOTP, no recovery codes. The one step-up is a fresh emailed link before staff actions.                                                                                               |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                  |
-| Global rate limiting                                  | **Partial**         | 24 limiters, and every write route has one. Most authenticated reads have none.                                                                                                         |
+| Global rate limiting                                  | **Partial**         | 23 limiters, and every write route has one. Most authenticated reads have none.                                                                                                         |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`) and each staff step-up (`auth.step_up_confirmed`, `auth.step_up_refused`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                  |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                  |

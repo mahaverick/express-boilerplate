@@ -14,7 +14,7 @@ import { isFrontendApp } from '@/constants/frontend.constants'
 import { HttpError } from '@/errors/http-error'
 import { revokeRefreshToken } from '@/services/session.service'
 import type { Actor, RequestPrincipal } from '@/types/actor'
-import type { InvalidStepUpIntent, OAuthIntent } from '@/types/oauth-intent'
+import type { OAuthIntent } from '@/types/oauth-intent'
 import { redirectPathSchema } from '@/validators/redirect.validators'
 
 /**
@@ -56,36 +56,16 @@ export function tenantPrincipal(request: Request): RequestPrincipal {
 }
 
 /**
- * A stored step-up intent's fields, re-checked one by one.
- * @param fields - The stored object's fields.
- * @returns The step-up, or the invalid marker when any field is missing or of the wrong type.
- */
-function storedStepUp(fields: Record<string, unknown>): OAuthIntent | InvalidStepUpIntent {
-  const { userId, sessionId, startedAt } = fields
-  const isValid =
-    typeof userId === 'string' &&
-    userId !== '' &&
-    typeof sessionId === 'string' &&
-    sessionId !== '' &&
-    typeof startedAt === 'number' &&
-    Number.isFinite(startedAt)
-  return isValid ? { kind: 'step_up', userId, sessionId, startedAt } : { kind: 'invalid_step_up' }
-}
-
-/**
  * The Google round-trip's stored intent, re-checked field by field: the
  * session store is server-side, but a value read back is still checked,
- * never trusted. A stored step-up never falls back to a sign-in: one whose
- * fields do not check out is `invalid_step_up`, so a step-up callback can
- * never mint a session.
+ * never trusted.
  * @param request - The callback request, after the OAuth session middleware.
- * @returns The stored step-up or sign-in, with a sign-in's unknown app read as 'web' and an unsafe redirect dropped; a web sign-in when there is none or it is neither kind.
+ * @returns The stored sign-in, with an unknown app read as 'web' and an unsafe redirect dropped; a web sign-in when there is none or it is not a sign-in.
  */
-export function oauthIntentOf(request: Request): OAuthIntent | InvalidStepUpIntent {
+export function oauthIntentOf(request: Request): OAuthIntent {
   const stored: unknown = (request as Partial<Request>).session?.oauthIntent
   if (typeof stored !== 'object' || stored === null) return { kind: 'sign_in', app: 'web' }
   const fields = stored as Record<string, unknown>
-  if (fields.kind === 'step_up') return storedStepUp(fields)
   if (fields.kind !== 'sign_in') return { kind: 'sign_in', app: 'web' }
   const { app, redirect } = fields
   const safeRedirect = redirectPathSchema.safeParse(redirect)

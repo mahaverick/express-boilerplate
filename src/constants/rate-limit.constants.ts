@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 24 limiters in `RATE_LIMITS`.
+ * The names of the 23 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -78,7 +78,6 @@ export type RateLimitName =
   | 'signInLinkVerify'
   | 'invitationVerify'
   | 'stepUpLink'
-  | 'stepUpGoogle'
 
 /**
  * The first sentence of most limiters' 429 message.
@@ -469,18 +468,6 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
    */
   stepUpLink: {
     name: 'step-up-link',
-    windowMs: 15 * 60 * 1000,
-    limit: 10,
-    keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * 10 per 15 minutes per staff member for `POST /auth/step-up/google/start`,
-   * each of which writes an OAuth session to Redis. The popup's
-   * `GET /auth/step-up/google` carries no bearer and shares `googleOAuth`.
-   */
-  stepUpGoogle: {
-    name: 'step-up-google',
     windowMs: 15 * 60 * 1000,
     limit: 10,
     keyBy: 'user',

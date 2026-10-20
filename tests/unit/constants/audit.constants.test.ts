@@ -48,7 +48,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     reason: 'Customer asked us to resend',
   },
   'auth.step_up_confirmed': { method: 'link' },
-  'auth.step_up_refused': { method: 'google' },
+  'auth.step_up_refused': { method: 'link' },
   'user.purged': { reason: 'Erasure request, ticket 9001', emailDomain: 'example.test' },
   'tenant.purged': { reason: 'Contract ended', name: 'Acme Inc', slug: 'acme', memberCount: 3 },
   'email.resent': {
@@ -210,7 +210,7 @@ describe('AUDIT_ACTIONS', () => {
     expect(AUDIT_ACTIONS['user.sign_in_link_sent'].metadata.safeParse({}).success).toBe(false)
     expect(
       AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'google' }).success
-    ).toBe(true)
+    ).toBe(false)
     expect(
       AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'password' }).success
     ).toBe(false)

@@ -175,14 +175,14 @@ export const AUDIT_ACTIONS = {
       reason: reason.nullable(),
     }),
   },
-  // A staff step-up: confirmed by an emailed link or a fresh Google login. A refused Google confirm is audited, and so is a link confirm by a caller no longer staff.
+  // A staff step-up, confirmed by an emailed link; a link confirm by a caller no longer staff is audited as refused. Rows written before Google step-up was removed keep `method: 'google'`: metadata is checked only on write.
   'auth.step_up_confirmed': {
     target: 'user',
-    metadata: z.strictObject({ method: z.enum(['link', 'google']) }),
+    metadata: z.strictObject({ method: z.literal('link') }),
   },
   'auth.step_up_refused': {
     target: 'user',
-    metadata: z.strictObject({ method: z.enum(['link', 'google']) }),
+    metadata: z.strictObject({ method: z.literal('link') }),
   },
   'user.purged': {
     target: 'user',

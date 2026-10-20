@@ -5,13 +5,10 @@
  * admitted, and a stale sign-in refused on step-up routes. A completeness
  * check walks the platform router and its sub-routers, so a route added
  * without a row here fails CI (OWASP API5: every function gets an explicit
- * gate). The staff routes outside /platform, the three bearer step-up routes
- * on the auth router (`/auth/step-up/link/request`, `/link/verify` and
- * `/google/start`), have their own block: a refused caller must get exactly
- * what an unknown path on the auth router gets. Google is configured for the
- * whole file, before the app is imported, so the Google start is mounted.
- * The popup's `GET /auth/step-up/google` carries no bearer and is pinned in
- * step-up-google.test.ts instead.
+ * gate). The staff routes outside /platform, the two bearer step-up routes
+ * on the auth router (`/auth/step-up/link/request` and `/link/verify`), have
+ * their own block: a refused caller must get exactly what an unknown path on
+ * the auth router gets.
  */
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
@@ -36,12 +33,6 @@ import {
 } from '../../helpers/email-messages'
 import { makeStaff } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
-
-// Before any import reads the environment: getEnv() memoises its first parse, and the Google start mounts only with these set.
-vi.hoisted(() => {
-  vi.stubEnv('GOOGLE_CLIENT_ID', 'test-google-client-id')
-  vi.stubEnv('GOOGLE_CLIENT_SECRET', 'test-google-client-secret')
-})
 
 // Apex has no experiment flag, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
 vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
@@ -256,10 +247,6 @@ const ELEVEN_MINUTES_MS = 11 * 60 * 1000
 const DISALLOWED_ORIGIN = 'https://not-allowed.example'
 
 const app = createApp()
-
-afterAll(() => {
-  vi.unstubAllEnvs()
-})
 
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
@@ -588,7 +575,6 @@ describe('/api/v1/platform route gates', () => {
   describe.each([
     { path: '/api/v1/auth/step-up/link/request', limiter: RATE_LIMITS.stepUpLink },
     { path: '/api/v1/auth/step-up/link/verify', limiter: RATE_LIMITS.stepUpLink },
-    { path: '/api/v1/auth/step-up/google/start', limiter: RATE_LIMITS.stepUpGoogle },
   ])('POST $path, a staff route on the auth router', ({ path: STAFF_PATH, limiter }) => {
     /**
      * Headers that differ between any two responses, whatever the route.

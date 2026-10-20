@@ -675,8 +675,8 @@ export async function revokeOtherSessions(
 
 /**
  * Record that a session's user just proved their identity again, by step-up
- * (a confirmed link or a fresh Google login, step-up.service.ts): move
- * `authenticated_at` to the current time on every refresh row of the session
+ * (a confirmed link, step-up.service.ts): move `authenticated_at` to the
+ * current time on every refresh row of the session
  * (`markSessionAuthenticated`).
  * Holds the user row FOR NO KEY UPDATE, which waits for a rotation holding it
  * FOR SHARE, so that rotation's new row exists before the update and gets
