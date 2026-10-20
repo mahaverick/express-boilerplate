@@ -18,3 +18,7 @@ src/database/migrations
 # lines between entries). Prettier would reformat it on every commit, and
 # the next release-please run would write it straight back.
 CHANGELOG.md
+
+# Vendored community AAGUID list (about 7 MB of icon data URIs); refresh
+# steps are in src/constants/passkey.constants.ts.
+src/data/passkey-aaguids.json
