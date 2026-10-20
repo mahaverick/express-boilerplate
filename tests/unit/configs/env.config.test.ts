@@ -873,3 +873,18 @@ describe('RATE_LIMIT_SCALE', () => {
     expect(rateLimitScale({ APP_ENV: appEnv, RATE_LIMIT_SCALE: scale })).toBe(expected)
   })
 })
+
+describe('passkey variables', () => {
+  it('defaults PASSKEY_MODE to optional and leaves WEBAUTHN_RP_ID unset', () => {
+    const parsed = parseEnv({ ...valid })
+    expect(parsed.PASSKEY_MODE).toBe('optional')
+    expect(parsed.WEBAUTHN_RP_ID).toBeUndefined()
+  })
+
+  it('accepts off, optional and required, and refuses any other mode', () => {
+    for (const mode of ['off', 'optional', 'required']) {
+      expect(parseEnv({ ...valid, PASSKEY_MODE: mode }).PASSKEY_MODE).toBe(mode)
+    }
+    expect(() => parseEnv({ ...valid, PASSKEY_MODE: 'always' })).toThrow(/PASSKEY_MODE/)
+  })
+})

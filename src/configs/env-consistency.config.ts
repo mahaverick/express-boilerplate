@@ -4,6 +4,7 @@
  * `getDatabaseUrl()`'s `.pick()`.
  */
 import { isCookieSecure, isProxyTrustOff, type Env } from '@/configs/env.config'
+import { passkeyRelyingParty } from '@/configs/passkey.config'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
 
@@ -98,6 +99,24 @@ function cookieDomainProblem(env: Env): string | undefined {
 }
 
 /**
+ * A `WEBAUTHN_RP_ID` that is not equal to, or a parent domain of, the host of
+ * every expected origin (`WEB_URL`, and `APEX_URL` when set). A browser refuses
+ * to create or use a passkey for an origin outside its RP ID.
+ * @param env - The validated environment.
+ * @returns A message naming the first origin host the RP ID does not cover, else undefined.
+ */
+function passkeyRpIdProblem(env: Env): string | undefined {
+  if (env.PASSKEY_MODE === 'off') return undefined
+  const { rpId, origins } = passkeyRelyingParty(env)
+  for (const origin of origins) {
+    const host = new URL(origin).hostname.toLowerCase()
+    if (isHostWithinCookieDomain(rpId, host)) continue
+    return `WEBAUTHN_RP_ID is ${rpId}, but ${origin}'s host ${host} is not within it, so browsers refuse every passkey there. Set WEBAUTHN_RP_ID to ${host} or a parent domain of every host in WEB_URL and APEX_URL, or set PASSKEY_MODE=off.`
+  }
+  return undefined
+}
+
+/**
  * Google calls back to APP_URL only. A sign-in started on an Apex host that
  * differs from APP_URL's loses its OAuth session cookie on the way back, and
  * its refresh cookie lands on APP_URL's host, unless COOKIE_DOMAIN covers both.
@@ -113,6 +132,17 @@ function apexCookieDomainProblem(env: Env): string | undefined {
     return undefined
   }
   return `APEX_URL's host ${apexHost} differs from APP_URL's host ${appHost} and Google sign-in is on (GOOGLE_CLIENT_ID), so a sign-in started in Apex loses its session on the way back. Set COOKIE_DOMAIN to a parent domain of both hosts, or serve Apex from APP_URL's host.`
+}
+
+/**
+ * The problems of a host name that a cookie domain or the passkey RP ID must cover.
+ * @param env - The validated environment.
+ * @returns One message per rule that fails, or none.
+ */
+function hostProblems(env: Env): string[] {
+  return [cookieDomainProblem(env), apexCookieDomainProblem(env), passkeyRpIdProblem(env)].filter(
+    (problem) => problem !== undefined
+  )
 }
 
 /**
@@ -223,10 +253,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     warnOnSharedSenderDomain(env, warn)
   }
 
-  const domainProblem = cookieDomainProblem(env)
-  if (domainProblem !== undefined) problems.push(domainProblem)
-  const apexProblem = apexCookieDomainProblem(env)
-  if (apexProblem !== undefined) problems.push(apexProblem)
+  problems.push(...hostProblems(env))
 
   // Half a pair sends no auth, so a provider that requires it refuses every send.
   if ((env.SMTP_USERNAME === undefined) !== (env.SMTP_PASSWORD === undefined)) {

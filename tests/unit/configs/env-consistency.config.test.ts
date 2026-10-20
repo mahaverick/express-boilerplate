@@ -82,6 +82,7 @@ describe('assertEnvConsistent', () => {
       GOOGLE_CLIENT_SECRET: 'secret',
       APP_URL: 'https://app.example.com',
       WEB_URL: 'https://app.example.com',
+      WEBAUTHN_RP_ID: 'example.com',
     }
 
     it('refuses boot when APEX_URL is another host and COOKIE_DOMAIN is unset', () => {
@@ -151,7 +152,11 @@ describe('assertEnvConsistent', () => {
     })
 
     it('passes when Google sign-in is off, whatever the hosts', () => {
-      const result = runChecks({ ...deployed, APEX_URL: 'https://admin.example.com' })
+      const result = runChecks({
+        ...deployed,
+        PASSKEY_MODE: 'off',
+        APEX_URL: 'https://admin.example.com',
+      })
       expect(result.error).toBeUndefined()
     })
 
@@ -482,5 +487,42 @@ describe('the rate-limit scale', () => {
   it('passes a scale of 1 outside local, and no scale at all', () => {
     expect(runChecks({ ...deployed, RATE_LIMIT_SCALE: '1' }).error).toBeUndefined()
     expect(runChecks(deployed).error).toBeUndefined()
+  })
+})
+
+describe('WEBAUTHN_RP_ID', () => {
+  const split = {
+    ...local,
+    WEB_URL: 'https://app.domain.com',
+    APEX_URL: 'https://apex.domain.com',
+  }
+
+  it("refuses an RP ID that does not cover APEX_URL's host, naming WEBAUTHN_RP_ID", () => {
+    const { error } = runChecks(split)
+    expect(error).toMatch(/WEBAUTHN_RP_ID/)
+    expect(error).toContain('apex.domain.com')
+  })
+
+  it('accepts domain.com for app. and apex. subdomains', () => {
+    expect(runChecks({ ...split, WEBAUTHN_RP_ID: 'domain.com' }).error).toBeUndefined()
+  })
+
+  it("accepts the default RP ID when APEX_URL shares WEB_URL's host", () => {
+    expect(runChecks({ ...local, APEX_URL: 'http://localhost:5174' }).error).toBeUndefined()
+  })
+
+  it.each(['other.com', 'evil-domain.com', 'main.domain.com'])(
+    'refuses %s, which is not equal to or a parent of every origin host',
+    (rpId) => {
+      expect(runChecks({ ...split, WEBAUTHN_RP_ID: rpId }).error).toMatch(/WEBAUTHN_RP_ID/)
+    }
+  )
+
+  it.each(['optional', 'required'])('checks the RP ID when PASSKEY_MODE is %s', (mode) => {
+    expect(runChecks({ ...split, PASSKEY_MODE: mode }).error).toMatch(/WEBAUTHN_RP_ID/)
+  })
+
+  it('skips the check when PASSKEY_MODE is off', () => {
+    expect(runChecks({ ...split, PASSKEY_MODE: 'off' }).error).toBeUndefined()
   })
 })

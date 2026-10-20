@@ -18,6 +18,9 @@
     "src/scripts/*.ts!",
   ],
   "project": ["src/**/*.ts!", "scripts/**", "tests/**/*.ts", "*.ts"],
+  // Used by the passkey services of the tasks that follow; remove this entry
+  // with the first import of it.
+  "ignoreDependencies": ["@simplewebauthn/server"],
   "ignoreFiles": [
     // Type declarations for the sibling .mjs: tsc reads them when a .ts file
     // imports scripts/*.mjs, and nothing imports a .d.mts by name.
