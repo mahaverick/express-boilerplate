@@ -226,7 +226,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // The link routes decide in the service: a request for a non-staff address in `full` mails nothing, and verify peeks before it claims.
   letThrough('POST', '/api/v1/auth/link/request'),
   letThrough('POST', '/api/v1/auth/link/verify'),
-  // Staff step-up by link: the service decides, and only staff reach it.
+  // Step-up by link, any signed-in user: the service decides.
   letThrough('POST', '/api/v1/auth/step-up/link/request'),
   letThrough('POST', '/api/v1/auth/step-up/link/verify'),
   // Session upkeep and sign-in methods: let through in both modes.
@@ -238,6 +238,9 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // A passkey sign-in; `assertSignInAllowed` refuses non-staff in full, as link verify does.
   letThrough('POST', '/api/v1/auth/passkeys/sign-in/options'),
   letThrough('POST', '/api/v1/auth/passkeys/sign-in/verify'),
+  // Step-up by passkey: let through in both modes, like the link step-up.
+  letThrough('POST', '/api/v1/auth/passkeys/step-up/options'),
+  letThrough('POST', '/api/v1/auth/passkeys/step-up/verify'),
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),
   // Account writes: refused in both modes.

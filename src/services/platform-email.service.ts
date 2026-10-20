@@ -397,7 +397,7 @@ function signInPageUrl(
 }
 
 /**
- * The Apex page a step-up link opens, carrying `rawToken`: the shape of
+ * The frontend page a step-up link opens, carrying `rawToken`: the shape of
  * `buildStepUpConfirmUrl`'s link.
  * @param rawToken - The token text, empty for a preview's masked link.
  * @param origin - The frontend origin the real link pointed at.

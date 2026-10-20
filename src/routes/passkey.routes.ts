@@ -3,7 +3,8 @@
  * answers in every mode; every other passkey route runs
  * `requirePasskeysEnabled` first, then `requireAuth`, except the two public
  * sign-in routes. Creating and deleting a
- * passkey also needs a recent sign-in. A public read of fixed settings takes no
+ * passkey also needs a recent sign-in; the two step-up routes are how a person
+ * gets one. A public read of fixed settings takes no
  * limiter: it has no oracle to probe.
  */
 import { Router } from 'express'
@@ -39,6 +40,10 @@ export function createPasskeyRouter(): Router {
     signInLimiter,
     passkeyController.signInVerify
   )
+  // Step-up by passkey, for any signed-in user: requireAuth first, as the limiter keys on request.user.id; one instance covers options and verify.
+  const stepUpLimiter = createRateLimiter(RATE_LIMITS.passkeyStepUp)
+  router.post('/step-up/options', requireAuth, stepUpLimiter, passkeyController.stepUpOptions)
+  router.post('/step-up/verify', requireAuth, stepUpLimiter, passkeyController.stepUpVerify)
   // A read of the caller's own list: no oracle to probe, so no limiter.
   router.get('/', requireAuth, passkeyController.list)
   router.post(

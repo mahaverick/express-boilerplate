@@ -96,3 +96,18 @@ export const passkeySignInVerifySchema = z.object({
   response: assertionResponseSchema,
   app: frontendAppSchema,
 })
+
+/**
+ * The body of `POST /auth/passkeys/step-up/options`: nothing. The caller is
+ * the signed-in user, so a body that names an account is refused.
+ */
+export const passkeyStepUpOptionsSchema = z.strictObject({})
+
+/**
+ * The body of `POST /auth/passkeys/step-up/verify`: the challenge id the
+ * options answered and the browser's assertion.
+ */
+export const passkeyStepUpVerifySchema = z.strictObject({
+  challengeId: z.string().min(1).max(64),
+  response: assertionResponseSchema,
+})

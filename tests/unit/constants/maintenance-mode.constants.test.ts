@@ -47,6 +47,8 @@ const ALWAYS: [string, string][] = [
   ['POST', '/api/v1/auth/step-up/link/verify'],
   ['POST', '/api/v1/auth/passkeys/sign-in/options'],
   ['POST', '/api/v1/auth/passkeys/sign-in/verify'],
+  ['POST', '/api/v1/auth/passkeys/step-up/options'],
+  ['POST', '/api/v1/auth/passkeys/step-up/verify'],
   ['POST', '/api/v1/auth/refresh'],
   ['POST', '/api/v1/auth/logout'],
   ['GET', '/api/v1/auth/providers'],

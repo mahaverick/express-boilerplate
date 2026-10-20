@@ -135,7 +135,7 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
       templateKey: 'step_up_link',
       variables: {
         firstName: 'Ada',
-        confirmUrl: buildStepUpConfirmUrl(RAW),
+        confirmUrl: buildStepUpConfirmUrl(RAW, 'apex'),
         expiresInMinutes: '15',
         expiresAt: '15:42 UTC on 20 October 2026',
         appName: 'App',

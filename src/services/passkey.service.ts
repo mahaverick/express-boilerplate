@@ -72,7 +72,7 @@ const WEBAUTHN_TRANSPORTS: ReadonlySet<string> = new Set([
  * @param transports - What a client or the library reported.
  * @returns The known transports.
  */
-function knownTransports(transports: readonly string[] | undefined): string[] {
+export function knownTransports(transports: readonly string[] | undefined): string[] {
   if (transports === undefined) return []
   return [...new Set(transports.filter((name) => WEBAUTHN_TRANSPORTS.has(name)))]
 }
@@ -98,7 +98,7 @@ const PASSKEY_VERIFICATION_FAILED_CODE = 'PASSKEY_VERIFICATION_FAILED'
  * the check, so a caller learns nothing about which.
  * @returns The error to throw.
  */
-function passkeyVerificationFailed(): HttpError {
+export function passkeyVerificationFailed(): HttpError {
   return new HttpError(
     "We couldn't confirm this passkey. Try again, or use another method.",
     400,
@@ -451,6 +451,54 @@ function isCounterRegression(stored: UserPasskeyRecord, newCount: number): boole
 }
 
 /**
+ * Verify a browser's assertion against a stored passkey, for sign-in and
+ * step-up alike: origin, RP ID, user verification and signature; a user
+ * handle, when the response carries one, that is the owner's; and the counter
+ * rule. The caller has already spent the challenge and chosen the account.
+ * @param stored - The passkey the response names.
+ * @param response - The browser's assertion response.
+ * @param challenge - The challenge the options carried.
+ * @returns The new counter and backup state, for `recordUse`.
+ * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` for any failed check.
+ */
+export async function verifyStoredAssertion(
+  stored: UserPasskeyRecord,
+  response: AuthenticationResponseJSON,
+  challenge: string
+): Promise<{ newCounter: number; credentialBackedUp: boolean }> {
+  const rp = passkeyRelyingParty()
+  let verified: Awaited<ReturnType<typeof verifyAuthenticationResponse>>
+  try {
+    verified = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge,
+      expectedOrigin: rp.origins,
+      expectedRPID: rp.rpId,
+      // The library's own counter check refuses a synced passkey; the rule below is the one this API applies.
+      credential: {
+        id: stored.credentialId,
+        publicKey: new Uint8Array(stored.publicKey),
+        counter: 0,
+      },
+      requireUserVerification: true,
+    })
+  } catch {
+    throw passkeyVerificationFailed()
+  }
+  if (!verified.verified) throw passkeyVerificationFailed()
+  const handle = response.response.userHandle
+  if (
+    handle !== undefined &&
+    handle !== Buffer.from(userHandleBytes(stored.userId)).toString('base64url')
+  ) {
+    throw passkeyVerificationFailed()
+  }
+  const { newCounter, credentialBackedUp } = verified.authenticationInfo
+  if (isCounterRegression(stored, newCounter)) throw passkeyVerificationFailed()
+  return { newCounter, credentialBackedUp }
+}
+
+/**
  * Finish a sign-in with a passkey and issue the session.
  *
  * Order: the challenge is spent (`sign_in` only); the credential is looked up;
@@ -481,35 +529,11 @@ export async function finishPasskeySignIn(input: {
   if (input.app === 'apex' && (await getPlatformMembership(user.id)) === null) {
     throw passkeyUnknown()
   }
-  const rp = passkeyRelyingParty()
-  let verified: Awaited<ReturnType<typeof verifyAuthenticationResponse>>
-  try {
-    verified = await verifyAuthenticationResponse({
-      response,
-      expectedChallenge: challenge,
-      expectedOrigin: rp.origins,
-      expectedRPID: rp.rpId,
-      // The library's own counter check refuses a synced passkey; the rule below is the one this API applies.
-      credential: {
-        id: stored.credentialId,
-        publicKey: new Uint8Array(stored.publicKey),
-        counter: 0,
-      },
-      requireUserVerification: true,
-    })
-  } catch {
-    throw passkeyVerificationFailed()
-  }
-  if (!verified.verified) throw passkeyVerificationFailed()
-  const handle = response.response.userHandle
-  if (
-    handle !== undefined &&
-    handle !== Buffer.from(userHandleBytes(user.id)).toString('base64url')
-  ) {
-    throw passkeyVerificationFailed()
-  }
-  const { newCounter, credentialBackedUp } = verified.authenticationInfo
-  if (isCounterRegression(stored, newCounter)) throw passkeyVerificationFailed()
+  const { newCounter, credentialBackedUp } = await verifyStoredAssertion(
+    stored,
+    response,
+    challenge
+  )
   await assertSignInAllowed(user.id)
   await userPasskeyRepository.recordUse(stored.id, {
     signCount: newCounter,

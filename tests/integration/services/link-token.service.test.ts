@@ -356,9 +356,12 @@ describe('link URLs', () => {
     expect(() => buildInvitationConfirmUrl(raw, { email: null, app: 'web' })).toThrow()
   })
 
-  it('builds the step-up confirm link on the apex origin', () => {
+  it('builds the step-up confirm link on the origin of the app that asked', () => {
     const raw = 'b'.repeat(43)
-    const url = new URL(buildStepUpConfirmUrl(raw))
+    const web = new URL(buildStepUpConfirmUrl(raw, 'web'))
+    expect(web.origin).toBe(new URL(getEnv().WEB_URL).origin)
+    expect(web.pathname).toBe('/auth/confirm')
+    const url = new URL(buildStepUpConfirmUrl(raw, 'apex'))
     expect(url.origin).toBe(APEX)
     expect(url.pathname).toBe('/auth/confirm')
     // The token comes first; UTM parameters follow.

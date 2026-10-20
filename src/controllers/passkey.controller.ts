@@ -22,6 +22,7 @@ import {
   startPasskeyRegistration,
   startPasskeySignIn,
 } from '@/services/passkey.service'
+import { finishPasskeyStepUp, startPasskeyStepUp } from '@/services/step-up.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
@@ -31,6 +32,8 @@ import {
   passkeyRenameSchema,
   passkeySignInOptionsSchema,
   passkeySignInVerifySchema,
+  passkeyStepUpOptionsSchema,
+  passkeyStepUpVerifySchema,
 } from '@/validators/passkey.validators'
 
 /**
@@ -123,6 +126,31 @@ class PasskeyController extends BaseController {
       },
       'Signed in.'
     )
+  })
+
+  /**
+   * `POST /auth/passkeys/step-up/options`: a challenge bound to the caller's
+   * session and the WebAuthn request options naming the caller's passkeys, as
+   * `{ challengeId, options }`. 409 `NO_PASSKEY` when the caller has none.
+   */
+  stepUpOptions = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    parseBody(passkeyStepUpOptionsSchema, request.body)
+    const started = await startPasskeyStepUp(authenticatedUserId(request), request.sessionId)
+    successResponse(response, started, 'Passkey options created.')
+  })
+
+  /**
+   * `POST /auth/passkeys/step-up/verify`: verify the assertion and reply with
+   * a new access token carrying the new `auth_time`, as the link step-up does.
+   * The refresh cookie is untouched: the session is the same. `no-store`, as
+   * every token response (RFC 6749 §5.1).
+   */
+  stepUpVerify = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
+    const input = parseBody(passkeyStepUpVerifySchema, request.body)
+    const result = await finishPasskeyStepUp(authenticatedUserId(request), request.sessionId, input)
+    successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
   })
 
   /**

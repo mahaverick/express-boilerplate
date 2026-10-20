@@ -36,7 +36,7 @@ const LINK_TOKEN_BYTES = 32
 const SIGN_IN_LINK_PATH = 'auth/link'
 
 /**
- * The Apex page a step-up link opens, relative to its origin.
+ * The frontend page a step-up link opens, relative to the app's origin.
  */
 const STEP_UP_CONFIRM_PATH = 'auth/confirm'
 
@@ -206,12 +206,13 @@ export function buildSignInLinkUrl(
 }
 
 /**
- * The step-up link a mail carries: `<apex>/auth/confirm?token=…`.
+ * The step-up link a mail carries: `<frontend>/auth/confirm?token=…`.
  * @param raw - The raw token, never its hash.
+ * @param app - The frontend the person asked from; the link opens there.
  * @returns The absolute URL, with UTM parameters after the token.
  */
-export function buildStepUpConfirmUrl(raw: string): string {
-  const url = frontendPageUrl('apex', STEP_UP_CONFIRM_PATH)
+export function buildStepUpConfirmUrl(raw: string, app: FrontendApp): string {
+  const url = frontendPageUrl(app, STEP_UP_CONFIRM_PATH)
   url.searchParams.set('token', raw)
   return withEmailUtm(url.href, 'step_up_link', 'text_link')
 }

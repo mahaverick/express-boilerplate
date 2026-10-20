@@ -292,6 +292,8 @@ describe('maintenance-mode route classification', () => {
         'GET /api/v1/auth/passkeys/config',
         'POST /api/v1/auth/passkeys/sign-in/options',
         'POST /api/v1/auth/passkeys/sign-in/verify',
+        'POST /api/v1/auth/passkeys/step-up/options',
+        'POST /api/v1/auth/passkeys/step-up/verify',
         'GET /api/v1/profile',
       ].toSorted(byText)
     )

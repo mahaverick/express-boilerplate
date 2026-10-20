@@ -80,6 +80,7 @@ export type RateLimitName =
   | 'stepUpLink'
   | 'passkeyManage'
   | 'passkeySignIn'
+  | 'passkeyStepUp'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -457,7 +458,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     unit: 'attempts',
   },
   /**
-   * 10 per 15 minutes per staff member, one instance shared by
+   * 10 per 15 minutes per signed-in user, one instance shared by
    * `POST /auth/step-up/link/request` and `/step-up/link/verify`: a normal
    * confirm spends two, and the request's own cooldown
    * (`STEP_UP_LINK_COOLDOWN`) bounds the mail. The link carries 256 bits, so
@@ -493,6 +494,20 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'ip',
+    unit: 'attempts',
+  },
+  /**
+   * 10 per 15 minutes per user, one instance shared by
+   * `POST /auth/passkeys/step-up/options` and `/step-up/verify`: a normal
+   * confirm spends two, so this allows about five tries. The user is
+   * signed in, and a wrong assertion costs a spent challenge, so this bounds
+   * a script, not a person who mistouches a few times.
+   */
+  passkeyStepUp: {
+    name: 'passkey-step-up',
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    keyBy: 'user',
     unit: 'attempts',
   },
 }

@@ -20,7 +20,7 @@ import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
-import { refusePlatformOptions, requirePlatformRole } from '@/middlewares/platform.middleware'
+import { refusePlatformOptions } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { createPasskeyRouter } from '@/routes/passkey.routes'
 
@@ -28,20 +28,23 @@ import { createPasskeyRouter } from '@/routes/passkey.routes'
  * Build the auth routes. A person signs in by an emailed link
  * (`/link/request`, then `/link/verify`) or by Google. The refresh cookie
  * drives `/refresh` and `/logout`, a bearer drives `/sessions/revoke-others`
- * and `/providers`, and staff confirm it's them under `/step-up`.
+ * and `/providers`, and any signed-in user confirms it's them under `/step-up`
+ * (by link) or `/passkeys/step-up` (by passkey).
  *
  * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
  * CSRF control (see content-type.middleware.ts). A GET carries no content
  * type, which it allows, so the Google routes pass it too.
  *
- * The staff-only step-up routes under `/step-up` that take a bearer
- * (`/step-up/link/request`, `/step-up/link/verify`) answer a refused caller exactly what an unknown auth path answers: the
- * router-wide JSON gate's 415 for a form body, as on every auth path, and
- * otherwise the platform role gate's 404 before the limiter, so no
- * `RateLimit-*` headers. An OPTIONS anywhere under `/step-up` gets the
+ * The step-up routes under `/step-up` that take a bearer
+ * (`/step-up/link/request`, `/step-up/link/verify`) run `requireAuth`, then
+ * their limiter; there is no role gate, since step-up is open to every
+ * signed-in user. The router-wide JSON gate answers a form body its 415, as
+ * on every auth path. An OPTIONS anywhere under `/step-up` gets the
  * unknown path's 404 (`refusePlatformOptions`, right after the JSON gate),
- * not Express's automatic `Allow` answer. The two link routes share one
- * limiter instance, so one budget covers a request and its confirm.
+ * not Express's automatic `Allow` answer; the passkey step-up routes sit
+ * under `/passkeys/step-up`, which gets the same refusal. The two link
+ * routes share one limiter instance, so one budget covers a request and its
+ * confirm.
  *
  * `/refresh` and `/logout`, which the refresh cookie authenticates and which
  * take no body, also refuse a disallowed `Origin` (origin.middleware.ts): a
@@ -67,6 +70,7 @@ export function createAuthRouter(): Router {
   router.use(requireJsonContentType)
   // Express would answer OPTIONS on the staff routes with an Allow header; an unknown auth path gets this 404.
   router.use('/step-up', refusePlatformOptions)
+  router.use('/passkeys/step-up', refusePlatformOptions)
   // The two routes the refresh cookie authenticates: the Origin check runs before the limiter, so a refused page spends no budget.
   router.post(
     '/refresh',
@@ -100,19 +104,17 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
-  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before the limiter keys on request.user.id.
+  // Step-up by link, for any signed-in user: requireAuth first, as the limiter keys on request.user.id.
   const stepUpLinkLimiter = createRateLimiter(RATE_LIMITS.stepUpLink)
   router.post(
     '/step-up/link/request',
     requireAuth,
-    requirePlatformRole('viewer'),
     stepUpLinkLimiter,
     authController.requestStepUpLink
   )
   router.post(
     '/step-up/link/verify',
     requireAuth,
-    requirePlatformRole('viewer'),
     stepUpLinkLimiter,
     authController.verifyStepUpLink
   )
