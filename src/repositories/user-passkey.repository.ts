@@ -136,20 +136,25 @@ export class UserPasskeyRepository {
   }
 
   /**
-   * Record a successful sign-in with a passkey.
+   * Record a successful use of a passkey. The write matches the owner too, so
+   * a row a claim deleted (or that never was this user's) changes nothing.
    * @param id - The passkey's row ID.
+   * @param userId - The owner the caller verified it for.
    * @param use - The new signature counter, the new backup state and when it happened.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once the row is updated.
+   * @returns True when the row existed for that user and was updated.
    */
   async recordUse(
     id: string,
+    userId: string,
     use: { signCount: number; backupState: boolean; at: Date },
     executor: DbExecutor = db
-  ): Promise<void> {
-    await executor
+  ): Promise<boolean> {
+    const updated = await executor
       .update(userPasskeyModel)
       .set({ signCount: use.signCount, backupState: use.backupState, lastUsedAt: use.at })
-      .where(eq(userPasskeyModel.id, id))
+      .where(and(eq(userPasskeyModel.id, id), eq(userPasskeyModel.userId, userId)))
+      .returning({ id: userPasskeyModel.id })
+    return updated.length > 0
   }
 }

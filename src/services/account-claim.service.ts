@@ -4,7 +4,8 @@
  * over a never-verified account that holds the address
  * (`claimNeverVerifiedAccount`), which a sign-in link, an invitation link and
  * a verified Google identity all do. A link's claim also clears the
- * squatter's federated links and passkeys (`clearSquatterCredentials`). `markEmailVerified`
+ * squatter's federated links (`clearSquatterCredentials`), and every claim, by
+ * link, invitation, Google or the grant script, deletes the squatter's passkeys. `markEmailVerified`
  * stays the only writer of `email_verified_at`.
  */
 import type { User } from '@/database/models/user.model'
@@ -151,6 +152,8 @@ export async function claimNeverVerifiedAccount(
     if (locked.emailVerifiedAt !== null) {
       return { claimed: locked, verifiedNow: false, revokedSessionIds: [] }
     }
+    // A passkey on a never-verified account may be a squatter's; whoever proves the mailbox starts clean.
+    await userPasskeyRepository.deleteAllForUser(userId, tx)
     await inLock?.(tx)
     const verified = await markEmailVerified(userId, tx)
     const sessionIds = await revokeSessionRows(userId, {}, tx)
@@ -167,15 +170,14 @@ export async function claimNeverVerifiedAccount(
 
 /**
  * The writes a link makes on a never-verified account it claims, in the
- * claim's locked transaction: a squatter who linked a federated identity or
- * created a passkey on the address first loses both, since the click proves
- * the mailbox is someone else's.
+ * claim's locked transaction: a squatter who linked a federated identity to
+ * the address first loses it, since the click proves the mailbox is someone
+ * else's. (Passkeys are deleted by every claim, in `claimNeverVerifiedAccount`.)
  * @param userId - The never-verified account.
  * @returns The callback for `claimNeverVerifiedAccount`.
  */
 export function clearSquatterCredentials(userId: string): (tx: DbTransaction) => Promise<void> {
   return async (tx) => {
     await authProviderRepository.deleteFederatedForUser(userId, tx)
-    await userPasskeyRepository.deleteAllForUser(userId, tx)
   }
 }

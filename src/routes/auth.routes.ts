@@ -68,7 +68,7 @@ export function createAuthRouter(): Router {
   const router = Router()
   // Router-wide and first, so no route can miss the CSRF gate.
   router.use(requireJsonContentType)
-  // Express would answer OPTIONS on the staff routes with an Allow header; an unknown auth path gets this 404.
+  // Express would answer OPTIONS on the step-up paths with an Allow header; an unknown auth path gets this 404.
   router.use('/step-up', refusePlatformOptions)
   router.use('/passkeys/step-up', refusePlatformOptions)
   // The two routes the refresh cookie authenticates: the Origin check runs before the limiter, so a refused page spends no budget.

@@ -19,6 +19,7 @@ import { accept as acceptInvitation } from '@/services/tenant-invitation.service
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { passkeyCount, seedPasskey } from '../../helpers/passkey-rows'
 
 const tenantRepository = new TenantRepository()
 const invitationRepository = new TenantInvitationRepository()
@@ -334,8 +335,10 @@ describe('platform.service', () => {
         providerId: `squatter-google-${randomUUID()}`,
       })
       await issueRefreshToken(user.id, randomUUID())
+      await seedPasskey(user.id)
 
       await bootstrapGrant(user.email, 'owner')
+      expect(await passkeyCount(user.id)).toBe(0)
 
       const [row] = await sql<{ verified: boolean }[]>`
         select email_verified_at is not null as verified from users where id = ${user.id}`

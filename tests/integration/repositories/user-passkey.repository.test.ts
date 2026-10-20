@@ -185,12 +185,38 @@ describe('UserPasskeyRepository', () => {
       const row = await passkeyRepository.create(passkeyFor(userId))
       const at = new Date('2026-10-20T10:00:00.000Z')
 
-      await passkeyRepository.recordUse(row.id, { signCount: 42, backupState: true, at })
+      const didUpdate = await passkeyRepository.recordUse(row.id, userId, {
+        signCount: 42,
+        backupState: true,
+        at,
+      })
+      expect(didUpdate).toBe(true)
 
       const found = await passkeyRepository.findByCredentialId(row.credentialId)
       expect(found?.signCount).toBe(42)
       expect(found?.backupState).toBe(true)
       expect(found?.lastUsedAt).toEqual(at)
+    })
+
+    it('changes nothing and answers false for another user, or a row that is gone', async () => {
+      const userId = await createUser()
+      const row = await passkeyRepository.create(passkeyFor(userId))
+      const at = new Date('2026-10-20T10:00:00.000Z')
+
+      const didUpdateOther = await passkeyRepository.recordUse(row.id, await createUser(), {
+        signCount: 99,
+        backupState: true,
+        at,
+      })
+      await passkeyRepository.deleteForUser(row.id, userId)
+      const didUpdateGone = await passkeyRepository.recordUse(row.id, userId, {
+        signCount: 99,
+        backupState: true,
+        at,
+      })
+
+      expect(didUpdateOther).toBe(false)
+      expect(didUpdateGone).toBe(false)
     })
   })
 

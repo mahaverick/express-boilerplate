@@ -357,6 +357,16 @@ describe('POST /api/v1/auth/step-up/link/request', () => {
     expect(options?.context).toMatchObject({ linkApp: 'apex' })
   })
 
+  it('answers the unknown-route 404 to a caller with no platform role who asks for an Apex link, and mails nothing', async () => {
+    const customer = await signInCustomer()
+
+    const response = await requestLink(customer.token, { app: 'apex' })
+
+    expect(response.status).toBe(404)
+    expect(await linkRows(customer.userId)).toEqual([])
+    expect(addEmailJob).not.toHaveBeenCalled()
+  })
+
   it('answers 400 for a body with no app, and mails nothing', async () => {
     const session = await signIn(await createStaff())
 

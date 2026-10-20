@@ -197,10 +197,10 @@ export const AUDIT_ACTIONS = {
     target: 'user',
     metadata: z.strictObject({ method: z.enum(['link', 'passkey']) }),
   },
-  // No code path writes this today (a link confirm no longer checks for staff); the action stays so old rows read back.
+  // Nothing writes this today (a link confirm no longer checks for staff, and passkey refusals are not audited); the action stays so old rows read back.
   'auth.step_up_refused': {
     target: 'user',
-    metadata: z.strictObject({ method: z.enum(['link', 'passkey']) }),
+    metadata: z.strictObject({ method: z.literal('link') }),
   },
   'user.purged': {
     target: 'user',

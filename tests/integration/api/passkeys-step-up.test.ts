@@ -11,11 +11,13 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
+import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { sql } from '@/services/database.service'
 import { issuePasskeyChallenge } from '@/services/passkey-challenge.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { verifyAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { SoftwareAuthenticator, type AssertionJson } from '../../helpers/passkey-authenticator'
 import { platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
@@ -446,6 +448,33 @@ describe('POST /step-up/verify', () => {
 
     expect(response.status).toBe(400)
     expect(envelope(response).code).toBe('PASSKEY_VERIFICATION_FAILED')
+    expect(await stepUpAudits(session.userId)).toEqual([])
+  })
+
+  it('answers 400 PASSKEY_VERIFICATION_FAILED, minting nothing, when a claim deletes the passkey after it verified', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const session = await customerWithPasskey(authenticator)
+    const repository = new UserPasskeyRepository()
+    const lookup = repository.findByCredentialId.bind(repository)
+    let response: Response | undefined
+
+    await withMutatedMethod(
+      UserPasskeyRepository.prototype,
+      'findByCredentialId',
+      async (...arguments_: Parameters<typeof lookup>) => {
+        const row = await lookup(...arguments_)
+        await sql`delete from user_passkeys where user_id = ${session.userId}`
+        return row
+      },
+      async () => {
+        response = await stepUp(session, (challenge) => authenticator.assertionResponse(challenge))
+      }
+    )
+
+    expect(response?.status).toBe(400)
+    expect(response === undefined ? '' : envelope(response).code).toBe(
+      'PASSKEY_VERIFICATION_FAILED'
+    )
     expect(await stepUpAudits(session.userId)).toEqual([])
   })
 

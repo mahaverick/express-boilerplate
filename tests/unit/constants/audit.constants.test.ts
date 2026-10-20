@@ -221,9 +221,12 @@ describe('AUDIT_ACTIONS', () => {
     expect(
       AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'link' }).success
     ).toBe(true)
-    for (const action of ['auth.step_up_confirmed', 'auth.step_up_refused'] as const) {
-      expect(AUDIT_ACTIONS[action].metadata.safeParse({ method: 'passkey' }).success).toBe(true)
-    }
+    expect(
+      AUDIT_ACTIONS['auth.step_up_confirmed'].metadata.safeParse({ method: 'passkey' }).success
+    ).toBe(true)
+    expect(
+      AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'passkey' }).success
+    ).toBe(false)
     expect(
       AUDIT_ACTIONS['auth.step_up_refused'].metadata.safeParse({ method: 'password' }).success
     ).toBe(false)

@@ -10,12 +10,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
+import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { sql } from '@/services/database.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { issuePasskeyChallenge } from '@/services/passkey-challenge.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { SoftwareAuthenticator, type AssertionJson } from '../../helpers/passkey-authenticator'
 import {
   createTrackedStaff,
@@ -279,6 +281,32 @@ describe('POST /sign-in/verify', () => {
     const response = await signIn((challenge) => authenticator.assertionResponse(challenge))
     expect(response.status).toBe(400)
     expect(envelope(response).code).toBe('PASSKEY_UNKNOWN')
+  })
+
+  it('answers 400 PASSKEY_UNKNOWN, with no cookie, when a claim deletes the passkey after it verified', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const user = await userWithPasskey(authenticator)
+    const repository = new UserPasskeyRepository()
+    const lookup = repository.findByCredentialId.bind(repository)
+    let response: Awaited<ReturnType<typeof signIn>> | undefined
+
+    // The seam: the row is read, then a claim deletes it, before the session transaction runs.
+    await withMutatedMethod(
+      UserPasskeyRepository.prototype,
+      'findByCredentialId',
+      async (...arguments_: Parameters<typeof lookup>) => {
+        const row = await lookup(...arguments_)
+        await sql`delete from user_passkeys where user_id = ${user.id}`
+        return row
+      },
+      async () => {
+        response = await signIn((challenge) => authenticator.assertionResponse(challenge))
+      }
+    )
+
+    expect(response?.status).toBe(400)
+    expect(response === undefined ? '' : envelope(response).code).toBe('PASSKEY_UNKNOWN')
+    expect(response?.headers['set-cookie']).toBeUndefined()
   })
 
   it('answers 400 PASSKEY_UNKNOWN, with no cookie, for a soft-deleted user', async () => {

@@ -9,7 +9,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { platformRoleForLogin } from '@/services/auth.service'
-import { withTransaction } from '@/services/database.service'
+import { withTransaction, type DbTransaction } from '@/services/database.service'
 import {
   issueRefreshToken,
   signAccessToken,
@@ -34,13 +34,15 @@ export interface IssuedSignInSession {
  * that committed since the lookup wins and one that commits later waits and
  * revokes the session.
  * @param user - The account to sign in.
- * @param refuse - Builds the error thrown when the account is inactive or gone under the lock.
+ * @param refuse - Builds the error thrown when the account is inactive or gone under the lock, or when `canSignInUnderLock` returns false.
+ * @param canSignInUnderLock - An extra check or write the sign-in needs under the same lock; false refuses the sign-in and rolls back.
  * @returns The tokens and the platform role.
  * @throws {Error} What `refuse` builds.
  */
 export async function issueSignInSession(
   user: User,
-  refuse: () => Error
+  refuse: () => Error,
+  canSignInUnderLock?: (locked: User, tx: DbTransaction) => Promise<boolean>
 ): Promise<IssuedSignInSession> {
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
 
@@ -48,6 +50,7 @@ export async function issueSignInSession(
   const refreshToken = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
     if (!locked?.active) throw refuse()
+    if (canSignInUnderLock && !(await canSignInUnderLock(locked, tx))) throw refuse()
     return issueRefreshToken(user.id, sessionId, tx)
   })
   const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)

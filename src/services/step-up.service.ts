@@ -25,6 +25,7 @@ import {
 import type { FrontendApp } from '@/constants/frontend.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
@@ -47,6 +48,7 @@ import {
   passkeyVerificationFailed,
   verifyStoredAssertion,
 } from '@/services/passkey.service'
+import { getPlatformMembership } from '@/services/platform.service'
 import { markSessionReauthenticated, signAccessToken } from '@/services/session.service'
 import { STEP_UP_LINK_TEMPLATE_KEY } from '@/templates/email/step-up-link.template'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
@@ -138,7 +140,7 @@ async function recordStepUp(
  * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
  * @param app - The frontend the caller is in; the link opens there.
  * @returns When the next request may mail again.
- * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid` or an account gone or inactive; 429 `STEP_UP_LINK_COOLDOWN` with `retryAfterSeconds` inside the cooldown.
+ * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid` or an account gone or inactive; 404 for an Apex link asked by a caller with no platform role; 429 `STEP_UP_LINK_COOLDOWN` with `retryAfterSeconds` inside the cooldown.
  */
 export async function requestStepUpLink(
   userId: string,
@@ -147,6 +149,10 @@ export async function requestStepUpLink(
 ): Promise<{ resendAvailableAt: string }> {
   if (sessionId === undefined) throw sessionEnded()
   const user = await activeAccount(userId)
+  // A caller with no platform role is refused an Apex link as the old role gate refused them, before the cooldown is spent.
+  if (app === 'apex' && (await getPlatformMembership(userId)) === null) {
+    throw notFoundError('route')
+  }
   const env = getEnv()
   const cooldownMs = requireDurationMs(env.STEP_UP_LINK_COOLDOWN)
   const claim = await claimCooldown(STEP_UP_LINK_COOLDOWN_SCOPE, userId, cooldownMs)
@@ -310,11 +316,15 @@ export async function finishPasskeyStepUp(
   const at = await withTransaction(async (tx) => {
     // markSessionReauthenticated takes the user row lock and refuses an account gone or inactive.
     const authenticatedAt = await markSessionReauthenticated(userId, sessionId, tx)
-    await userPasskeyRepository.recordUse(
+    // Under the user lock markSessionReauthenticated took: a claim that deleted the passkey, or left the account unverified, since the checks above refuses and rolls back.
+    const locked = await userRepository.lockById(userId, 'no key update', tx)
+    const wasRecorded = await userPasskeyRepository.recordUse(
       stored.id,
+      userId,
       { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
       tx
     )
+    if (!wasRecorded || !locked?.emailVerifiedAt) throw passkeyVerificationFailed()
     await recordStepUp(userId, 'passkey', tx)
     return authenticatedAt
   })

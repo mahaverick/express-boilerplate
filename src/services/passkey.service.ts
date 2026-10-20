@@ -557,12 +557,17 @@ export async function finishPasskeySignIn(input: {
     challenge
   )
   await assertSignInAllowed(user.id)
-  await userPasskeyRepository.recordUse(stored.id, {
-    signCount: newCounter,
-    backupState: credentialBackedUp,
-    at: new Date(),
-  })
-  const session = await issueSignInSession(user, passkeyUnknown)
+  // Under the user lock: a claim that deleted the passkey or verified the account since the checks above wins.
+  const session = await issueSignInSession(user, passkeyUnknown, (locked, tx) =>
+    locked.emailVerifiedAt === null
+      ? Promise.resolve(false)
+      : userPasskeyRepository.recordUse(
+          stored.id,
+          user.id,
+          { signCount: newCounter, backupState: credentialBackedUp, at: new Date() },
+          tx
+        )
+  )
   await emitDomainEvent({
     type: 'user_signed_in',
     userId: user.id,
