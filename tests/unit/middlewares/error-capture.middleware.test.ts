@@ -157,7 +157,12 @@ describe('errorHandler and error tracking', () => {
 
   it.each([
     ['an HttpError 404', new HttpError('Not found', 404)],
-    ['a validation 400', new HttpError('Validation failed', 400, undefined, { email: ['bad'] })],
+    [
+      'a validation 400',
+      new HttpError('Check the highlighted fields, then try again.', 400, undefined, {
+        email: ['bad'],
+      }),
+    ],
     ['a body-parser 413', Object.assign(new Error('too large'), { status: 413 })],
   ])('neither reports %s nor gives it an errorId', (_name, error) => {
     const { response, body } = mockResponse()

@@ -37,7 +37,7 @@ function getBearerToken(request: Request): string {
   const match = BEARER_PATTERN.exec(request.get('Authorization') ?? '')
   const token = match?.[1]
   if (!token) {
-    throw new HttpError('Missing or malformed Authorization header', 401)
+    throw new HttpError('Sign in to continue.', 401)
   }
   return token
 }
@@ -56,9 +56,13 @@ function verifyBearerToken(token: string): ReturnType<typeof verifyAccessToken> 
   if (result.ok) return result
 
   if (result.reason === 'expired') {
-    throw new HttpError('Access token expired', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    throw new HttpError(
+      'Your sign-in expired. Sign in again to continue.',
+      401,
+      ACCESS_TOKEN_EXPIRED_CODE
+    )
   }
-  throw new HttpError('Invalid access token', 401)
+  throw new HttpError("We don't recognize this sign-in. Sign in again to continue.", 401)
 }
 
 /**
@@ -73,7 +77,10 @@ function verifyBearerToken(token: string): ReturnType<typeof verifyAccessToken> 
 async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser> {
   const user = await userRepository.findById(userId)
   if (!user || !user.active) {
-    throw new HttpError('Account no longer exists or is inactive', 401)
+    throw new HttpError(
+      'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+      401
+    )
   }
   return toAuthenticatedUser(user)
 }
@@ -129,7 +136,11 @@ export async function requireAuth(
     const token = getBearerToken(request)
     const { payload } = verifyBearerToken(token)
     if (payload.sid && (await isSessionDenied(payload.sid))) {
-      throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+      throw new HttpError(
+        'This session ended. Sign in again to continue.',
+        401,
+        ACCESS_TOKEN_EXPIRED_CODE
+      )
     }
     if (payload.sid) {
       request.sessionId = payload.sid
@@ -171,7 +182,7 @@ export function requireRecentAuth(
 ): (request: Request, response: Response, next: NextFunction) => void {
   return (request, _response, next) => {
     if (!request.user) {
-      next(new HttpError('Authentication required', 401))
+      next(new HttpError('Sign in to continue.', 401))
       return
     }
     if (!isRecentAuth(request.authTime, Date.now(), maxAgeMs)) {

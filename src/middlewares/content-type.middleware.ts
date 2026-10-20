@@ -80,7 +80,7 @@ export function requireJsonContentType(
   }
   next(
     new HttpError(
-      'Unsupported content type. This endpoint accepts application/json only.',
+      'Send the request body as application/json. This endpoint accepts no other content type.',
       415,
       UNSUPPORTED_MEDIA_TYPE_CODE
     )

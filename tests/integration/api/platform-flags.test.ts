@@ -372,9 +372,9 @@ describe('GET /platform/flags/unregistered', () => {
     for (const response of [onUnregistered, onRegistry]) {
       expect(response.status).toBe(400)
       expect(response.body).toMatchObject({
-        message: 'Validation failed',
+        message: 'This list link is out of date. Reload the list from its first page.',
         code: 'CURSOR_INVALID',
-        errors: { cursor: ['cursor is invalid.'] },
+        errors: { cursor: ['This list link is out of date. Reload the list from its first page.'] },
       })
     }
   })

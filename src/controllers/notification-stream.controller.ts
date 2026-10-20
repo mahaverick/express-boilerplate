@@ -26,6 +26,7 @@ import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
 import { fetchMissedNotifications } from '@/services/notification.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
+import { formatWait } from '@/utilities/duration.utilities'
 import { errorResponse } from '@/utilities/response.utilities'
 
 /**
@@ -75,7 +76,11 @@ interface NotificationStreamPayload {
  */
 function requireSessionId(request: Request): string {
   if (!request.sessionId) {
-    throw new HttpError('Access token missing session', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    throw new HttpError(
+      'This session ended. Sign in again to continue.',
+      401,
+      ACCESS_TOKEN_EXPIRED_CODE
+    )
   }
   return request.sessionId
 }
@@ -141,7 +146,7 @@ function didRefuseStream(userId: string, response: Response): boolean {
   if (response.destroyed) return true
   if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
     throw new HttpError(
-      'Too many tabs are receiving notifications. Close one, then reload this page.',
+      `You've reached the limit of ${String(getEnv().SSE_MAX_STREAMS_PER_USER)} tabs that receive notifications. Close one, then reload this page.`,
       429,
       'too_many_streams'
     )
@@ -150,7 +155,7 @@ function didRefuseStream(userId: string, response: Response): boolean {
   response.setHeader('Retry-After', String(STREAM_CAPACITY_RETRY_AFTER_SECONDS))
   errorResponse(
     response,
-    'The server is at its notification stream capacity. Try again shortly.',
+    `Notifications are at capacity on this server. Reload this page in ${formatWait(STREAM_CAPACITY_RETRY_AFTER_SECONDS)} to try again.`,
     503,
     'stream_capacity'
   )

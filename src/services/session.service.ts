@@ -349,7 +349,11 @@ async function continueSession(
   const env = getEnv()
   const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
   if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
-    return { ok: false, message: 'Refresh token expired', killSessionId: sessionId }
+    return {
+      ok: false,
+      message: 'Your session expired. Sign in again to continue.',
+      killSessionId: sessionId,
+    }
   }
 
   const { id, raw, expiresAt } = await createRefreshRow(
@@ -396,19 +400,24 @@ async function rotateUnderUserLock(
       )
     }
     if (existing) {
-      return { ok: false, message: 'Invalid refresh token', killSessionId: existing.sessionId }
+      return {
+        ok: false,
+        message: "We don't recognize this session. Sign in again to continue.",
+        killSessionId: existing.sessionId,
+      }
     }
-    return { ok: false, message: 'Invalid refresh token' }
+    return { ok: false, message: "We don't recognize this session. Sign in again to continue." }
   }
 
   // issueRefreshToken always fills these for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
   const claimed = refreshTokenOf(spent)
-  if (!claimed) return { ok: false, message: 'Invalid refresh token' }
+  if (!claimed)
+    return { ok: false, message: "We don't recognize this session. Sign in again to continue." }
   const { sessionId, sessionStartedAt } = claimed
 
   if (claimed.expiresAt.getTime() < Date.now()) {
     // Already revoked by the claim; expiry is not a reuse signal, so the session is untouched.
-    return { ok: false, message: 'Refresh token expired' }
+    return { ok: false, message: 'Your session expired. Sign in again to continue.' }
   }
 
   const next = await continueSession(
@@ -450,7 +459,8 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
   const tokenHash = hashToken(raw)
   // Read only to learn whose row to lock; everything that decides runs under the lock.
   const presented = await userTokenRepository.findRefreshByHash(tokenHash)
-  if (!presented) throw new HttpError('Invalid refresh token', 401)
+  if (!presented)
+    throw new HttpError("We don't recognize this session. Sign in again to continue.", 401)
 
   const outcome = await withTransaction((tx) =>
     rotateUnderUserLock(presented.userId, tokenHash, tx)
@@ -647,12 +657,20 @@ export async function revokeOtherSessions(
   presentedRefreshToken?: string
 ): Promise<number> {
   if (sessionId === undefined) {
-    throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    throw new HttpError(
+      'This session ended. Sign in again to continue.',
+      401,
+      ACCESS_TOKEN_EXPIRED_CODE
+    )
   }
   const { revoked, live } = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(userId, 'no key update', tx)
     if (!locked?.active) {
-      throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
+      throw new HttpError(
+        'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
+        401,
+        ACCESS_TOKEN_EXPIRED_CODE
+      )
     }
     const liveSessionIds = await userTokenRepository.liveSessionIdsExcept(
       userId,
@@ -698,14 +716,24 @@ export function markSessionReauthenticated(
    */
   const mark = async (transaction: DbTransaction): Promise<Date> => {
     const user = await userRepository.lockById(userId, 'no key update', transaction)
-    if (!user?.active) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    if (!user?.active)
+      throw new HttpError(
+        'This session ended. Sign in again to continue.',
+        401,
+        ACCESS_TOKEN_EXPIRED_CODE
+      )
     const authenticatedAt = await userTokenRepository.markSessionAuthenticated(
       userId,
       sessionId,
       absoluteLifetimeCutoff(),
       transaction
     )
-    if (!authenticatedAt) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    if (!authenticatedAt)
+      throw new HttpError(
+        'This session ended. Sign in again to continue.',
+        401,
+        ACCESS_TOKEN_EXPIRED_CODE
+      )
     return authenticatedAt
   }
   return tx ? mark(tx) : withTransaction(mark)

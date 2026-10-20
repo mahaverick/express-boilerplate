@@ -406,7 +406,9 @@ describe('refresh cookie: the unprefixed refreshToken under COOKIE_SECURE', () =
         .set('Cookie', `${PLAIN_COOKIE}=${unprefixed}`)
 
       expect(refreshed.status).toBe(401)
-      expect((refreshed.body as { message?: string }).message).toBe('Missing refresh token')
+      expect((refreshed.body as { message?: string }).message).toBe(
+        "You're signed out. Sign in to continue."
+      )
       expect(cookieLines(refreshed, name)).toHaveLength(0)
       expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(0)
       expect(await tokenState(unprefixed)).toEqual({ isConsumed: false, isRevoked: false })
@@ -875,7 +877,9 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
         : followUp.set('Cookie', nextCookie))
 
       expect(response.status).toBe(401)
-      expect((response.body as { message?: string }).message).toBe('Missing refresh token')
+      expect((response.body as { message?: string }).message).toBe(
+        "You're signed out. Sign in to continue."
+      )
       expect(cookieLines(response, PLAIN_COOKIE)).toHaveLength(0)
       expect(findByHash).not.toHaveBeenCalled()
     } finally {
@@ -886,12 +890,12 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
   it.each([
     {
       label: 'an unknown token',
-      message: 'Invalid refresh token',
+      message: "We don't recognize this session. Sign in again to continue.",
       present: (): Promise<string> => Promise.resolve('a'.repeat(64)),
     },
     {
       label: 'an expired token',
-      message: 'Refresh token expired',
+      message: 'Your session expired. Sign in again to continue.',
       present: async (email: string): Promise<string> => {
         const raw = await sessionFor(email)
         await sql`
@@ -903,7 +907,7 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     },
     {
       label: 'a rotated token replayed after the grace window',
-      message: 'Invalid refresh token',
+      message: "We don't recognize this session. Sign in again to continue.",
       present: async (email: string): Promise<string> => {
         expect(REFRESH_REUSE_GRACE_MS).toBeLessThan(11_000)
         const raw = await sessionFor(email)
@@ -917,7 +921,7 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     },
     {
       label: 'a session past its absolute lifetime',
-      message: 'Refresh token expired',
+      message: 'Your session expired. Sign in again to continue.',
       present: async (email: string): Promise<string> => {
         const absoluteTtlMs = parseDurationMs(realEnv.SESSION_ABSOLUTE_TTL)
         if (absoluteTtlMs === undefined) throw new Error('SESSION_ABSOLUTE_TTL is unparseable')
@@ -932,7 +936,8 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     },
     {
       label: 'an inactive account',
-      message: 'Account no longer exists or is inactive',
+      message:
+        'This account is deactivated or deleted. Sign in with another account, or ask your team admin.',
       present: async (email: string): Promise<string> => {
         const raw = await sessionFor(email)
         await sql`update users set active = false where lower(email) = lower(${email})`
@@ -992,7 +997,9 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
       .set('Cookie', `${PLAIN_COOKIE}=`)
 
     expect(refreshed.status).toBe(401)
-    expect((refreshed.body as { message?: string }).message).toBe('Missing refresh token')
+    expect((refreshed.body as { message?: string }).message).toBe(
+      "You're signed out. Sign in to continue."
+    )
     const clears = cookieLines(refreshed, PLAIN_COOKIE)
     expect(clears).toHaveLength(2)
     expect(clears.every((line) => EPOCH_EXPIRY.test(line) && PATH_AUTH.test(line))).toBe(true)

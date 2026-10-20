@@ -31,6 +31,7 @@ import {
   invitationConfirmInputSchema,
   invitationTokenInputSchema,
 } from '@/validators/invitation.validators'
+import { VALIDATION_FAILED_MESSAGE } from '@/validators/parse.validators'
 
 /**
  * The raw token from a request body.
@@ -53,13 +54,16 @@ function invitationTokenFrom(input: unknown): string {
  * is the confirm page's generic 404 (`INVITATION_CONFIRM_INVALID_MESSAGE`).
  * @param input - `request.body`.
  * @returns The token and the address, trimmed and lowercased, when sent.
- * @throws {HttpError} 400 `Validation failed` with `errors.email`; 404 `invitation_invalid`.
+ * @throws {HttpError} 400 `Check the highlighted fields, then try again.` with `errors.email`; 404 `invitation_invalid`.
  */
 function confirmInputFrom(input: unknown): { token: string; email?: string } {
   const result = invitationConfirmInputSchema.safeParse(input)
   if (!result.success) {
     const { email } = z.flattenError(result.error).fieldErrors
-    if (email !== undefined) throw new HttpError('Validation failed', 400, undefined, { email })
+    if (email !== undefined)
+      throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
+        email,
+      })
     throw new HttpError(INVITATION_CONFIRM_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
   }
   const shape = invitationTokenInputSchema.safeParse({ token: result.data.token })

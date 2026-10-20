@@ -130,11 +130,7 @@ function changedFields<TValues extends object>(
  */
 export async function createTenant(actor: Actor, input: CreateTenantInput): Promise<Tenant> {
   const created = await withTransaction(async (tx) => {
-    await lockUserForOwnership(
-      actor.userId,
-      () => new HttpError('Authentication required', 401),
-      tx
-    )
+    await lockUserForOwnership(actor.userId, () => new HttpError('Sign in to continue.', 401), tx)
     const tenant = await tenantRepository.create({ ...input, ownerId: actor.userId }, tx)
     // The creator is the owner from this write on, so they act as a member.
     await record(

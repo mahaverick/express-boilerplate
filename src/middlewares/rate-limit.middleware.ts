@@ -27,17 +27,25 @@ function limiterStore(name: string): SharedRateLimitStore {
 }
 
 /**
- * The 429's message: the spec's sentence, then when to try again, read from
+ * The 429's message: the limit, its window and when to try again, read from
  * the `Retry-After` express-rate-limit has just set, so the two always agree.
  * Without that header the whole window is the wait.
- * @param spec - The limiter that refused the request.
+ * @param limit - The limit this limiter enforces, with any override and scale applied.
+ * @param windowMs - Its window, with any override applied.
+ * @param unit - What the limit counts.
  * @param response - The response, carrying `Retry-After` in seconds.
- * @returns For example "Too many attempts. Try again in 42 seconds."
+ * @returns For example "You've reached the limit of 10 attempts in 15 minutes. Try again in 42 seconds."
  */
-function limitedMessage(spec: RateLimiterSpec, response: Response): string {
+function limitedMessage(
+  limit: number,
+  windowMs: number,
+  unit: RateLimiterSpec['unit'],
+  response: Response
+): string {
   const header = Number(response.getHeader('Retry-After'))
-  const seconds = Number.isFinite(header) ? header : spec.windowMs / MS_PER_SECOND
-  return `${spec.message} Try again in ${formatWait(seconds)}.`
+  const seconds = Number.isFinite(header) ? header : windowMs / MS_PER_SECOND
+  const counted = limit === 1 ? unit.slice(0, -1) : unit
+  return `You've reached the limit of ${String(limit)} ${counted} in ${formatWait(windowMs / MS_PER_SECOND)}. Try again in ${formatWait(seconds)}.`
 }
 
 /**
@@ -89,9 +97,12 @@ export function createRateLimiter(
 ): RequestHandler {
   const keyGenerator = keyGeneratorFor(spec.keyBy)
 
+  const windowMs = overrides.windowMs ?? spec.windowMs
+  const limit = overrides.limit ?? spec.limit * rateLimitScale(getEnv())
+
   const handler = rateLimit({
-    windowMs: overrides.windowMs ?? spec.windowMs,
-    limit: overrides.limit ?? spec.limit * rateLimitScale(getEnv()),
+    windowMs,
+    limit,
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore(spec.name),
@@ -100,7 +111,9 @@ export function createRateLimiter(
     skipSuccessfulRequests: spec.counts === 'rejected',
     ...(spec.skip && { skip: spec.skip }),
     handler: (_request: Request, response: Response, next: NextFunction) => {
-      next(new HttpError(limitedMessage(spec, response), 429, RATE_LIMITED_CODE))
+      next(
+        new HttpError(limitedMessage(limit, windowMs, spec.unit, response), 429, RATE_LIMITED_CODE)
+      )
     },
   })
   Object.assign(handler, { [RATE_LIMITER_MARK]: spec.name })

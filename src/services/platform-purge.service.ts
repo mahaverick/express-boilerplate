@@ -105,7 +105,7 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
   const found = await platformUserRepository.findRecord(userId, { includeDeleted: true })
   if (!found) throw notFoundError('user')
   const { deletedAt } = found
-  if (deletedAt === null) throw new HttpError('Delete the user before purging them', 409)
+  if (deletedAt === null) throw new HttpError('Delete this user before you purge them.', 409)
 
   await withTransaction(async (tx) => {
     const platform = await platformTenantOrThrow(tx)
@@ -132,7 +132,7 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
     // Deleted here, under the locks taken above, so the user row's cascade finds none.
     for (const membership of memberships) await userMembershipRepository.delete(membership.id, tx)
     if (!(await userRepository.purgeDeleted(userId, tx))) {
-      throw new HttpError('Delete the user before purging them', 409)
+      throw new HttpError('Delete this user before you purge them.', 409)
     }
     await record(
       {
@@ -175,7 +175,7 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
   const found = await tenantRepository.findByIdIncludingDeleted(tenantId)
   if (!found) throw notFoundError('platformTenant')
   if (found.isPlatform || found.lifecycleState !== 'archived') {
-    throw new HttpError('Archive the tenant before purging it', 409)
+    throw new HttpError('Archive this tenant before you purge it.', 409)
   }
 
   await withTransaction(async (tx) => {
@@ -190,7 +190,7 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
     await auditLogRepository.deleteForTenant(tenantId, tx)
     await emailMessageRepository.deleteForTenant(tenantId, tx)
     if (!(await tenantRepository.purgeArchived(tenantId, tx))) {
-      throw new HttpError('Archive the tenant before purging it', 409)
+      throw new HttpError('Archive this tenant before you purge it.', 409)
     }
     const platform = await platformTenantOrThrow(tx)
     await record(

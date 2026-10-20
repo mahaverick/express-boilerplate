@@ -41,7 +41,7 @@ describe('authenticatedUserId (via getProfile/updateProfile)', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
-    expect((error as HttpError).message).toBe('Authentication required')
+    expect((error as HttpError).message).toBe('Sign in to continue.')
   })
 
   it('updateProfile forwards the same 401 HttpError to next() when request.user is unset', async () => {

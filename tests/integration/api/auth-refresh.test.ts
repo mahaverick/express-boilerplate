@@ -384,7 +384,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
       expect(response.body).toEqual({
         success: true,
-        message: 'Logged out.',
+        message: 'Signed out.',
         statusCode: 200,
         // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,

@@ -231,7 +231,7 @@ describe('what the builder never reads', () => {
   })
 
   it('drops an HttpError’s errors', () => {
-    const error = new HttpError('Validation failed', 500, undefined, [
+    const error = new HttpError('Check the highlighted fields, then try again.', 500, undefined, [
       { field: 'email', value: 'leaked-field-value' },
     ])
     const text = inspect(buildErrorEvent(error, HTTP, ERROR_ID, AT), { depth: Infinity })

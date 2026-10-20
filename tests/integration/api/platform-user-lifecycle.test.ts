@@ -232,7 +232,7 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
     const self = await action(owner.token, owner.user.id, 'deactivate')
     expect(self.status).toBe(409)
     expect((self.body as ApiEnvelope<unknown>).message).toBe(
-      'You cannot deactivate your own account'
+      "You can't deactivate your own account. Ask another platform admin."
     )
 
     const again = await action(owner.token, inactive.id, 'deactivate')
@@ -318,7 +318,7 @@ describe('POST /api/v1/platform/users/:id/sign-out', () => {
 
     expect(response.status).toBe(409)
     expect((response.body as ApiEnvelope<unknown>).message).toBe(
-      'Sign out from your profile instead'
+      "You can't sign yourself out here. Use Sign out on your profile instead."
     )
   })
 })
@@ -399,7 +399,9 @@ describe('DELETE /api/v1/platform/users/:id', () => {
     const self = await remove(owner.token, owner.user.id)
 
     expect(self.status).toBe(409)
-    expect((self.body as ApiEnvelope<unknown>).message).toBe('You cannot delete your own account')
+    expect((self.body as ApiEnvelope<unknown>).message).toBe(
+      "You can't delete your own account. Ask another platform admin."
+    )
   })
 
   it('answers 401 REAUTH_REQUIRED on a stale step-up', async () => {

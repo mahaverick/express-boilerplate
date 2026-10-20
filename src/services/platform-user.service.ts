@@ -113,7 +113,8 @@ export async function getUserDetail(userId: string): Promise<PlatformUserDetail>
   }
 }
 
-const DUPLICATE_EMAIL_MESSAGE = 'An account already uses that email address'
+const DUPLICATE_EMAIL_MESSAGE =
+  'An account already uses that email address. Search Users to open it.'
 const STAFF_TARGET_MESSAGE =
   "Your platform role can't act on this staff member. Ask a platform owner."
 
@@ -502,7 +503,7 @@ export async function deactivateUser(
   userId: string,
   reason: string
 ): Promise<PlatformUserRow> {
-  refuseSelf(actor, userId, 'You cannot deactivate your own account')
+  refuseSelf(actor, userId, "You can't deactivate your own account. Ask another platform admin.")
   const revoked = await withTransaction(async (tx) => {
     const { target, targetRole, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     if (!target.active)
@@ -580,7 +581,11 @@ export async function reactivateUser(
  * @throws {HttpError} 409 self; 403 staff target refused; 404 unknown.
  */
 export async function signOutUser(actor: Actor, userId: string, reason: string): Promise<void> {
-  refuseSelf(actor, userId, 'Sign out from your profile instead')
+  refuseSelf(
+    actor,
+    userId,
+    "You can't sign yourself out here. Use Sign out on your profile instead."
+  )
   const revoked = await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
@@ -624,7 +629,7 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * @throws {HttpError} 409 self, last owner (naming the tenants), or owned tenants changed between the two reads; 403 staff target refused; 404 unknown.
  */
 export async function deleteUser(actor: Actor, userId: string, reason: string): Promise<void> {
-  refuseSelf(actor, userId, 'You cannot delete your own account')
+  refuseSelf(actor, userId, "You can't delete your own account. Ask another platform admin.")
   const owned = await platformUserRepository.listOwnedTenants(userId)
   const customerTenants = owned.filter((tenant) => !tenant.isPlatform)
 
@@ -639,7 +644,10 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
     const lockedIds = new Set(customerTenants.map((tenant) => tenant.tenantId))
     const ownedNow = await platformUserRepository.listOwnedTenants(userId, tx)
     if (ownedNow.some((tenant) => !tenant.isPlatform && !lockedIds.has(tenant.tenantId))) {
-      throw new HttpError("This user's owned tenants changed meanwhile; try again", 409)
+      throw new HttpError(
+        "This user's owned tenants changed during the delete. Refresh the page, then try again.",
+        409
+      )
     }
     const blocking: string[] = []
     for (const tenant of customerTenants) {

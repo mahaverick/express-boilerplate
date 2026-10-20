@@ -1642,7 +1642,9 @@ describe('/api/v1/tenants', () => {
       const leaked = envelopeOf<{ id: string }>(refused).data
       if (leaked) createdTenantIds.push(leaked.id)
       expect(refused.status).toBe(400)
-      expect(envelopeOf(refused).errors?.website).toEqual(['Website must be an http or https URL.'])
+      expect(envelopeOf(refused).errors?.website).toEqual([
+        'Website must be a web address that starts with http:// or https://.',
+      ])
 
       const slug = uniqueSlug()
       const accepted = await request(app)

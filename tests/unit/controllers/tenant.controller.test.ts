@@ -47,7 +47,7 @@ describe('authenticatedUserId (via listTenants)', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
-    expect((error as HttpError).message).toBe('Authentication required')
+    expect((error as HttpError).message).toBe('Sign in to continue.')
   })
 })
 

@@ -512,7 +512,7 @@ describe('GET /api/v1/notifications/stream', () => {
     const body = await connection.collectBody()
     const parsed = JSON.parse(body) as { success: boolean; message: string; code?: string }
     expect(parsed.success).toBe(false)
-    expect(parsed.message).toBe('Missing or malformed Authorization header')
+    expect(parsed.message).toBe('Sign in to continue.')
     expect(parsed.code).toBeUndefined()
   })
 
@@ -528,7 +528,7 @@ describe('GET /api/v1/notifications/stream', () => {
 
     const body = await connection.collectBody()
     const parsed = JSON.parse(body) as { message: string; code?: string }
-    expect(parsed.message).toBe('Missing or malformed Authorization header')
+    expect(parsed.message).toBe('Sign in to continue.')
     expect(parsed.code).toBeUndefined()
   })
 
@@ -538,7 +538,9 @@ describe('GET /api/v1/notifications/stream', () => {
 
     expect(response.statusCode).toBe(401)
     const body = await connection.collectBody()
-    expect((JSON.parse(body) as { message: string }).message).toBe('Invalid access token')
+    expect((JSON.parse(body) as { message: string }).message).toBe(
+      "We don't recognize this sign-in. Sign in again to continue."
+    )
   })
 
   it('rejects a connection with an expired token, carrying the distinguishable code', async () => {
@@ -555,7 +557,7 @@ describe('GET /api/v1/notifications/stream', () => {
     const body = await connection.collectBody()
     const parsed = JSON.parse(body) as { message: string; code?: string }
     expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
-    expect(parsed.message).toBe('Access token expired')
+    expect(parsed.message).toBe('Your sign-in expired. Sign in again to continue.')
   })
 
   it('rejects a connection whose token belongs to no active user', async () => {
@@ -569,7 +571,7 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.statusCode).toBe(401)
     const body = await connection.collectBody()
     expect((JSON.parse(body) as { message: string }).message).toBe(
-      'Account no longer exists or is inactive'
+      'This account is deactivated or deleted. Sign in with another account, or ask your team admin.'
     )
   })
 
@@ -886,7 +888,7 @@ describe('GET /api/v1/notifications/stream', () => {
    * (the heartbeat). This one proves a session denied before connect never opens a stream, through
    * `requireAuth`'s own denylist check, not one this controller runs. It is told apart from the
    * sid-less rejection below by message: both carry `ACCESS_TOKEN_EXPIRED_CODE`, but only
-   * `requireAuth`'s denylist rejection says "Session ended".
+   * `requireAuth`'s denylist rejection says "This session ended. Sign in again to continue.".
    */
   it("refuses to open a stream for an already-denied session, via requireAuth's denylist check", async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -906,7 +908,7 @@ describe('GET /api/v1/notifications/stream', () => {
 
     const body = await connection.collectBody()
     const parsed = JSON.parse(body) as { message: string; code?: string }
-    expect(parsed.message).toBe('Session ended')
+    expect(parsed.message).toBe('This session ended. Sign in again to continue.')
     expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
@@ -940,13 +942,13 @@ describe('GET /api/v1/notifications/stream', () => {
     const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
-    // requireAuth admits this token (see the positive control above); this 401 comes from requireSessionId reading request.sessionId and finding it unset. Both this test and the "already-denied session" test carry ACCESS_TOKEN_EXPIRED_CODE, so the message attributes the rejection to the correct layer: "Session ended" is requireAuth's denylist, this one is requireSessionId's own check.
+    // requireAuth admits this token (see the positive control above); this 401 comes from requireSessionId reading request.sessionId and finding it unset. Both this test and the "already-denied session" test carry ACCESS_TOKEN_EXPIRED_CODE, so the message attributes the rejection to the correct layer: "This session ended. Sign in again to continue." is requireAuth's denylist, this one is requireSessionId's own check.
     expect(response.statusCode).toBe(401)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
 
     const body = await connection.collectBody()
     const parsed = JSON.parse(body) as { message: string; code?: string }
-    expect(parsed.message).toBe('Access token missing session')
+    expect(parsed.message).toBe('This session ended. Sign in again to continue.')
     expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
@@ -965,8 +967,11 @@ describe('GET /api/v1/notifications/stream', () => {
     const response = await rejected.waitForResponse()
     expect(response.statusCode).toBe(429)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
-    const parsed = JSON.parse(await rejected.collectBody()) as { code?: string }
+    const parsed = JSON.parse(await rejected.collectBody()) as { code?: string; message?: string }
     expect(parsed.code).toBe('too_many_streams')
+    expect(parsed.message).toBe(
+      `You've reached the limit of ${String(cap)} tabs that receive notifications. Close one, then reload this page.`
+    )
 
     // A closed stream frees its slot.
     openConnections[0]?.destroy()
@@ -995,6 +1000,9 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.headers['content-type']).not.toContain('text/event-stream')
     const parsed = JSON.parse(await refused.collectBody()) as { code?: string; message?: string }
     expect(parsed.code).toBe('stream_capacity')
+    expect(parsed.message).toBe(
+      'Notifications are at capacity on this server. Reload this page in 30 seconds to try again.'
+    )
     expect(countStreams(user.id)).toBe(0)
 
     // One slot freed anywhere lets the next stream open.

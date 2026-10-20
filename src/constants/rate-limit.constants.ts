@@ -44,11 +44,11 @@ export interface RateLimiterSpec {
    */
   skip?: (request: Request) => boolean
   /**
-   * The first sentence of the 429 `HttpError`'s message, naming what was
-   * refused; `createRateLimiter`'s handler adds when to try again, from the
-   * `Retry-After` it answers with.
+   * What the limit counts, named in the 429 `HttpError`'s message:
+   * `createRateLimiter`'s handler writes the limit, the window and when to
+   * try again, from the `Retry-After` it answers with.
    */
-  message: string
+  unit: 'attempts' | 'requests'
 }
 
 /**
@@ -78,11 +78,6 @@ export type RateLimitName =
   | 'signInLinkVerify'
   | 'invitationVerify'
   | 'stepUpLink'
-
-/**
- * The first sentence of most limiters' 429 message.
- */
-const RATE_LIMITED_MESSAGE = 'Too many attempts.'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -178,7 +173,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 5 * 60 * 1000,
     limit: 300,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on IP alone; volume protection only, generous on purpose because
@@ -189,7 +184,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 5 * 60 * 1000,
     limit: 300,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on IP alone. Bounds the Redis session write
@@ -201,7 +196,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 5 * 60 * 1000,
     limit: 300,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Its own prefix, separate from googleOAuth's: sharing one would let
@@ -214,7 +209,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 5 * 60 * 1000,
     limit: 300,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on the authenticated caller's id, not IP: this route sits
@@ -227,7 +222,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60 * 60 * 1000,
     limit: 20,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on the authenticated caller's id, for the reason given on
@@ -239,7 +234,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60 * 60 * 1000,
     limit: 30,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on IP alone: a public route, with no caller identity to key on.
@@ -249,7 +244,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 60,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on the caller's id, behind `requireAuth`, as createTenant is: an
@@ -262,7 +257,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * Keyed on the caller's id: only staff reach it, past requireAuth and
@@ -274,7 +269,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60 * 1000,
     limit: 60,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * One shared budget for every authenticated write that has no
@@ -287,7 +282,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 60,
     keyBy: 'user',
-    message: 'Too many requests.',
+    unit: 'requests',
   },
   /**
    * One shared budget for every `/platform` write, keyed on the caller's id:
@@ -300,7 +295,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 30,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 3000 a minute per provider: volume protection for a public route that
@@ -317,7 +312,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 3000,
     keyBy: emailWebhookProviderRateLimitKey,
     counts: 'accepted',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 60 a minute per IP, counting only responses of 400 or above: the cap on
@@ -331,7 +326,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 60,
     keyBy: 'ip',
     counts: 'rejected',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 3000 a minute per IP for `/api/v1/collect`, the PostHog proxy; no other
@@ -349,7 +344,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 3000,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * One staff user's flag evaluations; the limit comes from
@@ -362,7 +357,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 20,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 60 a minute per session for the three `…/flags/exposures` routes. A
@@ -379,7 +374,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 60,
     keyBy: flagExposureRateLimitKey,
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 120 a minute per IP for the public `GET /status/maintenance`: react
@@ -391,7 +386,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 120,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 10 a minute per staff member for `PUT /platform/maintenance-mode`, behind
@@ -404,7 +399,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 10,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 10 an hour per user for `POST /auth/sessions/revoke-others`, behind
@@ -416,7 +411,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60 * 60 * 1000,
     limit: 10,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 10 per 15 minutes per IP for `POST /auth/link/request`. Per IP only: a
@@ -430,7 +425,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 10,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 20 per 15 minutes per IP for `POST /auth/link/verify`. The token is
@@ -442,7 +437,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 20 per 15 minutes per IP, one instance shared by `POST
@@ -457,7 +452,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
   /**
    * 10 per 15 minutes per staff member, one instance shared by
@@ -471,6 +466,6 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 10,
     keyBy: 'user',
-    message: RATE_LIMITED_MESSAGE,
+    unit: 'attempts',
   },
 }

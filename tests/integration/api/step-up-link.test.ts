@@ -437,7 +437,7 @@ describe('POST /api/v1/auth/step-up/link/verify', () => {
       expect(response.body).toMatchObject({
         success: false,
         code: LINK_INVALID_CODE,
-        message: 'This link has expired or was already used.',
+        message: 'This link expired or was already used. Ask for a new link.',
       })
     }
     expect(await stepUpAudits(session.userId)).toEqual([

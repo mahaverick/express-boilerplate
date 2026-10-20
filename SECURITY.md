@@ -774,7 +774,7 @@ PostHog, describes what stays there.
   are allowed inside a word. A name is still not an identifier: it accepts
   cross-script lookalikes, so identify an account by its id or verified address.
 - **The error envelope.** `errorHandler` (`src/middlewares/error.middleware.ts`)
-  answers every 5xx but a maintenance refusal with `Internal server error` and
+  answers every 5xx but a maintenance refusal with "Our server hit an error. Try again, and contact support with the error ID if it happens again." and
   an `errorId`, whatever the error says. A maintenance `503` shows the owner's
   message and `Retry-After`, and carries no `errorId`. Below 500, an
   `HttpError`'s message is shown, since it is written for the client; any other

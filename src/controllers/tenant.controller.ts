@@ -40,7 +40,7 @@ import {
   updateTenantSettingsSchema,
 } from '@/validators/tenant.validators'
 
-const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation has been sent.'
+const INVITATION_SENT_MESSAGE = 'If we can invite that address, we sent it an invitation.'
 
 /**
  * The `:userId` route param on a member-management route, validated as a

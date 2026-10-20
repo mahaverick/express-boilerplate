@@ -75,7 +75,7 @@ const userRepository = new UserRepository()
 const HOUR_MS = 60 * 60 * 1000
 const INVITATION_SENT = {
   success: true,
-  message: 'If that address can be invited, an invitation has been sent.',
+  message: 'If we can invite that address, we sent it an invitation.',
   statusCode: 202,
   // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
   data: null,
@@ -680,7 +680,9 @@ describe('invitations API', () => {
       expect(unknown.status).toBe(404)
       expect(unknown.body).toMatchObject({ code: 'invitation_not_found' })
       expect(malformed.status).toBe(400)
-      expect(malformed.body).toMatchObject({ message: 'Validation failed' })
+      expect(malformed.body).toMatchObject({
+        message: 'Check the highlighted fields, then try again.',
+      })
     })
   })
 
@@ -904,7 +906,9 @@ describe('invitations API', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
 
       expect(malformed.status).toBe(400)
-      expect(malformed.body).toMatchObject({ message: 'Validation failed' })
+      expect(malformed.body).toMatchObject({
+        message: 'Check the highlighted fields, then try again.',
+      })
     })
 
     it.each<MembershipRole>(['manager', 'editor', 'viewer'])(

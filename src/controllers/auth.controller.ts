@@ -239,7 +239,7 @@ class AuthController extends BaseController {
     if (!rawToken) {
       // An empty current cookie can never refresh: clear it as any other 401 does, or the browser sends it on every refresh.
       if (rawToken === '') clearPresentedRefreshCookie(request, response)
-      throw new HttpError('Missing refresh token', 401)
+      throw new HttpError("You're signed out. Sign in to continue.", 401)
     }
 
     const refreshed = await refreshOrClearCookie(request, response, rawToken)
@@ -250,7 +250,7 @@ class AuthController extends BaseController {
       refreshed.refreshToken.raw,
       refreshed.refreshToken.expiresAt
     )
-    successResponse(response, { accessToken: refreshed.accessToken }, 'Token refreshed.')
+    successResponse(response, { accessToken: refreshed.accessToken }, 'Session refreshed.')
   })
 
   /**
@@ -267,7 +267,7 @@ class AuthController extends BaseController {
   logout = this.handle(async (request, response) => {
     await revokePresentedSession(request)
     clearRefreshTokenCookie(request, response)
-    messageResponse(response, 'Logged out.')
+    messageResponse(response, 'Signed out.')
   })
 
   /**

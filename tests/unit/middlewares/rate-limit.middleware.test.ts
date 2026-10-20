@@ -115,11 +115,11 @@ describe('the 429 message', () => {
     // A 15-minute window just opened: the header is 899 or 900 seconds, both 15 minutes.
     expect(retryAfter).toBeGreaterThan(14 * 60)
     expect((limited.body as { message?: string }).message).toBe(
-      'Too many attempts. Try again in 15 minutes.'
+      "You've reached the limit of 1 attempt in 15 minutes. Try again in 15 minutes."
     )
   })
 
-  it("keeps a spec's own first sentence", async () => {
+  it("names the spec's own unit", async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.authenticatedWrite, { limit: 1, windowMs: 30_000 })
     )
@@ -129,7 +129,7 @@ describe('the 429 message', () => {
     const limited = await request(app).post('/endpoint').set('x-test-user-id', userId)
 
     expect((limited.body as { message?: string }).message).toMatch(
-      /^Too many requests\. Try again in \d+ seconds\.$/
+      /^You've reached the limit of 1 request in 30 seconds\. Try again in \d+ seconds\.$/
     )
   })
 })
