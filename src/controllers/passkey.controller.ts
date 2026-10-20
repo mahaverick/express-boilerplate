@@ -18,6 +18,7 @@ import {
   finishPasskeyRegistration,
   finishPasskeySignIn,
   listPasskeys,
+  passkeyUserHandle,
   renamePasskey,
   startPasskeyRegistration,
   startPasskeySignIn,
@@ -56,13 +57,14 @@ class PasskeyController extends BaseController {
   })
 
   /**
-   * `GET /auth/passkeys`: the caller's passkeys, as `{ passkeys }`.
+   * `GET /auth/passkeys`: the caller's passkeys, as `{ userHandle, passkeys }`.
    */
   list = this.handle(async (request, response) => {
-    const rows = await listPasskeys(authenticatedUserId(request))
+    const userId = authenticatedUserId(request)
+    const rows = await listPasskeys(userId)
     successResponse(
       response,
-      { passkeys: rows.map((row) => toPublicPasskey(row)) },
+      { userHandle: passkeyUserHandle(userId), passkeys: rows.map((row) => toPublicPasskey(row)) },
       'Passkeys retrieved.'
     )
   })
@@ -168,14 +170,18 @@ class PasskeyController extends BaseController {
 
   /**
    * `DELETE /auth/passkeys/:id`: delete a passkey and answer the passkeys that
-   * remain, as `{ passkeys }`, which the app hands to the browser.
+   * remain, as `{ userHandle, passkeys }`, which the app hands to the browser.
    */
   remove = this.handle(async (request, response) => {
     const { app } = parseBody(passkeyDeleteQuerySchema, request.query)
-    const remaining = await deletePasskey(requireUser(request), String(request.params.id), app)
+    const user = requireUser(request)
+    const remaining = await deletePasskey(user, String(request.params.id), app)
     successResponse(
       response,
-      { passkeys: remaining.map((row) => toPublicPasskey(row)) },
+      {
+        userHandle: passkeyUserHandle(user.id),
+        passkeys: remaining.map((row) => toPublicPasskey(row)),
+      },
       'Passkey deleted.'
     )
   })
