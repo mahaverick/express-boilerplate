@@ -19,6 +19,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { OnboardingCompletion } from '@/database/models/onboarding-completion.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { OnboardingCompletionRepository } from '@/repositories/onboarding-completion.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -153,7 +154,12 @@ export async function completeOnboardingStep(
   executor: DbExecutor = db
 ): Promise<OnboardingCompletion | undefined> {
   const step = onboardingStepByKey(input.stepKey)
-  if (!step) throw new HttpError('Onboarding step not found', 404, ONBOARDING_STEP_NOT_FOUND_CODE)
+  if (!step)
+    throw new HttpError(
+      "We couldn't find this onboarding step. Refresh the checklist and try again.",
+      404,
+      ONBOARDING_STEP_NOT_FOUND_CODE
+    )
   if (step.scope === 'member' && input.userId === undefined) {
     throw new HttpError('This step is done by each member, not the tenant.', 409, MEMBER_STEP_CODE)
   }
@@ -164,7 +170,7 @@ export async function completeOnboardingStep(
     throw new HttpError('A staff completion needs a reason. Give one of 1 to 500 characters.', 400)
   }
   const tenant = await tenantRepository.findById(input.tenantId, {}, executor)
-  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!tenant) throw notFoundError('tenant')
   if (!isOnboardingStarted(tenant)) {
     throw new HttpError('Onboarding is not tracked for this tenant.', 409, NOT_TRACKED_CODE)
   }
@@ -364,7 +370,7 @@ export async function getTenantOnboarding(
   now: Date = new Date()
 ): Promise<TenantOnboardingView> {
   const tenant = await tenantRepository.findById(tenantId)
-  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!tenant) throw notFoundError('tenant')
   const [completions, activeOwnerIds] = await Promise.all([
     completionRepository.listForTenant(tenantId),
     userMembershipRepository.listActiveOwnerIds(tenantId),
@@ -519,7 +525,7 @@ export function registerOnboardingSubscribers(): void {
  * @param tenantId - The tenant.
  * @param minimum - The lowest membership role admitted.
  * @param tx - The transaction to hold the locks in.
- * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 when their
+ * @throws {HttpError} 404 `tenant_not_found` when the actor is not a member; 403 when their
  * role is below `minimum`.
  */
 async function lockMemberAccess(
@@ -529,7 +535,7 @@ async function lockMemberAccess(
   tx: DbTransaction
 ): Promise<void> {
   const { access } = await lockActorRole(actor, tenantId, minimum, tx)
-  if (access !== 'member') throw new HttpError('Tenant not found', 404)
+  if (access !== 'member') throw notFoundError('tenant')
 }
 
 /**
@@ -542,7 +548,7 @@ async function lockMemberAccess(
  * @param stepKey - The step.
  * @returns The onboarding as the actor now sees it.
  * @throws {HttpError} 404 `onboarding_step_not_found` for an unknown key; 409 `not_manual` for
- * a step that completes on its own; 404 `Tenant not found` when the actor is not a member; 403
+ * a step that completes on its own; 404 `tenant_not_found` when the actor is not a member; 403
  * for a tenant step below admin; 409 `not_tracked` when the tenant's onboarding is untracked or
  * waits for its first owner.
  */
@@ -552,7 +558,12 @@ export async function completeStepAsMember(
   stepKey: string
 ): Promise<TenantOnboardingView> {
   const step = onboardingStepByKey(stepKey)
-  if (!step) throw new HttpError('Onboarding step not found', 404, ONBOARDING_STEP_NOT_FOUND_CODE)
+  if (!step)
+    throw new HttpError(
+      "We couldn't find this onboarding step. Refresh the checklist and try again.",
+      404,
+      ONBOARDING_STEP_NOT_FOUND_CODE
+    )
   if (step.completion.kind !== 'manual') {
     throw new HttpError('This step completes on its own.', 409, NOT_MANUAL_CODE)
   }
@@ -584,7 +595,7 @@ export async function completeStepAsMember(
  */
 async function lockRunningTenant(tenantId: string, tx: DbTransaction): Promise<Tenant> {
   const tenant = await tenantRepository.lockById(tenantId, tx)
-  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!tenant) throw notFoundError('tenant')
   if (!isOnboardingStarted(tenant)) {
     throw new HttpError('Onboarding is not tracked for this tenant.', 409, NOT_TRACKED_CODE)
   }
@@ -597,7 +608,7 @@ async function lockRunningTenant(tenantId: string, tx: DbTransaction): Promise<T
  * @param actor - The signed-in owner.
  * @param tenantId - The tenant.
  * @returns The onboarding as the actor now sees it.
- * @throws {HttpError} 404 `Tenant not found` when the actor is not a member or the tenant is
+ * @throws {HttpError} 404 `tenant_not_found` when the actor is not a member or the tenant is
  * gone; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is already dismissed.
  */
 export async function dismissOnboarding(
@@ -635,7 +646,7 @@ export async function dismissOnboarding(
  * @param actor - The signed-in owner.
  * @param tenantId - The tenant.
  * @returns The onboarding as the actor now sees it.
- * @throws {HttpError} 404 `Tenant not found` when the actor is not a member or the tenant is
+ * @throws {HttpError} 404 `tenant_not_found` when the actor is not a member or the tenant is
  * gone; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is not dismissed.
  */
 export async function undismissOnboarding(

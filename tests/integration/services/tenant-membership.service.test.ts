@@ -12,6 +12,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -404,9 +405,9 @@ describe('tenant-membership.service', () => {
 
     await expect(
       changeRole({ userId: outsider.id }, tenant.id, target.id, 'editor')
-    ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+    ).rejects.toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     await expect(removeMember({ userId: outsider.id }, tenant.id, target.id)).rejects.toMatchObject(
-      { statusCode: 404, message: 'Tenant not found' }
+      { statusCode: 404, message: NOT_FOUND.tenant.message }
     )
 
     const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
@@ -496,7 +497,7 @@ describe('tenant-membership.service', () => {
 
     await expect(leaveTenant({ userId: staff.id }, tenant.id)).rejects.toMatchObject({
       statusCode: 404,
-      message: 'Tenant not found',
+      message: NOT_FOUND.tenant.message,
     })
 
     const rows = await sql`select 1 from audit_logs where action = 'member.left'`

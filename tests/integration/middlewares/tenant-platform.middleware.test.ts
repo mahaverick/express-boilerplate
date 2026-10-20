@@ -11,6 +11,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
@@ -279,7 +280,7 @@ describe('resolveTenant platform access (integration)', () => {
     const response = await request(buildApp(outsiderId)).get(`/tenants/${tenant.slug}/probe`)
 
     expect(response.status).toBe(404)
-    expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+    expect(response.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
   })
 
   describe('the platform tenant', () => {
@@ -291,7 +292,7 @@ describe('resolveTenant platform access (integration)', () => {
       const response = await request(buildApp(ownerId)).get(`/tenants/${platform.slug}/probe`)
 
       expect(response.status).toBe(404)
-      expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(response.body).toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     })
 
     it('stays members-only even if the platform lookup answered "admin" for anyone', async () => {

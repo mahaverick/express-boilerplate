@@ -8,6 +8,7 @@
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -75,12 +76,12 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
  * Which methods can sign an account in.
  * @param userId - The authenticated caller's id.
  * @returns The provider rows (unordered).
- * @throws {HttpError} 404 'User not found'.
+ * @throws {HttpError} 404 `user_not_found`.
  */
 export async function getAuthProviders(userId: string): Promise<AuthProviderRecord[]> {
   const user = await userRepository.findById(userId)
   if (!user) {
-    throw new HttpError('User not found', 404)
+    throw notFoundError('ownAccount')
   }
 
   return authProviderRepository.findByUser(userId)

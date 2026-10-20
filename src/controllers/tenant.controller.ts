@@ -9,7 +9,6 @@
  * entry.
  */
 import type { Request } from 'express'
-import { MEMBER_NOT_FOUND_CODE, MEMBER_NOT_FOUND_MESSAGE } from '@/constants/tenant.constants'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
@@ -49,10 +48,10 @@ const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation h
  * probed by format and a malformed one never reaches the database.
  * @param request - The incoming request.
  * @returns The `:userId` param.
- * @throws {HttpError} 404 `member_not_found` (message `Member not found`), when `:userId` is not a UUID.
+ * @throws {HttpError} 404 `member_not_found`, when `:userId` is not a UUID.
  */
 function targetUserIdParameter(request: Request): string {
-  return parseIdParameter(request.params.userId, MEMBER_NOT_FOUND_MESSAGE, MEMBER_NOT_FOUND_CODE)
+  return parseIdParameter(request.params.userId, 'member')
 }
 
 /**
@@ -161,7 +160,7 @@ class TenantController extends BaseController {
    * Owner only: `requireRole('owner')` (tenant.routes.ts), then `changeRole`
    * re-checks the actor's current role and the actor→target matrix under lock.
    * A `:userId` that is not a member (or not a UUID) answers 404
-   * `member_not_found`, message `Member not found`.
+   * `member_not_found`.
    */
   updateMemberRole = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
@@ -182,7 +181,7 @@ class TenantController extends BaseController {
    * then `removeMember` re-checks the actor's current role and the matrix
    * under lock. Under the matrix an admin can never remove another admin or
    * any owner, themselves included. A `:userId` that is not a member (or not
-   * a UUID) answers 404 `member_not_found`, message `Member not found`.
+   * a UUID) answers 404 `member_not_found`.
    */
   removeMember = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)

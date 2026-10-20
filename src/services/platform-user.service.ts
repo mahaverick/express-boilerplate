@@ -9,6 +9,7 @@ import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import {
   canPlatformActorModifyTarget,
@@ -94,7 +95,7 @@ export async function listUsers(query: PlatformUserListQuery): Promise<ListPage<
  */
 export async function getUserDetail(userId: string): Promise<PlatformUserDetail> {
   const record = await platformUserRepository.findRecord(userId, { includeDeleted: true })
-  if (!record) throw new HttpError('User not found', 404)
+  if (!record) throw notFoundError('user')
   const [providers, memberships, pendingInvitations] = await Promise.all([
     authProviderRepository.findByUser(userId),
     platformUserRepository.listMemberships(userId),
@@ -141,7 +142,7 @@ export async function platformTenantOrThrow(executor?: DbExecutor): Promise<Tena
  */
 async function requireRecord(userId: string): Promise<PlatformUserRow> {
   const found = await platformUserRepository.findRecord(userId)
-  if (!found) throw new HttpError('User not found', 404)
+  if (!found) throw notFoundError('user')
   return found
 }
 
@@ -220,7 +221,7 @@ async function lockStaffPair(
   const actorRole = await assertStillPlatformRole(actor, minimum, tx)
 
   const target = await userRepository.lockById(targetUserId, 'no key update', tx)
-  if (!target) throw new HttpError('User not found', 404)
+  if (!target) throw notFoundError('user')
   // Read again after the user-row wait: a platform invitation accepted meanwhile held that row first and has committed.
   const targetRole = await userMembershipRepository.findPlatformRole(targetUserId, tx)
   // The rule never covers oneself: a caller that must refuse a self-action does so before this, and one that allows it relies on this skip.
@@ -250,7 +251,7 @@ async function assertMayMail(actor: Actor, targetUserId: string): Promise<Member
     getPlatformMembership(targetUserId),
   ])
   if (actorRole === null || !isRoleAtLeast(actorRole, 'admin')) {
-    throw new HttpError('Not found', 404)
+    throw notFoundError('route')
   }
   if (!canStaffMailTarget(actorRole, targetRole)) throw new HttpError(STAFF_TARGET_MESSAGE, 403)
   return targetRole
@@ -265,7 +266,7 @@ async function assertMayMail(actor: Actor, targetUserId: string): Promise<Member
  */
 async function requireMailableUser(userId: string): Promise<User> {
   const user = await userRepository.findById(userId)
-  if (!user) throw new HttpError('User not found', 404)
+  if (!user) throw notFoundError('user')
   if (!user.active)
     throw new HttpError('This account is deactivated. Reactivate it, then try again.', 409)
   return user

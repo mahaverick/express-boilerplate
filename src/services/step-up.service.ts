@@ -16,6 +16,7 @@ import {
 } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -231,7 +232,7 @@ export async function confirmStepUpLink(
     logger.warn('Link step-up refused (step_up_refused)', { reason: 'not_staff', userId })
     await recordRefusal(userId)
     // The answer a caller without a platform role gets on every staff route.
-    throw new HttpError('Not found', 404)
+    throw notFoundError('route')
   }
 }
 

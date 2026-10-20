@@ -11,6 +11,7 @@ import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
@@ -240,10 +241,10 @@ describe('tenant lifecycle', () => {
 
     const response = await act(token, randomUUID(), 'suspend')
     expect(response.status).toBe(404)
-    expect((response.body as { message?: string }).message).toBe('Tenant not found')
+    expect((response.body as { message?: string }).message).toBe(NOT_FOUND.platformTenant.message)
     const response2 = await act(token, 'nope', 'suspend')
     expect(response2.status).toBe(404)
-    expect((response2.body as { message?: string }).message).toBe('Tenant not found')
+    expect((response2.body as { message?: string }).message).toBe(NOT_FOUND.platformTenant.message)
   })
 
   it('requires a reason', async () => {

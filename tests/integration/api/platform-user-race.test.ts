@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { PlatformUserRepository } from '@/repositories/platform-user.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -425,7 +426,7 @@ async function viaChangeRole(target: User): Promise<OwnerGrant> {
         pausingFirstCall(UserMembershipRepository.prototype.updateRole, 2, pause),
         run
       ),
-    refusal: { statusCode: 404, message: 'Member not found' },
+    refusal: { statusCode: 404, message: NOT_FOUND.member.message },
   }
 }
 
@@ -618,7 +619,7 @@ describe('a role change to platform owner racing a delete of the target', () => 
       expect(result?.outcomes[0].status).toBe('fulfilled')
       expect(result?.outcomes[1]).toMatchObject({
         status: 'rejected',
-        reason: { statusCode: 404, message: 'Member not found' },
+        reason: { statusCode: 404, message: NOT_FOUND.member.message },
       })
       expect(await staffState(target.id)).toEqual({ deleted: true, role: 'viewer' })
     },

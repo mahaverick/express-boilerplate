@@ -9,6 +9,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -138,7 +139,7 @@ describe('tenant-access.service', () => {
 
       await expect(
         db.transaction((tx) => resolveActorAccess({ userId: outsider.id }, tenant.id, tx))
-      ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      ).rejects.toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     })
 
     it('keeps the platform tenant members-only: its non-members have no platform role', async () => {
@@ -147,7 +148,7 @@ describe('tenant-access.service', () => {
 
       await expect(
         db.transaction((tx) => resolveActorAccess({ userId: outsider.id }, platform.id, tx))
-      ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      ).rejects.toMatchObject({ statusCode: 404, message: NOT_FOUND.tenant.message })
     })
   })
 

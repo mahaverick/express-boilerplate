@@ -15,6 +15,7 @@ import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
@@ -69,20 +70,22 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 function expectMemberNotFound(response: Response): void {
   expect(response.status).toBe(404)
   expect(envelopeOf(response)).toMatchObject({
-    message: 'Member not found',
+    message: NOT_FOUND.member.message,
     code: 'member_not_found',
   })
 }
 
 /**
  * Asserts the unknown-tenant answer a caller without access gets: 404
- * `Tenant not found` with no code, so a client never reads it as a vanished
- * member.
+ * `tenant_not_found`, never `member_not_found`, so a client never reads it
+ * as a vanished member.
  */
 function expectTenantNotFound(response: Response): void {
   expect(response.status).toBe(404)
-  expect(envelopeOf(response).message).toBe('Tenant not found')
-  expect(response.body).not.toHaveProperty('code')
+  expect(envelopeOf(response)).toMatchObject({
+    message: NOT_FOUND.tenant.message,
+    code: 'tenant_not_found',
+  })
 }
 
 /**
@@ -1258,7 +1261,7 @@ describe('/api/v1/tenants', () => {
       ).toBeUndefined()
     })
 
-    it('answers 404 Tenant not found, with no code, when the membership vanishes before the delete itself', async () => {
+    it('answers 404 tenant_not_found when the membership vanishes before the delete itself', async () => {
       const { user: owner } = await createAuthenticatedUser()
       const tenant = await createTenant(owner.id)
       const { user, token } = await createAuthenticatedUser()

@@ -536,11 +536,13 @@ defined once in
 
 ```json
 { "success": true, "message": "Success", "statusCode": 200, "data": {} }
-{ "success": false, "message": "Not found", "statusCode": 404, "requestId": "…" }
+{ "success": false, "message": "No route matches this method and path. Check both, then try again.", "statusCode": 404, "code": "not_found", "requestId": "…" }
 { "success": false, "message": "Access token expired", "statusCode": 401, "code": "ACCESS_TOKEN_EXPIRED", "requestId": "…" }
 ```
 
-`code` is one stable token a client branches on; `errors` is field-level
+`code` is one stable token a client branches on. Every 404 carries one, from
+`NOT_FOUND` (`src/errors/not-found-errors.ts`), and
+`tests/unit/errors/not-found-codes.test.ts` fails on a 404 thrown without it; `errors` is field-level
 validation detail, shaped by the validator. They are separate fields, so a
 client parsing `errors` never gets a different shape when `code` is present. A
 success with no payload goes through `messageResponse`, which always sends

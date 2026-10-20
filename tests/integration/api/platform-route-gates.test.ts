@@ -19,6 +19,7 @@ import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
+import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { createPlatformRouter } from '@/routes/platform.routes'
@@ -510,7 +511,7 @@ describe('/api/v1/platform route gates', () => {
           .set('Authorization', `Bearer ${await tokenFor(role)}`)
         expect({ role, status: response.status }).toEqual({ role, status: 404 })
         expect(response.headers).not.toHaveProperty('allow')
-        expect((response.body as { message?: string }).message).toBe('Not found')
+        expect((response.body as { message?: string }).message).toBe(NOT_FOUND.route.message)
       }
     }
   )

@@ -12,6 +12,7 @@ import {
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import {
   NotificationPreferenceRepository,
   type PreferenceMatrix,
@@ -59,7 +60,7 @@ export async function markRead(userId: string, notificationId: string): Promise<
   if (updated) return updated
 
   const existing = await notificationRepository.findByIdAndUser(notificationId, userId)
-  if (!existing) throw new HttpError('Notification not found', 404)
+  if (!existing) throw notFoundError('notification')
   return existing
 }
 
@@ -80,7 +81,7 @@ export async function markAllRead(userId: string): Promise<number> {
  */
 export async function deleteNotification(userId: string, notificationId: string): Promise<void> {
   const wasDeleted = await notificationRepository.deleteOne(notificationId, userId)
-  if (!wasDeleted) throw new HttpError('Notification not found', 404)
+  if (!wasDeleted) throw notFoundError('notification')
 }
 
 /**

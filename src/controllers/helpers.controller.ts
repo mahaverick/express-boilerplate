@@ -12,6 +12,7 @@ import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import { refreshCookieSpec, type RefreshCookieSpec } from '@/constants/auth.constants'
 import { isFrontendApp } from '@/constants/frontend.constants'
 import { HttpError } from '@/errors/http-error'
+import { notFoundError } from '@/errors/not-found-errors'
 import { revokeRefreshToken } from '@/services/session.service'
 import type { Actor, RequestPrincipal } from '@/types/actor'
 import type { OAuthIntent } from '@/types/oauth-intent'
@@ -50,7 +51,7 @@ export function actorFrom(request: Request): Actor {
  */
 export function tenantPrincipal(request: Request): RequestPrincipal {
   if (!request.principal) {
-    throw new HttpError('Tenant not found', 404)
+    throw notFoundError('tenant')
   }
   return request.principal
 }

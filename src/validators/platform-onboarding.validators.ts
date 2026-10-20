@@ -12,7 +12,8 @@ import { listParamsSchema } from '@/validators/list.validators'
 /**
  * The 404 an unknown or malformed step key answers.
  */
-export const STEP_NOT_FOUND_MESSAGE = 'Onboarding step not found'
+export const STEP_NOT_FOUND_MESSAGE =
+  "We couldn't find this onboarding step. Refresh the checklist and try again."
 
 /**
  * The error code of that 404: the value of `ONBOARDING_STEP_NOT_FOUND_CODE`

@@ -24,6 +24,7 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import type { InvalidCursorError } from '@/errors/list-errors'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
+import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
@@ -182,7 +183,8 @@ const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
 const INVITATION_RECIPIENT_LIMITED_MESSAGE =
   'This address has reached its daily invitation limit. Try again in 24 hours.'
 
-const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
+const INVITATION_NOT_FOUND_MESSAGE =
+  'This invitation is no longer pending. Refresh the invitation list to see the current ones.'
 /**
  * Matches no membership: stands in for the invitee id when the address has no account.
  */
@@ -497,7 +499,7 @@ async function tenantForMessages(
   executor: DbExecutor = db
 ): Promise<{ name: string; slug: string; isPlatform: boolean }> {
   const tenant = await tenantRepository.findById(tenantId, {}, executor)
-  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!tenant) throw notFoundError('tenant')
   return { name: tenant.name, slug: tenant.slug, isPlatform: tenant.isPlatform }
 }
 
@@ -513,7 +515,7 @@ async function tenantForMessages(
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
  * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function invite(
   actor: Actor,
@@ -738,7 +740,7 @@ export async function listPending(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `tenant_not_found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,
@@ -855,7 +857,7 @@ export async function mailPlatformInvitationConfirmForSignIn(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `reason` when staff revoke through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function revoke(
   actor: Actor,

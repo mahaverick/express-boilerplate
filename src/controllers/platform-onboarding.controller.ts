@@ -22,11 +22,6 @@ import {
 import { parseIdParameter, reasonBodySchema } from '@/validators/platform.validators'
 
 /**
- * The 404 a malformed or unknown tenant id answers.
- */
-const TENANT_NOT_FOUND = 'Tenant not found'
-
-/**
  * Handlers for the staff onboarding routes.
  */
 class PlatformOnboardingController extends BaseController {
@@ -50,7 +45,7 @@ class PlatformOnboardingController extends BaseController {
    * `GET /platform/tenants/:id/onboarding`: one tenant's onboarding, in any lifecycle state.
    */
   getTenantOnboarding = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, TENANT_NOT_FOUND)
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     successResponse(
       response,
       await getTenantOnboardingDetail(tenantId),
@@ -62,7 +57,7 @@ class PlatformOnboardingController extends BaseController {
    * `POST /platform/tenants/:id/onboarding/steps/:key/complete`: mark a tenant step complete, with a reason.
    */
   completeStep = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, TENANT_NOT_FOUND)
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const stepKey = parseStepKeyParameter(request.params.key)
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
@@ -76,7 +71,7 @@ class PlatformOnboardingController extends BaseController {
    * `POST /platform/tenants/:id/onboarding/remind`: email the active owners a reminder, with a reason.
    */
   sendReminder = this.handle(async (request, response) => {
-    const tenantId = parseIdParameter(request.params.id, TENANT_NOT_FOUND)
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
     const { reason } = parseBody(reasonBodySchema, request.body)
     const result = await sendOnboardingReminder(actorFrom(request), tenantId, reason)
     successResponse(

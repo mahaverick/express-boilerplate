@@ -27,11 +27,6 @@ import {
 } from '@/validators/platform.validators'
 
 /**
- * The 404 a malformed or unknown user id answers.
- */
-const USER_NOT_FOUND = 'User not found'
-
-/**
  * Handlers for `/api/v1/platform/users`.
  */
 class PlatformUserController extends BaseController {
@@ -47,7 +42,7 @@ class PlatformUserController extends BaseController {
    * `GET /platform/users/:id`: one user's detail.
    */
   getUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     successResponse(response, await getUserDetail(userId), 'User retrieved.')
   })
 
@@ -64,7 +59,7 @@ class PlatformUserController extends BaseController {
    * `PATCH /platform/users/:id`: change a user's names.
    */
   updateUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const input = parseBody(updatePlatformUserSchema, request.body)
     successResponse(response, await updateUser(actorFrom(request), userId, input), 'User updated.')
   })
@@ -73,7 +68,7 @@ class PlatformUserController extends BaseController {
    * `POST /platform/users/:id/sign-in-link`: mail the user a sign-in link.
    */
   sendSignInLink = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const result = await sendSignInLinkByStaff(actorFrom(request), userId)
     successResponse(response, result, 'Sign-in link sent.')
   })
@@ -82,7 +77,7 @@ class PlatformUserController extends BaseController {
    * `POST /platform/users/:id/deactivate`: block sign-in and end every session.
    */
   deactivateUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
       response,
@@ -95,7 +90,7 @@ class PlatformUserController extends BaseController {
    * `POST /platform/users/:id/reactivate`: allow sign-in again.
    */
   reactivateUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const { reason } = parseBody(reasonBodySchema, request.body)
     successResponse(
       response,
@@ -108,7 +103,7 @@ class PlatformUserController extends BaseController {
    * `POST /platform/users/:id/sign-out`: end every session.
    */
   signOutUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const { reason } = parseBody(reasonBodySchema, request.body)
     await signOutUser(actorFrom(request), userId, reason)
     messageResponse(response, 'User signed out everywhere.')
@@ -118,7 +113,7 @@ class PlatformUserController extends BaseController {
    * `DELETE /platform/users/:id`: soft-delete and end every session.
    */
   deleteUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const { reason } = parseBody(reasonBodySchema, request.body)
     await deleteUser(actorFrom(request), userId, reason)
     messageResponse(response, 'User deleted.')
@@ -128,7 +123,7 @@ class PlatformUserController extends BaseController {
    * `POST /platform/users/:id/purge`: permanently delete a soft-deleted user.
    */
   purgeUser = this.handle(async (request, response) => {
-    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const userId = parseIdParameter(request.params.id, 'user')
     const { reason } = parseBody(reasonBodySchema, request.body)
     await purgeUser(actorFrom(request), userId, reason)
     messageResponse(response, 'User permanently deleted.')

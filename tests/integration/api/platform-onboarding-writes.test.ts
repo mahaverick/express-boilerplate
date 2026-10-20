@@ -18,6 +18,7 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { PlatformOnboardingRepository } from '@/repositories/platform-onboarding.repository'
 import { sql, type DbTransaction } from '@/services/database.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
+import { STEP_NOT_FOUND_MESSAGE } from '@/validators/platform-onboarding.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -287,7 +288,7 @@ describe('POST /platform/tenants/:id/onboarding/steps/:key/complete', () => {
     const platformStep = await complete(token, platform.id, 'configure_settings')
 
     expect(unknownStep.status).toBe(404)
-    expect((unknownStep.body as ApiEnvelope<unknown>).message).toBe('Onboarding step not found')
+    expect((unknownStep.body as ApiEnvelope<unknown>).message).toBe(STEP_NOT_FOUND_MESSAGE)
     expect(codeOf(unknownStep)).toBe('onboarding_step_not_found')
     expect([unknownTenant.status, platformStep.status]).toEqual([404, 404])
   })
