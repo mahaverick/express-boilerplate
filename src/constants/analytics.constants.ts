@@ -21,6 +21,7 @@ export const AUDIT_EVENT_RENAMES = {
   'user.signed_out': 'user_sessions_revoked',
   'user.passkey_created': 'passkey_created',
   'user.passkey_deleted': 'passkey_deleted',
+  'user.passkeys_cleared_on_claim': 'passkeys_cleared_on_claim',
 } as const satisfies Partial<Record<AuditAction, string>>
 
 /**

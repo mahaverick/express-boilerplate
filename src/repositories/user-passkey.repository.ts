@@ -133,10 +133,14 @@ export class UserPasskeyRepository {
    * Delete every passkey a user holds.
    * @param userId - The owner.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once the rows are gone.
+   * @returns How many rows were deleted.
    */
-  async deleteAllForUser(userId: string, executor: DbExecutor = db): Promise<void> {
-    await executor.delete(userPasskeyModel).where(eq(userPasskeyModel.userId, userId))
+  async deleteAllForUser(userId: string, executor: DbExecutor = db): Promise<number> {
+    const deleted = await executor
+      .delete(userPasskeyModel)
+      .where(eq(userPasskeyModel.userId, userId))
+      .returning({ id: userPasskeyModel.id })
+    return deleted.length
   }
 
   /**

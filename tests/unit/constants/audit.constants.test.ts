@@ -40,6 +40,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'user.sign_in_link_sent': { app: 'web' },
   'user.passkey_created': { passkeyId: 'passkey-1', provider: 'Apple Passwords', app: 'web' },
   'user.passkey_deleted': { passkeyId: 'passkey-1', provider: 'Apple Passwords', app: 'web' },
+  'user.passkeys_cleared_on_claim': { count: 2 },
   'user.deleted': { reason: 'Erasure request' },
   'tenant.suspended': { reason: 'Unpaid invoice' },
   'tenant.reactivated': { reason: 'Invoice paid' },
@@ -124,6 +125,7 @@ describe('AUDIT_ACTIONS', () => {
       'user.flags_evaluated',
       'user.passkey_created',
       'user.passkey_deleted',
+      'user.passkeys_cleared_on_claim',
       'user.purged',
       'user.reactivated',
       'user.sign_in_link_sent',
@@ -241,6 +243,14 @@ describe('AUDIT_ACTIONS', () => {
       expect(schema.safeParse({ ...valid, provider: 'x'.repeat(101) }).success).toBe(false)
       expect(schema.safeParse({ ...valid, credentialId: 'abc' }).success).toBe(false)
     }
+  })
+
+  it('records only a positive whole count on user.passkeys_cleared_on_claim', () => {
+    const schema = AUDIT_ACTIONS['user.passkeys_cleared_on_claim'].metadata
+    expect(AUDIT_ACTIONS['user.passkeys_cleared_on_claim'].target).toBe('user')
+    expect(schema.safeParse({ count: 0 }).success).toBe(false)
+    expect(schema.safeParse({ count: 1.5 }).success).toBe(false)
+    expect(schema.safeParse({ count: 1, credentialId: 'abc' }).success).toBe(false)
   })
 
   it('records only a known template key on email.resent', () => {
