@@ -1,5 +1,16 @@
 # Changelog
 
+## [8.0.0](https://github.com/mahaverick/express-boilerplate/compare/v7.1.1...v8.0.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** Passkeys default to on (`PASSKEY_MODE=optional`; set `off` to disable), and boot now refuses to start when `WEBAUTHN_RP_ID` (default: `WEB_URL`'s host) is an IP address or is not equal to, or a parent domain of, the hosts of `WEB_URL` and `APEX_URL`, so a deployment with apex on a sibling host must set `WEBAUTHN_RP_ID` to the shared parent domain or set `PASSKEY_MODE=off`; `POST /api/v1/auth/step-up/link/request` now requires `{ "app": "web" | "apex" }` and answers 400 to `{}` or no body, and the mailed link opens that app's `/auth/confirm`; step-up by link and the new `/api/v1/auth/passkeys/step-up/options` and `/verify` are open to every signed-in user (non-staff no longer get 404, except for an `apex` link request); with `PASSKEY_MODE=required`, any authenticated route outside the setup allowlist, the notification stream included, can answer 403 `PASSKEY_SETUP_REQUIRED`; new routes under `/api/v1/auth/passkeys` (`config`, `sign-in/options`, `sign-in/verify`, `registration/options`, `registration/verify`, list, `PATCH /:id`, `DELETE /:id?app=`), whose list and delete answers are `{ passkeys, userHandle }` with `credentialId` on each passkey, and new codes `PASSKEY_UNKNOWN`, `PASSKEY_NO_ACCESS`, `PASSKEY_VERIFICATION_FAILED`, `PASSKEY_LIMIT`, `PASSKEY_EXISTS`, `LAST_PASSKEY`, `NO_PASSKEY`, `EMAIL_UNVERIFIED` and `PASSKEY_SETUP_REQUIRED`; `user_signed_in.method` and `auth.step_up_confirmed.method` gain `passkey`, `auth.step_up_refused` is no longer written, and the new auth-email templates `passkey_created` and `passkey_deleted` must be listed in apex's template filter; migration 0032 adds `user_passkeys`, an account claim now deletes the claimed account's passkeys, and `pnpm build` also writes `dist/data`.
+
+### Features
+
+* **auth:** passkeys for sign-in, confirm it's you and account security ([32768e1](https://github.com/mahaverick/express-boilerplate/commit/32768e1e4d769ef338ed09ef51e044b7e5b201f6))
+
 ## [7.1.1](https://github.com/mahaverick/express-boilerplate/compare/v7.1.0...v7.1.1) (2026-10-20)
 
 
