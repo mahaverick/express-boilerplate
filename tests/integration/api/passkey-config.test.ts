@@ -54,7 +54,7 @@ describe('GET /api/v1/auth/passkeys/config', () => {
       '@/configs/env.config',
       { getEnv: () => off },
       async () => {
-        // One at a time: the app now imports the gate, and loading them together made the gate read the real mode.
+        // One at a time: in a Promise.all load, passkey.config read the real mode while env.config answered off (probed); sequential loads agree.
         const middleware = await import('@/middlewares/passkey.middleware')
         const errors = await import('@/middlewares/error.middleware')
         const appModule = await import('@/app')

@@ -281,9 +281,75 @@ describe('creating and listing passkeys', () => {
       expect(refused.status).toBe(409)
       expect(envelope(refused).code).toBe('PASSKEY_LIMIT')
       expect(envelope(refused).message).toBe(
-        'You have 20 passkeys, the most an account can hold. Delete one to create another.'
+        'You have 20 passkeys, the limit for one account. Delete one to create another.'
       )
     }
+  })
+
+  it('answers 400 PASSKEY_VERIFICATION_FAILED when the user was not verified', async () => {
+    const user = await makeUser()
+    const token = recentAuthTokenFor(user)
+    const asked = await options(token)
+
+    const response = await request(app)
+      .post(`${BASE}/registration/verify`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        app: 'web',
+        challengeId: envelope(asked).data.challengeId,
+        response: new SoftwareAuthenticator().registrationResponse(
+          envelope(asked).data.options.challenge,
+          { isUserVerified: false }
+        ),
+      })
+
+    expect(response.status).toBe(400)
+    expect(envelope(response).code).toBe('PASSKEY_VERIFICATION_FAILED')
+    const [row] = await sql<{ total: number }[]>`
+      select count(*)::int as total from user_passkeys where user_id = ${user.id}
+    `
+    expect(row?.total).toBe(0)
+  })
+
+  it('answers 409 for a credential another user holds, and stores and audits nothing', async () => {
+    const owner = await makeUser()
+    const other = await makeUser()
+    const authenticator = new SoftwareAuthenticator()
+    await createPasskey(recentAuthTokenFor(owner), authenticator)
+
+    const duplicate = await createPasskey(recentAuthTokenFor(other), authenticator)
+
+    expect(duplicate.status).toBe(409)
+    expect(envelope(duplicate).message).toBe('This passkey is already saved. Create a new one.')
+    const [rows] = await sql<{ total: number }[]>`
+      select count(*)::int as total from user_passkeys where user_id = ${other.id}
+    `
+    const [audits] = await sql<{ total: number }[]>`
+      select count(*)::int as total from audit_logs where target_id = ${other.id}
+    `
+    expect(rows?.total).toBe(0)
+    expect(audits?.total).toBe(0)
+  })
+
+  it('drops transports WebAuthn does not define, keeping order and removing repeats', async () => {
+    const user = await makeUser()
+    const token = recentAuthTokenFor(user)
+    const asked = await options(token)
+    const registration = new SoftwareAuthenticator().registrationResponse(
+      envelope(asked).data.options.challenge
+    )
+    registration.response.transports = ['usb', 'bogus', 'usb', 'internal']
+
+    const response = await request(app)
+      .post(`${BASE}/registration/verify`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ app: 'web', challengeId: envelope(asked).data.challengeId, response: registration })
+
+    expect(response.status).toBe(201)
+    const [row] = await sql<{ transports: string[] }[]>`
+      select transports from user_passkeys where user_id = ${user.id}
+    `
+    expect(row?.transports).toEqual(['usb', 'internal'])
   })
 })
 
@@ -508,6 +574,30 @@ describe('deleting', () => {
     expect(envelope(refused).message).toBe(
       'Create another passkey before you delete this one. Your account needs at least one.'
     )
+    const listed = await request(app).get(BASE).set('Authorization', `Bearer ${token}`)
+    expect(envelope(listed).data.passkeys).toHaveLength(1)
+  })
+
+  it('in required mode, two deletes at once leave one passkey: one 200 and one LAST_PASSKEY', async () => {
+    mode.current = 'required'
+    const user = await makeUser()
+    const token = recentAuthTokenFor(user)
+    const first = await createPasskey(token, new SoftwareAuthenticator())
+    const second = await createPasskey(token, new SoftwareAuthenticator())
+
+    const responses = await Promise.all(
+      [first, second].map(async (created) =>
+        request(app)
+          .delete(`${BASE}/${envelope(created).data.passkey.id}`)
+          .set('Authorization', `Bearer ${token}`)
+      )
+    )
+
+    expect(
+      responses.map((response) => response.status).toSorted((left, right) => left - right)
+    ).toEqual([200, 409])
+    const refused = responses.find((response) => response.status === 409)
+    expect(refused && envelope(refused).code).toBe('LAST_PASSKEY')
     const listed = await request(app).get(BASE).set('Authorization', `Bearer ${token}`)
     expect(envelope(listed).data.passkeys).toHaveLength(1)
   })

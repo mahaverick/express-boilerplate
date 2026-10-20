@@ -46,6 +46,29 @@ const tenantRepository = new TenantRepository()
 const MAX_PASSKEYS_PER_USER = 20
 
 /**
+ * The transport names WebAuthn defines. Anything else a client sends is dropped.
+ */
+const WEBAUTHN_TRANSPORTS: ReadonlySet<string> = new Set([
+  'usb',
+  'nfc',
+  'ble',
+  'hybrid',
+  'internal',
+  'smart-card',
+  'cable',
+])
+
+/**
+ * Keep only the WebAuthn transport names, in order, without repeats.
+ * @param transports - What a client or the library reported.
+ * @returns The known transports.
+ */
+function knownTransports(transports: readonly string[] | undefined): string[] {
+  if (transports === undefined) return []
+  return [...new Set(transports.filter((name) => WEBAUTHN_TRANSPORTS.has(name)))]
+}
+
+/**
  * The code of a refused create at the cap.
  */
 const PASSKEY_LIMIT_CODE = 'PASSKEY_LIMIT'
@@ -80,7 +103,7 @@ function passkeyVerificationFailed(): HttpError {
  */
 function passkeyLimitReached(): HttpError {
   return new HttpError(
-    `You have ${String(MAX_PASSKEYS_PER_USER)} passkeys, the most an account can hold. Delete one to create another.`,
+    `You have ${String(MAX_PASSKEYS_PER_USER)} passkeys, the limit for one account. Delete one to create another.`,
     409,
     PASSKEY_LIMIT_CODE
   )
@@ -145,7 +168,7 @@ export async function startPasskeyRegistration(
     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
     excludeCredentials: existing.map((row) => ({
       id: row.credentialId,
-      transports: row.transports as never,
+      transports: knownTransports(row.transports),
     })),
   })
   return { challengeId, options }
@@ -275,7 +298,7 @@ export async function finishPasskeyRegistration(
         credentialId: credential.id,
         publicKey: credential.publicKey,
         signCount: credential.counter,
-        transports: response.response.transports ?? credential.transports ?? [],
+        transports: knownTransports(response.response.transports ?? credential.transports),
         aaguid,
         backupEligible: credentialDeviceType === 'multiDevice',
         backupState: credentialBackedUp,

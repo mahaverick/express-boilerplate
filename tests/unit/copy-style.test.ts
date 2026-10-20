@@ -43,8 +43,7 @@ const MACHINE_FACING = new Set([
 
 /**
  * Phrasings the copy rules ban, matched case-insensitively on whole words.
- * `most` is allowed in "at most 100" and "the most an account can hold", which
- * state a limit, not a hedge.
+ * `most` is allowed in "at most 100", which is a limit, not a hedge.
  */
 const BANNED: readonly RegExp[] = [
   // Vague failure words.
@@ -64,7 +63,7 @@ const BANNED: readonly RegExp[] = [
   /\bsome\b/i,
   /\bseveral\b/i,
   /\bmany\b/i,
-  /(?<!\bat )\bmost\b(?! an account can hold)/i,
+  /(?<!\bat )\bmost\b/i,
   /\bvery\b/i,
   /\bmight\b/i,
   /\bvarious\b/i,
@@ -468,8 +467,6 @@ describe('user-facing copy', () => {
     expect(problemsIn('Your access token expired.')).toHaveLength(1)
     expect(problemsIn('Too many attempts.')).toHaveLength(1)
     expect(problemsIn('Name must be at most 100 characters.')).toEqual([])
-    expect(problemsIn('You have 20 passkeys, the most an account can hold.')).toEqual([])
-    expect(problemsIn('The most popular option.')).toHaveLength(1)
     expect(problemsIn(`${'word '.repeat(30)}end.`)).toHaveLength(1)
     expect(problemsIn(`${'word '.repeat(29)}end.`)).toEqual([])
   })
