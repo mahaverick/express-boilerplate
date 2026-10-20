@@ -213,6 +213,12 @@ marked by a comment in its file (0024's has none):
   row passes the two CHECKs it re-adds: the new `invitation_id` column starts
   null. It adds the `invitation_link` purpose, the column, its foreign key to
   `tenant_invitations` and `user_tokens_invitation_id_idx`.
+- `0031` is hand-written whole (`drizzle-kit generate --custom`; no schema
+  change). It gives each live account the `email_messages` rows its address
+  was sent while no account held it (`user_id` NULL), except rows older than
+  the latest deletion of an earlier, soft-deleted holder of the address,
+  which may be that person's. New accounts adopt theirs when they are created
+  (`EmailMessageRepository.adoptUnowned`).
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
@@ -600,6 +606,12 @@ last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   accept) but not reads. Every existing row has
   `invitation_id` NULL, so the key's validation finds nothing to check. As for
   `0029`, run the retention purge first and apply `0030` in a quiet window.
+
+- **`0031` updates `email_messages` rows in one statement.** It takes row
+  locks only on the unowned rows it adopts, so mail keeps sending; the delivery
+  webhook's status update on one of those rows waits for the commit. It scans
+  `email_messages` for `user_id IS NULL`, so on a large table run the
+  retention purge first.
 
 ## The test database
 

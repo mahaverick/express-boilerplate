@@ -16,6 +16,7 @@ import {
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import {
   PlatformUserRepository,
   type PlatformUserMembership,
@@ -50,6 +51,7 @@ import type {
 
 const platformUserRepository = new PlatformUserRepository()
 const authProviderRepository = new AuthProviderRepository()
+const emailMessageRepository = new EmailMessageRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 const tenantInvitationRepository = new TenantInvitationRepository()
@@ -272,7 +274,8 @@ async function requireMailableUser(userId: string): Promise<User> {
 /**
  * Create an unverified user and mail them the `welcome` message, which
  * carries a sign-in link; its first click verifies the address. The row,
- * its `email` provider row and the audit entry commit together; the mail
+ * its `email` provider row, the mail the address was sent before it had an
+ * account (`adoptUnowned`) and the audit entry commit together; the mail
  * goes after commit and never undoes the create. The link opens the web
  * app: the new user holds no platform role, and the frontend is chosen from
  * that role, as for the staff-sent sign-in link.
@@ -298,6 +301,7 @@ export async function createUser(
       )
       // A soft-deleted account may still hold this address's 'email' row; release it, as register does.
       await authProviderRepository.releaseEmailOfDeletedUsers(email, tx)
+      await emailMessageRepository.adoptUnowned(user.id, email, tx)
       await authProviderRepository.create(
         { userId: user.id, provider: 'email', providerId: email },
         tx

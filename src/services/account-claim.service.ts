@@ -10,6 +10,7 @@
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import {
   db,
@@ -22,6 +23,7 @@ import { denySessionsAfterCommit, revokeSessionRows } from '@/services/session.s
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
+const emailMessageRepository = new EmailMessageRepository()
 
 /**
  * Mark a user's email verified. The only writer of users.email_verified_at;
@@ -65,7 +67,8 @@ export function isClaimedAccountGone(error: unknown): boolean {
 /**
  * Create a verified account for an address whose mailbox was just proven:
  * the user row, the release of the address's `email` row from any
- * soft-deleted account, the new account's `email` row, and the
+ * soft-deleted account, the mail the address was sent before it had an
+ * account (`adoptUnowned`), the new account's `email` row, and the
  * verification, in the caller's transaction. No name. The
  * caller emits `email_verified` once its transaction commits.
  * @param email - The address, stored lowercased.
@@ -78,6 +81,7 @@ export async function createLinkedAccount(email: string, tx: DbTransaction): Pro
   const user = await userRepository.create({ email: address }, tx)
   // A soft-deleted account may still hold this address's 'email' row; release it for the new account.
   await authProviderRepository.releaseEmailOfDeletedUsers(address, tx)
+  await emailMessageRepository.adoptUnowned(user.id, address, tx)
   await authProviderRepository.create(
     { userId: user.id, provider: 'email', providerId: address },
     tx
