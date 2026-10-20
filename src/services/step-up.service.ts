@@ -22,7 +22,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record, type AuditEntry } from '@/services/audit.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
-import { MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
+import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import {
   buildStepUpConfirmUrl,
   claimLinkToken,
@@ -150,7 +150,7 @@ export async function requestStepUpLink(
           firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
           confirmUrl: buildStepUpConfirmUrl(raw),
           expiresInMinutes: String(Math.round(ttlMs / 60_000)),
-          appName: env.APP_NAME,
+          appName: appNameFor('apex'),
         },
       },
       userId,

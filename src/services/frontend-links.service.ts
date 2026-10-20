@@ -1,7 +1,8 @@
 /**
  * @file The frontend links mailed to a user: the configured origin of each
- * frontend (`frontendUrl`), the invitation accept link, and the name a
- * template greets an unnamed user by.
+ * frontend (`frontendUrl`), the product name a mail into it carries
+ * (`appNameFor`), the invitation accept link, and the name a template greets
+ * an unnamed user by.
  */
 import { getEnv, type Env } from '@/configs/env.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
@@ -64,4 +65,20 @@ export function frontendUrl(
   env: Pick<Env, 'WEB_URL' | 'APEX_URL'> = getEnv()
 ): string {
   return app === 'apex' && env.APEX_URL !== undefined ? env.APEX_URL : env.WEB_URL
+}
+
+/**
+ * The product name a mail whose link opens one frontend carries in its
+ * subject and sign-off: `APEX_APP_NAME` for Apex, `APP_NAME` for the customer
+ * app. Keyed on the frontend alone, not on whether `APEX_URL` is set: a staff
+ * mail names the staff product even while both apps share one origin.
+ * @param app - The frontend the mail's link opens.
+ * @param env - The configured names; defaults to the validated environment.
+ * @returns The product name to interpolate as `appName`.
+ */
+export function appNameFor(
+  app: FrontendApp,
+  env: Pick<Env, 'APP_NAME' | 'APEX_APP_NAME'> = getEnv()
+): string {
+  return app === 'apex' ? env.APEX_APP_NAME : env.APP_NAME
 }

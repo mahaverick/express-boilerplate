@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildInvitationAcceptUrl, frontendUrl } from '@/services/frontend-links.service'
+import {
+  appNameFor,
+  buildInvitationAcceptUrl,
+  frontendUrl,
+} from '@/services/frontend-links.service'
 
 /**
  * The UTM query an invitation link carries after its token.
@@ -55,5 +59,14 @@ describe('frontendUrl', () => {
   ])('builds a clean link from APEX_URL %s', (configured, expected) => {
     const base = frontendUrl('apex', { WEB_URL: web, APEX_URL: configured })
     expect(buildInvitationAcceptUrl('t', base)).toBe(`${expected}?token=t&${INVITATION_UTM}`)
+  })
+})
+
+describe('appNameFor', () => {
+  const names = { APP_NAME: 'Express Boilerplate', APEX_APP_NAME: 'Apex' }
+
+  it('names the customer app APP_NAME and Apex APEX_APP_NAME', () => {
+    expect(appNameFor('web', names)).toBe('Express Boilerplate')
+    expect(appNameFor('apex', names)).toBe('Apex')
   })
 })

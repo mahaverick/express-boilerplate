@@ -31,7 +31,7 @@ import {
 import { platformRoleForLogin } from '@/services/auth.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
-import { MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
+import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import {
   buildSignInLinkUrl,
   claimLinkToken,
@@ -141,7 +141,7 @@ export async function sendSignInLink(
       reason === 'welcome' ? WELCOME_TEMPLATE_KEY : SIGN_IN_LINK_TEMPLATE_KEY
     ),
     expiresInMinutes: String(Math.round(ttlMs / 60_000)),
-    appName: getEnv().APP_NAME,
+    appName: appNameFor(target.app),
   }
   await addEmailJob(
     reason === 'welcome'

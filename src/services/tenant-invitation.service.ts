@@ -48,6 +48,7 @@ import { platformRoleForLogin } from '@/services/auth.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import {
+  appNameFor,
   buildInvitationAcceptUrl,
   frontendUrl,
   MISSING_FIRST_NAME_FALLBACK,
@@ -466,7 +467,7 @@ async function dispatchInvitationMessages(
           role: invitation.role,
           acceptUrl: buildInvitationAcceptUrl(rawToken, acceptOrigin),
           expiresInDays: context.expiresInDays ?? expiresInDays(),
-          appName: getEnv().APP_NAME,
+          appName: appNameFor(linkApp),
         },
       },
       // The account the mail is for: '' (stored as NULL) when the address has none.
@@ -1356,7 +1357,7 @@ function requestInvitationConfirm(
             role: invitation.role,
             confirmUrl: buildInvitationConfirmUrl(raw, row),
             expiresInMinutes: String(Math.round(ttlMs / 60_000)),
-            appName: env.APP_NAME,
+            appName: appNameFor(linkApp),
           },
         },
         // The account the mail is for: '' (stored as NULL) when the address has none.
