@@ -93,7 +93,7 @@ creates a passkey (`POST /api/v1/auth/passkeys/registration/options`, then
 hides the passkey routes; `required` makes every account create a passkey
 before anything else. `GET /api/v1/auth/passkeys/config` answers the mode.
 `WEBAUTHN_RP_ID` defaults to the host of `WEB_URL`; set it to a parent domain
-when `APEX_URL` sits on another subdomain. A browser has to run the ceremony,
+when `APEX_URL` sits on another subdomain. An IP address is refused as an RP ID. A browser has to run the ceremony,
 so the curl flow above covers links only. Sensitive actions ask a signed-in
 user to confirm it's them within 10 minutes: by emailed link
 (`POST /api/v1/auth/step-up/link/request` with `{"app":"web"}`) or by passkey

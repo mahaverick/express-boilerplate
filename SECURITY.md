@@ -368,7 +368,7 @@ invitation verify stamps it after its transaction commits, best effort.
 behind the unknown-route 404 and keeps the stored rows. `optional` (the
 default) lets a person create passkeys and sign in with one. `required` also
 refuses every signed-in route outside a short allowlist until the account has
-one ([Required mode](#passkeys)). Switching back to `optional` restores
+one (the Required mode item below). Switching back to `optional` restores
 the rows. `GET /auth/passkeys/config` is public and answers the mode in every
 mode, so a frontend knows whether to show the passkey screens.
 
@@ -377,7 +377,8 @@ mode, so a frontend knows whether to show the passkey screens.
   `CORS_ALLOWED_ORIGINS` extras are not passkey origins. Boot refuses an RP ID
   that is neither equal to nor a parent domain of each expected origin's host,
   unless the mode is `off` (`passkeyRpIdProblem`,
-  `src/configs/env-consistency.config.ts`). A passkey is bound to the RP ID,
+  `src/configs/env-consistency.config.ts`). It also refuses an IPv4 or IPv6
+  address as the RP ID, since browsers refuse one; `localhost` is allowed. A passkey is bound to the RP ID,
   so changing it orphans every stored passkey.
 - **What the browser must prove.** Every ceremony asks for user verification
   (`userVerification: 'required'`) and no attestation (`attestation: 'none'`).
@@ -400,19 +401,27 @@ mode, so a frontend knows whether to show the passkey screens.
   is not backup eligible and whose stored count is above 0. Synced passkeys
   report 0 or a count that does not advance, so refusing them would lock out
   honest users.
-- **Sign-in** (`POST /auth/passkeys/sign-in/options`, `.../verify`; public, one
-  per-IP limiter) issues a session the way a link click does: a recent
+- **Sign-in** (`POST /auth/passkeys/sign-in/options`, `.../verify`; public, a
+  per-IP limiter on each) issues a session the way a link click does: a recent
   sign-in (`auth_time` set), a refresh cookie, `lastLoggedInAt`, and a
-  `user_signed_in` event with `method: 'passkey'`. A deactivated, soft-deleted
-  or never-verified account, and a credential that was deleted mid-request,
-  answer `400 PASSKEY_UNKNOWN` and issue no session. The account is re-read
-  under the row lock, as in a link sign-in. In `full` maintenance a non-staff
+  `user_signed_in` event with `method: 'passkey'`. The assertion is verified
+  against the stored row first (signature, origin, RP ID, user verification,
+  user handle, counter), so a caller who cannot sign learns nothing about the
+  account. An unknown credential, or one deleted mid-request, answers
+  `400 PASSKEY_UNKNOWN`; a bad assertion answers
+  `400 PASSKEY_VERIFICATION_FAILED`. Only then are the account checks run: a
+  deactivated, soft-deleted or never-verified account, and a non-staff account
+  on Apex, answer `403 PASSKEY_NO_ACCESS` ("This passkey can't sign you in
+  here. Sign in with an email link instead.") and issue no session; the apps
+  keep the passkey instead of deleting it. The account is re-read under the
+  row lock, as in a link sign-in. In `full` maintenance a non-staff
   account is refused by `assertSignInAllowed`. A dead credential answers 400,
   never 401, because the clients sign out on a 401.
 - **Create, rename and delete** (`POST /auth/passkeys/registration/options`,
   `.../verify`, `PATCH` and `DELETE /auth/passkeys/:id`) need a signed-in
   user, share the `passkey-manage` limiter, and need a recent sign-in for
-  create and delete (`requireRecentAuth`). An account holds at most 20 passkeys
+  create and delete (`requireRecentAuth`, which runs before the limiter, so a
+  `REAUTH_REQUIRED` answer spends no budget). An account holds at most 20 passkeys
   (`409 PASSKEY_LIMIT`). An address that was never verified cannot create one
   (`403 EMAIL_UNVERIFIED`). In `required` mode the last passkey cannot be
   deleted (`409 LAST_PASSKEY`). Create and delete write
@@ -1051,7 +1060,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 26 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 27 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -1099,11 +1108,14 @@ The auth limiters each answer a specific threat:
   link request and its verify (10 in 15 minutes; a normal confirm spends two),
   and one `passkey-step-up` budget shared by the passkey options and verify
   (10 in 15 minutes).
-- **Passkey sign-in** counts by IP: one `passkey-sign-in` budget shared by the
-  options and verify (20 in 15 minutes; a sign-in spends two). The Origin
-  check runs before the limiter, so a refused page spends nothing.
+- **Passkey sign-in** counts by IP, with two budgets: `passkey-sign-in-options`
+  on the options call (300 in 15 minutes; it is cheap and runs on every
+  sign-in page load) and `passkey-sign-in` on the verify call (20 in 15
+  minutes). The Origin check runs before the limiter, so a refused page spends
+  nothing.
 - **Passkey create, rename and delete** count per user: one `passkey-manage`
-  budget across all four writes (20 in 15 minutes). Listing passkeys has no
+  budget across all four writes (20 in 15 minutes); create and delete check
+  for a recent sign-in first, so a refusal spends none of it. Listing passkeys has no
   limiter: it reads the caller's own rows.
 - **Refresh and logout** are volume protection (300 in 5 minutes per IP): a
   refresh token is 256 random bits. Logout's budget is generous because a 429
@@ -1178,7 +1190,7 @@ reload and the queue pause.
 | ----------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                               |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                      |
-| Global rate limiting                                  | **Partial**         | 26 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                             |
+| Global rate limiting                                  | **Partial**         | 27 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                             |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                      |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                      |
