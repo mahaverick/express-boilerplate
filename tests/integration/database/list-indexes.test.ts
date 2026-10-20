@@ -17,6 +17,8 @@
  * the tenants are read through an index and never sequentially. Search runs
  * through GIN trigram indexes, checked with every scan but a bitmap one off.
  */
+import { randomUUID } from 'node:crypto'
+import type { TransactionSql } from 'postgres'
 import { describe, expect, it } from 'vitest'
 import { auditLogList } from '@/repositories/audit-log.repository'
 import { notificationList } from '@/repositories/notification.repository'
@@ -80,6 +82,61 @@ const JOINED_ORDER_INDEXES = [
 ] as const
 
 /**
+ * Table sizes a bounded case plans against: many users and tenants, each
+ * with a few memberships. A test database holds a handful of rows, often in
+ * an empty membership table, and the planner estimates an empty table at
+ * one row whatever its statistics say. Membership and user then tie at one
+ * row each, and the planner may walk every user or tenant and probe the
+ * memberships per row, which fails the case at random.
+ */
+const REPRESENTATIVE_SIZES = {
+  users: 1_000_000,
+  tenants: 100_000,
+  user_memberships: 2_000_000,
+} as const
+
+/**
+ * How many distinct owners the membership rows have, as Postgres writes a
+ * share of the row count: two memberships per user, twenty per tenant.
+ */
+const MEMBERSHIP_OWNER_SHARES = [
+  ['user_id', -0.5],
+  ['tenant_id', -0.05],
+] as const
+
+/**
+ * Gives each of the bounded tables a page and the representative sizes,
+ * inside the planning transaction. The rows are one user, one tenant and
+ * their membership. Postgres 18 restores statistics transactionally, so the
+ * rollback undoes the sizes with the rows. Column statistics are cleared,
+ * and the membership owner columns get the shares above, so the planner
+ * sizes one owner's memberships from those, not from the few rows an
+ * analyze last saw.
+ */
+async function representativeSizes(tx: TransactionSql): Promise<void> {
+  const slug = `plan-${randomUUID()}`
+  const email = `${slug}@example.test`
+  const [user] = await tx<{ id: string }[]>`
+    insert into users (email) values (${email}) returning id`
+  const [tenant] = await tx<{ id: string }[]>`
+    insert into tenants (name, slug) values ('Plan', ${slug}) returning id`
+  await tx`insert into user_memberships (user_id, tenant_id) values (${user!.id}, ${tenant!.id})`
+  for (const [table, rows] of Object.entries(REPRESENTATIVE_SIZES)) {
+    await tx`select pg_restore_relation_stats(
+      'schemaname', 'public', 'relname', ${table}::text,
+      'relpages', 1::integer, 'reltuples', ${rows}::real)`
+    await tx`select pg_clear_attribute_stats('public', ${table}::text, attname, false)
+      from pg_attribute where attrelid = ${table}::regclass and attnum > 0 and not attisdropped`
+  }
+  for (const [column, share] of MEMBERSHIP_OWNER_SHARES) {
+    await tx`select pg_restore_attribute_stats(
+      'schemaname', 'public', 'relname', 'user_memberships', 'attname', ${column}::text,
+      'inherited', false, 'null_frac', 0::real, 'avg_width', 36::integer,
+      'n_distinct', ${share}::real)`
+  }
+}
+
+/**
  * Thrown to roll back the planning transaction, carrying the plan out of it.
  */
 class RollbackAfterPlan extends Error {
@@ -89,12 +146,13 @@ class RollbackAfterPlan extends Error {
 }
 
 /**
- * The text plan for a query with its parameters, with the given scans off
- * and the `hidden` indexes dropped; the transaction always rolls back.
+ * The text plan for a query with its parameters, with the given scans off,
+ * the `hidden` indexes dropped and, when asked, the representative sizes;
+ * the transaction always rolls back.
  */
 async function planFor(
   query: { sql: string; params: unknown[] },
-  options: { hidden?: readonly string[]; off?: readonly string[] } = {}
+  options: { hidden?: readonly string[]; off?: readonly string[]; representative?: boolean } = {}
 ): Promise<string> {
   try {
     await sql.begin(async (tx) => {
@@ -104,6 +162,7 @@ async function planFor(
       }
       const hidden = options.hidden ?? []
       for (const index of hidden) await tx.unsafe(`drop index "${index}"`)
+      if (options.representative === true) await representativeSizes(tx)
       const rows = await tx.unsafe<{ 'QUERY PLAN': string }[]>(
         `explain ${query.sql}`,
         query.params as Parameters<typeof tx.unsafe>[1]
@@ -459,7 +518,10 @@ describe('list sort indexes', () => {
       const rivals =
         owner === 'tenant' ? USER_LED_MEMBERSHIP_INDEXES : TENANT_LED_MEMBERSHIP_INDEXES
       const lines = mainTree(
-        await planFor(query(), { hidden: [...rivals, ...JOINED_ORDER_INDEXES, ...(hidden ?? [])] })
+        await planFor(query(), {
+          hidden: [...rivals, ...JOINED_ORDER_INDEXES, ...(hidden ?? [])],
+          representative: true,
+        })
       )
       // The first scan is the outer side of the join: the memberships, read through the owner's index with the owner in its Index Cond.
       const scan = lines.findIndex((line) =>
