@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.1.1](https://github.com/mahaverick/express-boilerplate/compare/v7.1.0...v7.1.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **copy:** reword every user-facing message to the copy rules and add a copy guard ([#140](https://github.com/mahaverick/express-boilerplate/issues/140)) ([9550e32](https://github.com/mahaverick/express-boilerplate/commit/9550e32c84ee7f68c2f00d8248b5deefd9969653))
+
 ## [7.1.0](https://github.com/mahaverick/express-boilerplate/compare/v7.0.1...v7.1.0) (2026-10-20)
 
 
