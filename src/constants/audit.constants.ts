@@ -122,7 +122,7 @@ export const AUDIT_ACTIONS = {
     target: 'invitation',
     metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
   },
-  // `trigger` is set when the system resent it because the invitee asked Apex for a sign-in link; a member's or staff resend carries none.
+  // `trigger` marks a system resend made when the invitee asked Apex for a sign-in link. No longer written (that request now mails the confirm link), but kept so older rows still parse.
   'invitation.resent': {
     target: 'invitation',
     metadata: z.strictObject({

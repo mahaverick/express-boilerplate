@@ -1,8 +1,9 @@
 /**
  * @file Apex sign-in links admit staff only. A request mails a link to a
  * staff member; any other address gets nothing, except an address holding a
- * pending staff invitation, which gets that invitation again (outside its
- * resend cooldown) instead of a link. Every address gets the one fixed 202.
+ * pending staff invitation, which gets that invitation's confirm link
+ * instead of a sign-in link: one mail, one click, joined (C12). Every address
+ * gets the one fixed 202.
  * A verify reads the frontend from the link's row, never the request, and
  * an Apex link reaches only an existing staff account. The follow-up's
  * effects are asserted by awaiting it directly (`requestSignInLink`), never
@@ -11,7 +12,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { LINK_INVALID_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
@@ -19,12 +20,16 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { db, sql } from '@/services/database.service'
+import { addressDigest } from '@/services/mail-cooldown.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
+import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import { requestSignInLink } from '@/services/sign-in-link.service'
+import { verifyInvitation } from '@/services/tenant-invitation.service'
 import { startEmailWorker } from '@/workers/email.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { findMailpitMessages, getMailpitMessage } from '../../helpers/mailpit'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -34,6 +39,11 @@ import {
 import { request } from '../../helpers/request'
 import { issueTestLink } from '../../helpers/sign-in'
 import { waitUntil } from '../../helpers/timing'
+
+vi.mock('@/services/sign-in-link-limit.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/sign-in-link-limit.service')>()
+  return { ...actual, spendSignInLinkBudget: vi.fn(actual.spendSignInLinkBudget) }
+})
 
 const app = createApp()
 const invitationRepository = new TenantInvitationRepository()
@@ -139,13 +149,13 @@ async function invitationState(id: string): Promise<InvitationState> {
  * @param email - The invited address.
  * @param lastSentAgoMs - How long ago it was last mailed.
  * @param expiresInMs - How long it has left; a day by default.
- * @returns The invitation's id.
+ * @returns The invitation's id and its raw token.
  */
 async function staffInvitationFor(
   email: string,
   lastSentAgoMs: number,
   expiresInMs = 24 * HOUR_MS
-): Promise<string> {
+): Promise<{ invitationId: string; rawToken: string }> {
   const { user: inviter } = await createTrackedStaff('owner')
   const platform = await platformTenant()
   const rawToken = randomBytes(32).toString('base64url')
@@ -167,7 +177,52 @@ async function staffInvitationFor(
     update tenant_invitations set last_sent_at = ${lastSentAt.toISOString()}::timestamptz
     where id = ${created.id}
   `
-  return created.id
+  return { invitationId: created.id, rawToken }
+}
+
+/**
+ * The `invitation_link` rows of one address, oldest first.
+ * @param email - The address.
+ * @returns Each row's invitation and whether it is revoked.
+ */
+async function confirmLinks(
+  email: string
+): Promise<{ app: string; invitationId: string | null; revoked: boolean }[]> {
+  return sql<{ app: string; invitationId: string | null; revoked: boolean }[]>`
+    select app, invitation_id as "invitationId", revoked_at is not null as revoked
+    from user_tokens where email = ${email} and purpose = 'invitation_link'
+    order by created_at, id
+  `
+}
+
+/**
+ * Release one address's sign-in request cooldown, as its expiry would, so a
+ * second request in the same test reaches the lookup.
+ * @param email - The address.
+ */
+async function releaseRequestCooldown(email: string): Promise<void> {
+  const redis = await getRedis()
+  await redis.del(redisKey('sign-in-link', addressDigest(email)))
+}
+
+/**
+ * The invitation confirm link mailed to an address, read from Mailpit.
+ * @param email - The recipient.
+ * @returns The link.
+ */
+async function mailedConfirmLink(email: string): Promise<URL> {
+  const [message] = await waitUntil(
+    async () => {
+      const found = await findMailpitMessages(email)
+      return found.length > 0 ? found : undefined
+    },
+    { message: `the confirm mail to ${email}` }
+  )
+  if (!message) throw new Error(`no mail reached ${email}`)
+  const detail = await getMailpitMessage(message.ID)
+  const href = /https?:\/\/\S+\/invitations\/confirm\?\S+/.exec(detail.Text)?.[0]
+  if (href === undefined) throw new Error('the mail carries no invitation confirm link')
+  return new URL(href)
 }
 
 /**
@@ -267,43 +322,43 @@ describe('POST /auth/link/request on Apex', () => {
     }
   })
 
-  it('resends a pending staff invitation instead of a sign-in link', async () => {
+  it('mails the staff invitation confirm link instead of a sign-in link, and leaves the invitation as it was', async () => {
     const email = uniqueEmail('invitee')
-    const invitationId = await staffInvitationFor(email, 2 * HOUR_MS)
+    const { invitationId } = await staffInvitationFor(email, 2 * HOUR_MS)
     const before = await invitationState(invitationId)
 
     await requestSignInLink({ email, app: 'apex' })()
 
-    const after = await invitationState(invitationId)
     expect(await linkRowCount(email)).toBe(0)
-    expect(after.tokenHash).not.toBe(before.tokenHash)
-    expect(after.lastSentAt).not.toBe(before.lastSentAt)
-    expect(new Date(after.lastSentAt ?? 0).getTime()).toBeGreaterThan(
-      new Date(before.lastSentAt ?? 0).getTime()
-    )
-    // A request from anyone must not lengthen a staff invitation's life.
-    expect(after.expiresAt).toBe(before.expiresAt)
-    expect(await messageCount(email, 'tenant_invitation')).toBe(1)
+    expect(await confirmLinks(email)).toEqual([{ app: 'apex', invitationId, revoked: false }])
+    expect(await messageCount(email, 'invitation_confirm')).toBe(1)
+    expect(await messageCount(email, 'tenant_invitation')).toBe(0)
     expect(await messageCount(email, 'sign_in_link')).toBe(0)
-    expect(await resentAudit(invitationId)).toEqual({
-      actorKind: 'system',
-      access: 'system',
-      metadata: { role: 'viewer', emailDomain: 'example.test', trigger: 'sign_in_request' },
-    })
+    // The invitation mail the invitee already holds keeps working, and nobody can lengthen its life.
+    expect(await invitationState(invitationId)).toEqual(before)
+    expect(await resentAudit(invitationId)).toBeUndefined()
   })
 
-  it('states the days the resent invitation actually has left', async () => {
-    const email = uniqueEmail('days-left')
-    // 30 hours left: rounding up would promise 2 days, past the real expiry.
-    await staffInvitationFor(email, 2 * HOUR_MS, 30 * HOUR_MS)
+  it('joins the invitee with one click on that one mail', async () => {
+    const email = uniqueEmail('one-click')
+    const { invitationId } = await staffInvitationFor(email, 2 * HOUR_MS)
 
     await requestSignInLink({ email, app: 'apex' })()
+    const link = await mailedConfirmLink(email)
+    const response = await request(app)
+      .post('/api/v1/invitations/confirm')
+      .send({ token: link.searchParams.get('token'), email: link.searchParams.get('email') })
 
-    const [message] = await sql<{ expiresInDays: string }[]>`
-      select variables->>'expiresInDays' as "expiresInDays" from email_messages
-      where recipient = ${email} and template_key = 'tenant_invitation'
+    expect(link.origin + link.pathname).toMatch(/\/invitations\/confirm$/)
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      data: { isNewUser: true, role: 'viewer', user: { email, platformRole: 'viewer' } },
+    })
+    const [accepted] = await sql<{ acceptedAt: string | null }[]>`
+      select accepted_at::text as "acceptedAt" from tenant_invitations where id = ${invitationId}
     `
-    expect(message?.expiresInDays).toBe('1')
+    expect(accepted?.acceptedAt).not.toBeNull()
+    expect(await findMailpitMessages(email)).toHaveLength(1)
   })
 
   it('answers one 202 body for staff, a staff invitee, a customer and an unknown address', async () => {
@@ -332,27 +387,80 @@ describe('POST /auth/link/request on Apex', () => {
       }
     )
     await waitUntil(
-      async () => (await messageCount(invitee, 'tenant_invitation')) === 1 || undefined,
+      async () => (await messageCount(invitee, 'invitation_confirm')) === 1 || undefined,
       {
-        message: 'the invitation mailed again to the invitee',
+        message: 'the confirm link mailed to the invitee',
       }
     )
   })
 
-  it('sends nothing when the pending staff invitation is inside its resend cooldown', async () => {
-    const email = uniqueEmail('cooldown')
-    const invitationId = await staffInvitationFor(email, 1000)
-    const before = await invitationState(invitationId)
+  it('mails no second confirm link after a Join click inside the confirm cooldown', async () => {
+    const email = uniqueEmail('after-join')
+    const { invitationId, rawToken } = await staffInvitationFor(email, 2 * HOUR_MS)
+    const outcome = await verifyInvitation(rawToken)
+    if (outcome.kind !== 'confirm') throw new Error('a staff invitation always confirms by email')
+    await outcome.followUp()
 
     await requestSignInLink({ email, app: 'apex' })()
 
-    expect(await invitationState(invitationId)).toEqual(before)
-    expect(await messageCount(email, 'tenant_invitation')).toBe(0)
-    expect(await linkRowCount(email)).toBe(0)
-    expect(await resentAudit(invitationId)).toBeUndefined()
+    expect(await messageCount(email, 'invitation_confirm')).toBe(1)
+    // The link the Join click mailed stays the live one.
+    expect(await confirmLinks(email)).toEqual([{ app: 'apex', invitationId, revoked: false }])
     const response = await postRequest({ email, app: 'apex' })
     expect(response.status).toBe(202)
     expect(response.body).toEqual(REQUEST_ACCEPTED_BODY)
+  })
+
+  it('mails no second confirm link to a Join click right after a sign-in request', async () => {
+    const email = uniqueEmail('before-join')
+    const { invitationId, rawToken } = await staffInvitationFor(email, 2 * HOUR_MS)
+    await requestSignInLink({ email, app: 'apex' })()
+
+    const outcome = await verifyInvitation(rawToken)
+    if (outcome.kind !== 'confirm') throw new Error('a staff invitation always confirms by email')
+    await outcome.followUp()
+
+    expect(await messageCount(email, 'invitation_confirm')).toBe(1)
+    expect(await confirmLinks(email)).toEqual([{ app: 'apex', invitationId, revoked: false }])
+  })
+
+  it('spends one daily budget unit per request, not two', async () => {
+    const email = uniqueEmail('budget')
+    await staffInvitationFor(email, 2 * HOUR_MS)
+    vi.mocked(spendSignInLinkBudget).mockClear()
+
+    await requestSignInLink({ email, app: 'apex' })()
+
+    expect(await messageCount(email, 'invitation_confirm')).toBe(1)
+    expect(vi.mocked(spendSignInLinkBudget)).toHaveBeenCalledTimes(1)
+  })
+
+  it('mails nothing once the daily budget is spent', async () => {
+    const email = uniqueEmail('budget-spent')
+    await staffInvitationFor(email, 2 * HOUR_MS)
+    vi.mocked(spendSignInLinkBudget).mockResolvedValueOnce('exhausted')
+
+    await requestSignInLink({ email, app: 'apex' })()
+
+    expect(await messageCount(email, 'invitation_confirm')).toBe(0)
+    expect(await confirmLinks(email)).toEqual([])
+  })
+
+  it('mails a fresh confirm link once the request cooldown and the confirm cooldown are over', async () => {
+    const email = uniqueEmail('again')
+    const { invitationId } = await staffInvitationFor(email, 2 * HOUR_MS)
+    await requestSignInLink({ email, app: 'apex' })()
+    await releaseRequestCooldown(email)
+    const redis = await getRedis()
+    await redis.del(redisKey(`invitation-confirm:${invitationId}`, addressDigest(email)))
+
+    await requestSignInLink({ email, app: 'apex' })()
+
+    expect(await messageCount(email, 'invitation_confirm')).toBe(2)
+    expect(await confirmLinks(email)).toEqual([
+      { app: 'apex', invitationId, revoked: true },
+      { app: 'apex', invitationId, revoked: false },
+    ])
   })
 
   it('resends nothing to a pending invitation in a customer tenant', async () => {
@@ -385,6 +493,8 @@ describe('POST /auth/link/request on Apex', () => {
 
       expect(await invitationState(created.id)).toEqual(before)
       expect(await messageCount(email, 'tenant_invitation')).toBe(0)
+      expect(await messageCount(email, 'invitation_confirm')).toBe(0)
+      expect(await confirmLinks(email)).toEqual([])
     } finally {
       await sql`delete from tenant_invitations where id = ${created.id}`
       await sql`delete from tenants where id = ${tenant.id}`
