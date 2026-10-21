@@ -2,7 +2,7 @@
  * @file `isRecentAuth`: `auth_time` in seconds against `now` in milliseconds,
  * the arithmetic the `requireRecentAuth` middleware applies.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { STEP_UP_MAX_AGE_MS } from '@/constants/auth.constants'
 import { isRecentAuth } from '@/utilities/recent-auth.utilities'
 

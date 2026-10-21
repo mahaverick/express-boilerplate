@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs'
 import net from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { applyNetworkDefaults, CONNECT_ATTEMPT_TIMEOUT_MS } from '@/configs/network.config'
 
 const nodeDefault = net.getDefaultAutoSelectFamilyAttemptTimeout()

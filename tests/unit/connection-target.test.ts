@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 /**
  * The text of a file at the repository root.

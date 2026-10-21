@@ -20,7 +20,7 @@ import { createTrackedUser } from './platform-users'
 /**
  * SQL NULL for a raw insert or update: postgres-js refuses `undefined`.
  */
-// eslint-disable-next-line unicorn/no-null -- the bound value must be NULL, not absent
+// oxlint-disable-next-line unicorn/no-null -- the bound value must be NULL, not absent
 const SQL_NULL = null
 
 const tenantRepository = new TenantRepository()

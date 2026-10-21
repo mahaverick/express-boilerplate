@@ -101,12 +101,12 @@ export async function createTenant(
     return {
       tenantId: tenant.id,
       createdAt: tenant.createdAt,
-      // eslint-disable-next-line unicorn/no-null -- no reason is asked when staff create the tenant
+      // oxlint-disable-next-line unicorn/no-null -- no reason is asked when staff create the tenant
       dispatch: await createOwnerInvitation(actor, tenant.id, ownerEmail, null, tx),
     }
   })
   await emitDomainEvent(
-    // eslint-disable-next-line unicorn/no-null -- the tenant has no owner until one accepts
+    // oxlint-disable-next-line unicorn/no-null -- the tenant has no owner until one accepts
     { type: 'tenant_created', tenantId, ownerId: null, at: createdAt },
     { access: 'platform' }
   )
@@ -179,7 +179,7 @@ export async function reissueOwnerInvitation(
           targetId: invitation.id,
           metadata: {
             role: invitation.role,
-            // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+            // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
             emailDomain: hostnameDomain(invitation.email) ?? null,
           },
         },

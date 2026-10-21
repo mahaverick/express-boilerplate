@@ -4,7 +4,7 @@
  * `canResendFor`'s matrix. No database.
  */
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { PlatformEmailRecord } from '@/repositories/platform-email.repository'
@@ -190,14 +190,14 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
     status: 'sent',
     senderClass: 'transactional',
     linkApp: 'web',
-    // eslint-disable-next-line unicorn/no-null -- the column is nullable
+    // oxlint-disable-next-line unicorn/no-null -- the column is nullable
     failureOrigin: null,
     userId,
-    // eslint-disable-next-line unicorn/no-null -- no tenant
+    // oxlint-disable-next-line unicorn/no-null -- no tenant
     tenantId: null,
-    // eslint-disable-next-line unicorn/no-null -- no invitation
+    // oxlint-disable-next-line unicorn/no-null -- no invitation
     invitationId: null,
-    // eslint-disable-next-line unicorn/no-null -- not a resend
+    // oxlint-disable-next-line unicorn/no-null -- not a resend
     resentFromId: null,
     createdAt: new Date(),
     statusUpdatedAt: new Date(),
@@ -205,14 +205,14 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
       id: userId,
       email: 'ada@example.test',
       firstName: 'Ada',
-      // eslint-disable-next-line unicorn/no-null -- no last name
+      // oxlint-disable-next-line unicorn/no-null -- no last name
       lastName: null,
       isActive: true,
       isVerified: true,
-      // eslint-disable-next-line unicorn/no-null -- a live user
+      // oxlint-disable-next-line unicorn/no-null -- a live user
       deletedAt: null,
     },
-    // eslint-disable-next-line unicorn/no-null -- no tenant
+    // oxlint-disable-next-line unicorn/no-null -- no tenant
     tenant: null,
     ...overrides,
   }
@@ -242,7 +242,7 @@ describe('canResendFor', () => {
     }
   )
 
-  // eslint-disable-next-line unicorn/no-null -- null is an actor with no platform role
+  // oxlint-disable-next-line unicorn/no-null -- null is an actor with no platform role
   it.each<MembershipRole | null>(['viewer', 'editor', 'manager', null])(
     'is false for a %s',
     (role) => {
@@ -269,7 +269,7 @@ describe('canResendFor', () => {
   })
 
   it('is false for a legacy row without a user, and for a soft-deleted user', () => {
-    // eslint-disable-next-line unicorn/no-null -- a backfilled row has no user
+    // oxlint-disable-next-line unicorn/no-null -- a backfilled row has no user
     const legacy = message({ userId: null, user: null })
     expect(canResendFor(ACTOR, legacy, context())).toBe(false)
     const gone = message()
@@ -366,7 +366,7 @@ describe('canResendFor', () => {
     })
 
     it('is false without the ids, or when the invitation is gone or in another tenant', () => {
-      // eslint-disable-next-line unicorn/no-null -- a backfilled row has no invitation id
+      // oxlint-disable-next-line unicorn/no-null -- a backfilled row has no invitation id
       expect(canResendFor(ACTOR, message({ ...invitation, invitationId: null }), context())).toBe(
         false
       )

@@ -2,7 +2,7 @@
  * @file The notification types this codebase produces: invitations and the
  * maintenance-mode notice only.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   NOTIFICATION_TYPES,
   STAFF_ONLY_NOTIFICATION_TYPES,

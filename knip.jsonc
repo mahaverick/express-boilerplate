@@ -3,8 +3,8 @@
   // knip's drizzle plugin executes drizzle.config.ts, which calls
   // getDatabaseUrl() and fails without DATABASE_URL; the config is an entry below.
   "drizzle": false,
-  // knip finds the rest from package.json scripts, eslint.config.mjs, the
-  // vitest configs and the dynamic imports in src/index.ts.
+  // knip finds the rest from package.json scripts, eslint.config.mjs,
+  // vite.config.ts and the dynamic imports in src/index.ts.
   "entry": [
     // Read by drizzle-kit, which the disabled plugin would have declared.
     "drizzle.config.ts",

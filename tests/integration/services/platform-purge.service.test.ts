@@ -7,7 +7,7 @@
  * membership. Both must finish: the purge takes the owner lock order first.
  */
 import postgres from 'postgres'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { record } from '@/services/audit.service'
 import { sql, withTransaction } from '@/services/database.service'

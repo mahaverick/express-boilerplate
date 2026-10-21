@@ -6,7 +6,7 @@
  * signature is committed.
  */
 import { createHmac, randomBytes } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { WebhookPayloadError, WebhookSignatureError } from '@/errors/webhook-errors'
 import {
   createResendEmailWebhookAdapter,

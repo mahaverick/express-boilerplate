@@ -4,7 +4,7 @@
  * calls `errorHandler`.
  */
 import { type Request } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestContextStore } from '@/services/request-context.service'
 import { settle } from '../../helpers/timing'

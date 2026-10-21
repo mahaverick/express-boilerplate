@@ -18,7 +18,7 @@ import { isAllowedOrigin } from '@/utilities/origin.utilities'
 export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     // Never an Error for a disallowed origin: that would be a 500; `false` withholds the grant.
-    // eslint-disable-next-line unicorn/no-null -- cors's own Node-style callback convention uses `null` as the "no error" sentinel; its `CustomOrigin` callback signature is a third-party type this file must match exactly
+    // oxlint-disable-next-line unicorn/no-null -- cors's own Node-style callback convention uses `null` as the "no error" sentinel; its `CustomOrigin` callback signature is a third-party type this file must match exactly
     callback(null, isAllowedOrigin(origin))
   },
   credentials: true,

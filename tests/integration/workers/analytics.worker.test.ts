@@ -7,7 +7,7 @@
  * mocked `getEnv()`.
  */
 import type { Worker } from 'bullmq'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { ANALYTICS_DELETIONS_JOB } from '@/jobs/analytics-deletion.job'
 import { ANALYTICS_DRAIN_JOB } from '@/jobs/analytics.job'
 import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'

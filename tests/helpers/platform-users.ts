@@ -34,11 +34,11 @@ export interface TestUserOptions {
 export async function createTrackedUser(options: TestUserOptions = {}): Promise<User> {
   const user = await userRepository.create({
     email: options.email ?? `pu-${randomUUID()}@example.test`,
-    // eslint-disable-next-line unicorn/no-null -- the column is nullable; null is "no name"
+    // oxlint-disable-next-line unicorn/no-null -- the column is nullable; null is "no name"
     firstName: options.firstName ?? null,
-    // eslint-disable-next-line unicorn/no-null -- as above
+    // oxlint-disable-next-line unicorn/no-null -- as above
     lastName: options.lastName ?? null,
-    // eslint-disable-next-line unicorn/no-null -- an unverified account
+    // oxlint-disable-next-line unicorn/no-null -- an unverified account
     emailVerifiedAt: options.verified === false ? null : new Date(),
     active: options.active ?? true,
   })

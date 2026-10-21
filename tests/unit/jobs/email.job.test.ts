@@ -5,7 +5,7 @@
  * still rejects. The real Redis and Postgres path is
  * tests/integration/jobs/email.job.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import {
   addEmailJob,

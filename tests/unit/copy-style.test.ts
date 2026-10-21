@@ -18,7 +18,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { renderInvitationConfirmTemplate } from '@/templates/email/invitation-confirm.template'
 import { renderMaintenanceModeChangedTemplate } from '@/templates/email/maintenance-mode-changed.template'
 import { renderOnboardingReminderTemplate } from '@/templates/email/onboarding-reminder.template'

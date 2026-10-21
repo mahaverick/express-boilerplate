@@ -65,7 +65,7 @@ export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<voi
   if (!isFlagsEnabled()) return
   const stored = await readStoredSnapshot()
   const isCurrent = stored?.snapshot.fingerprint === flagRegistryFingerprint()
-  // eslint-disable-next-line unicorn/no-null -- the client's contract is null for an unconditional fetch
+  // oxlint-disable-next-line unicorn/no-null -- the client's contract is null for an unconditional fetch
   const result = await fetchFlagDefinitions(isCurrent ? stored.snapshot.etag : null)
   if (result.kind === 'aborted') return
   if (result.kind === 'error') {
@@ -110,7 +110,7 @@ async function readStoredSnapshot(): Promise<StoredFlagSnapshot | null> {
     logger.warn('The stored flag snapshot could not be read; fetching without an ETag', {
       reason: error instanceof Error ? error.name : 'unknown',
     })
-    // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for none
+    // oxlint-disable-next-line unicorn/no-null -- the snapshot's contract is null for none
     return null
   }
 }

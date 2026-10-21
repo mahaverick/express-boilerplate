@@ -5,7 +5,7 @@
  * view of tenant steps, their own member steps, and staff-only states.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { OnboardingCompletionRepository } from '@/repositories/onboarding-completion.repository'
@@ -19,7 +19,7 @@ const completionRepository = new OnboardingCompletionRepository()
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const tenantIds: string[] = []
-// eslint-disable-next-line unicorn/no-null -- JSON null, as the API and the database return it
+// oxlint-disable-next-line unicorn/no-null -- JSON null, as the API and the database return it
 const NONE = null
 
 afterEach(async () => {

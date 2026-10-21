@@ -5,14 +5,14 @@
  * rules of every new foreign key, and the tenant columns' defaults.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { sql } from '@/services/database.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { platformTenant } from '../../helpers/platform-staff'
 
 const tenantIds: string[] = []
 const userIds: string[] = []
-// eslint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
+// oxlint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 afterEach(async () => {
@@ -76,11 +76,11 @@ describe('tenants onboarding columns', () => {
       from tenants where id = ${tenantId}`
     expect(row).toEqual({
       onboarding_tracked: false,
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL: no default
+      // oxlint-disable-next-line unicorn/no-null -- SQL NULL: no default
       onboarding_started_at: null,
-      // eslint-disable-next-line unicorn/no-null -- as above
+      // oxlint-disable-next-line unicorn/no-null -- as above
       onboarding_dismissed_at: null,
-      // eslint-disable-next-line unicorn/no-null -- as above
+      // oxlint-disable-next-line unicorn/no-null -- as above
       onboarding_dismissed_by: null,
     })
   })
@@ -104,7 +104,7 @@ describe('tenants onboarding columns', () => {
     const [row] = await sql`
       select onboarding_dismissed_by, onboarding_dismissed_at is not null as is_dismissed
       from tenants where id = ${tenantId}`
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL after ON DELETE SET NULL
+    // oxlint-disable-next-line unicorn/no-null -- SQL NULL after ON DELETE SET NULL
     expect(row).toEqual({ onboarding_dismissed_by: null, is_dismissed: true })
   })
 })
@@ -208,7 +208,7 @@ describe('onboarding_completions foreign keys', () => {
     )
     const [row] =
       await sql`select completed_by, source from onboarding_completions where id = ${recorded}`
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL after ON DELETE SET NULL
+    // oxlint-disable-next-line unicorn/no-null -- SQL NULL after ON DELETE SET NULL
     expect(row).toEqual({ completed_by: null, source: 'staff' })
   })
 })

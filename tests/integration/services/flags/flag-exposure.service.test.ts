@@ -8,7 +8,7 @@
  * under `.env.test`, so `isAnalyticsEnabled` is mocked here.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import {
   isAnalyticsSignatureValid,
@@ -29,7 +29,7 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
   return { ...actual, isAnalyticsEnabled: () => analytics.isEnabled }
 })
 
-// eslint-disable-next-line unicorn/no-null -- the context's contract uses null
+// oxlint-disable-next-line unicorn/no-null -- the context's contract uses null
 const NONE = null
 const KEY = 'example_cta_experiment'
 const BOLD: FlagEvaluation = { value: 'bold', reason: 'condition_match', conditionIndex: 0 }

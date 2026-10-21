@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
@@ -23,7 +23,7 @@ const userRepository = new UserRepository()
  * The JSON `null` the API returns for an unset firstName or lastName;
  * `toEqual` must match that value, and `undefined` would not.
  */
-// eslint-disable-next-line unicorn/no-null -- see comment above
+// oxlint-disable-next-line unicorn/no-null -- see comment above
 const NO_NAME = null
 
 /**
@@ -123,7 +123,7 @@ describe('/api/v1/profile', () => {
     // getProfile loads the user again after requireAuth did, and answers 404 when that second lookup finds nothing.
     it('returns 404 when the user is deleted between requireAuth loading it and the handler loading it again', async () => {
       const { token } = await createAuthenticatedUser()
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFindById = UserRepository.prototype.findById
       let callCount = 0
       /**
@@ -202,7 +202,7 @@ describe('/api/v1/profile', () => {
       const response = await request(app)
         .patch('/api/v1/profile')
         .set('Authorization', `Bearer ${token}`)
-        // eslint-disable-next-line unicorn/no-null -- exercising the explicit-null-clears-the-field contract itself
+        // oxlint-disable-next-line unicorn/no-null -- exercising the explicit-null-clears-the-field contract itself
         .send({ firstName: null })
 
       expect(response.status).toBe(200)
@@ -271,7 +271,7 @@ describe('/api/v1/profile', () => {
           firstName: 'Updated',
           email: attackerEmail,
           id: attackerId,
-          // eslint-disable-next-line unicorn/no-null -- an attacker's attempt to unverify the account
+          // oxlint-disable-next-line unicorn/no-null -- an attacker's attempt to unverify the account
           emailVerifiedAt: null,
           active: false,
         })

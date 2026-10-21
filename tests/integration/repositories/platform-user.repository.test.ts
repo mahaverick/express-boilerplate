@@ -6,7 +6,7 @@
  * in this worker never match.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { Tenant } from '@/database/models/tenant.model'
 import { PlatformUserRepository } from '@/repositories/platform-user.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'

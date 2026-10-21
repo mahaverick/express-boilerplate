@@ -9,7 +9,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -63,7 +63,7 @@ async function unownedInvitationMail(recipient: string, createdAt = new Date()):
   const message = await createTrackedMessage({
     recipient,
     templateKey: 'tenant_invitation',
-    // eslint-disable-next-line unicorn/no-null -- the column's "no account"
+    // oxlint-disable-next-line unicorn/no-null -- the column's "no account"
     userId: null,
     createdAt,
   })

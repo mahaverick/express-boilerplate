@@ -9,7 +9,7 @@
  * that needs the real compose-stack Redis.
  */
 import { createClient } from 'redis'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
 import { request } from '../../helpers/request'

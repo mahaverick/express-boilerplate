@@ -9,7 +9,16 @@
  * fault and keeps every row. Analytics is enabled for this file only, through
  * a mocked `getEnv()`.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import {
   ANALYTICS_LEASE_SECONDS,
   ANALYTICS_POISON_REJECTIONS,
@@ -41,7 +50,7 @@ const MINUTE_MS = 60 * SECOND_MS
 // The longest backoff (600 s) plus the lease: past it, every leased row is claimable again.
 const PAST_LEASE_AND_BACKOFF_MS = (ANALYTICS_LEASE_SECONDS + 600 + 1) * SECOND_MS
 
-// eslint-disable-next-line unicorn/no-null -- the column's "not leased" value, as postgres-js returns it
+// oxlint-disable-next-line unicorn/no-null -- the column's "not leased" value, as postgres-js returns it
 const NOT_LEASED = null
 
 const fake: { posthog?: FakePosthog } = {}

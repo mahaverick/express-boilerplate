@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
@@ -162,7 +162,7 @@ describe('POST /api/v1/platform/users', () => {
       emailSent: boolean
     }>(response)
     expect(body.emailSent).toBe(true)
-    // eslint-disable-next-line unicorn/no-null -- JSON null: verified by the first click
+    // oxlint-disable-next-line unicorn/no-null -- JSON null: verified by the first click
     expect(body.user).toMatchObject({ email, active: true, emailVerifiedAt: null })
     const userId = body.user.id
 
@@ -171,7 +171,7 @@ describe('POST /api/v1/platform/users', () => {
 
     const links = await linkRows(email)
     expect(links).toHaveLength(1)
-    // eslint-disable-next-line unicorn/no-null -- a sign_in_link row is keyed by address, never a user
+    // oxlint-disable-next-line unicorn/no-null -- a sign_in_link row is keyed by address, never a user
     expect(links[0]).toMatchObject({ userId: null, app: 'web', revoked: false })
     const expiresAt = new Date(links[0]?.expiresAt ?? 0)
     const createdAt = new Date(links[0]?.createdAt ?? 0)
@@ -270,13 +270,13 @@ describe('PATCH /api/v1/platform/users/:id', () => {
     const { token } = await createTrackedStaff('admin')
     const target = await createTrackedUser({ firstName: 'Ada' })
 
-    // eslint-disable-next-line unicorn/no-null -- null clears the last name
+    // oxlint-disable-next-line unicorn/no-null -- null clears the last name
     const response = await patch(token, target.id, { firstName: 'Augusta', lastName: null })
 
     expect(response.status).toBe(200)
     expect(dataOf<{ firstName: string | null; lastName: string | null }>(response)).toMatchObject({
       firstName: 'Augusta',
-      // eslint-disable-next-line unicorn/no-null -- JSON null: the cleared name
+      // oxlint-disable-next-line unicorn/no-null -- JSON null: the cleared name
       lastName: null,
     })
     expect(await auditRows(target.id)).toMatchObject([

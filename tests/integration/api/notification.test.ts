@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import {
   NOTIFICATION_TYPES,
@@ -473,7 +473,7 @@ describe('/api/v1/notifications', () => {
         success: true,
         message: 'Notification deleted.',
         statusCode: 200,
-        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,
       })
     })

@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Queue, Worker } from 'bullmq'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { gracefulShutdown, startServer } from '@/server'
 import { resetLifecycleForTests } from '@/services/lifecycle.service'
 import {

@@ -7,7 +7,7 @@
  * would hang here until the test timeout.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
@@ -93,7 +93,7 @@ async function pendingFrom(tenant: Tenant, inviter: User, role: MembershipRole):
 async function meetingAtLockOwners(
   start: () => Promise<unknown>[]
 ): Promise<{ arrivals: number; outcomes: (string | number)[] }> {
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realLockOwners = UserMembershipRepository.prototype.lockOwners
   let arrivals = 0
   let releaseBarrier: () => void

@@ -4,7 +4,7 @@
  * exercises.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import type { Handler } from '@/controllers/base.controller'
 import { notificationController } from '@/controllers/notification.controller'
 import { HttpError } from '@/errors/http-error'

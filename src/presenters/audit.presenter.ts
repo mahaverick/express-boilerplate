@@ -69,12 +69,12 @@ export function toAuditEntry(row: JoinedAuditRow): AuditEntryResponse {
     actor:
       actor !== null && entry.actorKind === 'user'
         ? { id: actor.id, name: displayName(actor), email: actor.email }
-        : // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null for a system actor
+        : // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null for a system actor
           null,
     target:
       entry.targetType !== null && entry.targetId !== null
         ? { type: entry.targetType, id: entry.targetId }
-        : // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null for no target
+        : // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null for no target
           null,
     metadata: entry.metadata,
   }

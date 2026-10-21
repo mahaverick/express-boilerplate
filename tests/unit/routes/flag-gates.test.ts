@@ -7,7 +7,7 @@
  * checks fail on a misplaced gate.
  */
 import { Router, type RequestHandler } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { flagEntry } from '@/constants/flags.constants'
 import { FLAG_GATE_MARK, requireFlag, type FlagGateMark } from '@/middlewares/flag.middleware'
 import { resolveTenant } from '@/middlewares/tenant.middleware'

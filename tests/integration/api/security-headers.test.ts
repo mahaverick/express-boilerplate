@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { UserRepository } from '@/repositories/user.repository'

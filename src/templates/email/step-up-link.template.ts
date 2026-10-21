@@ -39,7 +39,7 @@ export interface StepUpLinkVariables {
 export const STEP_UP_LINK_TEMPLATE_META: EmailTemplateMeta<StepUpLinkVariables> = {
   senderClass: 'transactional',
   previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
-  // eslint-disable-next-line unicorn/no-null -- no staff resend re-runs this flow
+  // oxlint-disable-next-line unicorn/no-null -- no staff resend re-runs this flow
   resendAction: null,
 }
 

@@ -229,7 +229,7 @@ export class AuditLogRepository {
   async redactActor(userId: string, tx: DbTransaction): Promise<number> {
     const result = await tx
       .update(auditLogModel)
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL is the erasure
+      // oxlint-disable-next-line unicorn/no-null -- SQL NULL is the erasure
       .set({ actorUserId: null, ip: null, userAgent: null })
       .where(eq(auditLogModel.actorUserId, userId))
     return result.count

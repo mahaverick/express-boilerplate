@@ -3,7 +3,7 @@
  * before pausing: the first must not pause the queues of a mode the second
  * already left, and its notice wait ends by the pause grace.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.constants'
 import * as notices from '@/services/maintenance-mode/maintenance-mode-notices.service'

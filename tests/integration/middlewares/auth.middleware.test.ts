@@ -2,8 +2,8 @@
  * @file `requireAuth` against this worker's own database. The file lives
  * under `tests/integration/`, although several cases need no database,
  * because others do: a soft-deleted or deactivated user's still-valid token
- * must be rejected, which needs a real user row. The git hooks run
- * `vitest.unit.config.ts`, which excludes `tests/integration/**` and sets up
+ * must be rejected, which needs a real user row. The git hooks run the
+ * `unit` project, which excludes `tests/integration/**` and sets up
  * no database, so a test that touches the database must not move to
  * `tests/unit/` (CLAUDE.md). `pnpm test` runs this file, and every vitest
  * worker owns its database, so files run in parallel.
@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
 import jwt from 'jsonwebtoken'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import { HttpError } from '@/errors/http-error'

@@ -4,7 +4,7 @@
  * for an actor with no membership, the platform membership `FOR SHARE`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
@@ -189,7 +189,7 @@ describe('tenant-access.service', () => {
       const releaseDemotion = deferred()
       const staffPid = deferred<number>()
 
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realUpdateRole = UserMembershipRepository.prototype.updateRole
       /**
        * `updateRole` that, after the real update, signals that the demotion holds S's platform
@@ -281,7 +281,7 @@ describe('tenant-access.service', () => {
      */
     it('serialises a staff write behind a concurrent demotion (the FOR SHARE lock)', async () => {
       const race = await raceStaffRemovalAgainstDemotion(
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- called with `this` bound by recordingRead
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- called with `this` bound by recordingRead
         UserMembershipRepository.prototype.lockPlatformRole
       )
       await expectRefusedOnTheDemotedRole(race)

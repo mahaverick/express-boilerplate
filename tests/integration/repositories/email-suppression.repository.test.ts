@@ -3,7 +3,7 @@
  * one active suppression per address in any case, and lifting.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
 import { sql } from '@/services/database.service'
 

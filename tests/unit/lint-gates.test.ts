@@ -8,7 +8,7 @@ import path from 'node:path'
 import { ESLint, type Linter } from 'eslint'
 import importX from 'eslint-plugin-import-x'
 import tseslint from 'typescript-eslint'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 /**
  * Lints with the repo's real config (type-aware `parserOptions.project`),
@@ -103,7 +103,7 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
 
 /**
  * This suite's own timeout, in place of the global test timeout
- * (vitest.config.ts). On an idle machine the two cold tests (first
+ * (vite.config.ts). On an idle machine the two cold tests (first
  * `lintText`, first `lintFiles`, building the real TS program the no-cycle
  * fixtures need) run in ~1.1-1.5 s each, and every later test in each group
  * costs 7-40 ms, since both ESLint instances above are module-scoped and

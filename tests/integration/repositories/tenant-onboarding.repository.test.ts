@@ -4,7 +4,7 @@
  * starts the clock, the clock starts once, and a dismissal is set and cleared.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
@@ -91,11 +91,11 @@ describe('TenantRepository onboarding columns', () => {
     const at = new Date('2026-10-02T10:00:00.000Z')
 
     const dismissed = await tenantRepository.setOnboardingDismissed(tenant.id, owner.id, at)
-    // eslint-disable-next-line unicorn/no-null -- null clears both columns
+    // oxlint-disable-next-line unicorn/no-null -- null clears both columns
     const cleared = await tenantRepository.setOnboardingDismissed(tenant.id, null, null)
 
     expect(dismissed).toMatchObject({ onboardingDismissedBy: owner.id, onboardingDismissedAt: at })
-    // eslint-disable-next-line unicorn/no-null -- both columns read back as null
+    // oxlint-disable-next-line unicorn/no-null -- both columns read back as null
     expect(cleared).toMatchObject({ onboardingDismissedBy: null, onboardingDismissedAt: null })
     expect(cleared?.updatedAt).toEqual(tenant.updatedAt)
   })

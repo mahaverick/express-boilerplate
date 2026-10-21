@@ -5,7 +5,7 @@
  * run it: it acts only when it is the entry module.
  */
 import { createHmac } from 'node:crypto'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { parseFireEventArguments, runFireEvent } from '@/scripts/email-fire-event'
 

@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { logger } from '@/services/logger.service'
 import { request } from '../../helpers/request'

@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'

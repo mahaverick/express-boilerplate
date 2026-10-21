@@ -2,7 +2,7 @@
  * @file The maintenance-mode notice: what it says, HTML escaping of every
  * interpolated value, and the missing-variable guard.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY,
   renderMaintenanceModeChangedTemplate,

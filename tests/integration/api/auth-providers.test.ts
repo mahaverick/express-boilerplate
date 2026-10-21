@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'

@@ -3,7 +3,7 @@
  * frontend that started the sign-in, without doubled slashes.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 
 // frontendUrl is mocked, so this test proves only the trailing-slash stripping.
 vi.mock('@/services/frontend-links.service', () => ({

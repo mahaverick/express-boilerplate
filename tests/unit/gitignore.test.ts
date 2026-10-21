@@ -3,7 +3,7 @@
  * while the committed `.env.example` and `.env.test` stay tracked.
  */
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 /**
  * Exit status of `git check-ignore -q` for one path.

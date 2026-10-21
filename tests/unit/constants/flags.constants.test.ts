@@ -3,7 +3,7 @@
  * reference entries, the client slices, the trait set, and the types the
  * registry derives (an unregistered key is a type error).
  */
-import { describe, expect, expectTypeOf, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vite-plus/test'
 import {
   assertFlagRegistry,
   clientFlagsFor,

@@ -6,7 +6,7 @@
  * copy zod's own messages are replaced with, so a schema that sets no message
  * still answers a person in plain words.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { z } from 'zod'
 import { HttpError } from '@/errors/http-error'
 import { parseBody } from '@/validators/parse.validators'

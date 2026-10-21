@@ -12,7 +12,16 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 
 const flags = vi.hoisted(() => ({ isEnabled: true }))
 
@@ -68,7 +77,7 @@ type FlagsMeta = import('@/types/flags').FlagsMetaResponse
  */
 type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 
-// eslint-disable-next-line unicorn/no-null -- JSON null, as the list carries it
+// oxlint-disable-next-line unicorn/no-null -- JSON null, as the list carries it
 const NONE = null
 
 /**

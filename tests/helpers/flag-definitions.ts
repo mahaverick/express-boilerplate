@@ -46,7 +46,7 @@ export function flagDefinition(
     filters?: Record<string, unknown>
   } = {}
 ): TestFlagDefinition {
-  // eslint-disable-next-line unicorn/no-null -- PostHog sends JSON null for a person-aggregated flag
+  // oxlint-disable-next-line unicorn/no-null -- PostHog sends JSON null for a person-aggregated flag
   const groupIndex = options.groupIndex ?? null
   ids.next += 1
   return {
@@ -105,7 +105,7 @@ export function ctaExperimentDefinition(
     filters: {
       groups: [
         {
-          // eslint-disable-next-line unicorn/no-null -- a person-aggregated condition
+          // oxlint-disable-next-line unicorn/no-null -- a person-aggregated condition
           aggregation_group_type_index: null,
           properties: [],
           rollout_percentage: options.rolloutPercentage ?? 100,

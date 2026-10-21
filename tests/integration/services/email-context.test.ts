@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Job } from 'bullmq'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'

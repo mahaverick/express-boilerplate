@@ -4,7 +4,7 @@
  * shared write limiter on writes. No route takes a step-up gate.
  */
 import type { RequestHandler, Router } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'

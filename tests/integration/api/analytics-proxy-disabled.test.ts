@@ -3,7 +3,7 @@
  * (`.env.test` sets no `POSTHOG_PROJECT_KEY`): every method and path answers
  * 503 in the error envelope, and nothing is proxied anywhere.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { request } from '../../helpers/request'
 

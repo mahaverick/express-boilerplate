@@ -78,7 +78,7 @@ function canonical(fields: SignedEventFields): string {
  * @returns The string, or null.
  */
 function signedText(value: unknown): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the signature covers an absent field as null
+  // oxlint-disable-next-line unicorn/no-null -- the signature covers an absent field as null
   return typeof value === 'string' && value !== '' ? value : null
 }
 

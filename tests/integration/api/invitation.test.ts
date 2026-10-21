@@ -13,7 +13,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -77,7 +77,7 @@ const INVITATION_SENT = {
   success: true,
   message: 'If we can invite that address, we sent it an invitation.',
   statusCode: 202,
-  // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+  // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
   data: null,
 }
 const INVALID = {
@@ -735,7 +735,7 @@ describe('invitations API', () => {
       await backdateInvitationSend(fresh?.id ?? '')
       const after = await listVia(tenant.slug, ownerToken)
       const [sent] = after.items
-      // eslint-disable-next-line unicorn/no-null -- JSON null: the cooldown is over
+      // oxlint-disable-next-line unicorn/no-null -- JSON null: the cooldown is over
       expect(sent).toMatchObject({ resendAvailableAt: null })
       expect(typeof sent?.lastSentAt).toBe('string')
     })
@@ -790,7 +790,7 @@ describe('invitations API', () => {
       const [pending] = await pendingOf(tenant.id)
       const invitationId = pending?.id ?? ''
       await backdateInvitationSend(invitationId)
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFind = TenantInvitationRepository.prototype.findPendingById
       /**
        * Reads the pending invitation, then stamps a newer send time on it, as a resend landing
@@ -991,7 +991,7 @@ describe('invitations API', () => {
       expect(revoked.body).toMatchObject({
         success: true,
         message: 'Invitation revoked.',
-        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,
       })
       const revokedPreview = await previewVia(rawToken)

@@ -12,7 +12,7 @@
  */
 import net from 'node:net'
 
-// eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied below with the server as `this`
+// oxlint-disable-next-line @typescript-eslint/unbound-method -- re-applied below with the server as `this`
 const originalListen = net.Server.prototype.listen
 
 /**

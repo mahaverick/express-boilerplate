@@ -6,7 +6,7 @@
  * The counting itself is proven against Redis in
  * tests/integration/api/invitation.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   INVITATION_RECIPIENT_TENANT_SHARE,
   spendInvitationRecipientBudget,

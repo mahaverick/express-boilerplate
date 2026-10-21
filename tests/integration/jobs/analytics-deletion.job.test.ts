@@ -3,7 +3,7 @@
  * under this worker's own `REDIS_KEY_PREFIX`. No Worker runs in this file,
  * so the scheduled job stays queued until `afterAll` removes it.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { ANALYTICS_DELETION_INTERVAL_MS } from '@/constants/analytics.constants'
 import {
   ANALYTICS_DELETIONS_JOB,

@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
 import {
   SCRUB_VALUE_MAX,

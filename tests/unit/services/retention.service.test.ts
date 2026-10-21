@@ -3,7 +3,7 @@
  * the environment maps to each rule's days. The purge itself runs
  * against Postgres in tests/integration/services/retention.service.test.ts.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { parseEnv } from '@/configs/env.config'
 import { RETENTION_BATCH_SIZE, retentionDays } from '@/services/retention.service'
 

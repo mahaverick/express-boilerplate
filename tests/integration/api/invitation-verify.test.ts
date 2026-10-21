@@ -10,7 +10,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -516,7 +516,7 @@ describe('POST /api/v1/invitations/verify', () => {
     // The invitation's own token is never mailed in the confirm link.
     expect(job.variables.confirmUrl).not.toContain(rawToken)
     expect(await confirmLinks(invitee.email)).toEqual([
-      // eslint-disable-next-line unicorn/no-null -- an invitation_link row names no user
+      // oxlint-disable-next-line unicorn/no-null -- an invitation_link row names no user
       { userId: null, app: 'web', invitationId, revoked: false },
     ])
     const [message] = await sql<{ tenantId: string; invitationId: string; linkApp: string }[]>`
@@ -573,7 +573,7 @@ describe('POST /api/v1/invitations/verify', () => {
     expect(await userCount(email)).toBe(0)
     expect(await isPending(invitationId)).toBe(true)
     expect(await confirmLinks(email)).toEqual([
-      // eslint-disable-next-line unicorn/no-null -- an invitation_link row names no user
+      // oxlint-disable-next-line unicorn/no-null -- an invitation_link row names no user
       { userId: null, app: 'apex', invitationId, revoked: false },
     ])
   })
@@ -706,7 +706,7 @@ describe('POST /api/v1/invitations/verify', () => {
       expect(await isPending(invitationId)).toBe(true)
       await waitForConfirmJob(invitee.email)
       expect(await confirmLinks(invitee.email)).toEqual([
-        // eslint-disable-next-line unicorn/no-null -- an invitation_link row names no user
+        // oxlint-disable-next-line unicorn/no-null -- an invitation_link row names no user
         { userId: null, app: 'apex', invitationId, revoked: false },
       ])
     }
@@ -717,7 +717,7 @@ describe('POST /api/v1/invitations/verify', () => {
     const { rawToken } = await customerInvitation(invitee.email)
     const reached = deferred()
     const release = deferred()
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realLock = UserTokenRepository.prototype.lockLinkIssue
     /**
      * Stands in for `lockLinkIssue`, which only the follow-up's `issueLinkToken` calls: it

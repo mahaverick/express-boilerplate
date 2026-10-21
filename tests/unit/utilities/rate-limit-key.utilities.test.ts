@@ -4,7 +4,7 @@
  * digest cannot be recomputed without the secret.
  */
 import { createHmac, hkdfSync } from 'node:crypto'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 
 /**
  * Loads `hashRateLimitIdentity` against a mocked `getEnv` that answers

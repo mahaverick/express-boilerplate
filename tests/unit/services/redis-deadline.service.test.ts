@@ -5,7 +5,7 @@
  * one warning per opening, and one `info` when a call succeeds after it.
  * Fake timers; nothing touches Redis.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { REDIS_REQUEST_DEADLINE_MS, REDIS_STALL_COOLDOWN_MS } from '@/constants/platform.constants'
 import { RedisStalledError } from '@/errors/redis-errors'
 import { logger } from '@/services/logger.service'

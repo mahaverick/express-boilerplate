@@ -2,7 +2,7 @@
  * @file The relying-party config takes the env as an argument, so every case
  * here is a crafted env, never the memoised getEnv().
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { isPasskeyEnabled, passkeyRelyingParty } from '@/configs/passkey.config'
 
 describe('passkeyRelyingParty', () => {

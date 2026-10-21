@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { createApp as CreateApp } from '@/app'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
@@ -451,7 +451,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const email = uniqueEmail()
         const existing = await userRepository.create({ email })
         createdIds.push(existing.id)
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
         const realLock = Users.prototype.lockById
         const changed = { done: false }
         /**
@@ -790,7 +790,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   it('issues no session when the account is deactivated between lookup and issue', async () => {
     // completeGoogleSignIn re-reads the user under its row lock before issuing.
     const { UserRepository: Users } = await import('@/repositories/user.repository')
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realUpdate = Users.prototype.update
     const email = `google-race-${randomUUID()}@example.test`
     const profile = googleProfile({ email, emailVerified: true })

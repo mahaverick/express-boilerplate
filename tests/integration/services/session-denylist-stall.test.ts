@@ -7,7 +7,7 @@
  * (`tests/helpers/redis-stall.ts`); nothing under `src/` changes.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { logger } from '@/services/logger.service'
 import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'

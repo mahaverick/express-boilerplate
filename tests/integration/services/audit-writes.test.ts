@@ -5,7 +5,7 @@
  * both be gone.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -286,11 +286,11 @@ describe('tenant.updated', () => {
 
     const result = await updateTenant({ userId: owner.id }, tenant.id, {
       name: 'Audit Co',
-      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       description: null,
-      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       logo: null,
-      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       website: null,
     })
 
@@ -304,7 +304,7 @@ describe('tenant.updated', () => {
 
     await updateTenant({ userId: owner.id }, tenant.id, {
       name: 'Audit Co',
-      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       description: null,
       website: 'https://acme.example',
     })
@@ -382,7 +382,7 @@ describe('tenant.settings_updated', () => {
     await updateSettings({ userId: owner.id }, tenant.id, {
       timezone: 'UTC',
       locale: 'fr',
-      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       metadata: null,
     })
 
@@ -578,7 +578,7 @@ describe('an invitation whose stored domain is no hostname', () => {
 
     const rows = await rowsFor(tenant.id, 'invitation.resent')
     expect(rows).toHaveLength(1)
-    // eslint-disable-next-line unicorn/no-null -- the metadata stores JSON null
+    // oxlint-disable-next-line unicorn/no-null -- the metadata stores JSON null
     expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: null })
   })
 
@@ -590,7 +590,7 @@ describe('an invitation whose stored domain is no hostname', () => {
 
     const rows = await rowsFor(tenant.id, 'invitation.revoked')
     expect(rows).toHaveLength(1)
-    // eslint-disable-next-line unicorn/no-null -- the metadata stores JSON null
+    // oxlint-disable-next-line unicorn/no-null -- the metadata stores JSON null
     expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: null })
   })
 })

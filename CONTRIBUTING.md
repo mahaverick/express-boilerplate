@@ -16,17 +16,18 @@ for unit tests ([DATABASE.md](DATABASE.md#the-test-database)).
 Run what CI runs:
 
 ```bash
-pnpm lint            # eslint + tsc --noEmit against tsconfig.typecheck.json
+pnpm lint            # eslint + tsc --noEmit against tsconfig.json
 pnpm lint:docs       # history phrasing, broken links and anchors in the docs
-pnpm format:check    # prettier over the repo, minus .prettierignore
+pnpm format:check    # Oxfmt over the repo, minus its ignorePatterns and .prettierignore
 pnpm knip            # unused files, exports, types and dependencies
 pnpm test:coverage   # vitest, gated at 80% lines/functions/branches/statements
-pnpm build           # tsc + tsc-alias
+pnpm build           # tsc + tsc-alias against tsconfig.build.json
 ```
 
 All six must exit 0; run `pnpm format` if `format:check` does not.
-`pnpm lint` type-checks once, against `tsconfig.typecheck.json`, which extends
-`tsconfig.json` and widens its `include` to `tests/` and `drizzle.config.ts`.
+`pnpm lint` type-checks once, against `tsconfig.json`, which extends
+`tsconfig.build.json` and widens its `include` to `tests/` and
+`drizzle.config.ts`; `pnpm typecheck` runs that step alone.
 The two configs stay separate: see [CLAUDE.md](CLAUDE.md#code-conventions),
 which also holds the code conventions.
 
@@ -36,10 +37,10 @@ Hooks install with `pnpm install` (the `prepare` script). Commit normally; do
 not reach for `--no-verify` on a routine commit.
 
 - **`pre-commit`** checks that the lockfile is not stale, runs `lint-staged`
-  (eslint --fix and prettier on staged `src/` and `tests/` TypeScript, prettier
-  on staged JSON, JSONC and Markdown), runs `vitest run --changed HEAD` against
-  `vitest.unit.config.ts`, and regenerates and stages `.env.example` when
-  `env.config.ts` is staged. The unit config excludes `tests/integration/**`
+  (eslint --fix and `vp fmt` on staged `src/` and `tests/` TypeScript, `vp fmt`
+  on staged JSON, JSONC and Markdown), runs `vp test run --changed HEAD` on the
+  `unit` project, and regenerates and stages `.env.example` when
+  `env.config.ts` is staged. The `unit` project excludes `tests/integration/**`
   and skips the database setup, so the hook runs with Docker down: a hook that
   fails whenever Docker is down gets bypassed with `--no-verify` for good.
   ESLint runs type-aware here, which is what catches floating and misused
@@ -104,7 +105,7 @@ These move together, or a gate below catches the one you missed:
    [ARCHITECTURE.md](ARCHITECTURE.md#environment-variables) from the schema,
    never by hand. `pnpm --silent env:table` prints it (`renderEnvTable()` in
    `src/scripts/generate-env-example.ts`). Paste its output over the table,
-   then run `pnpm exec prettier --write ARCHITECTURE.md`.
+   then run `pnpm exec vp fmt ARCHITECTURE.md`.
    `tests/unit/architecture-env-table.test.ts` compares the committed table
    with that output row for row, ignoring column padding.
 4. If the tests need a value, add it to `.env.test`.
@@ -126,8 +127,8 @@ that makes them required, and what runs after they pass on `main`, are in
 
 **`lint`** needs no services:
 
-- `pnpm lint`, `pnpm format:check` (the whole repo, `prettier --check .` minus
-  `.prettierignore`), `pnpm lint:docs` (no history phrasing in the Markdown or
+- `pnpm lint`, `pnpm format:check` (the whole repo, `vp fmt --check .` minus
+  its ignore patterns), `pnpm lint:docs` (no history phrasing in the Markdown or
   in `#` comments of config files, no broken relative link or anchor, no code
   citing an upper-case `.md` file the repo root lacks) and `pnpm knip` (answer a
   finding as [CLAUDE.md](CLAUDE.md#unused-code-knip) describes).
@@ -224,7 +225,7 @@ runs monthly, before 6am on the first day.
 - GitHub Actions are pinned to commit SHAs, and Renovate keeps the pins
   current.
 - TypeScript is held `<6.1.0` (see [CLAUDE.md](CLAUDE.md#versions)), and every
-  Node version pin (the docker `node` image, `.nvmrc`, `actions/setup-node`'s
+  Node version pin (the docker `node` image, `.node-version`, `actions/setup-node`'s
   `node-version:`, the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node`
   tag) is held `<25`. Lift these deliberately, not by merging a Renovate PR, and
   bump `package.json`'s `engines.node` and `devEngines.runtime.version` by hand

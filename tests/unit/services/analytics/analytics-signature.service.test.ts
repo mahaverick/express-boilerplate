@@ -5,7 +5,7 @@
  * signatures unverified. The secret comes from a mocked `getEnv()`.
  */
 import { createHmac, hkdfSync } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   isAnalyticsSignatureValid,
   resetAnalyticsSigningKey,
@@ -20,7 +20,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
   return { ...actual, getEnv: () => ({ ...actual.getEnv(), SESSION_SECRET: secret.value }) }
 })
 
-// eslint-disable-next-line unicorn/no-null -- the signer's "absent"
+// oxlint-disable-next-line unicorn/no-null -- the signer's "absent"
 const NONE = null
 
 const FIELDS: SignedEventFields = {

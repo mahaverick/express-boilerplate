@@ -4,7 +4,7 @@
  * 15-minute window's edge, the 20-minute expiry, and the last-send keys.
  * Writes use a fixed minute, so no other file's keys can be counted.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import {
   countErrorOutcome,
   getErrorTrackingStatus,

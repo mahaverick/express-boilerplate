@@ -13,7 +13,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { LINK_INVALID_CODE, MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
@@ -72,7 +72,7 @@ const REQUEST_ACCEPTED_BODY = {
   success: true,
   message: 'Check your inbox for a sign-in link.',
   statusCode: 202,
-  // eslint-disable-next-line unicorn/no-null -- the envelope's JSON null for "no data"
+  // oxlint-disable-next-line unicorn/no-null -- the envelope's JSON null for "no data"
   data: null,
 }
 
@@ -311,7 +311,7 @@ describe('POST /auth/link/request', () => {
     const email = uniqueEmail('before-lookup')
     const reached = deferred()
     const release = deferred()
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realFind = UserRepository.prototype.findByEmail
     /**
      * Stands in for `findByEmail`: it signals, then holds the lookup until released.
@@ -350,7 +350,7 @@ describe('POST /auth/link/request', () => {
       },
       { message: 'the issued link row' }
     )
-    // eslint-disable-next-line unicorn/no-null -- a sign_in_link row names no user
+    // oxlint-disable-next-line unicorn/no-null -- a sign_in_link row names no user
     expect(row).toMatchObject({ userId: null, app: 'web', revoked: false })
     const link = await mailedLink(email)
     expect(link.pathname).toBe('/auth/link')
@@ -747,7 +747,7 @@ describe('POST /auth/link/verify', () => {
     const email = uniqueEmail('register-race')
     const token = await issueTestLink(email)
     const seeded: { id?: string } = {}
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realCreate = UserRepository.prototype.create
     /**
      * Stands in for `UserRepository.create`: just before the click's insert,
@@ -785,7 +785,7 @@ describe('POST /auth/link/verify', () => {
         verified: false,
       })
       const token = await issueTestLink(user.email)
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+      // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realLock = UserRepository.prototype.lockById
       const changed = { done: false }
       /**
@@ -819,7 +819,7 @@ describe('POST /auth/link/verify', () => {
   it('creates no account when full maintenance begins between the peek and the claim', async () => {
     const email = uniqueEmail('flip-full')
     const token = await issueTestLink(email)
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realClaim = UserTokenRepository.prototype.claimOnce
     /**
      * Stands in for `claimOnce`: it claims, then switches the mode to `full` before the account is resolved.

@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Queue, Worker } from 'bullmq'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { getQueueConnection } from '@/services/queue.service'
 import { redisKey } from '@/services/redis.service'
 import { deferred } from '../../helpers/lock-probe'

@@ -3,7 +3,7 @@
  * database. Every user is deleted in `afterEach`; token rows cascade.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { UserRepository } from '@/repositories/user.repository'
 import { markEmailVerified } from '@/services/account-claim.service'
 import { sql, withTransaction } from '@/services/database.service'

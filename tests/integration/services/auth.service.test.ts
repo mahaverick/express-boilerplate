@@ -5,7 +5,7 @@
  * injected with `withMutatedMethod`; nothing under `src/` is edited.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'

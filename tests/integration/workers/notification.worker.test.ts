@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { UnrecoverableError, type Job } from 'bullmq'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { EmailJobData } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'

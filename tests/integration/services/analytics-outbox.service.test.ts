@@ -11,7 +11,16 @@ import { randomUUID } from 'node:crypto'
 import { context, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
 import { PostgresJsTransaction } from 'drizzle-orm/postgres-js'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import type { NewAnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -444,7 +453,7 @@ describe('staff status rows', () => {
     expect(rows.map((row) => row.event)).toEqual(['member_left', '$set'])
     expect(rows[1]).toMatchObject({
       distinctId: leaver.id,
-      // eslint-disable-next-line unicorn/no-null -- the $set row records JSON null for "not staff"
+      // oxlint-disable-next-line unicorn/no-null -- the $set row records JSON null for "not staff"
       properties: { $set: { is_staff: false, platform_role: null } },
     })
   })

@@ -7,7 +7,7 @@
  * the default windows delete them in `afterEach`. The real purge is asserted
  * only as a job that completes.
  */
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import { RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { logger } from '@/services/logger.service'

@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { RedisClientType } from 'redis'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
 import { emitNotification } from '@/services/notification-emitter.service'

@@ -12,10 +12,10 @@
  * sort key at least two distinct values and one tie, or the suite fails.
  */
 import type { RequestListener } from 'node:http'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { request } from './request'
 
-// eslint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
+// oxlint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
 const NONE = null
 
 /**

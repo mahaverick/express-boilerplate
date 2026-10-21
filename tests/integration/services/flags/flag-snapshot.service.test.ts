@@ -12,7 +12,7 @@
  * subscriber whose handshake never completes (a hung Redis or proxy).
  */
 import net from 'node:net'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import {
   createFlagSnapshotStore,
@@ -58,7 +58,7 @@ vi.mock('redis', async (importOriginal) => {
   }
 })
 
-// eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
+// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const stores: FlagSnapshotStore[] = []
 

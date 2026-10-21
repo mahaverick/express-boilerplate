@@ -4,7 +4,7 @@
  * in `tests/integration/services/platform.service.test.ts`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { runPlatformGrant } from '@/scripts/platform-grant'

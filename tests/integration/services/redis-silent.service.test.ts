@@ -9,7 +9,7 @@
  */
 import net from 'node:net'
 import { createClient } from 'redis'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { RedisStalledError } from '@/errors/redis-errors'
 import { withRedisDeadline } from '@/services/redis-deadline.service'
 import {

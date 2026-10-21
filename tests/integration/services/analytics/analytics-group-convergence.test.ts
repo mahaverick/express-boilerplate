@@ -8,7 +8,16 @@
  * drain. Analytics is enabled for this file only, through a mocked `getEnv()`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import { ANALYTICS_LEASE_SECONDS } from '@/constants/analytics.constants'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'
@@ -175,7 +184,7 @@ describe('group marker convergence', () => {
 
     await drainAnalyticsOutbox()
 
-    // eslint-disable-next-line unicorn/no-null -- null is what clears the group's name in PostHog
+    // oxlint-disable-next-line unicorn/no-null -- null is what clears the group's name in PostHog
     const scrub = { name: null, status: 'purged' }
     expect(sentMarkersFor(tenant.id).map((event) => event.properties.$group_set)).toEqual([scrub])
     expect(JSON.stringify(posthog().batches)).not.toContain('Purged Co')

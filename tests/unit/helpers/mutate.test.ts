@@ -5,7 +5,7 @@
  * session.service.ts) lives under tests/integration/ instead, since
  * that proof exercises the real per-worker database.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 
 describe('withMutatedMethod', () => {

@@ -4,7 +4,7 @@
  * read, and an unknown user is a 404.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -21,7 +21,7 @@ import {
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const createdTenantIds: string[] = []
-// eslint-disable-next-line unicorn/no-null -- the function's contract uses null for "none"
+// oxlint-disable-next-line unicorn/no-null -- the function's contract uses null for "none"
 const NONE = null
 
 afterEach(async () => {

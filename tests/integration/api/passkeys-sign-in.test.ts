@@ -7,7 +7,7 @@
  * verification, wrong-purpose and replayed challenges, counter regression),
  * the maintenance mode and the Apex staff rule.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
 import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'

@@ -141,7 +141,7 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
         access: 'platform',
         tenantId: platform.id,
         targetId: userId,
-        // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+        // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
         metadata: { reason, emailDomain: hostnameDomain(found.email) ?? null },
       },
       tx

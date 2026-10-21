@@ -7,7 +7,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getMailTransporter } from '@/configs/mailer.config'
 import {
   emailLogModel,
@@ -119,7 +119,7 @@ const rejectWithAuthError: StubbedSendMail = () => {
 /**
  * A `sendMail` stub that rejects with a string, which has no `.code` to extract.
  */
-// eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- deliberately a non-Error rejection, to prove extractErrorCode never assumes an object shape
+// oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- deliberately a non-Error rejection, to prove extractErrorCode never assumes an object shape
 const rejectWithAString: StubbedSendMail = () => Promise.reject('smtp exploded')
 
 /**
@@ -213,7 +213,7 @@ describe('sendMail', () => {
    * in `mailer.config.ts`, one per process) fail against the real Mailpit
    * container with `command: 'CONN'` connection errors. Three SMTP round
    * trips plus three Mailpit search polls in sequence can exceed the
-   * suite's default 20 s per-test timeout (`vitest.config.ts`), hence the
+   * suite's default 20 s per-test timeout (`vite.config.ts`), hence the
    * override below.
    */
   it('dispatches every templateKey to its own template — sent Subject and logged templateKey always agree', async () => {
@@ -675,7 +675,7 @@ describe('sendMail', () => {
        */
       const sendFailureCall = capturedErrorCalls.find((call) => call[0] === 'Mail send failed')
       expect(sendFailureCall).toBeDefined()
-      // eslint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
+      // oxlint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
       const inspectedLogged = inspect(sendFailureCall?.[1], { depth: null })
       expect(inspectedLogged).not.toContain(rawToken)
       expect(inspectedLogged).not.toContain(confirmUrl)

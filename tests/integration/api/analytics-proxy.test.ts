@@ -11,7 +11,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto'
 import express, { type Express } from 'express'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'

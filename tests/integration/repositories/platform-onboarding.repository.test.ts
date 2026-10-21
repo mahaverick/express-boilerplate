@@ -7,7 +7,7 @@
  * active owner only, removed keys ignored, the list's order and paging,
  * the funnel's counts, and the stuck count.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import {
   PlatformOnboardingRepository,
   type OnboardingProgressOptions,
@@ -38,7 +38,7 @@ const OPTIONS: OnboardingProgressOptions = {
   stuckBefore: STUCK_BEFORE,
 }
 
-// eslint-disable-next-line unicorn/no-null -- the column's "not set"
+// oxlint-disable-next-line unicorn/no-null -- the column's "not set"
 const NOT_SET = null
 
 /**

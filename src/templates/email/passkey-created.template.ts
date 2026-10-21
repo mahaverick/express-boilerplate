@@ -40,7 +40,7 @@ export interface PasskeySecurityVariables {
 export const PASSKEY_CREATED_TEMPLATE_META: EmailTemplateMeta<PasskeySecurityVariables> = {
   senderClass: 'transactional',
   previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-  // eslint-disable-next-line unicorn/no-null -- no staff resend re-runs a security notice
+  // oxlint-disable-next-line unicorn/no-null -- no staff resend re-runs a security notice
   resendAction: null,
 }
 

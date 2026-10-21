@@ -4,7 +4,7 @@
  * `signedFieldsOf` from the properties it sent and checked by
  * `isAnalyticsSignatureValid`. No database is involved.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
 import {

@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import net from 'node:net'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import type { Notification } from '@/database/models/notification.model'
 import * as replicaA from '@/services/notification-emitter.service'

@@ -104,7 +104,7 @@ const state: {
  */
 function getEmitter(): EventEmitter {
   if (!state.emitter) {
-    // eslint-disable-next-line unicorn/prefer-event-target -- needs `setMaxListeners(0)` and `listenerCount()`, which EventTarget lacks
+    // oxlint-disable-next-line unicorn/prefer-event-target -- needs `setMaxListeners(0)` and `listenerCount()`, which EventTarget lacks
     state.emitter = new EventEmitter()
     state.emitter.setMaxListeners(0)
   }

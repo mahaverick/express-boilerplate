@@ -4,7 +4,7 @@
  * reads return a tenant's rows and one member's rows.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { OnboardingCompletionRepository } from '@/repositories/onboarding-completion.repository'
@@ -51,7 +51,7 @@ describe('OnboardingCompletionRepository.insertIfNew', () => {
       source: 'auto',
     })
 
-    // eslint-disable-next-line unicorn/no-null -- a tenant step's row has no member
+    // oxlint-disable-next-line unicorn/no-null -- a tenant step's row has no member
     expect(first).toMatchObject({ tenantId: tenant.id, userId: null, source: 'auto' })
     expect(repeat).toBeUndefined()
     expect(await repository.listForTenant(tenant.id)).toHaveLength(1)

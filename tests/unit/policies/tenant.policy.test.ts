@@ -3,7 +3,7 @@
  * written out row by row, not derived from the rules, so a change to a
  * rule has to change this table too.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import {
   canActorGrantRole,
@@ -157,7 +157,7 @@ describe('canPlatformActorModifyTarget', () => {
 })
 
 describe('canStaffMailTarget', () => {
-  // eslint-disable-next-line unicorn/no-null -- the policy's "not staff" value
+  // oxlint-disable-next-line unicorn/no-null -- the policy's "not staff" value
   const NOT_STAFF = null
   it.each<[MembershipRole, MembershipRole | null, boolean]>([
     ['owner', NOT_STAFF, true],

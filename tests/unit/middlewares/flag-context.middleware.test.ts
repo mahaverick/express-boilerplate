@@ -4,7 +4,7 @@
  * resolved tenant and the session, and each key is evaluated once.
  */
 import type { Request } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { evaluateForRequest, flagContextFor } from '@/middlewares/flag-context.middleware'
 import { flagContextForUser } from '@/services/flags/flag-context.service'
 import { evaluateKey } from '@/services/flags/flags.service'
@@ -13,7 +13,7 @@ import type { FlagContext } from '@/types/flags'
 vi.mock('@/services/flags/flag-context.service', () => ({ flagContextForUser: vi.fn() }))
 vi.mock('@/services/flags/flags.service', () => ({ evaluateKey: vi.fn() }))
 
-// eslint-disable-next-line unicorn/no-null -- the context's contract uses null
+// oxlint-disable-next-line unicorn/no-null -- the context's contract uses null
 const NONE = null
 const USER_ID = '0199b000-0000-7000-8000-000000000001'
 const TENANT_ID = '0199b000-0000-7000-8000-000000000002'

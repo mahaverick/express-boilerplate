@@ -3,7 +3,7 @@
  * Postgres: the exit code and what it prints. What it restores is covered
  * in `tests/integration/services/onboarding-reconcile.test.ts`.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { runOnboardingReconcile } from '@/scripts/onboarding-reconcile'
 
 afterEach(() => {

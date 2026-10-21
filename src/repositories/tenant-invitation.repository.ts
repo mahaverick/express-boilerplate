@@ -38,7 +38,7 @@ const invitation = tenantInvitationModel
 /**
  * `invitedBy` once the inviter's account is gone.
  */
-// eslint-disable-next-line unicorn/no-null -- the API contract is `… | null`, because JSON has no undefined
+// oxlint-disable-next-line unicorn/no-null -- the API contract is `… | null`, because JSON has no undefined
 const NO_INVITER = null
 
 /**

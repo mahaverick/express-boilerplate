@@ -40,6 +40,8 @@ overrides:
   # GHSA-67mh-4wv8-2f99: drizzle-kit's legacy @esbuild-kit loader pins
   # esbuild 0.18; 0.25 is the version drizzle-kit itself already uses. Dev only.
   '@esbuild-kit/core-utils>esbuild': 0.25.12
+  vite@*: 'catalog:'
+  vitest@*: 'catalog:'
 auditConfig:
   ignoreGhsas:
     # braces <=3.0.3 stack exhaustion on deeply nested brace patterns; no
@@ -48,3 +50,16 @@ auditConfig:
     # passes none (default '/'), and braces parses patterns, never request
     # paths. Remove once braces ships a fix.
     - GHSA-vfj7-8cjw-p6xm
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vitest: 5.0.5
+  vite-plus: 1.3.0
+  '@vitest/coverage-v8': 5.0.5
+  '@vitest/ui': 5.0.5
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: '*'
+    vitest: '*'

@@ -4,7 +4,7 @@
  * a finished email) before every queue but auth-email pauses, nothing is left pending,
  * and switching off resumes the queues.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
 import { hasPendingNotices } from '@/services/maintenance-mode/maintenance-mode-notices.service'

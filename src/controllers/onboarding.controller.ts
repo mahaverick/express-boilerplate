@@ -26,7 +26,7 @@ class OnboardingController extends BaseController {
   getOnboarding = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const viewer = {
-      // eslint-disable-next-line unicorn/no-null -- staff reading through platform access have no membership
+      // oxlint-disable-next-line unicorn/no-null -- staff reading through platform access have no membership
       userId: principal.access === 'member' ? actorFrom(request).userId : null,
     }
     const view = await getTenantOnboarding(principal.tenantId, viewer)

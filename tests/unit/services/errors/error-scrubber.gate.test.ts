@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { scrubText } from '@/services/errors/error-scrubber.service'
 import { corpusCase, huntCase } from '../../../helpers/scrub-gate-generators'
 import { compareCase, visibleWindows } from '../../../helpers/scrub-gate-metric'

@@ -3,7 +3,7 @@
  * No keys are written, so there is no cross-worker data-isolation risk here
  * (see `database.service.test.ts` for the equivalent Postgres note).
  */
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
 
 describe('redis.service', () => {

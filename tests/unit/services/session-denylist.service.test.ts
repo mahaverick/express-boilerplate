@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'

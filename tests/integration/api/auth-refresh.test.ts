@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response, Test } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -386,7 +386,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
         success: true,
         message: 'Signed out.',
         statusCode: 200,
-        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,
       })
     })

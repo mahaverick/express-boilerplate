@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Queue } from 'bullmq'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { addEmailJob, emailQueueFor } from '@/jobs/email.job'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { sql } from '@/services/database.service'

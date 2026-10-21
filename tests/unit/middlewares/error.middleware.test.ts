@@ -4,7 +4,7 @@ import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
 import { DrizzleQueryError } from 'drizzle-orm'
 import { type Request, type Response } from 'express'
 import postgres from 'postgres'
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
@@ -151,7 +151,7 @@ describe('errorHandler', () => {
       vi.fn()
     )
 
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
     expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '42')
     expect(body()).toMatchObject({ statusCode: 429, code: 'STEP_UP_LINK_COOLDOWN' })
   })
@@ -160,7 +160,7 @@ describe('errorHandler', () => {
     const { response } = mockResponse()
     errorHandler(new HttpError('invalid', 400), {} as never, response, vi.fn())
 
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
     expect(response.setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything())
   })
 

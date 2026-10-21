@@ -7,7 +7,7 @@
  * (`tests/helpers/setup-global.ts` sets `test-w${VITEST_POOL_ID}`), so they
  * never collide with another vitest worker's keyspace.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import {
   addJob,
   closeQueue,

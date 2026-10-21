@@ -5,7 +5,7 @@
  * the backstop picking up an unpublished change, and a stopped store
  * staying stopped.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import {
   readMaintenanceModeState,
   updateMaintenanceModeStateIfVersion,

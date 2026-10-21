@@ -2,7 +2,7 @@
  * @file redisKey only: the connection logic is covered against a real
  * Redis in tests/integration/services/redis.service.test.ts.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { redisKey } from '@/services/redis.service'
 
 vi.mock('@/configs/env.config', async (importOriginal) => {

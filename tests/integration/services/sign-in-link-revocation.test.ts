@@ -7,7 +7,7 @@
  * `LINK_INVALID`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { LINK_INVALID_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { sql } from '@/services/database.service'

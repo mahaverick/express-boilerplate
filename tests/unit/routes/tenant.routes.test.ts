@@ -6,7 +6,7 @@
  * no database or Redis: every connection is lazy.
  */
 import type { RequestHandler, Router } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { createTenantRouter } from '@/routes/tenant.routes'
 
 /**

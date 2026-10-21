@@ -73,8 +73,8 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.node },
       parserOptions: {
-        // The build tsconfig covers src/ only; this wider project lets type-aware rules see tests/.
-        project: ['./tsconfig.typecheck.json'],
+        // tsconfig.build.json covers src/ only; this wider project lets type-aware rules see tests/.
+        project: ['./tsconfig.json'],
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -336,8 +336,7 @@ export default tseslint.config(
     files: [
       '**/*.mjs',
       'scripts/**/*.d.mts',
-      'vitest.config.ts',
-      'vitest.unit.config.ts',
+      'vite.config.ts',
       'commitlint.config.js',
     ],
     extends: [tseslint.configs.disableTypeChecked],

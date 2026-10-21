@@ -4,7 +4,7 @@
  * marker unique to the test and searches by it.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import {
   PlatformTenantRepository,
   type PlatformTenantRow,

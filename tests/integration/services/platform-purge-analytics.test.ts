@@ -6,7 +6,7 @@
  * change. Analytics is off under `.env.test`, which is the unconfigured case.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
 import { analyticsDeletionModel } from '@/database/models/analytics-deletion.model'
 import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
@@ -23,7 +23,7 @@ import {
 const REASON = 'Erasure request, ticket 9002'
 const MINUTE_MS = 60_000
 
-// eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the repository as `this`
+// oxlint-disable-next-line @typescript-eslint/unbound-method -- called below with the repository as `this`
 const realDeleteForDistinctId = AnalyticsOutboxRepository.prototype.deleteForDistinctId
 
 afterEach(async () => {

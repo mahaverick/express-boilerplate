@@ -46,7 +46,7 @@ export async function platformRoleForLogin(userId: string): Promise<MembershipRo
       error: redactedForLog(error),
       userId,
     })
-    // eslint-disable-next-line unicorn/no-null -- the login user reports JSON null for "not staff"
+    // oxlint-disable-next-line unicorn/no-null -- the login user reports JSON null for "not staff"
     return null
   }
 }

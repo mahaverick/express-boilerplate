@@ -474,9 +474,9 @@ export async function startFakePosthog(): Promise<FakePosthog> {
       status: 200,
       json: {
         count: fake.featureFlags.length,
-        // eslint-disable-next-line unicorn/no-null -- PostHog's JSON null on the last page
+        // oxlint-disable-next-line unicorn/no-null -- PostHog's JSON null on the last page
         next: offset + limit < fake.featureFlags.length ? pageUrl(offset + limit) : null,
-        // eslint-disable-next-line unicorn/no-null -- PostHog's JSON null on the first page
+        // oxlint-disable-next-line unicorn/no-null -- PostHog's JSON null on the first page
         previous: offset > 0 ? pageUrl(Math.max(0, offset - limit)) : null,
         results: fake.featureFlags.slice(offset, offset + limit),
       },

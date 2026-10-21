@@ -5,7 +5,7 @@
  */
 import { Writable } from 'node:stream'
 import { DrizzleQueryError } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createPinoLogger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
 import { LEAKED_PARAM } from '../../helpers/query-error'

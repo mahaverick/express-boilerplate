@@ -10,7 +10,7 @@ import type { Span } from '@opentelemetry/api'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import type { Request, Response } from 'express'
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
@@ -105,7 +105,7 @@ describe('errorHandler and error tracking', () => {
     const { response, body } = mockResponse()
     const { request } = mockRequest()
 
-    // eslint-disable-next-line unicorn/no-null -- the thrown value under test
+    // oxlint-disable-next-line unicorn/no-null -- the thrown value under test
     errorHandler(null, request, response, vi.fn())
 
     expect(reporter.reportErrorWithSpan).toHaveBeenCalledOnce()

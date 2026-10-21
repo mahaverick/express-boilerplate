@@ -4,7 +4,7 @@
  * address never in a mail cooldown's key, and the caller's choice when Redis
  * fails.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   claimCooldown,
   didClaimMailCooldown,
@@ -47,7 +47,7 @@ describe('claimCooldown', () => {
   })
 
   it('answers the time left on the held slot from PTTL', async () => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
+    // oxlint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
     pttl.mockResolvedValue(41_250)
 
@@ -62,7 +62,7 @@ describe('claimCooldown', () => {
     ['the key expired between the two commands (-2)', -2],
     ['the key has no expiry (-1)', -1],
   ])('answers a positive wait when %s', async (_label, answer) => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
+    // oxlint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
     pttl.mockResolvedValue(answer)
 
@@ -73,7 +73,7 @@ describe('claimCooldown', () => {
   })
 
   it('answers the whole cooldown when PTTL fails after a held slot', async () => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
+    // oxlint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
     pttl.mockRejectedValue(new Error('redis down'))
 
@@ -140,7 +140,7 @@ describe('didClaimMailCooldown', () => {
   })
 
   it('refuses the slot while one is held (the SET answers null)', async () => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
+    // oxlint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
 
     await expect(

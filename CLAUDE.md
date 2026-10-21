@@ -374,8 +374,9 @@ points at the code or doc that holds the detail. How things work is in
   `tests/fixtures/`.
 - **A test that reaches the real database or Redis lives under
   `tests/integration/`, never `tests/unit/`.** The git hooks run unit tests
-  with Docker down, and `vitest.unit.config.ts` excludes by path only. Check
-  where a test's dependencies reach, not where its assertions live.
+  with Docker down, and the `unit` project (`vite.config.ts`) excludes by path
+  only. Check where a test's dependencies reach, not where its assertions
+  live.
 - **HTTP tests use `request` or `agent` from `tests/helpers/request.ts`, never
   supertest directly** (lint enforces it). A hand-rolled test server calls
   `listen(0, '127.0.0.1')`: on macOS a `::` bind can take a port another
@@ -529,10 +530,12 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
 - **Don't import or "fix" `tests/fixtures/lint-cycle/` or
   `tests/fixtures/lint-zones/`.** They are committed violations that
   `tests/unit/lint-gates.test.ts` lints to prove each gate fires.
-- **Keep `tsconfig.json` and `tsconfig.typecheck.json` separate.** The build
-  config compiles `src/` with `rootDir: ./src`; widening its `include` to
-  `tests/` breaks the build with `TS6059`. The typecheck config is the wide one
-  lint uses.
+- **Keep `tsconfig.build.json` and `tsconfig.json` separate.**
+  `tsconfig.build.json` is the emit config: it compiles `src/` with
+  `rootDir: ./src`, and widening its `include` to `tests/` breaks the build
+  with `TS6059`. `tsconfig.json` is the wide `noEmit` config over `src/`,
+  `tests/` and `drizzle.config.ts`; `pnpm typecheck` and lint use it, and
+  tsgolint reads the nearest `tsconfig.json`.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`,** so
   `drizzle-kit` needs only `DATABASE_URL`
   ([DATABASE.md](DATABASE.md#drizzleconfigts-and-why-it-only-needs-database_url)).

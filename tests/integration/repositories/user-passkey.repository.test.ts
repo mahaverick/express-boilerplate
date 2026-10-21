@@ -4,7 +4,7 @@
  * carries `ON DELETE CASCADE`, so its passkey rows go with it.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { NewUserPasskey } from '@/database/models/user-passkey.model'
 import { HttpError } from '@/errors/http-error'
 import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'

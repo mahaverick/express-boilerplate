@@ -8,7 +8,7 @@
  * it lands after the kill's BEGIN and before its lock, every time.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import type { DbTransaction } from '@/services/database.service'
@@ -54,7 +54,7 @@ async function killWithRotationBeforeLock(
   kill: () => Promise<unknown>
 ): Promise<IssuedRefreshToken> {
   const prototype = UserRepository.prototype
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
+  // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
   const original = prototype.lockById
   let minted: IssuedRefreshToken | undefined
   /**

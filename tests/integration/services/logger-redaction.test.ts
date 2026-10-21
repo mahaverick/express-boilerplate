@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { Writable } from 'node:stream'
 import { DrizzleQueryError } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { userModel } from '@/database/models/user.model'
 import { db, sql } from '@/services/database.service'
 import { createPinoLogger } from '@/services/logger.service'

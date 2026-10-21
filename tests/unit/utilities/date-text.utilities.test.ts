@@ -2,7 +2,7 @@
  * @file The absolute date and time text lasting copy carries: a 24-hour UTC
  * time, then the day, the month's name and the year.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 
 describe('formatUtcDateTime', () => {

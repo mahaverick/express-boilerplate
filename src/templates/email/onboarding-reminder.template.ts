@@ -68,7 +68,7 @@ export const ONBOARDING_REMINDER_TEMPLATE_META: EmailTemplateMeta<OnboardingRemi
     'stepsTotal',
     'overviewLink',
   ],
-  // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+  // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
   resendAction: null,
 }
 

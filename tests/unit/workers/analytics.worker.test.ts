@@ -4,7 +4,7 @@
  * tests/integration/workers/analytics.worker.test.ts.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
 import { runFlagDefinitionsJob } from '@/jobs/flag-definitions.job'
 import { processAnalyticsDeletions } from '@/services/analytics/analytics-deletion.service'

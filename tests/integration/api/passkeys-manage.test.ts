@@ -5,7 +5,7 @@
  * for real. The mode is switched by mocking `getEnv`, never `process.env`; the
  * mail is read off the `addEmailJob` call.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
@@ -157,7 +157,7 @@ describe('creating and listing passkeys', () => {
       name: 'Apple Passwords',
       synced: true,
       provider: { name: 'Apple Passwords' },
-      // eslint-disable-next-line unicorn/no-null -- the API's JSON null for "never used"
+      // oxlint-disable-next-line unicorn/no-null -- the API's JSON null for "never used"
       lastUsedAt: null,
     })
     expect(envelope(created).data.passkey).toMatchObject({

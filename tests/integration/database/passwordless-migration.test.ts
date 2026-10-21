@@ -5,7 +5,7 @@
  * key stays filterable in the staff email list.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
 import { RETIRED_EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'

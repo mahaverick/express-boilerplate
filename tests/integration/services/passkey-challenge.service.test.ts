@@ -4,7 +4,7 @@
  * `undefined`, and a mismatched read still burns the challenge.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import {
   consumePasskeyChallenge,
   issuePasskeyChallenge,

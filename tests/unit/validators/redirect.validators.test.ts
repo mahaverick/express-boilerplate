@@ -3,7 +3,7 @@
  * byte for byte; anything that could leave the frontend's origin, or carries
  * a control character, fails.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { redirectPathSchema } from '@/validators/redirect.validators'
 
 describe('redirect validation', () => {

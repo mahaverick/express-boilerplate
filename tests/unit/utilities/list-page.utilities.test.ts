@@ -6,7 +6,7 @@
  */
 import { and, eq, sql } from 'drizzle-orm'
 import { PgDialect } from 'drizzle-orm/pg-core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { z } from 'zod'
 import { tenantModel } from '@/database/models/tenant.model'
 import { InvalidCursorError } from '@/errors/list-errors'
@@ -30,7 +30,7 @@ import { listFilter, listParamsSchema } from '@/validators/list.validators'
 
 const dialect = new PgDialect()
 const ID = '0199c4a2-0000-7000-8000-000000000001'
-// eslint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
+// oxlint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
 const NONE = null
 
 /**

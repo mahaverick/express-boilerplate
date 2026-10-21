@@ -207,7 +207,7 @@ export class UserMembershipRepository {
     executor: DbExecutor = db
   ): Promise<MembershipRole | null> {
     const [row] = await platformRoleQuery(userId, executor)
-    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
+    // oxlint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
     return row?.role ?? null
   }
 
@@ -224,7 +224,7 @@ export class UserMembershipRepository {
     const [row] = await platformRoleQuery(userId, executor).for('share', {
       of: userMembershipModel,
     })
-    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
+    // oxlint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
     return row?.role ?? null
   }
 

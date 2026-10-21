@@ -263,7 +263,7 @@ function latestOf(times: ReadonlyArray<Date | null | undefined>): Date | null {
   for (const time of times) {
     if (time && (!latest || time.getTime() > latest.getTime())) latest = time
   }
-  // eslint-disable-next-line unicorn/no-null -- the derived contract uses null for "none"
+  // oxlint-disable-next-line unicorn/no-null -- the derived contract uses null for "none"
   return latest ?? null
 }
 
@@ -349,7 +349,7 @@ function customerStateOf(state: OnboardingState): CustomerOnboardingState {
  * @returns Its ISO string, or null.
  */
 function isoOrNull(date: Date | null | undefined): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the wire contract sends JSON null
+  // oxlint-disable-next-line unicorn/no-null -- the wire contract sends JSON null
   return date ? date.toISOString() : null
 }
 
@@ -398,7 +398,7 @@ export async function getTenantOnboarding(
       kind: step.completion.kind,
       required: step.required,
       completedAt: isoOrNull(completion?.completedAt),
-      // eslint-disable-next-line unicorn/no-null -- the wire contract sends JSON null
+      // oxlint-disable-next-line unicorn/no-null -- the wire contract sends JSON null
       source: completion?.source ?? null,
     }
   })
@@ -663,7 +663,7 @@ export async function undismissOnboarding(
         DISMISS_STATE_CODE
       )
     }
-    // eslint-disable-next-line unicorn/no-null -- null clears the dismissal
+    // oxlint-disable-next-line unicorn/no-null -- null clears the dismissal
     await tenantRepository.setOnboardingDismissed(tenantId, null, null, tx)
     await record(
       {

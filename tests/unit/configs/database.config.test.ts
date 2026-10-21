@@ -5,7 +5,7 @@
  * DB_STATEMENT_TIMEOUT_MS is also proven against a live connection in
  * tests/integration/services/database.service.test.ts.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { databaseClientOptions } from '@/configs/database.config'
 
 describe('databaseClientOptions', () => {

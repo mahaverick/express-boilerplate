@@ -5,7 +5,7 @@
  * request deadline. Each test uses a fresh address, so no count carries over.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'

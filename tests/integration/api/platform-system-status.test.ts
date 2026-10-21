@@ -4,7 +4,7 @@
  * no read is audited. The counters themselves are the error-counters and flag-counters services';
  * here they are spied.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { sql } from '@/services/database.service'
@@ -51,7 +51,7 @@ function sampleFlagsStatus(): FlagsStatus {
     checkedAt: '2026-10-05T10:05:00.000Z',
     stale: false,
     lastFetchOk: '2026-10-05T10:05:00.000Z',
-    // eslint-disable-next-line unicorn/no-null -- no fetch has failed
+    // oxlint-disable-next-line unicorn/no-null -- no fetch has failed
     lastFetchError: null,
     propertyMatchingVersion: 1,
     counts: {
@@ -78,7 +78,7 @@ function sampleMaintenanceStatus(): MaintenanceModeStatus {
     queuesPaused: true,
     queues: [{ name: 'email', paused: true, active: 0 }],
     noticesPending: false,
-    // eslint-disable-next-line unicorn/no-null -- the last reload succeeded
+    // oxlint-disable-next-line unicorn/no-null -- the last reload succeeded
     lastReloadError: null,
   }
 }

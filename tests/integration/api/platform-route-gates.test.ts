@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import type { Response } from 'supertest'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'

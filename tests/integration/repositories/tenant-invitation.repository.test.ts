@@ -5,7 +5,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { DrizzleQueryError, eq } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import {
   tenantInvitationModel,
   type TenantInvitation,

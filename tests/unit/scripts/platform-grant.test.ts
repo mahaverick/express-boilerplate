@@ -3,7 +3,7 @@
  * Importing the script does not run it: it acts only when it is the
  * entry module.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { parseGrantArguments } from '@/scripts/platform-grant'
 
 describe('parseGrantArguments', () => {

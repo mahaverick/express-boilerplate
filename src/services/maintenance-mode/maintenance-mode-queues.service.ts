@@ -283,9 +283,9 @@ export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
   }
   const unanswered = queues.map((queue) => ({
     name: queue.name,
-    // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+    // oxlint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
     paused: null,
-    // eslint-disable-next-line unicorn/no-null -- as above
+    // oxlint-disable-next-line unicorn/no-null -- as above
     active: null,
   }))
   return withStatusTimeout(
@@ -297,9 +297,9 @@ export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
         ])
         return {
           name: queue.name,
-          // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+          // oxlint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
           paused: paused.status === 'fulfilled' ? paused.value : null,
-          // eslint-disable-next-line unicorn/no-null -- as above
+          // oxlint-disable-next-line unicorn/no-null -- as above
           active: active.status === 'fulfilled' ? active.value : null,
         }
       })

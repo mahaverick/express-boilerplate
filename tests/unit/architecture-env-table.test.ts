@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { EnvSchemaShape } from '@/configs/env.config'
 import { renderEnvTable } from '@/scripts/generate-env-example'
 

@@ -5,7 +5,7 @@
  * that frontend's own origin.
  */
 import type { Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 
 /**

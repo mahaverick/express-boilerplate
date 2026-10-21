@@ -249,12 +249,12 @@ export async function getPlatformMaintenanceMode(): Promise<PlatformMaintenanceM
   const isOff = row.mode === 'off'
   return {
     mode: row.mode,
-    // eslint-disable-next-line unicorn/no-null -- the view's contract uses null for "none"
+    // oxlint-disable-next-line unicorn/no-null -- the view's contract uses null for "none"
     message: isOff ? null : row.message,
     reason: row.reason,
-    // eslint-disable-next-line unicorn/no-null -- as above
+    // oxlint-disable-next-line unicorn/no-null -- as above
     since: isOff ? null : row.changedAt.toISOString(),
-    // eslint-disable-next-line unicorn/no-null -- as above
+    // oxlint-disable-next-line unicorn/no-null -- as above
     changedBy: changedBy ? { id: changedBy.id, name: nameOf(changedBy) } : null,
     version: row.version,
     queues,
@@ -306,7 +306,7 @@ async function viewOfCommitted(
     mode: committed.to,
     message: committed.message,
     reason: committed.reason,
-    // eslint-disable-next-line unicorn/no-null -- the view's contract uses null for "none"
+    // oxlint-disable-next-line unicorn/no-null -- the view's contract uses null for "none"
     since: committed.to === 'off' ? null : committed.changedAt.toISOString(),
     changedBy: { id: actor.userId, name: MAINTENANCE_ACTOR_PLACEHOLDER },
     version: committed.version,
@@ -431,7 +431,7 @@ export async function changeMaintenanceMode(
       )
     }
     const kind = changeKindOf(current.mode, body.mode)
-    // eslint-disable-next-line unicorn/no-null -- the column is null while off
+    // oxlint-disable-next-line unicorn/no-null -- the column is null while off
     const message = body.mode === 'off' ? null : (body.message ?? null)
     // A same-mode save changes something when the message or a sent reason differs from the stored one.
     const isReasonChanged = body.reason !== undefined && body.reason !== current.reason
@@ -442,7 +442,7 @@ export async function changeMaintenanceMode(
       return undefined
     }
     assertChangeAllowed(kind, body)
-    // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given or it was cleared
+    // oxlint-disable-next-line unicorn/no-null -- the column is null when no reason was given or it was cleared
     const reason = body.reason ?? null
     const updated = await updateMaintenanceModeStateIfVersion(
       { mode: body.mode, message, reason: body.reason, changedBy: actor.userId },

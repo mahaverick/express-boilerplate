@@ -126,7 +126,7 @@ export function requireEmailVariables<T extends object>(
 ): T {
   for (const name of requiredNames) {
     if (typeof variables[name] !== 'string') {
-      // eslint-disable-next-line unicorn/prefer-type-error -- incomplete caller data, not a JavaScript type violation
+      // oxlint-disable-next-line unicorn/prefer-type-error -- incomplete caller data, not a JavaScript type violation
       throw new Error(
         `Cannot render "${templateKey}" email template: required variable "${name}" is missing.`
       )

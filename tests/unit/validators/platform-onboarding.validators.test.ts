@@ -4,7 +4,7 @@
  * (stuck by default, `not_tracked` refused), its state-chosen default sort,
  * `direction=prev` needing a cursor, and the step-key parameter.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { ONBOARDING_STEP_NOT_FOUND_CODE } from '@/services/onboarding.service'
 import {

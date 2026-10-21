@@ -360,7 +360,7 @@ interface PageAssembly<Row, Item> {
 /**
  * A page's cursor on a side with no rows to read.
  */
-// eslint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
+// oxlint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
 const NO_CURSOR = null
 
 /**

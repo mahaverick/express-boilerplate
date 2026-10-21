@@ -8,7 +8,16 @@
  * mocked `getEnv()`.
  */
 import { asc } from 'drizzle-orm'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import { ANALYTICS_DELETION_BATCH_SIZE } from '@/constants/analytics.constants'
 import { analyticsDeletionModel } from '@/database/models/analytics-deletion.model'
 import { processAnalyticsDeletions } from '@/services/analytics/analytics-deletion.service'

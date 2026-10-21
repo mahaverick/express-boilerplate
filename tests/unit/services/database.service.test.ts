@@ -7,7 +7,7 @@
  * tests/integration/services/database-transactions.test.ts instead.
  */
 import { PgTransaction } from 'drizzle-orm/pg-core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { db, withTransaction, type DbTransaction } from '@/services/database.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 

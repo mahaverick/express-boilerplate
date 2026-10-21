@@ -15,7 +15,7 @@ import path from 'node:path'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { dropScratchDatabase } from '../../helpers/scratch-database'
 import { baseDatabaseUrl } from '../../helpers/worker-database'
 
@@ -89,7 +89,7 @@ const userId = randomUUID()
 const tenantId = randomUUID()
 const invitationId = randomUUID()
 const seeded = { refresh: tokenHash(), sign_in_link: tokenHash(), step_up_link: tokenHash() }
-// eslint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
+// oxlint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 beforeAll(async () => {
@@ -162,11 +162,11 @@ describe('migration 0030 over rows of every 0029 purpose', () => {
       from user_tokens order by purpose`
 
     expect(rows).toEqual([
-      // eslint-disable-next-line unicorn/no-null -- the new column starts NULL
+      // oxlint-disable-next-line unicorn/no-null -- the new column starts NULL
       { purpose: 'refresh', tokenHash: seeded.refresh, invitationId: null },
-      // eslint-disable-next-line unicorn/no-null -- the new column starts NULL
+      // oxlint-disable-next-line unicorn/no-null -- the new column starts NULL
       { purpose: 'sign_in_link', tokenHash: seeded.sign_in_link, invitationId: null },
-      // eslint-disable-next-line unicorn/no-null -- the new column starts NULL
+      // oxlint-disable-next-line unicorn/no-null -- the new column starts NULL
       { purpose: 'step_up_link', tokenHash: seeded.step_up_link, invitationId: null },
     ])
   })

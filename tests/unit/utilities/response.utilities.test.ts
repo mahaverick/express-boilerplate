@@ -1,5 +1,5 @@
 import { type Response } from 'express'
-import { describe, expect, it, vi, type Mock } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vite-plus/test'
 import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 import { errorResponse, messageResponse, successResponse } from '@/utilities/response.utilities'
 
@@ -62,7 +62,7 @@ describe('messageResponse', () => {
       success: true,
       message: 'Signed out.',
       statusCode: 200,
-      // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+      // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
       data: null,
     })
   })
@@ -76,7 +76,7 @@ describe('messageResponse', () => {
       success: true,
       message: 'Accepted.',
       statusCode: 202,
-      // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+      // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
       data: null,
     })
   })

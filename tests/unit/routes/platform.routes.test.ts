@@ -3,7 +3,7 @@
  * put RateLimit-* headers on the non-staff 404 and reveal the route.
  */
 import type { NextFunction, Request, RequestHandler, Response, Router } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
@@ -117,7 +117,7 @@ describe('createPlatformRouter', () => {
 
       expect(handlers).toHaveLength(3)
       expect(await runGate(handlers[0], 'viewer')).toEqual([[]])
-      // eslint-disable-next-line unicorn/no-null -- getPlatformMembership answers null for non-staff
+      // oxlint-disable-next-line unicorn/no-null -- getPlatformMembership answers null for non-staff
       const [refusal] = await runGate(handlers[0], null)
       expect(refusal?.[0]).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
       expect(handlers[1]).toBe(handlersFor(router, 'get', '/tenants')[1])

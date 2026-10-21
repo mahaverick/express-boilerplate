@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import express, { type NextFunction, type Request, type Response } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { z } from 'zod'
 import { HttpError } from '@/errors/http-error'
 import { listPageInMemory, type InMemoryListDefinition } from '@/utilities/list-page.utilities'

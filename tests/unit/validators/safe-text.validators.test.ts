@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 
 describe('safeText', () => {

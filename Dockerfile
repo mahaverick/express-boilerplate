@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build on node:24-alpine, the Node line .nvmrc and engines require.
+# Multi-stage build on node:24-alpine, the Node line .node-version and engines require.
 # Pinned by digest, as in the client images, so a rebuild never picks up a
 # different base silently; Renovate proposes each new digest.
 FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS base
@@ -56,5 +56,5 @@ EXPOSE 4040
 # Like `pnpm start` without --env-file-if-exists: the image has no .env
 # (.dockerignore) and the orchestrator supplies the environment. tracing.js
 # loads via --import, before the app, or OpenTelemetry never starts.
-# --enable-source-maps maps stack traces to the .ts lines (tsconfig.json's sourceMap).
+# --enable-source-maps maps stack traces to the .ts lines (tsconfig.build.json's sourceMap).
 CMD ["node", "--enable-source-maps", "--import", "./dist/observability/tracing.js", "dist/index.js"]

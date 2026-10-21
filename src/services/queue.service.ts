@@ -120,7 +120,7 @@ export function getQueueConnection(): IORedis {
   state.worker ??= createQueueRedis(
     'BullMQ Redis connection',
     {
-      // eslint-disable-next-line unicorn/no-null -- ioredis's option merge replaces undefined with its default of 20; BullMQ needs null
+      // oxlint-disable-next-line unicorn/no-null -- ioredis's option merge replaces undefined with its default of 20; BullMQ needs null
       maxRetriesPerRequest: null,
     },
     (dead) => {

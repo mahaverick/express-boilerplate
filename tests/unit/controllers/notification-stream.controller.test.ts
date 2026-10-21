@@ -4,7 +4,7 @@
  * server-initiated close that happens with no request 'close' event.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { notificationStreamController } from '@/controllers/notification-stream.controller'
 import { countAllStreams, resetLifecycleForTests } from '@/services/lifecycle.service'

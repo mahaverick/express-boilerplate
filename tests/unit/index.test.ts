@@ -5,7 +5,7 @@
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 const execFileAsync = promisify(execFile)
 

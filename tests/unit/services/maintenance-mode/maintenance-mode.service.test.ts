@@ -3,7 +3,7 @@
  * answers: the section resolves at `STATUS_READ_TIMEOUT_MS` with no pending
  * notices, one warning, no timer left. Redis and the queues are mocks.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'
 import { rememberNoticeJobs } from '@/services/maintenance-mode/maintenance-mode-notices.service'
@@ -27,7 +27,7 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
         get: () =>
           redis.isHung
             ? new Promise<never>(() => {})
-            : // eslint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
+            : // oxlint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
               Promise.resolve(null),
         publish: redis.publish,
         set: redis.set,

@@ -7,7 +7,7 @@
  * request does. Client spans are supertest's own outgoing requests.
  */
 import { SpanKind } from '@opentelemetry/api'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 
 const capture = await vi.hoisted(async () => {
   const { HTTP_INSTRUMENTATION_CONFIG } = await import('@/observability/tracing')

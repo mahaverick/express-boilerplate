@@ -1,12 +1,12 @@
 /**
- * @file A `setupFiles` hook, registered only in vitest.config.ts (never in
- * the unit-only config, which may run with Docker down). Before each file's
- * own hooks, it clears this worker's rate-limit counters, so a per-IP budget
- * an earlier file in the same worker spent cannot answer 429 here. Only this
- * worker's prefix: another worker's files are counting under theirs right
- * now. It runs after setup-global.ts, which loads REDIS_URL.
+ * @file A `setupFiles` hook, registered only on vite.config.ts's
+ * `integration` project (never on `unit`, which may run with Docker down).
+ * Before each file's own hooks, it clears this worker's rate-limit counters,
+ * so a per-IP budget an earlier file in the same worker spent cannot answer
+ * 429 here. Only this worker's prefix: another worker's files are counting
+ * under theirs right now. It runs after setup-global.ts, which loads REDIS_URL.
  */
-import { beforeAll } from 'vitest'
+import { beforeAll } from 'vite-plus/test'
 import { clearRedisKeys } from './clear-redis-keys'
 import { workerRedisKeyPrefix } from './redis-prefix'
 

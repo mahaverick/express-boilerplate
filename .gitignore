@@ -138,6 +138,6 @@ dist
 # May hold database credentials — commit an .mcp.json.example instead
 .mcp.json
 
-# Vitest reporter output (vitest.config.ts writes .vitest/json/output.json).
+# Vitest reporter output (a JSON reporter run writes .vitest/json/output.json).
 # Generated on every run; was committed once by accident in #33.
 .vitest/

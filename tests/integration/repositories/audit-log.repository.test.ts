@@ -4,7 +4,7 @@
  * by that tenant to stay isolated from other files' rows.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { NewAuditLog } from '@/database/models/audit-log.model'
 import {
   AuditLogRepository,

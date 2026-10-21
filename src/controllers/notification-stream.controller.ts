@@ -96,7 +96,7 @@ function toStreamPayload(notification: Notification): NotificationStreamPayload 
     type: notification.type,
     title: notification.title,
     body: notification.body,
-    // eslint-disable-next-line unicorn/no-null -- an unread notification serializes readAt as JSON null, not an absent key
+    // oxlint-disable-next-line unicorn/no-null -- an unread notification serializes readAt as JSON null, not an absent key
     readAt: notification.readAt ? notification.readAt.toISOString() : null,
     createdAt: notification.createdAt.toISOString(),
   }

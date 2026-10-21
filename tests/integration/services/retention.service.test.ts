@@ -8,7 +8,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import postgres from 'postgres'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'

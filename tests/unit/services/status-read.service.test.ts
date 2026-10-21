@@ -4,7 +4,7 @@
  * and one warning, a failed read rejects, and the timer is always
  * cleared. Fake timers; nothing touches Redis.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'
 import { withStatusTimeout } from '@/services/status-read.service'

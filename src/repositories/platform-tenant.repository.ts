@@ -226,7 +226,7 @@ export class PlatformTenantRepository {
       memberCount: members?.count ?? 0,
       owners,
       pendingInvitationCount: pending?.count ?? 0,
-      // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when there is none
+      // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null when there is none
       pendingOwnerInvitation: ownerInvitation ?? null,
     }
   }

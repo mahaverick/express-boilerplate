@@ -8,7 +8,7 @@
 import { inspect } from 'node:util'
 import { trace } from '@opentelemetry/api'
 import postgres from 'postgres'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
 import { ERROR_CAUSE_DEPTH, ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
 import { HttpError } from '@/errors/http-error'
@@ -491,7 +491,7 @@ describe('exceptionListOf with hostile values', () => {
 
   it('reads a null-prototype object and a null-prototype error', () => {
     expect(exceptionListOf(Object.create(null) as object)[0]?.value).toBe('Non-Error object thrown')
-    // eslint-disable-next-line unicorn/no-null -- a null prototype is the case under test
+    // oxlint-disable-next-line unicorn/no-null -- a null prototype is the case under test
     const error = Object.setPrototypeOf(new Error('np'), null) as Error
     expect(exceptionListOf(error)[0]?.value).toBe('np')
   })

@@ -3,7 +3,7 @@
  * write; the caller is told `emailSent: false`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import * as envConfig from '@/configs/env.config'
 import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'

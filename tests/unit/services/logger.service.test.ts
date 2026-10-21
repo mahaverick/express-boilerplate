@@ -10,7 +10,7 @@ import { context, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import {
   createPinoLogger,
   getCallerSource,

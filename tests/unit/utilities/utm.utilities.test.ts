@@ -1,7 +1,7 @@
 /**
  * @file Unit tests for `withUtm`: the four parameters, the untouched query and fragment, and the replaced duplicates.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   UTM_CONTENTS,
   UTM_MEDIUMS,

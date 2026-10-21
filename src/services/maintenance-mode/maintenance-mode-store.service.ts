@@ -30,11 +30,11 @@ const RELOAD_MESSAGE = 'reload'
  */
 const UNKNOWN_SNAPSHOT: MaintenanceModeSnapshot = Object.freeze({
   mode: 'off',
-  // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
+  // oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
   message: null,
-  // eslint-disable-next-line unicorn/no-null -- as above
+  // oxlint-disable-next-line unicorn/no-null -- as above
   since: null,
-  // eslint-disable-next-line unicorn/no-null -- as above
+  // oxlint-disable-next-line unicorn/no-null -- as above
   changedAt: null,
   version: 0,
   known: false,
@@ -58,9 +58,9 @@ export function snapshotOf(row: MaintenanceModeStateRow): MaintenanceModeSnapsho
   const changedAt = row.changedAt.toISOString()
   return {
     mode: row.mode,
-    // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
+    // oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
     message: isOff ? null : row.message,
-    // eslint-disable-next-line unicorn/no-null -- as above
+    // oxlint-disable-next-line unicorn/no-null -- as above
     since: isOff ? null : changedAt,
     changedAt,
     version: row.version,
@@ -146,7 +146,7 @@ export function createMaintenanceModeStore(
     isClosed: boolean
   } = {
     snapshot: UNKNOWN_SNAPSHOT,
-    // eslint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
+    // oxlint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
     lastReloadError: null,
     subscriber: undefined,
     subscribing: undefined,
@@ -183,7 +183,7 @@ export function createMaintenanceModeStore(
       if (!state.snapshot.known || row.version > state.snapshot.version) {
         state.snapshot = snapshotOf(row)
       }
-      // eslint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
+      // oxlint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
       state.lastReloadError = null
     } catch (error) {
       // A read that fails after stop() is shutdown noise: say nothing, notify no one.

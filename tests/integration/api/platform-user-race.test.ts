@@ -11,7 +11,7 @@
  * Seams via withMutatedMethod, no sleeps.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { NOT_FOUND } from '@/errors/not-found-errors'
@@ -80,7 +80,7 @@ describe('concurrent staff deletes', () => {
       // Pause the first delete inside its transaction, after the soft delete and before commit.
       const reached = deferred<number>()
       const release = deferred()
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realRevoke = TenantInvitationRepository.prototype.revokePendingByInviter
       let calls = 0
       /**
@@ -167,7 +167,7 @@ describe('a delete whose target came to own a tenant after the first ownership r
     })
     createdTenantIds.push(tenant.id)
     // The first read (before any lock) misses the tenant, as if it was created just after.
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realList = PlatformUserRepository.prototype.listOwnedTenants
     let calls = 0
     /**
@@ -362,7 +362,7 @@ function viaCreateTenant(target: User): OwnerGrant {
       withMutatedMethod(
         TenantRepository.prototype,
         'create',
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         pausingFirstCall(TenantRepository.prototype.create, 1, pause),
         run
       ),
@@ -393,7 +393,7 @@ async function viaOwnerInvitation(target: User, invitedBy: string): Promise<Owne
       withMutatedMethod(
         TenantInvitationRepository.prototype,
         'claimForAccept',
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         pausingFirstCall(TenantInvitationRepository.prototype.claimForAccept, 2, pause),
         run
       ),
@@ -428,7 +428,7 @@ async function viaChangeRole(target: User): Promise<OwnerGrant> {
       withMutatedMethod(
         UserMembershipRepository.prototype,
         'updateRole',
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         pausingFirstCall(UserMembershipRepository.prototype.updateRole, 2, pause),
         run
       ),
@@ -494,7 +494,7 @@ describe('a delete racing a grant of ownership', () => {
       await withMutatedMethod(
         TenantInvitationRepository.prototype,
         'revokePendingByInviter',
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         pausingFirstCall(TenantInvitationRepository.prototype.revokePendingByInviter, 1, pause),
         async () => {
           result = await race(
@@ -564,7 +564,7 @@ describe('a delete racing a platform invitation accept', () => {
       await withMutatedMethod(
         TenantInvitationRepository.prototype,
         'claimForAccept',
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         pausingFirstCall(TenantInvitationRepository.prototype.claimForAccept, 2, pause),
         async () => {
           result = await race(
@@ -607,7 +607,7 @@ describe('a role change to platform owner racing a delete of the target', () => 
       await withMutatedMethod(
         UserMembershipRepository.prototype,
         'lockOwners',
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
         pausingFirstCall(UserMembershipRepository.prototype.lockOwners, 2, pause),
         async () => {
           result = await race(
@@ -645,7 +645,7 @@ describe('assertPlatformOwnerRemains', () => {
     )
     expect(() => assertPlatformOwnerRemains('owner', 1, 'delete')).not.toThrow()
     expect(() => assertPlatformOwnerRemains('admin', 0, 'delete')).not.toThrow()
-    // eslint-disable-next-line unicorn/no-null -- a non-staff target
+    // oxlint-disable-next-line unicorn/no-null -- a non-staff target
     expect(() => assertPlatformOwnerRemains(null, 0, 'delete')).not.toThrow()
   })
 })

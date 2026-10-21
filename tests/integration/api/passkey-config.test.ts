@@ -5,7 +5,7 @@
  * mocked through `getEnv`, never through `process.env`.
  */
 import express from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv, type Env } from '@/configs/env.config'
 import { withMutatedModule } from '../../helpers/mutate'

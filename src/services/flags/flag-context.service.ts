@@ -123,10 +123,10 @@ export async function flagContextForUser(
     userId,
     tenantId,
     platformRole,
-    // eslint-disable-next-line unicorn/no-null -- the input's contract is null for no membership
+    // oxlint-disable-next-line unicorn/no-null -- the input's contract is null for no membership
     tenantRole: membership?.role ?? null,
     userCreatedAt: user.createdAt,
-    // eslint-disable-next-line unicorn/no-null -- the input's contract is null for an unknown creation
+    // oxlint-disable-next-line unicorn/no-null -- the input's contract is null for an unknown creation
     tenantCreatedAt: tenant?.createdAt ?? null,
     sessionId,
   })

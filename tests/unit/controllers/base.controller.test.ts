@@ -6,7 +6,7 @@
  * success never calls `next`.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { BaseController, type Handler } from '@/controllers/base.controller'
 import { logger } from '@/services/logger.service'
 

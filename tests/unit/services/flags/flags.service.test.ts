@@ -5,7 +5,7 @@
  * Exposure recording itself is mocked here and tested against the real
  * outbox in tests/integration/services/flags/flag-exposure.service.test.ts.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { isFlagsEnabled } from '@/configs/analytics.config'
 import { recordUnknownVariant } from '@/services/flags/flag-counters.service'
 import { recordExposure } from '@/services/flags/flag-exposure.service'
@@ -46,7 +46,7 @@ vi.mock('@/services/flags/flag-snapshot.service', () => ({ getFlagSnapshot: vi.f
 vi.mock('@/services/flags/flag-exposure.service', () => ({ recordExposure: vi.fn() }))
 vi.mock('@/services/flags/flag-counters.service', () => ({ recordUnknownVariant: vi.fn() }))
 
-// eslint-disable-next-line unicorn/no-null -- the context's contract uses null
+// oxlint-disable-next-line unicorn/no-null -- the context's contract uses null
 const NONE = null
 const TENANT_ID = '0199b000-0000-7000-8000-000000000002'
 

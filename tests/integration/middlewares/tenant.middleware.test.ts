@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
@@ -79,9 +79,9 @@ function stubAuthenticatedUser(userId: string) {
     thisRequest.user = {
       id: userId,
       email: 'stub@example.test',
-      // eslint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
+      // oxlint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
       firstName: null,
-      // eslint-disable-next-line unicorn/no-null -- see comment above.
+      // oxlint-disable-next-line unicorn/no-null -- see comment above.
       lastName: null,
     }
     next()
@@ -177,7 +177,7 @@ describe('resolveTenant + requireRole (integration)', () => {
         isPlatformTenant: false,
         role: 'owner',
         memberRole: 'owner',
-        // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
+        // oxlint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
         platformRole: null,
         access: 'member',
       },

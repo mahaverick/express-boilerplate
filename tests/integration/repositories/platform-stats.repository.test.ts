@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { sql as drizzleSql } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { PlatformStatsRepository } from '@/repositories/platform-stats.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'

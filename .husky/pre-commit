@@ -9,10 +9,10 @@ pnpm install --frozen-lockfile --lockfile-only --ignore-scripts >/dev/null
 pnpm exec lint-staged
 
 # Tests for what you touched AND everything importing it (vitest walks the
-# module graph). vitest.unit.config.ts drops tests/integration/** and the
+# module graph). The `unit` project drops tests/integration/** and the
 # database setup, so this runs with Docker down. Integration tests and the
 # coverage gate run in CI, which main requires.
-pnpm exec vitest run --config vitest.unit.config.ts --changed HEAD --passWithNoTests
+pnpm exec vp test run --project unit --changed HEAD --passWithNoTests
 
 # .env.example is generated. Regenerate it when the schema is staged, so the
 # example can never drift from the schema it documents.

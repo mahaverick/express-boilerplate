@@ -10,7 +10,7 @@
  * as SQL; `tenant_invitations` has no index on purpose (see its repository
  * method).
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { sql } from '@/services/database.service'
 
 const CUTOFF = `'2001-01-01T00:00:00.000Z'::timestamptz`

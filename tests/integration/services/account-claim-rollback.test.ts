@@ -17,7 +17,7 @@
  * ```
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
@@ -29,7 +29,7 @@ import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 const originalClaimOnce = UserTokenRepository.prototype.claimOnce.bind(new UserTokenRepository())
-// eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+// oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
 const realLockById = UserRepository.prototype.lockById
 
 /**

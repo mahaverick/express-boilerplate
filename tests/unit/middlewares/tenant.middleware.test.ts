@@ -7,7 +7,7 @@
  * router lives in tests/integration/middlewares/tenant.middleware.test.ts.
  */
 import { type NextFunction, type Request, type Response } from 'express'
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
@@ -39,22 +39,22 @@ const mockTenant: Tenant = {
   id: 'tenant-1',
   name: 'Acme Inc',
   slug: 'acme',
-  // eslint-disable-next-line unicorn/no-null -- Tenant.description/logo/website are `T | null` database columns.
+  // oxlint-disable-next-line unicorn/no-null -- Tenant.description/logo/website are `T | null` database columns.
   description: null,
-  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   logo: null,
-  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   website: null,
   lifecycleState: 'active',
   isPlatform: false,
   onboardingTracked: false,
-  // eslint-disable-next-line unicorn/no-null -- an untracked tenant has no onboarding clock.
+  // oxlint-disable-next-line unicorn/no-null -- an untracked tenant has no onboarding clock.
   onboardingStartedAt: null,
-  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   onboardingDismissedAt: null,
-  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   onboardingDismissedBy: null,
-  // eslint-disable-next-line unicorn/no-null -- Tenant.deletedAt is a `Date | null` soft-delete column.
+  // oxlint-disable-next-line unicorn/no-null -- Tenant.deletedAt is a `Date | null` soft-delete column.
   deletedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -97,7 +97,7 @@ function memberPrincipal(role: MembershipRole): RequestPrincipal {
     isPlatformTenant: false,
     role,
     memberRole: role,
-    // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
+    // oxlint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
     platformRole: null,
     access: 'member',
   }
@@ -172,7 +172,7 @@ describe('resolveTenant', () => {
     findByUserAndTenantSpy = vi.spyOn(UserMembershipRepository.prototype, 'findByUserAndTenant')
     findPlatformRoleSpy = vi
       .spyOn(UserMembershipRepository.prototype, 'findPlatformRole')
-      // eslint-disable-next-line unicorn/no-null -- not staff
+      // oxlint-disable-next-line unicorn/no-null -- not staff
       .mockResolvedValue(null)
     recordPlatformAccessSpy = vi
       .spyOn(auditService, 'recordPlatformAccess')
@@ -378,7 +378,7 @@ describe('resolveTenant', () => {
       tenantSlug: 'acme',
       isPlatformTenant: false,
       role: 'admin',
-      // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+      // oxlint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
       memberRole: null,
       platformRole: 'admin',
       access: 'platform',
@@ -531,7 +531,7 @@ describe('requireMembership', () => {
   it('refuses staff reaching the tenant through a platform role, even an owner, with 404', () => {
     const principal: RequestPrincipal = {
       ...memberPrincipal('owner'),
-      // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+      // oxlint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
       memberRole: null,
       platformRole: 'owner',
       access: 'platform',
@@ -593,7 +593,7 @@ describe('requireRecentAuthOnPlatformTenant', () => {
 function staffRequest(fields: { authTime?: number; body?: unknown }): Request {
   const principal: RequestPrincipal = {
     ...memberPrincipal('owner'),
-    // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+    // oxlint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
     memberRole: null,
     platformRole: 'owner',
     access: 'platform',

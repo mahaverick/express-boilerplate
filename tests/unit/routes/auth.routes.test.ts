@@ -10,7 +10,7 @@
  * existed.
  */
 import type { RequestHandler, Router } from 'express'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import { authController } from '@/controllers/auth.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'

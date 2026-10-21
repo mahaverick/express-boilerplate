@@ -5,7 +5,7 @@
  * under `src/`. Prefer `withMutatedMethod`; reach for `withMutatedModule`
  * only when there is no shared mutable object to swap a method on.
  */
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 /**
  * Replace one method on a shared object, typically `SomeClass.prototype`, for

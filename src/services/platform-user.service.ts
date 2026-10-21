@@ -315,7 +315,7 @@ export async function createUser(
           access: 'platform',
           tenantId: platform.id,
           targetId: user.id,
-          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+          // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           metadata: { emailDomain: hostnameDomain(email) ?? null },
         },
         tx
@@ -465,7 +465,7 @@ async function revokeInvitationsSentBy(
         targetId: invitation.id,
         metadata: {
           role: invitation.role,
-          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+          // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           emailDomain: hostnameDomain(invitation.email) ?? null,
         },
       },

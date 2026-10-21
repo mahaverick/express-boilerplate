@@ -8,7 +8,7 @@
  * revoked role taking effect on the next request).
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -49,7 +49,7 @@ const tenantRepository = new TenantRepository()
 const tenantIds: string[] = []
 const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
 const SINCE = new Date('2026-10-06T10:42:00.000Z')
-// eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
+// oxlint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
 const NONE = null
 
 /**

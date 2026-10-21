@@ -8,7 +8,7 @@
  * instance that may already exist, to guarantee `REDIS_URL` is wrong from
  * this module's very first `getQueueConnection()` call.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 
 describe('queue unreachable', () => {
   /**

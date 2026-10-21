@@ -7,7 +7,7 @@
  * which derive the same progress in TypeScript.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import type { OnboardingState } from '@/constants/onboarding.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -37,7 +37,7 @@ import {
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
 
-// eslint-disable-next-line unicorn/no-null -- JSON null, as the API returns it
+// oxlint-disable-next-line unicorn/no-null -- JSON null, as the API returns it
 const NONE = null
 
 const tenantRepository = new TenantRepository()

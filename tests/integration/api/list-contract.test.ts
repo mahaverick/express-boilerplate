@@ -5,7 +5,7 @@
  * worker's database never change a count.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -27,7 +27,7 @@ const app = createApp()
  */
 const tag = `lc${randomUUID().slice(0, 8)}`
 
-// eslint-disable-next-line unicorn/no-null -- SQL NULL for a seeded nullable column
+// oxlint-disable-next-line unicorn/no-null -- SQL NULL for a seeded nullable column
 const NONE = null
 
 /**

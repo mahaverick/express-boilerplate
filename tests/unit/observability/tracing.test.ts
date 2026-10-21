@@ -10,7 +10,7 @@
  * exercises the "tracing disabled" branch — same as every other test
  * file that transitively imports it.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   isIgnoredIncomingPath,
   shutdownOtel,

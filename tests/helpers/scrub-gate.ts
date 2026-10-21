@@ -26,7 +26,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { format, resolveConfig } from 'prettier'
 import { corpusCase, huntCase, type GateCase } from './scrub-gate-generators'
 import { compareCase, visibleWindows } from './scrub-gate-metric'
 import { CORPUS_SEED, parseOptions, type Options } from './scrub-gate-options'
@@ -261,7 +260,7 @@ function checkVectors(candidate: Scrub): VectorReport {
  * @param baseline - The baseline scrubber.
  * @param options - The options.
  */
-async function writeSlice(baseline: Scrub, options: Options): Promise<void> {
+function writeSlice(baseline: Scrub, options: Options): void {
   const seed = options.seed ?? CORPUS_SEED
   const allowed: Record<string, Record<string, string[]>> = {}
   const unstable: number[] = []
@@ -283,11 +282,9 @@ async function writeSlice(baseline: Scrub, options: Options): Promise<void> {
     allowed,
     unstable,
   }
-  const config = await resolveConfig(SLICE_FILE)
-  fs.writeFileSync(
-    SLICE_FILE,
-    await format(JSON.stringify(slice), { ...config, filepath: SLICE_FILE })
-  )
+  fs.writeFileSync(SLICE_FILE, JSON.stringify(slice))
+  // Oxfmt reads its options from vite.config.ts's `fmt` block.
+  execFileSync('pnpm', ['exec', 'vp', 'fmt', SLICE_FILE], { stdio: 'inherit' })
   console.log(`wrote ${SLICE_FILE}: ${Object.keys(allowed).length} of ${options.count} cases`)
 }
 
@@ -361,7 +358,7 @@ async function main(): Promise<void> {
   }
   const baseline = await scrubberAt(options.baseline)
   if (options.mode === 'slice') {
-    await writeSlice(baseline, options)
+    writeSlice(baseline, options)
     return
   }
   const candidate =

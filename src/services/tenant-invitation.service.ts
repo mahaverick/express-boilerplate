@@ -319,7 +319,7 @@ function isNotifiable(user: User | undefined): user is User {
  * @returns Its lowercased domain, or null when it has none or it is not a dotted hostname.
  */
 function auditEmailDomain(email: string): string | null {
-  // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+  // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
   return hostnameDomain(email) ?? null
 }
 
@@ -352,12 +352,12 @@ async function assertRecipientBudget(email: string, tenantId: string): Promise<v
  * @returns The instant the cooldown ends, or null when it is over or never began.
  */
 export function resendAvailableAt(lastSentAt: Date | null, now: number = Date.now()): Date | null {
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no cooldown applies
+  // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null when no cooldown applies
   if (lastSentAt === null) return null
   const availableAt = new Date(
     lastSentAt.getTime() + requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
   )
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null once the cooldown is over
+  // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null once the cooldown is over
   return availableAt.getTime() > now ? availableAt : null
 }
 
@@ -670,7 +670,7 @@ export async function createOwnerInvitation(
       targetId: invitation.id,
       metadata: {
         emailDomain: auditEmailDomain(normalizedEmail),
-        // eslint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
+        // oxlint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
         inviteeUserId: invitee?.id ?? null,
         reason,
       },

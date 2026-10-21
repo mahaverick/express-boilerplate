@@ -6,7 +6,7 @@
  * and a reissued pending owner invitation. Seams via withMutatedMethod, no sleeps.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -166,7 +166,7 @@ describe('owner re-issue vs the old invitee accepting', () => {
     // Pause the accept after it claimed the invitation and inserted the owner membership, before commit.
     const reached = deferred<number>()
     const release = deferred()
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realInsert = UserMembershipRepository.prototype.insertIfAbsent
     /**
      * Pauses the accept after its owner membership insert, reporting its backend pid, until

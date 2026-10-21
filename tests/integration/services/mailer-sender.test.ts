@@ -5,7 +5,7 @@
  * rest. Nothing a caller passes can change it.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { sql } from '@/services/database.service'
 import { sendMail, type MailMessage } from '@/services/mailer.service'
 import { deleteMailpitMessage, findMailpitMessages, getMailpitMessage } from '../../helpers/mailpit'

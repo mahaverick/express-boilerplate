@@ -2,7 +2,7 @@
  * @file Pure schema checks: no database, no I/O.
  */
 import { randomBytes } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { invitationTokenInputSchema } from '@/validators/invitation.validators'
 
 describe('invitationTokenInputSchema', () => {
