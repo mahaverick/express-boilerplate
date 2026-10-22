@@ -811,6 +811,30 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
         label: 'raw read off a namespace import',
         source: "import * as orm from 'drizzle-orm'\nexport const q = orm.sql.raw('select 1')\n",
       },
+      {
+        label: 'an SQL object built with its constructor',
+        source: "import { SQL } from 'drizzle-orm'\nexport const q = new SQL([])\n",
+      },
+      {
+        label: 'a StringChunk built with its constructor',
+        source:
+          "import { StringChunk } from 'drizzle-orm'\nexport const q = new StringChunk('select 1')\n",
+      },
+      {
+        label: 'raw taken by assignment destructuring',
+        source:
+          "import { sql } from 'drizzle-orm'\nlet raw: unknown\n;({ raw } = sql)\nexport const q = raw\n",
+      },
+      {
+        label: 'raw renamed by assignment destructuring',
+        source:
+          "import { sql } from 'drizzle-orm'\nlet r: unknown\n;({ raw: r } = sql)\nexport const q = r\n",
+      },
+      {
+        label: 'a String(...) call passed to execute',
+        source:
+          'declare const db: { execute: (query: string) => unknown }\ndeclare const id: string\ndb.execute(String(id))\n',
+      },
     ])('rejects $label in a service', async ({ source }) => {
       const messages = await messagesFor('src/services/probe.service.ts', source)
       expect(messages.find((message) => message.ruleId === 'no-restricted-syntax')?.severity).toBe(

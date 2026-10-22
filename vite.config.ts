@@ -455,6 +455,36 @@ export default defineConfig({
       // Vitest's expect takes a message as its second argument.
       'vitest/valid-expect': ['error', { maxArgs: 2 }],
       'vitest/valid-title': 'error',
+      /**
+       * Adopted with correctness: in the category but never in origin/main, with
+       * 0 hits. Listed so tests/unit/lint-inventory.test.ts pins them on.
+       */
+      'eslint/no-caller': 'error',
+      'eslint/no-eval': 'error',
+      'eslint/no-iterator': 'error',
+      'eslint/no-useless-rename': 'error',
+      'import/default': 'error',
+      'import/namespace': 'error',
+      'oxc/bad-array-method-on-arguments': 'error',
+      'oxc/bad-match-all-arg': 'error',
+      'oxc/bad-min-max-func': 'error',
+      'oxc/bad-object-literal-comparison': 'error',
+      'oxc/bad-replace-all-arg': 'error',
+      'oxc/const-comparisons': 'error',
+      'oxc/missing-throw': 'error',
+      'oxc/number-arg-out-of-range': 'error',
+      'oxc/only-used-in-recursion': 'error',
+      'oxc/uninvoked-array-callback': 'error',
+      'typescript/no-meaningless-void-operator': 'error',
+      'typescript/no-unnecessary-parameter-property-assignment': 'error',
+      'typescript/no-useless-default-assignment': 'error',
+      'typescript/no-useless-empty-export': 'error',
+      'vitest/prefer-snapshot-hint': 'error',
+      'vitest/require-awaited-expect-poll': 'error',
+      'vitest/require-local-test-context-for-concurrent-snapshots': 'error',
+      'vitest/valid-describe-callback': 'error',
+      'vitest/valid-expect-in-promise': 'error',
+      'vitest/warn-todo': 'error',
 
       // Noise: 394 and 53 disable comments, no protection (the migration audit, flag 8).
       'unicorn/no-null': 'off',

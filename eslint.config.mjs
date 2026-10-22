@@ -282,6 +282,17 @@ export default tseslint.config(
             "VariableDeclarator[init.name='sql'] > ObjectPattern > Property:matches([key.name='raw'], [key.value='raw'], [computed=true])",
           message: RAW_SQL_MESSAGE,
         },
+        // ({ raw } = sql), the same destructuring by assignment.
+        {
+          selector:
+            "AssignmentExpression[right.name='sql'] > ObjectPattern > Property:matches([key.name='raw'], [key.value='raw'], [computed=true])",
+          message: RAW_SQL_MESSAGE,
+        },
+        // new SQL(…) or new StringChunk(…) builds raw SQL without sql.raw. src imports SQL only as a type, so match the constructor call, not the import.
+        {
+          selector: 'NewExpression[callee.name=/^(SQL|StringChunk)$/]',
+          message: RAW_SQL_MESSAGE,
+        },
         {
           selector:
             "ImportDeclaration[source.value=/^drizzle-orm(\\/|$)/] > ImportSpecifier[imported.name='sql'][local.name!='sql']",
@@ -300,6 +311,12 @@ export default tseslint.config(
         {
           selector:
             "CallExpression[callee.property.name='execute'][arguments.0.type=/^(Literal|TemplateLiteral|BinaryExpression)$/]",
+          message: RAW_SQL_MESSAGE,
+        },
+        // A String(…) conversion as a query, the same plain string by another route.
+        {
+          selector:
+            "CallExpression[callee.property.name='execute'][arguments.0.type='CallExpression'][arguments.0.callee.name='String']",
           message: RAW_SQL_MESSAGE,
         },
       ],

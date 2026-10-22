@@ -348,8 +348,9 @@ async function isConnectionReachable(queueRedis: QueueRedis): Promise<boolean> {
   } else if (!(await hasBecomeReady(connection))) {
     return false
   }
-  await connection.ping()
-  return true
+  const reply = await connection.ping()
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- ioredis in subscriber mode returns an array, not 'PONG'
+  return reply === 'PONG'
 }
 
 /**
