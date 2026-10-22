@@ -73,7 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     env:
       # How many workers (and per-worker databases) a shard runs; the default is 8.
       VITEST_WORKERS: 4
