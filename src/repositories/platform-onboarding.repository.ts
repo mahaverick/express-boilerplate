@@ -18,7 +18,6 @@ import { onboardingCompletionModel } from '@/database/models/onboarding-completi
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
 import {
   defineList,
@@ -392,6 +391,21 @@ export function onboardingTenantList(search: string | undefined, filters: Onboar
 }
 
 /**
+ * The earliest member-access audit entry of `action` in the tenant at or
+ * after its onboarding start, or null when there is none. The correlation
+ * is spelled out in SQL: drizzle renders a one-table select's columns
+ * unqualified, binding them inside the subquery.
+ */
+const earliestMemberEntry = (action: 'tenant.settings_updated' | 'invitation.created') =>
+  sql<Date | null>`(
+    select min(entry.occurred_at) from audit_logs entry
+    where entry.tenant_id = "tenants"."id"
+      and entry.action = ${action}
+      and entry.access = 'member'
+      and entry.occurred_at >= "tenants"."onboarding_started_at"
+  )`.mapWith(auditLogModel.occurredAt)
+
+/**
  * Query access for staff onboarding reads.
  */
 export class PlatformOnboardingRepository {
@@ -710,20 +724,6 @@ export class PlatformOnboardingRepository {
    * @returns One row per tenant.
    */
   async reconcileCandidates(executor: DbExecutor = db): Promise<OnboardingReconcileRow[]> {
-    /**
-     * The earliest member-access audit entry of `action` in the tenant at or
-     * after its onboarding start, or null when there is none. The correlation
-     * is spelled out in SQL: drizzle renders a one-table select's columns
-     * unqualified, binding them inside the subquery.
-     */
-    const earliestMemberEntry = (action: 'tenant.settings_updated' | 'invitation.created') =>
-      sql<Date | null>`(
-        select min(entry.occurred_at) from audit_logs entry
-        where entry.tenant_id = "tenants"."id"
-          and entry.action = ${action}
-          and entry.access = 'member'
-          and entry.occurred_at >= "tenants"."onboarding_started_at"
-      )`.mapWith(auditLogModel.occurredAt)
     // One join time per membership: its accept entry's when on file (rank 0), else its row's.
     const secondJoinAt = sql<Date | null>`(
       select joins.joined_at from (

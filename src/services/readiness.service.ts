@@ -60,9 +60,13 @@ function runOnce(slot: CheckSlot): Promise<boolean> {
     }
   })()
   slot.pending = run
-  void run.finally(() => {
-    if (slot.pending === run) slot.pending = undefined
-  })
+  void (async () => {
+    try {
+      await run
+    } finally {
+      if (slot.pending === run) slot.pending = undefined
+    }
+  })()
   return run
 }
 

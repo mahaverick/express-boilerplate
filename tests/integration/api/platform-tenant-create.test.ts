@@ -505,7 +505,9 @@ describe('staff-created tenants', () => {
       )
 
       expect(response?.status).toBe(200)
-      expect((response?.body as { data: { emailSent: boolean } }).data.emailSent).toBe(false)
+      expect((response?.body as { data: { emailSent: boolean } } | undefined)?.data.emailSent).toBe(
+        false
+      )
       const pending = await sql<{ email: string }[]>`select email from tenant_invitations
         where tenant_id = ${tenantId} and accepted_at is null and revoked_at is null`
       expect(pending.map((row) => row.email)).toEqual([second])

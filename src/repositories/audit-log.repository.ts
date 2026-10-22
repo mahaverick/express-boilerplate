@@ -13,7 +13,6 @@ import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/model
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import {
   defineList,

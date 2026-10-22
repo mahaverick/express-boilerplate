@@ -8,7 +8,6 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import {

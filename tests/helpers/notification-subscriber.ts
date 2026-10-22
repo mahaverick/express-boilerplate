@@ -54,7 +54,7 @@ export function notificationChannel(): string {
 export async function countSubscribers(client: RedisClientType): Promise<number> {
   const channel = notificationChannel()
   const counts = await client.pubSubNumSub(channel)
-  return Number(counts[channel] ?? 0)
+  return counts[channel] ?? 0
 }
 
 /**

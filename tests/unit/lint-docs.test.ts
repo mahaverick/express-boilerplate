@@ -19,6 +19,11 @@ describe('slugify', () => {
   })
 })
 
+/**
+ * The anchors every fixture file defines: only `cors`.
+ */
+const readAnchors = (): Set<string> => new Set(['cors'])
+
 describe('anchors', () => {
   it('numbers duplicates and skips fenced code', () => {
     const md = '# A\n## A\n```\n# not a heading\n```\n## B\n'
@@ -33,10 +38,6 @@ describe('linkProblems', () => {
    * the two fixture files only.
    */
   const exists = (p: string): boolean => files.has(p)
-  /**
-   * The anchors every fixture file defines: only `cors`.
-   */
-  const readAnchors = (): Set<string> => new Set(['cors'])
 
   it('passes existing files, known anchors and external links', () => {
     const md = '[s](CLAUDE.md#cors) [w](https://x.test) [m](mailto:a@b.test) [top](#cors)'

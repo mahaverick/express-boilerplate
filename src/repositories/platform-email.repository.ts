@@ -40,7 +40,6 @@ import { tenantInvitationModel } from '@/database/models/tenant-invitation.model
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { pendingCondition } from '@/repositories/tenant-invitation.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import {

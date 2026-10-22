@@ -82,10 +82,14 @@ export async function recordFlagFetch(
     await (outcome === 'ok' || outcome === 'not_modified'
       ? redis
           .multi()
-          .set(redisKey(...LAST_FETCH_OK_KEY), at.toISOString(), { EX: LAST_FETCH_TTL_SECONDS })
+          .set(redisKey(...LAST_FETCH_OK_KEY), at.toISOString(), {
+            expiration: { type: 'EX', value: LAST_FETCH_TTL_SECONDS },
+          })
           .del(redisKey(...LAST_FETCH_ERROR_KEY))
           .exec()
-      : redis.set(redisKey(...LAST_FETCH_ERROR_KEY), outcome, { EX: LAST_FETCH_TTL_SECONDS }))
+      : redis.set(redisKey(...LAST_FETCH_ERROR_KEY), outcome, {
+          expiration: { type: 'EX', value: LAST_FETCH_TTL_SECONDS },
+        }))
   } catch {
     // The status reads no outcome then; the job logs its own failures.
   }

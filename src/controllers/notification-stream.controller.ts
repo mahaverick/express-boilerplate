@@ -298,11 +298,16 @@ class NotificationStreamController extends BaseController {
         isClosed = true
         closeStream()
       })
+      /**
+       * Reads `isClosed` afresh: TypeScript keeps it narrowed to `false`
+       * across an `await`, though the 'close' handler can set it meanwhile.
+       */
+      const hasClosed = (): boolean => isClosed
 
       if (lastEventId) {
         const missed = await fetchMissedNotifications(userId, lastEventId)
         // Disconnected during the query: the 'close' handler already tore down.
-        if (isClosed) return
+        if (hasClosed()) return
 
         for (const notification of missed) {
           missedIds.add(notification.id)

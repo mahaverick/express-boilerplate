@@ -136,8 +136,18 @@ describe('recordErrorSendOk and recordErrorSendError', () => {
     await recordErrorSendError(401)
     await recordErrorSendOk(AT)
     expect(fake.state.commands).toEqual([
-      ['set', redisKey('errors', 'last_send_error'), '401', { EX: 86_400 }],
-      ['set', redisKey('errors', 'last_send_ok_at'), '2026-10-04T12:00:30.000Z', { EX: 86_400 }],
+      [
+        'set',
+        redisKey('errors', 'last_send_error'),
+        '401',
+        { expiration: { type: 'EX', value: 86_400 } },
+      ],
+      [
+        'set',
+        redisKey('errors', 'last_send_ok_at'),
+        '2026-10-04T12:00:30.000Z',
+        { expiration: { type: 'EX', value: 86_400 } },
+      ],
       ['del', redisKey('errors', 'last_send_error')],
     ])
   })

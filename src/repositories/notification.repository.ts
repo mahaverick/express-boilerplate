@@ -10,7 +10,6 @@ import {
   type Notification,
 } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import {
   defineList,

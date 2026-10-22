@@ -8,7 +8,7 @@
  * is disabled.
  */
 import type { IncomingMessage } from 'node:http'
-// eslint-disable-next-line sonarjs/deprecation -- `register()` is deprecated in favor of `module.registerHooks()`, but that replacement takes a synchronous hooks object, not a loader specifier; `@opentelemetry/instrumentation@0.222.0`'s `hook.mjs` only exports the async `load`/`resolve`/`initialize` shape `register()` expects, so this is the only integration path this package version offers (see the `register()` call below)
+// oxlint-disable-next-line typescript/no-deprecated -- `register()` is deprecated in favor of `module.registerHooks()`, but that replacement takes a synchronous hooks object, not a loader specifier; `@opentelemetry/instrumentation@0.222.0`'s `hook.mjs` only exports the async `load`/`resolve`/`initialize` shape `register()` expects, so this is the only integration path this package version offers (see the `register()` call below)
 import { register } from 'node:module'
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
@@ -26,7 +26,7 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
 // OTel's require-hook never sees CommonJS pino imported from ESM; the loader hook does.
 if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
-  // eslint-disable-next-line sonarjs/deprecation -- see the disable comment on the `register` import above
+  // oxlint-disable-next-line typescript/no-deprecated -- see the disable comment on the `register` import above
   register('@opentelemetry/instrumentation/hook.mjs', import.meta.url)
 }
 

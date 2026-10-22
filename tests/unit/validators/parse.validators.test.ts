@@ -65,18 +65,18 @@ describe('parseBody', () => {
   })
 })
 
-describe("zod's default messages", () => {
-  /**
-   * The field messages a parse answers for one field and one input.
-   */
-  function fieldMessages(field: z.ZodType, input: unknown): string[] | undefined {
-    const errors = captureRejection(z.object({ field }), { field: input }).errors as Record<
-      string,
-      string[]
-    >
-    return errors.field
-  }
+/**
+ * The field messages a parse answers for one field and one input.
+ */
+function fieldMessages(field: z.ZodType, input: unknown): string[] | undefined {
+  const errors = captureRejection(z.object({ field }), { field: input }).errors as Record<
+    string,
+    string[]
+  >
+  return errors.field
+}
 
+describe("zod's default messages", () => {
   it.each([
     ['a missing value', z.string(), undefined, 'Enter a value.'],
     ['text where a number goes', z.number(), 'ten', 'Enter a number.'],

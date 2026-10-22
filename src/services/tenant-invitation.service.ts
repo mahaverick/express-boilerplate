@@ -22,7 +22,6 @@ import {
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -486,7 +485,7 @@ async function dispatchInvitationMessages(
       })
     }
   }
-  return { emailSent: results[0]?.status === 'fulfilled' }
+  return { emailSent: results[0].status === 'fulfilled' }
 }
 
 /**
@@ -586,7 +585,7 @@ export async function invite(
   })
 
   const { invitee } = context
-  // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
+  // oxlint-disable-next-line promise/prefer-await-to-then -- fire-and-forget: the response must not wait on the queue
   dispatchInvitationMessages(context, isNotifiable(invitee) ? invitee : undefined).catch(
     (error: unknown) => {
       logger.error('Invitation messages failed', { error, invitationId: context.invitation.id })
@@ -811,7 +810,7 @@ export async function resend(
   // The email context takes only `resentFromId`: the staff reason stays in the audit entry.
   const resendOptions: EmailResendOptions =
     options.resentFromId === undefined ? {} : { resentFromId: options.resentFromId }
-  // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
+  // oxlint-disable-next-line promise/prefer-await-to-then -- fire-and-forget: the response must not wait on the queue
   dispatchInvitationMessages(context, undefined, resendOptions).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })

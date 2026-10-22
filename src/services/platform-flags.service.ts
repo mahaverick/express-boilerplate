@@ -20,7 +20,6 @@ import {
   type FlagEntry,
 } from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'

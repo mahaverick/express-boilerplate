@@ -295,7 +295,7 @@ describe('POST /auth/link/request', () => {
     for (const response of responses) {
       expect(response.status).toBe(202)
       expect(response.body).toEqual(REQUEST_ACCEPTED_BODY)
-      expect(response.text).toBe(responses[0]?.text)
+      expect(response.text).toBe(responses[0].text)
     }
     // The follow-ups run after the reply; wait for the three that mail before cleanup.
     for (const email of [fresh, existing.email, mixedCase]) {
@@ -941,7 +941,7 @@ describe('POST /auth/link/verify', () => {
         postVerifyWithEmail(token, user.email),
       ])
 
-      expect(swapped?.status).toBe(400)
+      expect(swapped.status).toBe(400)
       expect(matched.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
         200, 400,
       ])

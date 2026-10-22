@@ -290,6 +290,13 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
   }
 
   /**
+   * Reads `state.isClosed` afresh: TypeScript keeps a property narrowed
+   * across an `await`, so a direct read after one types as the value
+   * checked before it.
+   */
+  const isClosed = (): boolean => state.isClosed
+
+  /**
    * Replace the copy in memory with the stored snapshot, unless that is
    * missing, unreadable or checked earlier than the copy. Never rejects;
    * a failure is logged once until a reload succeeds.
@@ -298,7 +305,7 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
     if (state.isClosed) return
     try {
       const stored = await readFlagSnapshot()
-      if (stored !== null && !state.isClosed && !isOlder(stored, state.snapshot)) {
+      if (stored !== null && !isClosed() && !isOlder(stored, state.snapshot)) {
         state.snapshot = stored
       }
       state.isReloadFailing = false
@@ -353,7 +360,7 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       // A connect that landed after stop() cannot be closed through node-redis; unref'd, it never holds the process.
       client.unref()
       destroyQuietly(client)
-      if (!state.isClosed) {
+      if (!isClosed()) {
         logger.warn('Flag snapshot subscriber failed to start; the backstop keeps reloading', {
           error,
         })
@@ -381,7 +388,7 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       if (state.isStarted || state.isClosed) return
       state.isStarted = true
       await reload()
-      if (state.isClosed) return
+      if (isClosed()) return
       void ensureSubscriber()
       state.timer = setInterval(() => {
         void reload()

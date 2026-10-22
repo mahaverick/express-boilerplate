@@ -11,7 +11,6 @@
 import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
-import { HttpError } from '@/errors/http-error'
 import { toPublicTenant, toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import { changeRole, leaveTenant, removeMember } from '@/services/tenant-membership.service'

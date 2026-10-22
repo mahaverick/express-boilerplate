@@ -253,7 +253,8 @@ const LOCALE_PATTERN = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/
 export function isTimeZoneName(value: string): boolean {
   if (!TIMEZONE_PATTERN.test(value)) return false
   try {
-    new Intl.DateTimeFormat('en', { timeZone: value })
+    // Constructed only for the RangeError it throws on a zone this runtime does not know.
+    void new Intl.DateTimeFormat('en', { timeZone: value })
     return true
   } catch {
     return false

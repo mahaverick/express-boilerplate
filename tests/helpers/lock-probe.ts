@@ -113,6 +113,11 @@ export async function pollUntil(
     }
   }
   void observe()
+  /**
+   * Reads `hasSettled` afresh: TypeScript keeps it narrowed to `false`
+   * across an `await`, though `observe` sets it meanwhile.
+   */
+  const isSettled = (): boolean => hasSettled
 
   // connect_timeout is whole seconds: rounding up gives a sub-second timeoutMs a full second to connect, longer than the poll's own budget.
   const probe = postgres(getEnv().DATABASE_URL, {
@@ -147,7 +152,7 @@ export async function pollUntil(
   try {
     while (Date.now() < timing.deadline) {
       if (await isObservedOnce(probe, isObserved, timing.deadline - Date.now(), label)) return true
-      if (hasSettled) return false
+      if (isSettled()) return false
       await settle(POLL_INTERVAL_MS, 'poll interval')
     }
     if (!timing.hasStarted) {

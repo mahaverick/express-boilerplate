@@ -42,7 +42,10 @@ describe('claimCooldown', () => {
     await expect(claimCooldown('step-up-link', 'user-1', 60_000)).resolves.toEqual({
       claimed: true,
     })
-    expect(set).toHaveBeenCalledWith('test:step-up-link:user-1', '1', { NX: true, PX: 60_000 })
+    expect(set).toHaveBeenCalledWith('test:step-up-link:user-1', '1', {
+      condition: 'NX',
+      expiration: { type: 'PX', value: 60_000 },
+    })
     expect(pttl).not.toHaveBeenCalled()
   })
 
@@ -125,7 +128,10 @@ describe('didClaimMailCooldown', () => {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
-    expect(set).toHaveBeenCalledWith(expect.any(String), '1', { NX: true, PX: 300_000 })
+    expect(set).toHaveBeenCalledWith(expect.any(String), '1', {
+      condition: 'NX',
+      expiration: { type: 'PX', value: 300_000 },
+    })
   })
 
   it('rounds a fractional cooldown up to a whole PX, which Redis requires', async () => {
@@ -136,7 +142,10 @@ describe('didClaimMailCooldown', () => {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
-    expect(set).toHaveBeenCalledWith(expect.any(String), '1', { NX: true, PX: 2 })
+    expect(set).toHaveBeenCalledWith(expect.any(String), '1', {
+      condition: 'NX',
+      expiration: { type: 'PX', value: 2 },
+    })
   })
 
   it('refuses the slot while one is held (the SET answers null)', async () => {

@@ -102,9 +102,9 @@ describe('addEmailJob', () => {
       // Only the call is asserted.
     })
     try {
-      const rejected = expect(addEmailJob(message, 'user-1')).rejects
-      await rejected.toThrow(expect.not.stringContaining('user@example.com'))
-      await rejected.toThrow(/onboarding_reminder/)
+      const attempt = addEmailJob(message, 'user-1')
+      await expect(attempt).rejects.toThrow(expect.not.stringContaining('user@example.com'))
+      await expect(attempt).rejects.toThrow(/onboarding_reminder/)
     } finally {
       loggerError.mockRestore()
     }

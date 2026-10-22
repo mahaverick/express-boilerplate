@@ -5,7 +5,6 @@
  */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
-import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import type { DbTransaction } from '@/services/database.service'

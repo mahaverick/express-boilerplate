@@ -48,7 +48,7 @@ async function trySlot(redisKeyName: string, cooldownMs: number): Promise<Cooldo
   const result = await withRedisDeadline(async () => {
     const redis = await getRedis()
     // Redis rejects a non-integer PX.
-    return redis.set(redisKeyName, '1', { NX: true, PX: px })
+    return redis.set(redisKeyName, '1', { condition: 'NX', expiration: { type: 'PX', value: px } })
   }, 'cooldown claim')
   if (result === 'OK') return { claimed: true }
   try {

@@ -83,6 +83,17 @@ const withApexUrl = {
   getEnv: () => ({ ...envConfig.getEnv(), APEX_URL: APEX_ORIGIN }),
 }
 
+/**
+ * Reads the origin of the sign-in link queued for `to`, which shows the frontend it opens.
+ */
+const originOfLink = async (to: string): Promise<string> => {
+  const job = await waitForJob<EmailJobData>(
+    emailQueueFor(SIGN_IN_LINK_TEMPLATE_KEY),
+    (data) => data.to === to && data.templateKey === SIGN_IN_LINK_TEMPLATE_KEY
+  )
+  return new URL((job.data.variables as { signInUrl: string }).signInUrl).origin
+}
+
 describe('platform-user.service link origins', () => {
   it('a staff target gets an Apex sign-in link and a customer a web one', async () => {
     const { user: owner } = await createTrackedStaff('owner')
@@ -100,16 +111,6 @@ describe('platform-user.service link origins', () => {
       }
     )
 
-    /**
-     * Reads the origin of the sign-in link queued for `to`, which shows the frontend it opens.
-     */
-    const originOfLink = async (to: string): Promise<string> => {
-      const job = await waitForJob<EmailJobData>(
-        emailQueueFor(SIGN_IN_LINK_TEMPLATE_KEY),
-        (data) => data.to === to && data.templateKey === SIGN_IN_LINK_TEMPLATE_KEY
-      )
-      return new URL((job.data.variables as { signInUrl: string }).signInUrl).origin
-    }
     const webOrigin = new URL(envConfig.getEnv().WEB_URL).origin
     expect(webOrigin).not.toBe(APEX_ORIGIN)
     expect(await originOfLink(staffTarget.user.email)).toBe(APEX_ORIGIN)

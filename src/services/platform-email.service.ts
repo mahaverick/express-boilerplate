@@ -17,7 +17,6 @@ import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.cons
 import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { canActorGrantRole, canStaffMailTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'

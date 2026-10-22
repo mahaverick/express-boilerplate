@@ -133,8 +133,8 @@ describe('migration 0020: backfill', () => {
     for (const column of ['failure_origin', 'user_id', 'tenant_id', 'link_app', 'job_key']) {
       expect(rows[0]?.[column]).toBeNull()
     }
-    expect((rows[0]?.created_at as Date).toISOString()).toBe(SENT_AT)
-    expect((rows[0]?.status_updated_at as Date).toISOString()).toBe(SENT_AT)
+    expect((rows[0]?.created_at as Date | undefined)?.toISOString()).toBe(SENT_AT)
+    expect((rows[0]?.status_updated_at as Date | undefined)?.toISOString()).toBe(SENT_AT)
     expect(rows[1]).toMatchObject({
       id: '00000000-0000-7000-8000-000000000002',
       template_key: 'password_changed',
@@ -143,7 +143,7 @@ describe('migration 0020: backfill', () => {
       sender_class: 'general',
       message_id_header: '<legacy-00000000-0000-7000-8000-000000000002@invalid>',
     })
-    expect((rows[1]?.created_at as Date).toISOString()).toBe(FAILED_AT)
+    expect((rows[1]?.created_at as Date | undefined)?.toISOString()).toBe(FAILED_AT)
   })
 
   it('points every legacy attempt at its message', async () => {

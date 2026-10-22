@@ -349,8 +349,8 @@ async function isConnectionReachable(queueRedis: QueueRedis): Promise<boolean> {
   } else if (!(await hasBecomeReady(connection))) {
     return false
   }
-  const reply = await connection.ping()
-  return reply === 'PONG'
+  await connection.ping()
+  return true
 }
 
 /**

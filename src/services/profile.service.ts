@@ -3,7 +3,6 @@
  */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewUser, User } from '@/database/models/user.model'
-import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { UserRepository } from '@/repositories/user.repository'
 import { getPlatformMembership } from '@/services/platform.service'

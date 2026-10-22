@@ -102,6 +102,109 @@ describe('tenant-access.service', () => {
     return tenant
   }
 
+  /**
+   * What the race produced: both outcomes, the order of the staff read
+   * against the demotion's commit, and whether the staff read queued.
+   */
+  interface DemotionRace {
+    outcomes: (string | number)[]
+    events: string[]
+    didStaffWait: boolean
+  }
+
+  /**
+   * Staff admin S removes manager M from tenant T while platform owner P's
+   * demotion of S to viewer holds S's platform row, uncommitted. P's
+   * transaction waits inside `updateRole` until the probe has answered
+   * whether S's platform read queued behind it, then commits. `platformRead` is the read S's
+   * transaction makes in place of `lockPlatformRole`. Resolves with the outcomes (S, then P),
+   * the events, whether S waited, and the rows involved.
+   */
+  async function raceStaffRemovalAgainstDemotion(
+    platformRead: UserMembershipRepository['lockPlatformRole']
+  ): Promise<DemotionRace & { staff: User; tenant: Tenant; manager: User }> {
+    const platform = await platformTenant()
+    const owner = await createUser()
+    const tenant = await createTenant(owner)
+    const manager = await createUser()
+    await addMember(tenant, manager, 'manager')
+    const staff = await createUser()
+    await addMember(platform, staff, 'admin')
+    const platformOwner = await createUser()
+    await addMember(platform, platformOwner, 'owner')
+
+    const events: string[] = []
+    const demotionHolds = deferred()
+    const releaseDemotion = deferred()
+    const staffPid = deferred<number>()
+
+    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    const realUpdateRole = UserMembershipRepository.prototype.updateRole
+    /**
+     * `updateRole` that, after the real update, signals that the demotion holds S's platform
+     * row and waits for the release before returning, so the commit comes after the probe.
+     */
+    const holdingUpdateRole: typeof realUpdateRole = async function (
+      this: UserMembershipRepository,
+      ...parameters: Parameters<typeof realUpdateRole>
+    ) {
+      const updated = await realUpdateRole.apply(this, parameters)
+      demotionHolds.resolve()
+      await releaseDemotion.promise
+      events.push('demotion committing')
+      return updated
+    }
+    /**
+     * `lockPlatformRole` stand-in that publishes S's backend pid for the probe, makes
+     * `platformRead`, and records the role it read.
+     */
+    const recordingRead: typeof platformRead = async function (
+      this: UserMembershipRepository,
+      userId,
+      tx
+    ) {
+      staffPid.resolve(await backendPid(tx))
+      const role = await platformRead.call(this, userId, tx)
+      events.push(`staff read ${String(role)}`)
+      return role
+    }
+
+    let outcomes: (string | number)[] = []
+    let didStaffWait = false
+    await withMutatedMethod(
+      UserMembershipRepository.prototype,
+      'updateRole',
+      holdingUpdateRole,
+      async () => {
+        await withMutatedMethod(
+          UserMembershipRepository.prototype,
+          'lockPlatformRole',
+          recordingRead,
+          async () => {
+            const demotion = changeRole(
+              { userId: platformOwner.id },
+              platform.id,
+              staff.id,
+              'viewer'
+            )
+            let removal: Promise<void> | undefined
+            try {
+              await untilSignalled(demotionHolds.promise, demotion, 'the demotion')
+              removal = removeMember({ userId: staff.id }, tenant.id, manager.id)
+              const pid = await untilSignalled(staffPid.promise, removal, 'the staff removal')
+              didStaffWait = await waitForBlocked(pid, removal)
+            } finally {
+              releaseDemotion.resolve()
+            }
+            const settled = await Promise.allSettled([removal, demotion])
+            outcomes = settled.map((result) => outcomeOf(result))
+          }
+        )
+      }
+    )
+    return { outcomes, events, didStaffWait, staff, tenant, manager }
+  }
+
   describe('resolveActorAccess', () => {
     it('reports a member as "member", with their own role', async () => {
       const owner = await createUser()
@@ -152,128 +255,22 @@ describe('tenant-access.service', () => {
     })
   })
 
+  /**
+   * Asserts that the staff removal waited for the demotion and was then refused with 403 on
+   * the demoted role, leaving the manager in place.
+   */
+  async function expectRefusedOnTheDemotedRole(
+    race: Awaited<ReturnType<typeof raceStaffRemovalAgainstDemotion>>
+  ): Promise<void> {
+    expect(race.didStaffWait).toBe(true)
+    expect(race.outcomes).toEqual([403, 'fulfilled'])
+    expect(race.events).toEqual(['demotion committing', 'staff read viewer'])
+    expect(await userMembershipRepository.findPlatformRole(race.staff.id)).toBe('viewer')
+    const kept = await userMembershipRepository.findByUserAndTenant(race.manager.id, race.tenant.id)
+    expect(kept?.role).toBe('manager')
+  }
+
   describe('the platform-membership lock', () => {
-    /**
-     * What the race produced: both outcomes, the order of the staff read
-     * against the demotion's commit, and whether the staff read queued.
-     */
-    interface DemotionRace {
-      outcomes: (string | number)[]
-      events: string[]
-      didStaffWait: boolean
-    }
-
-    /**
-     * Staff admin S removes manager M from tenant T while platform owner P's
-     * demotion of S to viewer holds S's platform row, uncommitted. P's
-     * transaction waits inside `updateRole` until the probe has answered
-     * whether S's platform read queued behind it, then commits. `platformRead` is the read S's
-     * transaction makes in place of `lockPlatformRole`. Resolves with the outcomes (S, then P),
-     * the events, whether S waited, and the rows involved.
-     */
-    async function raceStaffRemovalAgainstDemotion(
-      platformRead: UserMembershipRepository['lockPlatformRole']
-    ): Promise<DemotionRace & { staff: User; tenant: Tenant; manager: User }> {
-      const platform = await platformTenant()
-      const owner = await createUser()
-      const tenant = await createTenant(owner)
-      const manager = await createUser()
-      await addMember(tenant, manager, 'manager')
-      const staff = await createUser()
-      await addMember(platform, staff, 'admin')
-      const platformOwner = await createUser()
-      await addMember(platform, platformOwner, 'owner')
-
-      const events: string[] = []
-      const demotionHolds = deferred()
-      const releaseDemotion = deferred()
-      const staffPid = deferred<number>()
-
-      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
-      const realUpdateRole = UserMembershipRepository.prototype.updateRole
-      /**
-       * `updateRole` that, after the real update, signals that the demotion holds S's platform
-       * row and waits for the release before returning, so the commit comes after the probe.
-       */
-      const holdingUpdateRole: typeof realUpdateRole = async function (
-        this: UserMembershipRepository,
-        ...parameters: Parameters<typeof realUpdateRole>
-      ) {
-        const updated = await realUpdateRole.apply(this, parameters)
-        demotionHolds.resolve()
-        await releaseDemotion.promise
-        events.push('demotion committing')
-        return updated
-      }
-      /**
-       * `lockPlatformRole` stand-in that publishes S's backend pid for the probe, makes
-       * `platformRead`, and records the role it read.
-       */
-      const recordingRead: typeof platformRead = async function (
-        this: UserMembershipRepository,
-        userId,
-        tx
-      ) {
-        staffPid.resolve(await backendPid(tx))
-        const role = await platformRead.call(this, userId, tx)
-        events.push(`staff read ${String(role)}`)
-        return role
-      }
-
-      let outcomes: (string | number)[] = []
-      let didStaffWait = false
-      await withMutatedMethod(
-        UserMembershipRepository.prototype,
-        'updateRole',
-        holdingUpdateRole,
-        async () => {
-          await withMutatedMethod(
-            UserMembershipRepository.prototype,
-            'lockPlatformRole',
-            recordingRead,
-            async () => {
-              const demotion = changeRole(
-                { userId: platformOwner.id },
-                platform.id,
-                staff.id,
-                'viewer'
-              )
-              let removal: Promise<void> | undefined
-              try {
-                await untilSignalled(demotionHolds.promise, demotion, 'the demotion')
-                removal = removeMember({ userId: staff.id }, tenant.id, manager.id)
-                const pid = await untilSignalled(staffPid.promise, removal, 'the staff removal')
-                didStaffWait = await waitForBlocked(pid, removal)
-              } finally {
-                releaseDemotion.resolve()
-              }
-              const settled = await Promise.allSettled([removal, demotion])
-              outcomes = settled.map((result) => outcomeOf(result))
-            }
-          )
-        }
-      )
-      return { outcomes, events, didStaffWait, staff, tenant, manager }
-    }
-
-    /**
-     * Asserts that the staff removal waited for the demotion and was then refused with 403 on
-     * the demoted role, leaving the manager in place.
-     */
-    async function expectRefusedOnTheDemotedRole(
-      race: Awaited<ReturnType<typeof raceStaffRemovalAgainstDemotion>>
-    ): Promise<void> {
-      expect(race.didStaffWait).toBe(true)
-      expect(race.outcomes).toEqual([403, 'fulfilled'])
-      expect(race.events).toEqual(['demotion committing', 'staff read viewer'])
-      expect(await userMembershipRepository.findPlatformRole(race.staff.id)).toBe('viewer')
-      const kept = await userMembershipRepository.findByUserAndTenant(
-        race.manager.id,
-        race.tenant.id
-      )
-      expect(kept?.role).toBe('manager')
-    }
-
     /**
      * No lock cycle: the only membership lock that reaches a second tenant is this `FOR SHARE`
      * on one platform row, and every transaction that locks membership rows in both a customer

@@ -81,7 +81,9 @@ describe('passkey challenges', () => {
   it('answers undefined for a stored value that is not a challenge record', async () => {
     const redis = await getRedis()
     const challengeId = randomUUID()
-    await redis.set(redisKey('passkey-challenge', challengeId), 'not json', { PX: 5000 })
+    await redis.set(redisKey('passkey-challenge', challengeId), 'not json', {
+      expiration: { type: 'PX', value: 5000 },
+    })
     expect(await consumePasskeyChallenge(challengeId, 'sign_in', {})).toBeUndefined()
     expect(await redis.exists(redisKey('passkey-challenge', challengeId))).toBe(0)
   })

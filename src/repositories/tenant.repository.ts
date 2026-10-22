@@ -18,7 +18,6 @@ import {
 } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import {
   BaseRepository,

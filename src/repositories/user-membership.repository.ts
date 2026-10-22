@@ -14,7 +14,6 @@ import {
 } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import type { RowLockMode } from '@/types/lock-mode'

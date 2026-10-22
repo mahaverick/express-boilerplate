@@ -13,7 +13,6 @@ import {
 } from '@/constants/audit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuditLog, WrittenAuditLog } from '@/database/models/audit-log.model'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { AuditLogRepository, type AuditLogListRow } from '@/repositories/audit-log.repository'
 import { enqueueAuditAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'

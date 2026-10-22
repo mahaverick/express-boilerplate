@@ -185,6 +185,13 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+/**
+ * Set as the Proxy's read traps, so every read of the thrown value throws.
+ */
+const trap = (): never => {
+  throw new Error('proxy trap')
+}
+
 describe('reportError gating and ids', () => {
   it('returns a fresh UUIDv7 and queues nothing when error tracking is off', async () => {
     tracking.isEnabled = false
@@ -234,12 +241,6 @@ describe('reportError gating and ids', () => {
 
   it('a Proxy whose every access throws gives one deterministic outcome per report', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
-    /**
-     * Set as the Proxy's read traps, so every read of the thrown value throws.
-     */
-    const trap = (): never => {
-      throw new Error('proxy trap')
-    }
     const hostile = new Proxy(
       {},
       {

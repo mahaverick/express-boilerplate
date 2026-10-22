@@ -8,7 +8,6 @@
 import { and, asc, desc, or, sql, type SQL } from 'drizzle-orm'
 import type { AnyPgColumn, PgSelect } from 'drizzle-orm/pg-core'
 import { z } from 'zod'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import type { DbExecutor } from '@/services/database.service'
 import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
 import {

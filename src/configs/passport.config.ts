@@ -196,6 +196,15 @@ function buildOAuthSessionOptions(client: RedisClient): SessionOptions {
 }
 
 /**
+ * Wait for the shared Redis client and build the real session middleware on
+ * it. Rejects when Redis misses the `withRedisDeadline` deadline.
+ */
+async function buildOAuthSessionMiddleware(): Promise<RequestHandler> {
+  const client = await withRedisDeadline(() => getRedis(), 'OAuth session store')
+  return session(buildOAuthSessionOptions(client))
+}
+
+/**
  * Build the express-session middleware for the OAuth round-trip, for the
  * Google routes only (`/auth/google` and its callback): the rest of the API is stateless JWT, so never mount it globally.
  *
@@ -211,18 +220,9 @@ function buildOAuthSessionOptions(client: RedisClient): SessionOptions {
 export function createOAuthSessionMiddleware(): RequestHandler {
   let middlewarePromise: Promise<RequestHandler> | undefined
 
-  /**
-   * Wait for the shared Redis client and build the real session middleware on
-   * it. Rejects when Redis misses the `withRedisDeadline` deadline.
-   */
-  async function buildMiddleware(): Promise<RequestHandler> {
-    const client = await withRedisDeadline(() => getRedis(), 'OAuth session store')
-    return session(buildOAuthSessionOptions(client))
-  }
-
   return async (request, response, next) => {
     try {
-      middlewarePromise ??= buildMiddleware()
+      middlewarePromise ??= buildOAuthSessionMiddleware()
       const middleware = await middlewarePromise
       middleware(request, response, next)
     } catch (error) {

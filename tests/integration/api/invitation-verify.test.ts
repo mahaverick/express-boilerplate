@@ -757,7 +757,7 @@ describe('POST /api/v1/invitations/verify', () => {
     const first = await postVerify(rawToken)
     expect(first.status).toBe(200)
     const inviteeId = verifyData(first).user.id
-    const firstCookie = ((first.headers['set-cookie'] as unknown as string[]) ?? [])
+    const firstCookie = ((first.headers['set-cookie'] as unknown as string[] | undefined) ?? [])
       .map((line) => line.split(';', 1)[0] ?? '')
       .find((pair) => pair.startsWith(`${REFRESH_COOKIE_NAME}=`))
 

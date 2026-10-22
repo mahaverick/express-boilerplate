@@ -109,6 +109,17 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/**
+ * A call that succeeds 10 ms after the deadline, once it has been abandoned.
+ */
+const late = (): Promise<string> =>
+  new Promise<string>((resolve) => {
+    // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test
+    setTimeout(() => {
+      resolve('PONG')
+    }, REDIS_REQUEST_DEADLINE_MS + 10)
+  })
+
 describe('withRedisDeadline', () => {
   it('passes a prompt answer through and leaves no timer', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
@@ -194,16 +205,6 @@ describe('withRedisDeadline', () => {
   it('opens no new cooldown on a late success from a call already abandoned', async () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
-    /**
-     * A call that succeeds 10 ms after the deadline, once it has been abandoned.
-     */
-    const late = (): Promise<string> =>
-      new Promise<string>((resolve) => {
-        // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test
-        setTimeout(() => {
-          resolve('PONG')
-        }, REDIS_REQUEST_DEADLINE_MS + 10)
-      })
     const stalled = track(withRedisDeadline(late, 'ping'))
     await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS + 10)
     expect(stalled.outcome).toBe('rejected')

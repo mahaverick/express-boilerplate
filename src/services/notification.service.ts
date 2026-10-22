@@ -10,8 +10,6 @@ import {
   STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
-import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import {
   NotificationPreferenceRepository,

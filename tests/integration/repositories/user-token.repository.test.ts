@@ -499,7 +499,7 @@ describe('UserTokenRepository', () => {
      * to NULL, not true, for this row, silently leaving it live if the
      * repository's `IS DISTINCT FROM` is ever "simplified" to `!=`.
      */
-    it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not != ', async () => {
+    it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not !=', async () => {
       const userId = await createUser()
       const sparedSessionId = randomUUID()
 

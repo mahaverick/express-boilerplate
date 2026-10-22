@@ -871,7 +871,7 @@ describe('invitations API', () => {
       await redis.set(
         recipientBudgetKey(invitee),
         String(getEnv().INVITATION_RECIPIENT_DAILY_LIMIT),
-        { PX: HOUR_MS }
+        { expiration: { type: 'PX', value: HOUR_MS } }
       )
 
       const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
@@ -932,8 +932,9 @@ describe('invitations API', () => {
     )
 
     // Revoke applies the grant rule, as invite and resend do.
-    for (const role of ['owner', 'admin'] as const satisfies readonly MembershipRole[]) {
-      it(`refuses a tenant admin revoking an ${role} invitation 403`, async () => {
+    it.each(['owner', 'admin'] as const satisfies readonly MembershipRole[])(
+      'refuses a tenant admin revoking an %s invitation 403',
+      async (role) => {
         const { owner, tenant } = await setup()
         const { user: admin, token: adminToken } = await createUser()
         await userMembershipRepository.create({
@@ -952,8 +953,8 @@ describe('invitations API', () => {
         const [row] = await sql<{ revoked: boolean }[]>`
           select revoked_at is not null as revoked from tenant_invitations where id = ${invitationId}`
         expect(row?.revoked).toBe(false)
-      })
-    }
+      }
+    )
 
     it('lets a tenant admin revoke a manager invitation', async () => {
       const { owner, tenant } = await setup()

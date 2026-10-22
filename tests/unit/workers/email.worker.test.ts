@@ -212,9 +212,9 @@ describe('processEmailJob', () => {
       // Only the call is asserted.
     })
     try {
-      const rejected = expect(processEmailJob(mockJob())).rejects
-      await rejected.toThrow(expect.not.stringContaining('user@example.com'))
-      await rejected.toThrow(
+      const attempt = processEmailJob(mockJob())
+      await expect(attempt).rejects.toThrow(expect.not.stringContaining('user@example.com'))
+      await expect(attempt).rejects.toThrow(
         /Email job test-job-1 failed before sending, for template step_up_link/
       )
       expect(mailerService.sendMail).not.toHaveBeenCalled()

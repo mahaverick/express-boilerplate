@@ -22,7 +22,6 @@ import {
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { createTrackedEmail, enqueueTrackedEmail } from '@/jobs/email.job'

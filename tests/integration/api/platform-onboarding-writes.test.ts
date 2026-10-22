@@ -358,7 +358,7 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
       actor_user_id: staff.id,
       metadata: { reason: REASON, recipientCount: 2, emailDomains: ['example.test'] },
     })
-    expect((entry?.metadata.messageIds as string[]).toSorted(byText)).toEqual(
+    expect((entry?.metadata.messageIds as string[] | undefined)?.toSorted(byText)).toEqual(
       messages.map((row) => row.id).toSorted(byText)
     )
     expect(JSON.stringify(entry?.metadata)).not.toContain('@')

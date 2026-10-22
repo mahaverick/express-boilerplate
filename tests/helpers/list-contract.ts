@@ -461,8 +461,9 @@ export function describeListContract(contract: ListContract): void {
 
       const otherSort = contract.sorts.find((sort) => sort !== defaultFor(contract, {}))
       if (otherSort === undefined) {
-        // eslint-disable-next-line sonarjs/assertions-in-tests -- a skip that names why this list has nothing to replay
-        it.skip('refuses a cursor replayed under another sort (the list has one sort)', () => {})
+        it('has one sort, so no cursor replays under another sort', () => {
+          expect(contract.sorts).toEqual([defaultFor(contract, {})])
+        })
       } else {
         it('refuses a cursor replayed under another sort', async () => {
           await expectRefused({ cursor: await issuedCursor(), sort: otherSort })
@@ -471,8 +472,9 @@ export function describeListContract(contract: ListContract): void {
 
       const otherFilter = contract.filters?.[0]?.query
       if (otherFilter === undefined) {
-        // eslint-disable-next-line sonarjs/assertions-in-tests -- a skip that names why this list has nothing to replay
-        it.skip('refuses a cursor replayed under another filter (the list has no filters)', () => {})
+        it('has no filters, so no cursor replays under another filter', () => {
+          expect(contract.filters ?? []).toEqual([])
+        })
       } else {
         it('refuses a cursor replayed under another filter', async () => {
           await expectRefused({ cursor: await issuedCursor(), ...otherFilter })
