@@ -76,7 +76,7 @@ jobs:
         shard: [1, 2, 3]
     env:
       # How many workers (and per-worker databases) a shard runs; the default is 8.
-      VITEST_WORKERS: 8
+      VITEST_WORKERS: 4
     services:
       # GitHub's `services:` blocks cannot mount a file, so the init.sql that
       # docker-compose uses to create the test role/database is unavailable
