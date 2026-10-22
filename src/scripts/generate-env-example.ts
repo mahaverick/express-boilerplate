@@ -2,7 +2,7 @@
  * @file Generates `.env.example` (and ARCHITECTURE.md's environment table)
  * from the environment schema, so the example never drifts from it. Lives in
  * src/ because it imports `@/configs/env.config`, and outside src/ it would
- * fall outside tsconfig's `include`, unchecked by `tsc` and type-aware ESLint.
+ * fall outside tsconfig's `include`, unchecked by `tsc` and type-aware Oxlint.
  * `pnpm env:example` writes the file; `pnpm env:table` passes `--table` and
  * prints the table.
  */

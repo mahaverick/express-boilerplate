@@ -30,12 +30,12 @@
   ],
   "packageRules": [
     {
-      "description": "typescript-eslint peers typescript <6.1.0; TS 7 breaks type-aware lint (see CLAUDE.md)",
+      "description": "tsc 6 and typescript-eslint 8.70.1 (untyped ESLint parser) peer typescript <6.1.0; Oxlint's type-aware engine bundles its own TS 7 (see CLAUDE.md)",
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<6.1.0"
     },
     {
-      "description": "Stay on Node 24 LTS until the planned move to Node 26 after 2026-10-28. Covers every Node version pin in the repo: the docker `node` image (Dockerfile), `.node-version` and `actions/setup-node`'s `node-version:` (both the node-version datasource, depName `node`), and the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node` image tag.",
+      "description": "Stay on Node 24 LTS until the planned move to Node 26 after 2026-10-28. Covers every Node version pin in the repo: the docker `node` image (Dockerfile), `.node-version` and `actions/setup-node`'s `node-version:` in pr-title.yml (both the node-version datasource, depName `node`), and the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node` image tag.",
       "matchDepNames": ["node", "mcr.microsoft.com/devcontainers/typescript-node"],
       "allowedVersions": "<25"
     },

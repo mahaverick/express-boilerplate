@@ -13,10 +13,10 @@ WORKDIR /app
 
 FROM base AS deps
 # pnpm-workspace.yaml and .npmrc travel with the lockfile: pnpm reads
-# allowBuilds, minimumReleaseAge and minimumReleaseAgeExclude from
-# pnpm-workspace.yaml at install time (the lockfile doesn't record them), and
-# --frozen-lockfile enforces the release-age gate, so the install needs the
-# file on disk to allow the native builds and apply the excludes.
+# allowBuilds and minimumReleaseAge from pnpm-workspace.yaml at install time
+# (the lockfile doesn't record them), and --frozen-lockfile enforces the
+# release-age gate, so the install needs the file on disk to allow the native
+# builds and apply minimumReleaseAge (there is no exclude list).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN corepack install
 # `prepare` runs `vp config`; there is no git repository in the image to hook.

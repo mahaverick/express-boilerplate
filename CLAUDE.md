@@ -579,11 +579,11 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
 
 ## Versions
 
-- **Keep `typescript` within the `typescript` peer range of the
-  `typescript-eslint` version `package.json` pins:** `pnpm lint` depends on its
-  type-aware rules. Bump TypeScript past that range only once a
-  `typescript-eslint` release admits it, and lift the matching hold in
-  `renovate.json` with it.
+- **TypeScript stays below 6.1.** `tsc` 6 and typescript-eslint 8.70.1's parser
+  (used untyped by the leftover ESLint config) peer `typescript >=4.8.4 <6.1.0`.
+  Oxlint's type-aware engine bundles its own TS 7, so it does not constrain
+  this pin. `renovate.json` holds it; re-check the peer range of the
+  `typescript-eslint` version `package.json` pins before lifting the hold.
 - **Lift the TypeScript and Node holds in `renovate.json` by hand, never by
   merging a Renovate PR;** the steps are in
   [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy).

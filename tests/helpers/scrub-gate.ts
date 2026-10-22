@@ -252,8 +252,8 @@ function checkVectors(candidate: Scrub): VectorReport {
 }
 
 /**
- * Write the slice file the unit suite checks, formatted with the repository's
- * Prettier config. It records, per case index and per planted value (by
+ * Write the slice file the unit suite checks, formatted with `vp fmt`
+ * (Oxfmt). It records, per case index and per planted value (by
  * position), the windows of that value the baseline leaves in view
  * (`allowed`), and which cases the baseline changes on a second pass
  * (`unstable`).

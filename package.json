@@ -48,7 +48,7 @@
     "test:watch": "vp test watch",
     "test:coverage": "vp test run --coverage",
     "commit": "cz",
-    "prepare": "vp config --hooks --no-agent || true; node -e 'try{if(require(\"node:child_process\").execFileSync(\"git\",[\"config\",\"core.hooksPath\"],{encoding:\"utf8\",stdio:[\"ignore\",\"pipe\",\"ignore\"]}).trim()===\".husky/_\")console.warn(\"Git hooks still point at .husky/_, so no hook runs. Run: git config --unset core.hooksPath && pnpm prepare\")}catch{}'",
+    "prepare": "vp config --hooks --no-agent || echo 'vp config failed: git hooks are not installed. Run pnpm prepare.' >&2; node -e 'try{if(require(\"node:child_process\").execFileSync(\"git\",[\"config\",\"core.hooksPath\"],{encoding:\"utf8\",stdio:[\"ignore\",\"pipe\",\"ignore\"]}).trim()===\".husky/_\")console.warn(\"Git hooks still point at .husky/_, so no hook runs. Run: git config --unset core.hooksPath && pnpm prepare\")}catch{}'",
     "gate": "sh scripts/pre-push-gate.sh",
     "push": "sh scripts/push.sh"
   },

@@ -32,6 +32,6 @@ indent_style = space
 indent_size = 2
 
 # Configuration files
-[*.{eslintrc,prettierrc}]
+[*.{mjs,jsonc}]
 indent_style = space
 indent_size = 2
