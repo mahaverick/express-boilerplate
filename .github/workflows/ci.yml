@@ -162,6 +162,9 @@ jobs:
           SMTP_HOST: 127.0.0.1
           MAIL_FROM_TRANSACTIONAL: auth@mail.example.test
           ERROR_TRACKING_ENABLED: false
+      - name: Throwaway proof, shard 2 fails
+        if: matrix.shard == 2
+        run: exit 1
       - name: Upload the test blob
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
