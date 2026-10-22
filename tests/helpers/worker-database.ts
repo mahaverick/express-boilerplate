@@ -17,7 +17,7 @@
 export function workerCountFrom(env: Record<string, string | undefined>): number {
   const raw = env.VITEST_WORKERS
   if (raw === undefined) return 8
-  const count = Number(raw)
+  const count = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
   if (!Number.isInteger(count) || count < 1 || count > 16) {
     throw new Error(`VITEST_WORKERS must be an integer from 1 to 16, got "${raw}"`)
   }

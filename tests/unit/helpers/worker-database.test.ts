@@ -14,9 +14,9 @@ describe('workerCountFrom', () => {
     expect(workerCountFrom({ VITEST_WORKERS: '4' })).toBe(4)
   })
 
-  it.each(['0', '17', 'x', '', '4.5'])('rejects %j', (value) => {
+  it.each(['0', '17', 'x', '', '4.5', ' 4 ', '0x4'])('rejects %j', (value) => {
     expect(() => workerCountFrom({ VITEST_WORKERS: value })).toThrow(
-      `VITEST_WORKERS must be an integer from 1 to 16, got "${value}"`
+      new Error(`VITEST_WORKERS must be an integer from 1 to 16, got "${value}"`)
     )
   })
 })

@@ -132,7 +132,7 @@ jobs:
           # commands (see DATABASE.md).
           DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
       - name: Test with coverage gate
-        # Thresholds are zeroed here: a shard sees a third of the suite.
+        # Thresholds are zeroed here: a shard sees only its slice of the suite.
         # The `test` job enforces vite.config.ts's thresholds on the merge.
         run: >-
           pnpm exec vp test run --coverage
@@ -219,6 +219,10 @@ jobs:
           fi
           # A blob is named blob-<shard>-<total>.json, so the total comes from the run itself.
           total=$(basename "${blobs[0]}" .json | sed -E 's/^blob-[0-9]+-//')
+          if ! [[ "$total" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not read the shard total from ${blobs[0]}. Open the test-shard jobs for their logs."
+            exit 1
+          fi
           if [ "${#blobs[@]}" -ne "$total" ]; then
             echo "::error::Found ${#blobs[@]} of $total test blobs. Open the test-shard jobs for their logs."
             exit 1
