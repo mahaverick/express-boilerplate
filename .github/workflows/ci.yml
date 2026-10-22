@@ -66,7 +66,8 @@ jobs:
   # Mailpit, so the shards share nothing. A shard writes a coverage blob and
   # enforces no threshold; the `test` job below merges the blobs and enforces
   # it on the whole suite. Keep `shard` a list of 1..N: the `test` job counts
-  # the blobs against the N in their names.
+  # the blobs against the N in their names. Four shards finish in 115-118 s
+  # (three took 130-148 s); each adds about 45 s of setup, so a fifth gains little.
   test-shard:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -75,7 +76,9 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     env:
-      # How many workers (and per-worker databases) a shard runs; the default is 8.
+      # Workers (and per-worker databases) per shard, on a 4-vCPU runner. Over
+      # three runs each, 4 and 8 gave the same slowest shard (129-140 s against
+      # 130-148 s), so this takes the fewer connections. Local runs default to 8.
       VITEST_WORKERS: 4
     services:
       # GitHub's `services:` blocks cannot mount a file, so the init.sql that
