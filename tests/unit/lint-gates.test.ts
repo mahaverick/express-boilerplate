@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { ESLint, type Linter } from 'eslint'
 import { describe, expect, it } from 'vite-plus/test'
-import { oxlintMessagesFor } from '../helpers/oxlint-probe'
+import { oxlintMessagesFor, UNUSED_DIRECTIVE_RULE_ID } from '../helpers/oxlint-probe'
 
 /**
  * Lints with the repo's real ESLint config, `ignore: false` so a committed
@@ -604,6 +604,40 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
       const source = "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n"
       const messages = await oxlintMessagesFor('tests/helpers/request.ts', source)
       expect(messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)?.severity).toBe(2)
+    })
+  })
+
+  /**
+   * Oxlint reads only oxlint-* directives (respectEslintDisableDirectives:
+   * false), so each tool checks its own blanket disables.
+   */
+  describe('disable directives', () => {
+    const probePath = 'src/services/probe.service.ts'
+
+    it('rejects a blanket eslint-disable', async () => {
+      const messages = await messagesFor(probePath, '/* eslint-disable */\nexport const a = 1\n')
+      const abusive = messages.find(
+        (message) => message.ruleId === 'unicorn/no-abusive-eslint-disable'
+      )
+      expect(abusive?.severity).toBe(2)
+    })
+
+    it('rejects a blanket oxlint-disable', async () => {
+      const messages = await oxlintMessagesFor(
+        probePath,
+        '/* oxlint-disable */\nexport const a = 1\n'
+      )
+      const abusive = messages.find(
+        (message) => message.ruleId === 'unicorn/no-abusive-eslint-disable'
+      )
+      expect(abusive?.severity).toBe(2)
+    })
+
+    it('rejects an oxlint-disable that suppresses nothing', async () => {
+      const source = '// oxlint-disable-next-line eslint/no-console -- probe\nexport const a = 1\n'
+      const messages = await oxlintMessagesFor(probePath, source)
+      const unused = messages.find((message) => message.ruleId === UNUSED_DIRECTIVE_RULE_ID)
+      expect(unused?.severity).toBe(2)
     })
   })
 

@@ -49,8 +49,14 @@ export default {
 }
 `
 
+/** The message of the code-less diagnostic `reportUnusedDisableDirectives` emits. */
+const UNUSED_DIRECTIVE = /^Unused (?:oxlint|eslint)-(?:disable|enable) directive/
+/** The rule id the probe reports for an unused directive, which Oxlint reports with no code. */
+export const UNUSED_DIRECTIVE_RULE_ID = 'unused-disable-directive'
+
 /**
- * One Oxlint diagnostic from `--format json`. A parse error has no `code`.
+ * One Oxlint diagnostic from `--format json`. A parse error and an unused
+ * disable directive have no `code`.
  */
 interface OxlintDiagnostic {
   message: string
@@ -119,11 +125,16 @@ export async function oxlintMessagesFor(
     if (report.number_of_files !== 1) {
       throw new Error(`oxlint linted ${String(report.number_of_files)} files for ${filePath}`)
     }
-    const parseError = report.diagnostics.find((diagnostic) => diagnostic.code === undefined)
+    const parseError = report.diagnostics.find(
+      (diagnostic) => diagnostic.code === undefined && !UNUSED_DIRECTIVE.test(diagnostic.message)
+    )
     if (parseError) throw new Error(`oxlint could not parse ${filePath}: ${parseError.message}`)
 
     return report.diagnostics.map((diagnostic) => ({
-      ruleId: String(diagnostic.code).replace(/^([\w-]+)\((.+)\)$/, '$1/$2'),
+      ruleId:
+        diagnostic.code === undefined
+          ? UNUSED_DIRECTIVE_RULE_ID
+          : diagnostic.code.replace(/^([\w-]+)\((.+)\)$/, '$1/$2'),
       severity: diagnostic.severity === 'error' ? 2 : 1,
     }))
   } finally {

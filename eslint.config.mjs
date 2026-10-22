@@ -129,6 +129,8 @@ export default tseslint.config(
         { replacements: { env: false, db: false, repository: false, params: false, def: false } },
       ],
       'unicorn/consistent-boolean-name': 'error',
+      // Oxlint's copy of this rule checks only oxlint-disable comments, since it no longer reads eslint-disable ones (vite.config.ts).
+      'unicorn/no-abusive-eslint-disable': 'error',
       'unicorn/no-async-promise-finally': 'error',
       'unicorn/no-loop-iterable-mutation': 'error',
       'unicorn/no-unsafe-property-key': 'error',
@@ -269,7 +271,10 @@ export default tseslint.config(
           message: RAW_SQL_MESSAGE,
         },
         // sql['raw'] or any other computed key, which the name match above can't read.
-        { selector: "MemberExpression[object.name='sql'][computed=true]", message: RAW_SQL_MESSAGE },
+        {
+          selector: "MemberExpression[object.name='sql'][computed=true]",
+          message: RAW_SQL_MESSAGE,
+        },
         {
           selector:
             "VariableDeclarator[init.name='sql'] > ObjectPattern > Property:matches([key.name='raw'], [key.value='raw'], [computed=true])",
