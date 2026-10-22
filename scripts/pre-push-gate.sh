@@ -31,4 +31,7 @@ pnpm build
 
 step '.env.example is current'
 pnpm env:example
-git diff --exit-code .env.example
+git diff --exit-code .env.example || {
+  echo '.env.example is stale. Run pnpm env:example and commit it.' >&2
+  exit 1
+}

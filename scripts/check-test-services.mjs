@@ -44,7 +44,7 @@ const accepts = (host, port, timeoutMs) =>
  */
 const reachable = async (host, port, timeoutMs) => {
   if (host === '') return false
-  const hosts = host === 'localhost' ? ['127.0.0.1', '::1'] : [host]
+  const hosts = host.toLowerCase() === 'localhost' ? ['127.0.0.1', '::1'] : [host]
   const results = await Promise.all(hosts.map((each) => accepts(each, port, timeoutMs)))
   return results.includes(true)
 }
@@ -58,7 +58,8 @@ const reachable = async (host, port, timeoutMs) => {
 const target = (value, defaultPort) => {
   try {
     const url = new URL(value ?? '')
-    return { host: url.hostname, port: Number(url.port || defaultPort) }
+    // URL keeps the brackets of an IPv6 literal (`[::1]`), which net.connect cannot resolve.
+    return { host: url.hostname.replace(/^\[(.*)\]$/, '$1'), port: Number(url.port || defaultPort) }
   } catch {
     return { host: '', port: defaultPort }
   }

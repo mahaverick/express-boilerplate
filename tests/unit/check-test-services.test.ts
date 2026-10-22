@@ -10,13 +10,17 @@ import { checkTestServices } from '../../scripts/check-test-services.mjs'
 const servers: net.Server[] = []
 
 /**
- * Listen on an ephemeral 127.0.0.1 port (never `::`, which can collide with a
- * 127.0.0.1 port on macOS).
+ * Listen on an ephemeral port of one loopback address (never `::`, which can
+ * collide with a 127.0.0.1 port on macOS).
+ * @param host - The loopback address to bind.
  * @returns The listening server and its port.
  */
-const listen = async (): Promise<{ server: net.Server; port: number }> => {
+const listen = async (host = '127.0.0.1'): Promise<{ server: net.Server; port: number }> => {
   const server = net.createServer((socket) => socket.destroy())
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, host, resolve)
+  })
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no port')
   return { server, port: address.port }
@@ -46,6 +50,22 @@ const envFor = ([db, redis, smtp, http]: number[], host = '127.0.0.1'): Record<s
   MAILPIT_URL: `http://${host}:${String(http)}`,
 })
 
+/**
+ * Whether this machine can bind the IPv6 loopback address.
+ * @returns True when a listener on ::1 starts.
+ */
+const canBindIpv6 = async (): Promise<boolean> => {
+  try {
+    const { server } = await listen('::1')
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    return true
+  } catch {
+    return false
+  }
+}
+
+const ipv6 = await canBindIpv6()
+
 afterEach(async () => {
   await Promise.all(
     servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve())))
@@ -71,13 +91,22 @@ describe('checkTestServices', () => {
     await expect(checkTestServices(env)).resolves.toEqual({ ok: true })
   })
 
-  it('probes localhost on 127.0.0.1 without resolving the name', async () => {
+  it('treats localhost as up when 127.0.0.1 accepts', async () => {
     const listening = await Promise.all([listen(), listen(), listen(), listen()])
     servers.push(...listening.map(({ server }) => server))
     const env = envFor(
       listening.map(({ port }) => port),
       'localhost'
     )
+
+    await expect(checkTestServices(env)).resolves.toEqual({ ok: true })
+  })
+
+  it.skipIf(!ipv6)('reaches a bracketed IPv6 literal in a URL', async () => {
+    const listening = await Promise.all([listen('::1'), listen(), listen(), listen()])
+    servers.push(...listening.map(({ server }) => server))
+    const [db, ...rest] = listening.map(({ port }) => port)
+    const env = { ...envFor([0, ...rest]), DATABASE_URL: `postgres://t:t@[::1]:${String(db)}/x` }
 
     await expect(checkTestServices(env)).resolves.toEqual({ ok: true })
   })

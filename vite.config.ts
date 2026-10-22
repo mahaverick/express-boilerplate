@@ -647,6 +647,7 @@ export default defineConfig({
     '{src,tests}/**/*.ts': [
       'vp check --fix --no-error-on-unmatched-pattern',
       'eslint --fix --max-warnings 0 --no-warn-ignored',
+      'vp fmt --no-error-on-unmatched-pattern',
     ],
     '**/*.{json,jsonc,md}': ['vp fmt --no-error-on-unmatched-pattern'],
   },
