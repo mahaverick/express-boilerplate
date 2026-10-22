@@ -8,7 +8,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import jwt from 'jsonwebtoken'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { userTokenModel } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'

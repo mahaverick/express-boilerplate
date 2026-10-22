@@ -13,7 +13,6 @@ import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import type { RoleFilters } from '@/repositories/user-membership.repository'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
@@ -38,7 +37,6 @@ const invitation = tenantInvitationModel
 /**
  * `invitedBy` once the inviter's account is gone.
  */
-// eslint-disable-next-line unicorn/no-null -- the API contract is `… | null`, because JSON has no undefined
 const NO_INVITER = null
 
 /**

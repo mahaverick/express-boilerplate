@@ -4,7 +4,7 @@
  * `tests/integration/services/analytics/analytics-backfill.service.test.ts`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { runAnalyticsBackfillGroups } from '@/scripts/analytics-backfill-groups'
 import { sql } from '@/services/database.service'

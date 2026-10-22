@@ -5,7 +5,7 @@
  * tests/integration/workers/job-failure-reporting.test.ts.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { reportFinalJobFailure } from '@/jobs/job-failure.job'
 import { reportError } from '@/services/errors/error-reporter.service'
 

@@ -6,7 +6,7 @@
  * unset and `frontendUrl('apex')` would then fall back to WEB_URL.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import type { LinkTokenIntent } from '@/database/models/user-token.model'
 import { db, sql } from '@/services/database.service'
@@ -131,9 +131,7 @@ describe('issueLinkToken', () => {
       select purpose, user_id, session_id, app, redirect from user_tokens where id = ${row.id}`
     expect(stored).toEqual({
       purpose: 'sign_in_link',
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL: a sign-in link names no user
       user_id: null,
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL: nor a session
       session_id: null,
       app: 'apex',
       redirect: '/tenants',
@@ -211,11 +209,8 @@ describe('issueLinkToken', () => {
       where id = ${second.row.id}`
     expect(stored).toEqual({
       purpose: 'invitation_link',
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL: an invitation link names no user
       user_id: null,
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL: nor a session
       session_id: null,
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL: nor a redirect
       redirect: null,
       invitation_id: invitationId,
     })
@@ -327,7 +322,6 @@ describe('link URLs', () => {
     expect(apexUrl.hash).toBe('')
 
     const webUrl = new URL(
-      // eslint-disable-next-line unicorn/no-null -- a row with no stored redirect
       buildSignInLinkUrl(raw, { email, app: 'web', redirect: null }, 'sign_in_link')
     )
     expect(webUrl.origin).toBe(new URL(getEnv().WEB_URL).origin)
@@ -350,9 +344,7 @@ describe('link URLs', () => {
     expect(apexUrl.searchParams.get('utm_content')).toBe('primary_button')
     const webUrl = new URL(buildInvitationConfirmUrl(raw, { email, app: 'web' }))
     expect(webUrl.origin).toBe(new URL(getEnv().WEB_URL).origin)
-    // eslint-disable-next-line unicorn/no-null -- a row with no app, which no link row is
     expect(() => buildInvitationConfirmUrl(raw, { email, app: null })).toThrow()
-    // eslint-disable-next-line unicorn/no-null -- a row with no address, which no link row is
     expect(() => buildInvitationConfirmUrl(raw, { email: null, app: 'web' })).toThrow()
   })
 

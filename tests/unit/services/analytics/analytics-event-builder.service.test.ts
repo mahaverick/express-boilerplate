@@ -7,7 +7,7 @@
  * property-tested over metadata generated from every audit action's own
  * schema.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { z } from 'zod'
 import {
   AUDIT_EVENT_RENAMES,
@@ -72,7 +72,6 @@ const BANNED_FIELD_PROBE = 'Banned Field Probe'
  * Text only a `slug` field is given: a tenant slug must never reach an event.
  */
 const SLUG_PROBE = 'slug-probe-co'
-// eslint-disable-next-line unicorn/no-null -- audit_logs columns are nullable, and the row type says so
 const NONE = null
 
 /**

@@ -3,7 +3,7 @@
  * an access list beside the action list, and only the platform read takes a
  * tenant and a target.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { platformAuditLogListSchema, tenantAuditLogListSchema } from '@/validators/audit.validators'
 
 const ID = '0199c4a2-0000-7000-8000-000000000001'

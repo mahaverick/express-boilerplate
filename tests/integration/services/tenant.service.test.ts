@@ -4,7 +4,7 @@
  * deletes tenants, then the users this file created.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'

@@ -5,7 +5,7 @@
  */
 
 import express from 'express'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { READINESS_CHECK_DEADLINE_MS } from '@/constants/platform.constants'

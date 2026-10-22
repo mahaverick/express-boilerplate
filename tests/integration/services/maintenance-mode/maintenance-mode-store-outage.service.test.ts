@@ -5,7 +5,7 @@
  * this file owns (`tests/helpers/redis-proxy.ts`), never by stopping the
  * shared Redis; its own file because it mocks `getEnv()`'s `REDIS_URL`.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { logger } from '@/services/logger.service'
 import {
   createMaintenanceModeStore,

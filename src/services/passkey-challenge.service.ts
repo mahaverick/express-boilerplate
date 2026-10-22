@@ -63,7 +63,7 @@ export async function issuePasskeyChallenge(
   await withRedisDeadline(async () => {
     const redis = await getRedis()
     return redis.set(redisKey('passkey-challenge', challengeId), JSON.stringify(stored), {
-      PX: Math.ceil(ttlMs),
+      expiration: { type: 'PX', value: Math.ceil(ttlMs) },
     })
   }, 'passkey challenge issue')
   return { challengeId, challenge }

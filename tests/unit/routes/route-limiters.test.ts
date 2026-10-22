@@ -10,7 +10,7 @@
  * router@2's layers, hence the local shapes and the one cast.
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
@@ -123,7 +123,6 @@ const ALLOWLIST: { method: string; path: string; reason: string }[] = []
  * rate limiter.
  */
 function isAllowlisted(route: DiscoveredRoute): boolean {
-  // eslint-disable-next-line sonarjs/no-empty-collection -- deliberately empty today; kept as a mechanism for the next legitimate exception rather than removed
   return ALLOWLIST.some((entry) => entry.method === route.method && entry.path === route.path)
 }
 

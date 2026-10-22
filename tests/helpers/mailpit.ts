@@ -2,7 +2,7 @@
  * @file Mailpit's own HTTP API, shared by every test that asserts on
  * outbound mail.
  */
-import { expect } from 'vitest'
+import { expect } from 'vite-plus/test'
 import { settle } from './timing'
 
 /**

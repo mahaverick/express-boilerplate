@@ -6,7 +6,7 @@
  * so there is nothing separate to clean up there.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { type LinkTokenPurpose, type NewUserToken } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -499,7 +499,7 @@ describe('UserTokenRepository', () => {
      * to NULL, not true, for this row, silently leaving it live if the
      * repository's `IS DISTINCT FROM` is ever "simplified" to `!=`.
      */
-    it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not != ', async () => {
+    it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not !=', async () => {
       const userId = await createUser()
       const sparedSessionId = randomUUID()
 

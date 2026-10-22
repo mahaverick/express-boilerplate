@@ -117,7 +117,7 @@ export async function createTrackedEmail(
       error: redactedForLog(error),
       templateKey: message.templateKey,
     })
-    // eslint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
+    // oxlint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
     throw new Error(`Creating the message row for a ${message.templateKey} email failed`)
   }
 }

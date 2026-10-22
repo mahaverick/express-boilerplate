@@ -9,7 +9,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
@@ -699,7 +699,6 @@ describe('POST /api/v1/invitations/confirm', () => {
     async (mode, code) => {
       const invitee = await createTrackedUser({ email: uniqueEmail(`mode-${mode}`) })
       const { tenant, invitationId, raw } = await invitedWithLink(invitee.email)
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realFind = TenantInvitationRepository.prototype.findValidById
       /**
        * Stands in for `findValidById`: the lookup succeeds, then the mode switches.

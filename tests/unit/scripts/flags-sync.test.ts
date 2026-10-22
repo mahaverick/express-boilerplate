@@ -8,7 +8,7 @@
  * only. The key, project id and app host come from a mocked `getEnv()`.
  * Importing the script does not run it: it acts only as the entry module.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { flagEntry } from '@/constants/flags.constants'
 import { evenVariantSplit, FLAG_SYNC_TAG, runFlagsSync } from '@/scripts/flags-sync'
 import { resetTenantGroupTypeIndexCache } from '@/services/analytics/posthog-group-index.service'
@@ -71,7 +71,6 @@ function inSync(): FakePosthogFeatureFlag[] {
   return [
     existing('example_beta_page', { aggregation_group_type_index: 2, groups: [] }),
     existing('example_cta_experiment', {
-      // eslint-disable-next-line unicorn/no-null -- PostHog's null means person aggregation
       aggregation_group_type_index: null,
       groups: [],
       multivariate: {
@@ -221,7 +220,6 @@ describe('runFlagsSync', () => {
 
   it('prints drift and exits 2, editing nothing', async () => {
     posthog().featureFlags = [
-      // eslint-disable-next-line unicorn/no-null -- person aggregation on a tenant-scoped flag
       existing('example_beta_page', { aggregation_group_type_index: null, groups: [] }),
       existing('example_cta_experiment', { groups: [] }),
     ]
@@ -279,7 +277,6 @@ describe('runFlagsSync', () => {
     const [beta, cta] = inSync()
     if (!beta || !cta) throw new Error('setup: inSync returns both flags')
     posthog().featureFlags = [
-      // eslint-disable-next-line unicorn/no-null -- person aggregation on a tenant-scoped flag: drift
       { ...beta, filters: { aggregation_group_type_index: null, groups: [] } },
       cta,
     ]

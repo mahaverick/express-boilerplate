@@ -1,7 +1,7 @@
 /**
  * @file escapeLikePattern: the shared LIKE escaping for the staff searches.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
 
 describe('escapeLikePattern', () => {

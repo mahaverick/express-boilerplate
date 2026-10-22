@@ -6,7 +6,7 @@
  * by-template and top-10 by-domain tables.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { EmailMessageStatus, SenderClass } from '@/constants/email.constants'
 import { getEmailHealth } from '@/services/platform-email.service'
 import {

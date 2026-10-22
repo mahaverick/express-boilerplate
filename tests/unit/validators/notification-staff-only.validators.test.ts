@@ -4,7 +4,7 @@
  * and `emailEnabled: false` is refused for every notification type however
  * the body is crafted (the schema is the only gate before `upsert`).
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
 import { updatePreferencesSchemaFor } from '@/validators/notification.validators'
 

@@ -9,7 +9,7 @@
  * Its hook imports `src/` dynamically, inside the hook: a static import is
  * hoisted above `loadTestEnv()` and would load modules before the test env.
  */
-import { beforeEach } from 'vitest'
+import { beforeEach } from 'vite-plus/test'
 import { loadTestEnv } from './env'
 import { workerRedisKeyPrefix } from './redis-prefix'
 import { useWorkerDatabase } from './worker-database'

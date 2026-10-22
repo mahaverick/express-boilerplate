@@ -20,7 +20,6 @@ import {
   type FlagEntry,
 } from '@/constants/flags.constants'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -65,7 +64,6 @@ const userMembershipRepository = new UserMembershipRepository()
  */
 function maxRolloutOf(definition: ParsedDefinition | undefined): number | null {
   const groups = definition?.raw?.filters.groups ?? []
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when there is no condition
   if (groups.length === 0) return null
   return Math.max(...groups.map((group) => group.rollout_percentage ?? 100))
 }
@@ -82,7 +80,6 @@ function flagRow(entry: FlagEntry, definition: ParsedDefinition | undefined): Fl
     key: entry.key,
     description: entry.description,
     kind: entry.kind,
-    // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null for a boolean flag
     variants: entry.kind === 'multivariate' ? entry.variants : null,
     scope: entry.scope,
     client: entry.client,
@@ -96,7 +93,6 @@ function flagRow(entry: FlagEntry, definition: ParsedDefinition | undefined): Fl
       }),
     conditions: definition?.raw?.filters.groups.length ?? 0,
     maxRollout: maxRolloutOf(definition),
-    // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null for a flag PostHog lacks
     posthogUrl: definition === undefined ? null : posthogFlagUrl(definition.id),
   }
 }
@@ -219,7 +215,6 @@ async function auditEvaluateView(actor: Actor, query: PlatformFlagsEvaluateQuery
     write: async () => {
       const platform = await platformTenantOrThrow()
       await recordFlagsEvaluateView(actor, platform.id, query.userId, {
-        // eslint-disable-next-line unicorn/no-null -- the audit metadata records "no tenant" as null
         tenantId: query.tenantId ?? null,
         clientApp: query.app,
       })
@@ -262,7 +257,6 @@ export async function evaluateFlagsFor(
     }
   }
   await auditEvaluateView(actor, query)
-  // eslint-disable-next-line unicorn/no-null -- no tenant, and no session: this is not the user's own request
   const context = await flagContextForUser(query.userId, query.tenantId ?? null, null)
   const evaluations = await evaluateAll(context)
   const status = await getFlagsStatus()

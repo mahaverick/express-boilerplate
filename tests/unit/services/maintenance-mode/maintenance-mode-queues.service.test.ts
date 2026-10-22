@@ -6,7 +6,7 @@
  * when no run has the scheduler's next-run id, and a removal that fails.
  */
 import type { Queue } from 'bullmq'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.constants'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'
@@ -42,7 +42,6 @@ vi.mock('@/services/queue.service', async (importOriginal) => {
   }
 })
 
-// eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
 const NOW = new Date('2026-10-06T10:00:30.000Z')
 
@@ -212,11 +211,8 @@ describe('getQueuePauseStates with a Redis that stalls', () => {
     await vi.advanceTimersByTimeAsync(1)
     await pending
     expect(settled).toHaveBeenCalledWith([
-      // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
       { name: 'email', paused: null, active: null },
-      // eslint-disable-next-line unicorn/no-null -- as above
       { name: 'auth-email', paused: null, active: null },
-      // eslint-disable-next-line unicorn/no-null -- as above
       { name: 'notification', paused: null, active: null },
     ])
     expect(warn).toHaveBeenCalledTimes(1)

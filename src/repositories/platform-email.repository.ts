@@ -40,7 +40,6 @@ import { tenantInvitationModel } from '@/database/models/tenant-invitation.model
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { pendingCondition } from '@/repositories/tenant-invitation.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import {
@@ -259,7 +258,6 @@ function userOrNull(row: {
   deletedAt: Date | null
 }): EmailUserRow | null {
   if (row.id === null || row.email === null) {
-    // eslint-disable-next-line unicorn/no-null -- no user row joined: purged, or the message had none
     return null
   }
   return {
@@ -356,8 +354,7 @@ function toRecord(row: MessageSelection): PlatformEmailRecord & { sortAt: string
     tenant:
       joinedTenantId !== null && joinedTenantName !== null && joinedTenantSlug !== null
         ? { id: joinedTenantId, name: joinedTenantName, slug: joinedTenantSlug }
-        : // eslint-disable-next-line unicorn/no-null -- no tenant row joined: purged, or the message had none
-          null,
+        : null,
   }
 }
 

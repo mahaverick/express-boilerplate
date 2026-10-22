@@ -10,7 +10,7 @@
  * deactivation. Seams via `withMutatedMethod`, no sleeps.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import type { FrontendApp } from '@/constants/frontend.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
@@ -240,7 +240,6 @@ async function confirmBesideDeactivate(options: { claimFirst: boolean }): Promis
   const { raw } = await invitedWithLink(invitee.email)
   const reached = deferred<number>()
   const release = deferred()
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
   const realLock = UserRepository.prototype.lockById
   /**
    * Stands in for `UserRepository.lockById` on the confirm's share lock of
@@ -375,7 +374,6 @@ describe('invitation confirm races', () => {
   it('a deactivation committed mid-confirm wins and leaves no live session', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('deactivated-mid') })
     const { tenant, raw } = await invitedWithLink(invitee.email)
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realLock = UserRepository.prototype.lockById
     /**
      * Stands in for `UserRepository.lockById`: just before the confirm locks
@@ -416,7 +414,6 @@ describe('invitation confirm races', () => {
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces a spent link when the claim runs outside the transaction',
     async () => {
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realClaim = UserTokenRepository.prototype.claimOnce
       /**
        * Stands in for `claimOnce`: the same claim, always on the pool.
@@ -459,7 +456,6 @@ describe('invitation confirm races', () => {
       const invitee = await createTrackedUser({ email: uniqueEmail(mode), verified: false })
       if (mode === 'full') await makeStaff(invitee.id, 'viewer')
       const { tenant, invitationId, raw } = await invitedWithLink(invitee.email)
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realLock = UserRepository.prototype.lockById
       /**
        * Stands in for `UserRepository.lockById`: the claim's first lock switches the mode.
@@ -491,7 +487,6 @@ describe('invitation confirm races', () => {
     async (change) => {
       const invitee = await createTrackedUser({ email: uniqueEmail(change), verified: false })
       const { tenant, raw } = await invitedWithLink(invitee.email)
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realLock = UserRepository.prototype.lockById
       const changed = { done: false }
       /**

@@ -2,7 +2,7 @@
  * @file Which From address each sender class resolves to, and how a
  * sender's domain is read.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
 
 describe('senderFor', () => {

@@ -96,7 +96,6 @@ function toStreamPayload(notification: Notification): NotificationStreamPayload 
     type: notification.type,
     title: notification.title,
     body: notification.body,
-    // eslint-disable-next-line unicorn/no-null -- an unread notification serializes readAt as JSON null, not an absent key
     readAt: notification.readAt ? notification.readAt.toISOString() : null,
     createdAt: notification.createdAt.toISOString(),
   }
@@ -298,11 +297,16 @@ class NotificationStreamController extends BaseController {
         isClosed = true
         closeStream()
       })
+      /**
+       * Reads `isClosed` afresh: TypeScript keeps it narrowed to `false`
+       * across an `await`, though the 'close' handler can set it meanwhile.
+       */
+      const hasClosed = (): boolean => isClosed
 
       if (lastEventId) {
         const missed = await fetchMissedNotifications(userId, lastEventId)
         // Disconnected during the query: the 'close' handler already tore down.
-        if (isClosed) return
+        if (hasClosed()) return
 
         for (const notification of missed) {
           missedIds.add(notification.id)

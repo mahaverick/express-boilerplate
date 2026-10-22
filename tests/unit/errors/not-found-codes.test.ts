@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 
 const SOURCE_ROOT = path.resolve(process.cwd(), 'src')

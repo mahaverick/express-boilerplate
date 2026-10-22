@@ -7,7 +7,7 @@
  * before any service call.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { tenantController } from '@/controllers/tenant.controller'
 import { HttpError } from '@/errors/http-error'
 import { NOT_FOUND } from '@/errors/not-found-errors'
@@ -30,7 +30,6 @@ const authenticatedPrincipal: RequestPrincipal = {
   isPlatformTenant: false,
   role: 'owner',
   memberRole: 'owner',
-  // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
   platformRole: null,
   access: 'member',
 }

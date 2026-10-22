@@ -6,7 +6,7 @@
  * staff-pass; and `maintenanceDecision`, which returns the rule its verdict
  * was decided by, and no rule when the mode is off or the method is OPTIONS.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   classifyMaintenanceRoute,
   MAINTENANCE_MODE_CODE,

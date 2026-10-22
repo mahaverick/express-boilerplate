@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 
 const ENV_FLAG = '--env-file-if-exists=.env'
 const repoRoot = process.cwd()

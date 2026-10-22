@@ -5,7 +5,7 @@
  * bare app's error handler, where Express has already restored `baseUrl`.
  */
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   recordRouteTemplate,
   routeTemplateOf,

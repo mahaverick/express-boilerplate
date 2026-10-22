@@ -19,7 +19,6 @@ import { db, sql, type DbExecutor } from '@/services/database.service'
  */
 const OVERLONG_EVENT = 'x'.repeat(101)
 
-// eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the repository as `this`
 const realInsertMany = AnalyticsOutboxRepository.prototype.insertMany
 
 /**

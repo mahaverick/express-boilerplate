@@ -2,7 +2,7 @@
  * @file Exercises `platform.service` against the real per-worker Postgres.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
@@ -246,7 +246,6 @@ describe('platform.service', () => {
         {
           action: 'platform.member.granted',
           actorKind: 'system',
-          // eslint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
           actorUserId: null,
           access: 'system',
           tenantId: platform.id,
@@ -292,7 +291,6 @@ describe('platform.service', () => {
         {
           action: 'user.created',
           actorKind: 'system',
-          // eslint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
           actorUserId: null,
           access: 'system',
           tenantId: platform.id,

@@ -83,7 +83,7 @@ async function isFirstExposure(key: string, seconds: number): Promise<boolean> {
   try {
     const reply = await withRedisDeadline(async () => {
       const redis = await getRedis()
-      return redis.set(key, '1', { NX: true, EX: seconds })
+      return redis.set(key, '1', { condition: 'NX', expiration: { type: 'EX', value: seconds } })
     }, 'flag exposure dedupe')
     return reply !== null
   } catch (error) {

@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
 import { Job } from 'bullmq'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { addEmailJob, emailJobDefaults, type EmailJobData } from '@/jobs/email.job'
 import { EmailLogRepository } from '@/repositories/email-log.repository'

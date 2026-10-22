@@ -68,7 +68,6 @@ export function flagRegistryFingerprint(
   const registry = entries.map((entry) => ({
     key: entry.key,
     kind: entry.kind,
-    // eslint-disable-next-line unicorn/no-null -- a boolean entry has no variants
     variants: entry.kind === 'multivariate' ? entry.variants : null,
     scope: entry.scope,
   }))
@@ -469,7 +468,6 @@ export function detectUnsupported(
     fieldConstruct(definition) ??
     variantConstruct(definition) ??
     (entry === undefined ? undefined : registryConstruct(definition, entry))
-  // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for an evaluable flag
   return construct ?? null
 }
 
@@ -494,7 +492,6 @@ function malformedDefinition(item: unknown): ParsedDefinition | undefined {
     id: typeof item.id === 'number' ? item.id : 0,
     active: item.active === true,
     unsupported: 'malformed',
-    // eslint-disable-next-line unicorn/no-null -- a malformed flag has no validated definition
     raw: null,
   }
 }
@@ -529,7 +526,6 @@ function tenantIndexOf(mapping: Record<string, string>): number | null {
   const found = Object.entries(mapping).find(
     ([index, name]) => name === 'tenant' && /^\d+$/.test(index)
   )
-  // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for no tenant group type
   return found === undefined ? null : Number(found[0])
 }
 
@@ -560,7 +556,6 @@ export function parseDefinitionsResponse(
     etag,
     fetchedAt: at,
     checkedAt: at,
-    // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for an absent version
     propertyMatchingVersion: response.property_matching_version ?? null,
     tenantGroupIndex,
     fingerprint: flagRegistryFingerprint(),

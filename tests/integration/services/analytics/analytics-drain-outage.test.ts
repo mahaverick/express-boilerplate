@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Express } from 'express'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { UserRepository } from '@/repositories/user.repository'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'

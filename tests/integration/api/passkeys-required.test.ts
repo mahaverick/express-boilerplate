@@ -8,7 +8,7 @@
  * mocking `getEnv`, never `process.env`; the mail is read off `addEmailJob`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
 import { addEmailJob } from '@/jobs/email.job'

@@ -4,7 +4,7 @@
  * deleted in `afterEach`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import {
   PROVIDER_MESSAGE_ID_MAX_LENGTH,

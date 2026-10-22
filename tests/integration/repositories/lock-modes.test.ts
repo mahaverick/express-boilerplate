@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import {
   tenantModel,
   tenantSettingsModel,
@@ -449,11 +449,8 @@ describe('UserMembershipRepository lock modes', () => {
  */
 async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
   const calls: string[] = []
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realOwners = UserMembershipRepository.prototype.lockOwners
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realMemberships = UserMembershipRepository.prototype.lockMemberships
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realPlatformRole = UserMembershipRepository.prototype.lockPlatformRole
   /**
    * Wraps `lockOwners` so `recordModes` sees the mode each call site passes.

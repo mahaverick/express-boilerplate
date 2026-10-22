@@ -1,0 +1,21 @@
+# Fast checks on what you changed; the full sweep is in pre-push. If a step
+# here grows past a few seconds, move it.
+set -e
+
+# Lockfile drift: under a second, and it catches the mistake that sends PRs
+# to CI red, since CI installs with --frozen-lockfile and refuses.
+pnpm install --frozen-lockfile --lockfile-only --ignore-scripts >/dev/null
+
+pnpm exec vp staged
+
+# Tests for what you touched AND everything importing it (vitest walks the
+# module graph). The `unit` project drops tests/integration/** and the
+# database setup, so this runs with Docker down.
+pnpm exec vp test run --project unit --changed HEAD --passWithNoTests
+
+# .env.example is generated. Regenerate it when the schema is staged, so the
+# example can never drift from the schema it documents.
+if git diff --cached --name-only | grep -q 'src/configs/env.config.ts'; then
+  pnpm env:example
+  git add .env.example
+fi

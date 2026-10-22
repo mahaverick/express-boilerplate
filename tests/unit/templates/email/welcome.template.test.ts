@@ -3,7 +3,7 @@
  * the app name in both parts, escaping in the HTML part only, a subject with
  * no token in it, and tracking metadata that stores no link.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   renderWelcomeTemplate,
   WELCOME_TEMPLATE_KEY,

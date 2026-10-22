@@ -254,7 +254,11 @@ export function clientFlagsFor(app: FlagApp): readonly FlagEntry[] {
  * A trait a flag condition may target.
  */
 type TraitName =
-  'platform_role' | 'tenant_role' | 'app_env' | 'account_created_days' | 'tenant_created_days'
+  | 'platform_role'
+  | 'tenant_role'
+  | 'app_env'
+  | 'account_created_days'
+  | 'tenant_created_days'
 
 /**
  * One trait: where PostHog reads it (a person or the tenant group), what it

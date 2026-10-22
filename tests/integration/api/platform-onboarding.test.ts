@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -32,7 +32,6 @@ interface ApiEnvelope<TData> {
   data?: TData
 }
 
-// eslint-disable-next-line unicorn/no-null -- an unstarted tenant's onboarding_started_at
 const NOT_STARTED = null
 
 /**
@@ -220,7 +219,6 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
 
   it.each([
     ['in_progress', { startedAt: daysAgo(1) }],
-    // eslint-disable-next-line unicorn/no-null -- awaiting the first owner
     ['awaiting_owner', { startedAt: null }],
     ['dismissed', { startedAt: daysAgo(30), dismissedAt: daysAgo(29) }],
   ] as const)('lists state=%s', async (state, options) => {

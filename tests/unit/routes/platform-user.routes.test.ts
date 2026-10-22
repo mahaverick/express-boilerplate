@@ -3,7 +3,7 @@
  * a limiter first would put RateLimit-* headers on the non-staff 404.
  */
 import type { NextFunction, Request, RequestHandler, Response, Router } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'

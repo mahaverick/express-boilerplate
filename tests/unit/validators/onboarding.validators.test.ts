@@ -2,7 +2,7 @@
  * @file The step-key route parameter: a key's shape only, so an unknown but
  * well-formed key reaches the service's 404 and anything else answers 400.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { onboardingStepParametersSchema } from '@/validators/onboarding.validators'
 
 describe('onboardingStepParametersSchema', () => {

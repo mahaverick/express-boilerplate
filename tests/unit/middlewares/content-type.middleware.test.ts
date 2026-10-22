@@ -6,7 +6,7 @@
  * tests/integration/api/auth.test.ts.
  */
 import express, { type Express } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   requireJsonContentType,
   UNSUPPORTED_MEDIA_TYPE_CODE,

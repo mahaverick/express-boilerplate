@@ -2,7 +2,7 @@
  * @file `findMailpitMessages` takes its base URL from `MAILPIT_URL`, so an
  * isolated Mailpit can be targeted without touching the compose stack's.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { findMailpitMessages } from '../../helpers/mailpit'
 
 /**

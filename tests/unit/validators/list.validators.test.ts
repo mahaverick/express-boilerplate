@@ -3,7 +3,7 @@
  * messages, the `prev` rule, comma-list filters, defaults, and a scope that
  * is the same for the same view however the URL spells it.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { z } from 'zod'
 import { booleanFilter, listFilter, listParamsSchema } from '@/validators/list.validators'
 

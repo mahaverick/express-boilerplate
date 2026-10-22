@@ -2,7 +2,7 @@
  * @file The scrubber gate's option parser refuses what it cannot read, so a
  * typo never runs the gate on a default or on zero cases and exits 0.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { parseOptions } from '../../helpers/scrub-gate-options'
 
 describe('scrub gate options', () => {

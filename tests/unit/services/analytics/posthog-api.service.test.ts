@@ -5,7 +5,7 @@
  * mocked `getEnv()`, bound once the fake is listening.
  */
 import { inspect } from 'node:util'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { posthogApi, posthogProjectPath } from '@/services/analytics/posthog-api.service'
 import { startFakePosthog, type FakePosthog } from '../../../helpers/fake-posthog'
 

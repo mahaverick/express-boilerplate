@@ -5,7 +5,7 @@
  * belongs to tests/integration/workers/email.worker.test.ts.
  */
 import type { Job } from 'bullmq'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import type { EmailJobData } from '@/jobs/email.job'
 import * as emailMessageService from '@/services/email-message.service'
@@ -37,21 +37,16 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
     recipient: 'user@example.com',
     templateKey: 'step_up_link',
     userId: 'user-123',
-    // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     tenantId: null,
-    // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     invitationId: null,
     linkApp: 'web',
     senderClass: 'transactional',
     messageIdHeader: `<${MESSAGE_ID}@mail.example.com>`,
-    // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     jobKey: null,
     variables: { firstName: 'Ada', appName: 'Test' },
     status: 'queued',
-    // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     failureOrigin: null,
     statusUpdatedAt: new Date('2026-01-01T00:00:00.000Z'),
-    // eslint-disable-next-line unicorn/no-null -- a nullable column's value
     resentFromId: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
@@ -212,9 +207,9 @@ describe('processEmailJob', () => {
       // Only the call is asserted.
     })
     try {
-      const rejected = expect(processEmailJob(mockJob())).rejects
-      await rejected.toThrow(expect.not.stringContaining('user@example.com'))
-      await rejected.toThrow(
+      const attempt = processEmailJob(mockJob())
+      await expect(attempt).rejects.toThrow(expect.not.stringContaining('user@example.com'))
+      await expect(attempt).rejects.toThrow(
         /Email job test-job-1 failed before sending, for template step_up_link/
       )
       expect(mailerService.sendMail).not.toHaveBeenCalled()

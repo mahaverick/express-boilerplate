@@ -4,7 +4,7 @@
  * the context, anything else is dropped, and the chain always continues.
  */
 import type { Request } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { posthogSession } from '@/middlewares/posthog-session.middleware'
 import { requestContextStore, type RequestContext } from '@/services/request-context.service'
 

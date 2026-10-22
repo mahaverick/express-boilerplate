@@ -5,7 +5,7 @@
  * tests/integration/api/email-webhook.test.ts.
  */
 import { randomBytes } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { AppEnv } from '@/configs/env.config'
 import {
   emailWebhookAdapters,

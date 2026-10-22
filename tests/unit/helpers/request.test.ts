@@ -3,7 +3,7 @@
  * the local address the connection arrived on.
  */
 import http, { type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { request } from '../../helpers/request'
 
 /**

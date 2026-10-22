@@ -8,7 +8,6 @@
 import { and, asc, desc, or, sql, type SQL } from 'drizzle-orm'
 import type { AnyPgColumn, PgSelect } from 'drizzle-orm/pg-core'
 import { z } from 'zod'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import type { DbExecutor } from '@/services/database.service'
 import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
 import {
@@ -360,7 +359,6 @@ interface PageAssembly<Row, Item> {
 /**
  * A page's cursor on a side with no rows to read.
  */
-// eslint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
 const NO_CURSOR = null
 
 /**

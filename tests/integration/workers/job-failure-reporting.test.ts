@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Job } from 'bullmq'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import * as reporter from '@/services/errors/error-reporter.service'

@@ -63,7 +63,6 @@ const cache: { index: number | undefined } = { index: undefined }
  *   the answer is not a list of group types.
  */
 function tenantIndexIn(json: unknown): number | undefined | null {
-  // eslint-disable-next-line unicorn/no-null -- null marks an unusable answer, apart from "no tenant type"
   if (!Array.isArray(json)) return null
   for (const entry of json as unknown[]) {
     if (typeof entry !== 'object' || entry === null) continue
@@ -74,7 +73,6 @@ function tenantIndexIn(json: unknown): number | undefined | null {
       Number.isSafeInteger(index) &&
       index >= 0 &&
       index <= MAX_GROUP_TYPE_INDEX
-    // eslint-disable-next-line unicorn/no-null -- null marks an unusable answer, apart from "no tenant type"
     return isValidIndex ? index : null
   }
   return undefined

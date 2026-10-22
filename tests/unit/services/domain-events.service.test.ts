@@ -4,7 +4,7 @@
  * and neither fails the emit nor stops the next one; subscribing a function
  * twice runs it once.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   emitDomainEvent,
   resetDomainEventSubscribers,

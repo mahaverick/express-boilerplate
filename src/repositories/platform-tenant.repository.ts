@@ -10,7 +10,6 @@ import { tenantInvitationModel } from '@/database/models/tenant-invitation.model
 import { tenantModel, tenantSettingsModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor } from '@/services/database.service'
 import {
   defineList,
@@ -226,7 +225,6 @@ export class PlatformTenantRepository {
       memberCount: members?.count ?? 0,
       owners,
       pendingInvitationCount: pending?.count ?? 0,
-      // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when there is none
       pendingOwnerInvitation: ownerInvitation ?? null,
     }
   }

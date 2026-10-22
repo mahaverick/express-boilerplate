@@ -7,7 +7,7 @@
  */
 import http from 'node:http'
 import express from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { ERROR_SHUTDOWN_FLUSH_MS } from '@/constants/error-tracking.constants'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 

@@ -6,7 +6,7 @@
  * outbox. Sessions are issued with `issueRefreshToken` and a matching bearer.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'

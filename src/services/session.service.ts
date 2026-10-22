@@ -170,7 +170,6 @@ async function createRefreshRow(
 export function signAccessToken(
   user: User,
   sessionId: string,
-  // eslint-disable-next-line unicorn/no-null -- the stored column is null for a session before migration 0018
   authenticatedAt: Date | null = null
 ): string {
   const env = getEnv()
@@ -194,7 +193,8 @@ export function signAccessToken(
  * unverified claims would trust the data verification just rejected.
  */
 export type VerifyAccessTokenResult =
-  { ok: true; payload: AccessTokenPayload } | { ok: false; reason: 'expired' | 'invalid' }
+  | { ok: true; payload: AccessTokenPayload }
+  | { ok: false; reason: 'expired' | 'invalid' }
 
 /**
  * Verify an access token.
@@ -252,7 +252,6 @@ export async function issueRefreshToken(
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
   const sessionStartedAt = new Date()
-  // eslint-disable-next-line unicorn/no-null -- the stored column is null for a session that is not a recent sign-in
   const authenticatedAt = options.recentAuth === false ? null : sessionStartedAt
 
   const { raw, expiresAt } = await createRefreshRow(

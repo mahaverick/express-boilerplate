@@ -3,7 +3,7 @@
  * `STATUS_READ_TIMEOUT_MS` with no fetch outcome and zero undeclared
  * variants, one warning, no timer left. Redis is a mock.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { getFlagsStatus } from '@/services/flags/flag-counters.service'
 import { logger } from '@/services/logger.service'
@@ -17,10 +17,7 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
     getRedis: () =>
       Promise.resolve({
         mGet: (keys: string[]) =>
-          redis.isHung
-            ? new Promise<never>(() => {})
-            : // eslint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
-              Promise.resolve(keys.map(() => null)),
+          redis.isHung ? new Promise<never>(() => {}) : Promise.resolve(keys.map(() => null)),
       }),
   }
 })

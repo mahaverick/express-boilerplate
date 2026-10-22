@@ -7,7 +7,7 @@
  * change into `full`, which waits for its notices, is `platform-maintenance-mode-notices.test.ts`'s.
  */
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import * as repository from '@/repositories/maintenance-mode.repository'
@@ -43,7 +43,6 @@ import { clearRateLimiter } from '../../helpers/sign-in'
 const app = createApp()
 const ENVIRONMENT = 'local'
 const PATH = '/api/v1/platform/maintenance-mode'
-// eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
 const NONE = null
 /**
  * Orders strings for `toSorted`.

@@ -5,7 +5,7 @@
  * forced on without changing the signature). The host and key come from a
  * mocked `getEnv()`, bound once the fake is listening.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { signAnalyticsEvent } from '@/services/analytics/analytics-signature.service'
 import {
   classifyStatus,
@@ -164,11 +164,8 @@ describe('toPosthogBatchEvent', () => {
       event: EVENT.event,
       distinctId: EVENT.distinct_id,
       source: 'audit',
-      // eslint-disable-next-line unicorn/no-null -- the row has no access, as the signature reads it
       access: null,
-      // eslint-disable-next-line unicorn/no-null -- nor a target type
       targetType: null,
-      // eslint-disable-next-line unicorn/no-null -- nor a target id
       targetId: null,
       tenant: 'tenant-1',
     })

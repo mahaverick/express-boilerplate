@@ -6,7 +6,7 @@
  * table, because a claim takes any due row in it.
  */
 import { asc, eq } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import { analyticsDeletionModel } from '@/database/models/analytics-deletion.model'
 import { analyticsDeletionRepository as repository } from '@/repositories/analytics-deletion.repository'
 import { db, sql } from '@/services/database.service'
@@ -74,7 +74,6 @@ describe('AnalyticsDeletionRepository.insert', () => {
         distinctId: 'user-a',
         notBefore: at(MINUTE_MS),
         attempts: 0,
-        // eslint-disable-next-line unicorn/no-null -- the column's "never failed" state
         lastError: null,
       },
     ])

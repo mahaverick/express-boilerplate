@@ -126,7 +126,10 @@ export interface OnboardingStepDetail {
  * Why a reminder cannot be sent now, as the remind endpoint's 409 code.
  */
 export type OnboardingReminderBlock =
-  'tenant_state_conflict' | 'not_in_progress' | 'no_owner' | 'reminded_recently'
+  | 'tenant_state_conflict'
+  | 'not_in_progress'
+  | 'no_owner'
+  | 'reminded_recently'
 
 /**
  * One reminder a staff member sent, read from its `onboarding.reminder_sent`

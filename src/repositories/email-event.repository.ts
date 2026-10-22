@@ -24,7 +24,6 @@ function withDetailChecked(row: NewEmailEvent): NewEmailEvent {
   if (typeof row.detail !== 'string') return row
   const isValid =
     row.detail.length <= EMAIL_DETAIL_MAX_LENGTH && EMAIL_DETAIL_PATTERN.test(row.detail)
-  // eslint-disable-next-line unicorn/no-null -- the column's "no detail" value
   return isValid ? row : { ...row, detail: null }
 }
 

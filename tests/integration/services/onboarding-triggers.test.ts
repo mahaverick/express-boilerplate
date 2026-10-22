@@ -9,7 +9,7 @@
  * subscriber that must not fail its request.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'

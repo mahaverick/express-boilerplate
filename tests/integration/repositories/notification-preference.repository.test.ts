@@ -7,7 +7,7 @@
  * same cascade directly for `notifications.user_id`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { UserRepository } from '@/repositories/user.repository'

@@ -7,7 +7,7 @@
  * specs; the stub handler accepts a request carrying `x-ok`.
  */
 import express, { type Express } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { RATE_LIMITED_CODE, RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'

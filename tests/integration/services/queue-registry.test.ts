@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { closeQueue, getAllQueues, getPausableQueues } from '@/services/queue.service'
 
 /**

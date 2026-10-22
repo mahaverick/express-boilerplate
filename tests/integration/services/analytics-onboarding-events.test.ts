@@ -7,7 +7,16 @@
  * repeat completes nothing and writes nothing. Analytics is off under
  * `.env.test`, so `isAnalyticsEnabled` is mocked on here.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'

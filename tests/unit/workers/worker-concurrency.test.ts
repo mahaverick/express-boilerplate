@@ -5,7 +5,7 @@
  * connection for a stub, so no Redis is touched; getEnv() is a vi.fn
  * over the real one.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { startAnalyticsWorker } from '@/workers/analytics.worker'
 import { startEmailWorker } from '@/workers/email.worker'

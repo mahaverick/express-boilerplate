@@ -120,7 +120,6 @@ export function getQueueConnection(): IORedis {
   state.worker ??= createQueueRedis(
     'BullMQ Redis connection',
     {
-      // eslint-disable-next-line unicorn/no-null -- ioredis's option merge replaces undefined with its default of 20; BullMQ needs null
       maxRetriesPerRequest: null,
     },
     (dead) => {
@@ -350,6 +349,7 @@ async function isConnectionReachable(queueRedis: QueueRedis): Promise<boolean> {
     return false
   }
   const reply = await connection.ping()
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- ioredis in subscriber mode returns an array, not 'PONG'
   return reply === 'PONG'
 }
 

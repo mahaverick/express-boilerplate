@@ -230,9 +230,10 @@ record of how the schema reached its current state. `pnpm db:migrate` replays
 them in journal order against a database that may be several migrations
 behind, and CI and the production image cannot regenerate them (`generate`
 diffs the models, not a live database). They must be committed; do not add the
-directory to `.gitignore`. `.prettierignore` excludes it, because Prettier and
-`drizzle-kit` would otherwise each rewrite `meta/_journal.json` and the SQL
-into their own layout on every run, and `vitest.config.ts` excludes
+directory to `.gitignore`. The `fmt` ignore patterns in `vite.config.ts`
+exclude it, because Oxfmt and `drizzle-kit` would otherwise each rewrite
+`meta/_journal.json` and the SQL into their own layout on every run, and the
+`test.coverage` block in `vite.config.ts` excludes
 `**/migrations/**` and `src/database/models/**` from coverage.
 
 ### `drizzle.config.ts` and why it only needs `DATABASE_URL`
@@ -350,7 +351,7 @@ as described so it does not build them a second time under the lock, then run
   Then edit the `0014` file: delete its
   `DROP INDEX "users_email_unique";--> statement-breakpoint` line, and change
   the remaining statement to `CREATE UNIQUE INDEX IF NOT EXISTS
-"users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the
+  "users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the
   index you just built and rebuilds it under the lock. With it, the migration
   only records `0014` as applied.
 
@@ -504,7 +505,7 @@ as described so it does not build them a second time under the lock, then run
   it in a quiet window.
 
 - **`0025` holds `tenant_invitations` briefly.** Its nullable `ADD COLUMN
-last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
+  last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   `tenant_invitations` until the batch commits, so invitation reads and writes
   wait for the batch.
 
@@ -651,14 +652,15 @@ in every forked worker for every test file, calls `useWorkerDatabase()`. That
 rewrites `process.env.DATABASE_URL` to the worker's own database, by
 `VITEST_POOL_ID`, before any `src/` module reads it, and keeps the untouched
 base URL under `TEST_DATABASE_BASE_URL` so a second call cannot suffix the name
-twice. `maxWorkers` in `vitest.config.ts` is `WORKER_COUNT`, so each worker has
+twice. `maxWorkers` in `vite.config.ts` is `WORKER_COUNT`, so each worker has
 a database to itself and two workers cannot race a unique constraint on the
 same row. The migrator lives in `globalSetup` and not in `setupFiles`, which
 would run it again for every file. `.env.test` sets `DB_POOL_MAX=2`, so the
 eight workers hold at most 16 connections.
 
-`vitest.unit.config.ts`, which the git hooks use, sets no `globalSetup` and
-excludes `tests/integration/**`, so it runs with Docker down.
+The `unit` project in `vite.config.ts`, which the git hooks use, sets no
+`globalSetup` and excludes `tests/integration/**`, so it runs with Docker down.
+Only the `integration` project has the migrator in `globalSetup`.
 
 ## Batch deletes and claims
 

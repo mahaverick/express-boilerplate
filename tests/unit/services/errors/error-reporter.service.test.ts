@@ -9,7 +9,7 @@
 import { Writable } from 'node:stream'
 import { inspect } from 'node:util'
 import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import type { PosthogBatchEvent, SendResult } from '@/services/analytics/posthog-batch.service'
@@ -48,7 +48,7 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
     ...actual,
     isErrorTrackingEnabled: () => {
       if (tracking.shouldThrow) throw new Error('config unreadable')
-      // eslint-disable-next-line @typescript-eslint/only-throw-error -- a thrown non-Error is the value under test
+      // oxlint-disable-next-line typescript/only-throw-error -- a thrown non-Error is the value under test
       if (tracking.thrown !== undefined) throw tracking.thrown
       return tracking.isEnabled
     },
@@ -185,6 +185,13 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+/**
+ * Set as the Proxy's read traps, so every read of the thrown value throws.
+ */
+const trap = (): never => {
+  throw new Error('proxy trap')
+}
+
 describe('reportError gating and ids', () => {
   it('returns a fresh UUIDv7 and queues nothing when error tracking is off', async () => {
     tracking.isEnabled = false
@@ -234,12 +241,6 @@ describe('reportError gating and ids', () => {
 
   it('a Proxy whose every access throws gives one deterministic outcome per report', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
-    /**
-     * Set as the Proxy's read traps, so every read of the thrown value throws.
-     */
-    const trap = (): never => {
-      throw new Error('proxy trap')
-    }
     const hostile = new Proxy(
       {},
       {

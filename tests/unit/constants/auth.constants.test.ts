@@ -4,7 +4,7 @@
  * Secure. A plain name has no prefix rules, so COOKIE_DOMAIN still
  * applies to it.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { refreshCookieSpec } from '@/constants/auth.constants'
 
 describe('refreshCookieSpec', () => {

@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -446,7 +446,6 @@ describe('/api/v1/tenants', () => {
       const response = await request(app)
         .patch(`/api/v1/tenants/${tenant.slug}`)
         .set('Authorization', `Bearer ${token}`)
-        // eslint-disable-next-line unicorn/no-null -- exercising the explicit-null-clears-the-field contract itself
         .send({ description: null })
 
       expect(response.status).toBe(200)
@@ -857,7 +856,6 @@ describe('/api/v1/tenants', () => {
         success: true,
         message: 'Member removed.',
         statusCode: 200,
-        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,
       })
     })
@@ -1026,11 +1024,9 @@ describe('/api/v1/tenants', () => {
       const tenant = await createTenant(ownerA.id)
       await addMembership(ownerB.id, tenant.id, 'owner')
 
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realCountOwners = UserMembershipRepository.prototype.countOwners
       let arrivals = 0
       let releaseBarrier: () => void
-      // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
       const barrier = new Promise<void>((resolve) => {
         releaseBarrier = resolve
       })
@@ -1122,15 +1118,12 @@ describe('/api/v1/tenants', () => {
       await addMembership(admin.id, tenant.id, 'admin')
       await addMembership(target.id, tenant.id, 'manager')
 
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realLockOwners = UserMembershipRepository.prototype.lockOwners
       let signalArrived: () => void
-      // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
       const arrived = new Promise<void>((resolve) => {
         signalArrived = resolve
       })
       let releaseHeld: () => void
-      // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- see the disable above.
       const heldReleased = new Promise<void>((resolve) => {
         releaseHeld = resolve
       })
@@ -1196,7 +1189,6 @@ describe('/api/v1/tenants', () => {
         expect(response.body).toMatchObject({
           success: true,
           message: 'You left the tenant.',
-          // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
           data: null,
         })
         expect(
@@ -1419,7 +1411,6 @@ describe('/api/v1/tenants', () => {
       const response = await request(app)
         .patch(`/api/v1/tenants/${tenant.slug}/settings`)
         .set('Authorization', `Bearer ${token}`)
-        // eslint-disable-next-line unicorn/no-null -- exercising the explicit-null-clears-the-field contract itself
         .send({ metadata: null })
 
       expect(response.status).toBe(200)

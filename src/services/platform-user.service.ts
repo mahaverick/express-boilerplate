@@ -8,7 +8,6 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import {
@@ -315,7 +314,6 @@ export async function createUser(
           access: 'platform',
           tenantId: platform.id,
           targetId: user.id,
-          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           metadata: { emailDomain: hostnameDomain(email) ?? null },
         },
         tx
@@ -465,7 +463,6 @@ async function revokeInvitationsSentBy(
         targetId: invitation.id,
         metadata: {
           role: invitation.role,
-          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           emailDomain: hostnameDomain(invitation.email) ?? null,
         },
       },

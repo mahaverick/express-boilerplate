@@ -14,7 +14,6 @@ import {
 } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import type { RowLockMode } from '@/types/lock-mode'
@@ -207,7 +206,6 @@ export class UserMembershipRepository {
     executor: DbExecutor = db
   ): Promise<MembershipRole | null> {
     const [row] = await platformRoleQuery(userId, executor)
-    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
     return row?.role ?? null
   }
 
@@ -224,7 +222,6 @@ export class UserMembershipRepository {
     const [row] = await platformRoleQuery(userId, executor).for('share', {
       of: userMembershipModel,
     })
-    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
     return row?.role ?? null
   }
 

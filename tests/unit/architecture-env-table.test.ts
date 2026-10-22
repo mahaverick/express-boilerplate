@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { EnvSchemaShape } from '@/configs/env.config'
 import { renderEnvTable } from '@/scripts/generate-env-example'
 
@@ -13,7 +13,7 @@ const architecture = fs.readFileSync(path.resolve(process.cwd(), 'ARCHITECTURE.m
 const HEADER = /^\| Variable +\| Required +\| Default +\| What it does +\|$/
 
 /**
- * Split a Markdown table row into trimmed cells, so prettier's column
+ * Split a Markdown table row into trimmed cells, so Oxfmt's column
  * padding does not count as a difference. An escaped `\|` stays in its cell.
  */
 function cells(row: string): string[] {
@@ -39,7 +39,7 @@ function tableRows(): string[][] {
 }
 
 /**
- * Collapse a separator row's dashes to `---`, because prettier widens them to the column width.
+ * Collapse a separator row's dashes to `---`, because Oxfmt widens them to the column width.
  */
 const normalise = (row: string[]): string[] => row.map((cell) => (/^-+$/.test(cell) ? '---' : cell))
 

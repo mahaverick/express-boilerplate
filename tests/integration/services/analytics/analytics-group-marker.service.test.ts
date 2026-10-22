@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -110,7 +110,6 @@ describe('resolveGroupMarkers', () => {
   it('scrubs a tenant with no row: a null name and the status purged', async () => {
     const [resolved] = await resolveGroupMarkers([marker(randomUUID())])
 
-    // eslint-disable-next-line unicorn/no-null -- null is what clears the property in PostHog
     expect(resolved?.properties.$group_set).toEqual({ name: null, status: 'purged' })
   })
 

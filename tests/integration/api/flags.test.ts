@@ -11,7 +11,16 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 
 const flags = vi.hoisted(() => ({ isEnabled: true }))
 

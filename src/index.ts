@@ -82,14 +82,14 @@ async function boot(): Promise<void> {
   const server = startServer()
   // Same tick as listen(), since a bind failure is emitted on nextTick; startServer has logged it.
   server.once('error', () => {
-    // eslint-disable-next-line unicorn/no-process-exit -- a server error is fatal; the exit still goes through the shared once-guard
+    // oxlint-disable-next-line unicorn/no-process-exit -- a server error is fatal; the exit still goes through the shared once-guard
     handleShutdown((code) => process.exit(code), 1)
   })
   // Never rejects: a failed count is logged at warn.
   void warnIfDeletionsPending()
 
   const { onFault, onSignal } = createProcessFaultHandler(recordProcessFault, (exitCode) => {
-    // eslint-disable-next-line unicorn/no-process-exit -- every exit goes through the shared once-guard
+    // oxlint-disable-next-line unicorn/no-process-exit -- every exit goes through the shared once-guard
     handleShutdown((code) => process.exit(code), exitCode)
   })
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
@@ -124,7 +124,6 @@ async function boot(): Promise<void> {
  */
 function main(): void {
   applyNetworkDefaults()
-  // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth; Node runs only on V8
   Error.stackTraceLimit = ERROR_FRAME_LIMIT
   try {
     assertEnvConsistent(getEnv(), (message) => {

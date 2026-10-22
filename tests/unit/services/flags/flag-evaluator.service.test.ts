@@ -3,7 +3,7 @@
  * reason, bucketing by the definition's aggregation, holdout, an unknown
  * variant, an inconclusive match, the property wrapper and the flag state.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import type { FlagEntry } from '@/constants/flags.constants'
 import {
   definitionOf,
@@ -19,7 +19,6 @@ import {
   type ParsedSnapshot,
 } from '@/validators/flag-definition.validators'
 
-// eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const USER_ID = '9595353c-7863-4490-968f-f49060804066'
 const TENANT_ID = '0199b000-0000-7000-8000-00000000a1a1'

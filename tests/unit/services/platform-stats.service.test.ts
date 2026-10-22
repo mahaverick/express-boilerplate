@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { emailMessageDays, getPlatformStats, utcDays } from '@/services/platform-stats.service'
 
 vi.mock('@/repositories/platform-stats.repository', () => ({

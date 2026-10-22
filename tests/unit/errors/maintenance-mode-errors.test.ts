@@ -2,7 +2,7 @@
  * @file `MaintenanceModeError`: it carries the stored message, the mode and
  * when it began, and falls back to a fixed message when none is stored.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   MAINTENANCE_MODE_CODE,
   MAINTENANCE_MODE_RETRY_AFTER_SECONDS,
@@ -10,7 +10,6 @@ import {
 } from '@/constants/maintenance-mode.constants'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 
-// eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
 
 describe('MaintenanceModeError', () => {

@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { sql } from '@/services/database.service'

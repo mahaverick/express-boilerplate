@@ -23,7 +23,8 @@ const tenantRepository = new TenantRepository()
  * PostHog) and the status `purged`.
  */
 type TenantGroupSet =
-  { name: string; status: string; created_at: string } | { name: null; status: 'purged' }
+  | { name: string; status: string; created_at: string }
+  | { name: null; status: 'purged' }
 
 /**
  * The tenant id a row is a tenant marker for.
@@ -43,7 +44,6 @@ function tenantKeyOf(row: AnalyticsOutboxRow): string | undefined {
  */
 function groupSetOf(tenant: TenantGroupSnapshot | undefined): TenantGroupSet {
   if (!tenant) {
-    // eslint-disable-next-line unicorn/no-null -- null is what clears a group property in PostHog
     return { name: null, status: 'purged' }
   }
   return { name: tenant.name, status: tenant.status, created_at: tenant.createdAt.toISOString() }

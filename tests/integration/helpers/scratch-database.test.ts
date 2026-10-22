@@ -5,7 +5,7 @@
  * database here is created and dropped by this file alone.
  */
 import postgres from 'postgres'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { dropScratchDatabase } from '../../helpers/scratch-database'
 import { waitUntil } from '../../helpers/timing'
 import { baseDatabaseUrl } from '../../helpers/worker-database'

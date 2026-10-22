@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -135,7 +135,6 @@ describe('GET /api/v1/platform/tenants/:id', () => {
       slug: tenant.slug,
       website: 'https://example.test',
       lifecycleState: 'active',
-      // eslint-disable-next-line unicorn/no-null -- JSON null: a live tenant
       deletedAt: null,
       settings: { timezone: 'UTC', locale: 'en' },
       memberCount: 1,

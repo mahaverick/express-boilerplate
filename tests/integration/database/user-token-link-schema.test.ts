@@ -6,7 +6,7 @@
  * test is valid, so each insert fails on exactly the constraint it names.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { LINK_TOKEN_INTENTS, LINK_TOKEN_PURPOSES } from '@/database/models/user-token.model'
 import { sql } from '@/services/database.service'
 
@@ -14,7 +14,6 @@ const PREFIX = `link-schema-${randomUUID()}-`
 const PREFIX_LIKE = `${PREFIX}%`
 const userIds: string[] = []
 const tenantIds: string[] = []
-// eslint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 afterEach(async () => {

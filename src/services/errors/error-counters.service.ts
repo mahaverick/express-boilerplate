@@ -108,7 +108,9 @@ export async function recordErrorSendOk(at: Date = new Date()): Promise<void> {
     const redis = await getRedis()
     await redis
       .multi()
-      .set(redisKey(...LAST_SEND_OK_KEY), at.toISOString(), { EX: LAST_SEND_TTL_SECONDS })
+      .set(redisKey(...LAST_SEND_OK_KEY), at.toISOString(), {
+        expiration: { type: 'EX', value: LAST_SEND_TTL_SECONDS },
+      })
       .del(redisKey(...LAST_SEND_ERROR_KEY))
       .exec()
   } catch {
@@ -125,7 +127,7 @@ export async function recordErrorSendError(status: number): Promise<void> {
   try {
     const redis = await getRedis()
     await redis.set(redisKey(...LAST_SEND_ERROR_KEY), String(status), {
-      EX: LAST_SEND_TTL_SECONDS,
+      expiration: { type: 'EX', value: LAST_SEND_TTL_SECONDS },
     })
   } catch {
     // Error tracking never depends on Redis.
@@ -180,9 +182,7 @@ export async function getErrorTrackingStatus(at: Date = new Date()): Promise<Err
     window: '15m',
     sent: 0,
     dropped: noDrops(),
-    // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null
     lastSendOkAt: null,
-    // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null
     lastSendError: null,
   }
   const current = epochMinuteOf(at)

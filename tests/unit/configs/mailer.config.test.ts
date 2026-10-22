@@ -5,7 +5,7 @@
  * SMTP_USERNAME and SMTP_PASSWORD cannot be varied between cases. This is
  * also why `trustProxySetting` (env.config.ts) is tested as a pure function.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { getEnv, type Env } from '@/configs/env.config'
 import { getMailTransporter, mailTransportOptions } from '@/configs/mailer.config'
 import { withMutatedModule } from '../../helpers/mutate'

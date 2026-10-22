@@ -8,7 +8,7 @@
  * tracking is enabled through a mocked `getEnv()` against a fake PostHog.
  */
 import { SpanStatusCode } from '@opentelemetry/api'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 
 const capture = await vi.hoisted(async () => {
   const { HTTP_INSTRUMENTATION_CONFIG } = await import('@/observability/tracing')

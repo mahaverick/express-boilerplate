@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import express from 'express'
 import IORedis from 'ioredis'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'

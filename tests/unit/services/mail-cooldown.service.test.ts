@@ -4,7 +4,7 @@
  * address never in a mail cooldown's key, and the caller's choice when Redis
  * fails.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   claimCooldown,
   didClaimMailCooldown,
@@ -42,12 +42,14 @@ describe('claimCooldown', () => {
     await expect(claimCooldown('step-up-link', 'user-1', 60_000)).resolves.toEqual({
       claimed: true,
     })
-    expect(set).toHaveBeenCalledWith('test:step-up-link:user-1', '1', { NX: true, PX: 60_000 })
+    expect(set).toHaveBeenCalledWith('test:step-up-link:user-1', '1', {
+      condition: 'NX',
+      expiration: { type: 'PX', value: 60_000 },
+    })
     expect(pttl).not.toHaveBeenCalled()
   })
 
   it('answers the time left on the held slot from PTTL', async () => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
     pttl.mockResolvedValue(41_250)
 
@@ -62,7 +64,6 @@ describe('claimCooldown', () => {
     ['the key expired between the two commands (-2)', -2],
     ['the key has no expiry (-1)', -1],
   ])('answers a positive wait when %s', async (_label, answer) => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
     pttl.mockResolvedValue(answer)
 
@@ -73,7 +74,6 @@ describe('claimCooldown', () => {
   })
 
   it('answers the whole cooldown when PTTL fails after a held slot', async () => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
     pttl.mockRejectedValue(new Error('redis down'))
 
@@ -125,7 +125,10 @@ describe('didClaimMailCooldown', () => {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
-    expect(set).toHaveBeenCalledWith(expect.any(String), '1', { NX: true, PX: 300_000 })
+    expect(set).toHaveBeenCalledWith(expect.any(String), '1', {
+      condition: 'NX',
+      expiration: { type: 'PX', value: 300_000 },
+    })
   })
 
   it('rounds a fractional cooldown up to a whole PX, which Redis requires', async () => {
@@ -136,11 +139,13 @@ describe('didClaimMailCooldown', () => {
         whenUnavailable: 'send',
       })
     ).resolves.toBe(true)
-    expect(set).toHaveBeenCalledWith(expect.any(String), '1', { NX: true, PX: 2 })
+    expect(set).toHaveBeenCalledWith(expect.any(String), '1', {
+      condition: 'NX',
+      expiration: { type: 'PX', value: 2 },
+    })
   })
 
   it('refuses the slot while one is held (the SET answers null)', async () => {
-    // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)
 
     await expect(

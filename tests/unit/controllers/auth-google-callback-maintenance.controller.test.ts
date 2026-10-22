@@ -5,7 +5,7 @@
  * owner's customer text.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 
 vi.mock('@/services/frontend-links.service', () => ({

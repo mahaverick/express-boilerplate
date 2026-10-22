@@ -12,7 +12,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE, LINK_INVALID_CODE } from '@/constants/auth.constants'

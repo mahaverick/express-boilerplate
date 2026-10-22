@@ -4,7 +4,7 @@
  * reminder rule, the recipients' domains and the reconcile's dated steps.
  * No database.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { OnboardingStep } from '@/constants/onboarding.constants'
 import {
   daysStuckOf,
@@ -18,7 +18,6 @@ import {
 } from '@/services/platform-onboarding.service'
 
 const NOW = new Date('2026-10-02T12:00:00.000Z')
-// eslint-disable-next-line unicorn/no-null -- the functions' JSON null
 const NONE = null
 const DAY_MS = 24 * 60 * 60 * 1000
 

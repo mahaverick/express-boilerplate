@@ -4,7 +4,7 @@
  * user under its row lock, sees the account inactive, and issues nothing.
  * The same holds for a soft delete. Seams via withMutatedMethod, no sleeps.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { LINK_INVALID_CODE } from '@/constants/auth.constants'
 import type { NewUser } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
@@ -30,7 +30,6 @@ async function verifyAround(
 ): Promise<PromiseSettledResult<unknown>> {
   const reached = deferred()
   const release = deferred()
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realUpdate = UserRepository.prototype.update
   /**
    * Stands in for `UserRepository.update`: it blocks the `lastLoggedInAt` write until released and

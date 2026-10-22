@@ -2,7 +2,7 @@
  * @file Pins email tracking's value sets, from which the CHECK constraints
  * are built, and the status ranks every writer obeys.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   BOUNCE_KINDS,
   EMAIL_DETAIL_MAX_LENGTH,

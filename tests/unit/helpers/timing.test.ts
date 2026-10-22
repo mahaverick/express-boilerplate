@@ -3,7 +3,7 @@
  * run, the count is asserted loosely (at least N), so these tests do not
  * depend on scheduling.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { settle, waitUntil } from '../../helpers/timing'
 
 describe('waitUntil', () => {

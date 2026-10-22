@@ -9,7 +9,7 @@
 import express from 'express'
 import passport from 'passport'
 import type { VerifyCallback } from 'passport-google-oauth20'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv, type Env } from '@/configs/env.config'
 import {
   configurePassport,
@@ -190,7 +190,6 @@ describe('configurePassport', () => {
 
     verify('access-token', 'refresh-token', profile, done)
 
-    // eslint-disable-next-line unicorn/no-null -- asserting against Passport's own Node-style callback convention (see passport.config.ts's own disable comment on the line this proves).
     expect(done).toHaveBeenCalledWith(null, profile)
   })
 })

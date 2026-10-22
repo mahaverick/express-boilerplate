@@ -17,7 +17,6 @@ import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.cons
 import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { canActorGrantRole, canStaffMailTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
@@ -136,7 +135,6 @@ function isKnownTemplateKey(key: string): key is EmailTemplateKey {
  * @returns The action, or null.
  */
 function resendActionOf(key: string): ResendAction | null {
-  // eslint-disable-next-line unicorn/no-null -- an unknown template has no action
   return isKnownTemplateKey(key) ? EMAIL_TEMPLATE_META[key].resendAction : null
 }
 
@@ -146,7 +144,6 @@ function resendActionOf(key: string): ResendAction | null {
  * @returns The reference the API returns, or null when there is no user.
  */
 function personOf(user: EmailUserRow | null): EmailPerson | null {
-  // eslint-disable-next-line unicorn/no-null -- JSON null: no user, or purged
   if (user === null) return null
   const name = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
   return { id: user.id, name: name === '' ? user.email : name }
@@ -229,7 +226,6 @@ export function canResendFor(
   }
   // A deactivated user is a certain 409
   if (!message.user.isActive) return false
-  // eslint-disable-next-line unicorn/no-null -- a non-staff user has no platform role
   return canStaffMailTarget(actorRole, context.targetPlatformRoles.get(message.userId) ?? null)
 }
 
@@ -360,8 +356,7 @@ export async function getEmailDetail(actor: Actor, id: string): Promise<EmailMes
     events,
     suppression: suppression
       ? { id: suppression.id, reason: suppression.reason, createdAt: suppression.createdAt }
-      : // eslint-disable-next-line unicorn/no-null -- JSON null: the address is not suppressed
-        null,
+      : null,
     resentFromId: message.resentFromId,
     resentAsIds,
   }
@@ -629,7 +624,6 @@ export async function previewEmail(id: string): Promise<EmailPreview> {
  */
 export function rateOf(numerator: number, denominator: number, isKnowable: boolean): EmailRate {
   return {
-    // eslint-disable-next-line unicorn/no-null -- JSON null: shown as "—", not 0%
     value: isKnowable && denominator > 0 ? numerator / denominator : null,
     numerator,
     denominator,
@@ -850,7 +844,6 @@ export async function resendEmail(
         targetId: message.id,
         metadata: {
           reason,
-          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           emailDomain: hostnameDomain(message.recipient) ?? null,
           templateKey,
         },
@@ -902,7 +895,6 @@ export async function liftSuppression(
         targetId: lifted.id,
         metadata: {
           reason,
-          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           emailDomain: hostnameDomain(lifted.address) ?? null,
         },
       },

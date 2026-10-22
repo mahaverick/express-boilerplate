@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Job } from 'bullmq'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   hasPendingNotices,
   noticeIdsKey,

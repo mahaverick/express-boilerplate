@@ -3,7 +3,7 @@
  * real Worker runs in tests/integration/workers/maintenance.worker.test.ts.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { runRetentionPurge } from '@/services/retention.service'
 import { processMaintenanceJob } from '@/workers/maintenance.worker'
 

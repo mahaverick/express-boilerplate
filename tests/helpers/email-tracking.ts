@@ -14,7 +14,6 @@ import {
 } from '@/services/email-webhook-fake.service'
 
 // postgres-js binds SQL NULL only from null; an undefined parameter throws.
-// eslint-disable-next-line unicorn/no-null -- see above
 const SQL_NULL = null
 
 /**

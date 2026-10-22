@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { EnvSchemaShape } from '@/configs/env.config'
 import { render } from '@/scripts/generate-env-example'
 

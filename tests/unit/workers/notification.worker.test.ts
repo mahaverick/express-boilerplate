@@ -5,7 +5,7 @@
  * tests/integration/workers/notification.worker.test.ts.
  */
 import type { Job } from 'bullmq'
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vite-plus/test'
 import type { NewNotification, Notification } from '@/database/models/notification.model'
 import * as emailJob from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
@@ -69,11 +69,8 @@ const mockNotificationRow: Notification = {
   type: 'maintenance_mode_changed',
   title: 'Maintenance mode changed',
   body: 'body',
-  // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` database columns; see this const's own comment.
   metadata: null,
-  // eslint-disable-next-line unicorn/no-null -- see comment above.
   readAt: null,
-  // eslint-disable-next-line unicorn/no-null -- see comment above.
   dedupeKey: null,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
 }

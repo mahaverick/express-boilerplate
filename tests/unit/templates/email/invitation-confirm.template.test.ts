@@ -4,7 +4,7 @@
  * pinned line by line, UTM parameters that leave the link's own `token` and
  * `email` untouched, and tracking metadata that stores no link.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   INVITATION_CONFIRM_TEMPLATE_KEY,
   INVITATION_CONFIRM_TEMPLATE_META,

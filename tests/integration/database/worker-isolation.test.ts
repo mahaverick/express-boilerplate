@@ -9,7 +9,7 @@
  * a mismatched assertion.
  */
 import postgres from 'postgres'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { sql } from '@/services/database.service'
 import { baseDatabaseUrl, testDatabaseUrlForWorker } from '../../helpers/worker-database'
 

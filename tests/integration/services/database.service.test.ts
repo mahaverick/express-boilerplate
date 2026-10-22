@@ -5,7 +5,7 @@
  * `tests/helpers/worker-database.ts`), so there is no cross-worker
  * data-isolation risk either way.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { closeDatabase, isDatabaseReachable, sql } from '@/services/database.service'
 

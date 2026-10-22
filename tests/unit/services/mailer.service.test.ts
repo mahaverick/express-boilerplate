@@ -6,7 +6,7 @@
  * `MailMessage`. `sendMail` touches the real transporter and the delivery log,
  * so it is covered in tests/integration/services/mailer.service.test.ts.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
 import {
   extractErrorCode,
@@ -29,7 +29,6 @@ describe('extractErrorCode', () => {
 
   it('returns UNKNOWN_ERROR_CODE for a non-object rejection', () => {
     expect(extractErrorCode('smtp exploded')).toBe(UNKNOWN_ERROR_CODE)
-    // eslint-disable-next-line unicorn/no-null -- exercising extractErrorCode's own `error === null` branch
     expect(extractErrorCode(null)).toBe(UNKNOWN_ERROR_CODE)
     expect(extractErrorCode(undefined)).toBe(UNKNOWN_ERROR_CODE)
   })
@@ -44,7 +43,6 @@ describe('extractErrorCode', () => {
 describe('redactedMailErrorForLog', () => {
   it('passes a non-object rejection through unchanged — nothing to redact from a primitive', () => {
     expect(redactedMailErrorForLog('smtp exploded')).toBe('smtp exploded')
-    // eslint-disable-next-line unicorn/no-null -- exercising redactedMailErrorForLog's own `error === null` branch
     expect(redactedMailErrorForLog(null)).toBeNull()
   })
 
@@ -125,7 +123,7 @@ describe('redactedMailErrorForLog', () => {
  * `variables` disagree, and cannot supply `subject`/`text`/`html` at all. All
  * three properties below are compile-time only: no assertion can check them,
  * and `tsc` either reports "Unused '@ts-expect-error' directive" or it does
- * not (`pnpm lint` runs tsconfig.typecheck.json's tsc over this file). The
+ * not (`pnpm lint` runs tsconfig.json's tsc over this file). The
  * same `@ts-expect-error` pattern is used for `NewUserToken['purpose']` in
  * tests/unit/database/models/user-token.model.test.ts.
  */

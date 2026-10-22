@@ -3,7 +3,7 @@
  * does, and a message line that merely starts with an indented `at ` does
  * not, nor does a frame-shaped line inside the message.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { frameLineIndexesOf, isStackFrameLine } from '@/errors/stack-frames'
 
 /**

@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'

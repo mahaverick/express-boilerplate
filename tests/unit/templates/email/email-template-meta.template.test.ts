@@ -5,7 +5,7 @@
  * storage (a compile error in the template module, and a thrown error at
  * module load for anything that gets past the type).
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
 import type { MailMessage } from '@/services/mailer.service'
 import {
@@ -121,13 +121,11 @@ describe('EMAIL_TEMPLATE_META', () => {
           'stepsTotal',
           'overviewLink',
         ],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       maintenance_mode_changed: {
         senderClass: 'general',
         previewVariables: ['firstName', 'appName', 'mode', 'changedAt'],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       sign_in_link: {
@@ -138,19 +136,16 @@ describe('EMAIL_TEMPLATE_META', () => {
       step_up_link: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       passkey_created: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       passkey_deleted: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       welcome: {
@@ -217,7 +212,6 @@ describe('assertTemplateMetaSafe', () => {
       sign_in_link: {
         senderClass: 'transactional' as const,
         previewVariables: ['firstName', name],
-        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
     }
@@ -272,7 +266,6 @@ describe('EmailTemplateMeta type rules', () => {
       // @ts-expect-error -- the general sender is the one for token-free templates
       senderClass: 'transactional',
       previewVariables: ['firstName'],
-      // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     }
     expect(meta.senderClass).toBe('transactional')

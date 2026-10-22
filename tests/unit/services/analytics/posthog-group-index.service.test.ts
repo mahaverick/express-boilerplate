@@ -4,7 +4,16 @@
  * a missing `tenant` type is logged at error and not kept; a failed or
  * malformed answer throws PosthogUnavailableError.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import { PosthogUnavailableError } from '@/errors/posthog-errors'
 import {
   resetTenantGroupTypeIndexCache,

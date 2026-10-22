@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import {
   MAX_REASON_LENGTH,

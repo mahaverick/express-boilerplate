@@ -4,7 +4,7 @@
  * the counts by state from a snapshot, staleness, and zeros (never a
  * rejection) when Redis fails.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { isFlagsEnabled } from '@/configs/analytics.config'
 import {
   getFlagsStatus,
@@ -27,7 +27,6 @@ vi.mock('@/services/flags/flag-snapshot.service', async (importOriginal) => {
   return { ...actual, getFlagSnapshot: vi.fn() }
 })
 
-// eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const NOW = new Date('2026-10-05T12:00:00.000Z')
 

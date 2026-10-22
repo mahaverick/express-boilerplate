@@ -19,7 +19,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { TransactionSql } from 'postgres'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { auditLogList } from '@/repositories/audit-log.repository'
 import { notificationList } from '@/repositories/notification.repository'
 import {

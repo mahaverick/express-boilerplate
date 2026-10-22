@@ -6,7 +6,6 @@
  */
 import { getEnv, type AppEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
-import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -123,10 +122,8 @@ export async function flagContextForUser(
     userId,
     tenantId,
     platformRole,
-    // eslint-disable-next-line unicorn/no-null -- the input's contract is null for no membership
     tenantRole: membership?.role ?? null,
     userCreatedAt: user.createdAt,
-    // eslint-disable-next-line unicorn/no-null -- the input's contract is null for an unknown creation
     tenantCreatedAt: tenant?.createdAt ?? null,
     sessionId,
   })

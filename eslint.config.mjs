@@ -1,17 +1,15 @@
 /**
- * @file The flat ESLint config: the shared rule sets first, then path-scoped
- * overrides. A comment above an override gives the reason it differs.
+ * @file The flat ESLint config for the rules Oxlint can't run yet; each one's
+ * reason is in docs/lint-deferred.md. It is untyped: no rule here needs type
+ * information. The rules are listed by name, then path-scoped overrides; a
+ * comment above an override gives the reason it differs.
  */
 import path from 'node:path'
-import js from '@eslint/js'
-import prettier from 'eslint-config-prettier'
 import checkFile from 'eslint-plugin-check-file'
 import importX from 'eslint-plugin-import-x'
 import jsdoc from 'eslint-plugin-jsdoc'
-import promise from 'eslint-plugin-promise'
 import sonarjs from 'eslint-plugin-sonarjs'
 import unicorn from 'eslint-plugin-unicorn'
-import globals from 'globals'
 import tseslint from 'typescript-eslint'
 import { commentStyleRule } from './scripts/comment-style.mjs'
 
@@ -21,11 +19,14 @@ import { commentStyleRule } from './scripts/comment-style.mjs'
  */
 const BARE_SLEEP_MESSAGE =
   'No bare sleeps in tests. Wait on a condition with waitUntil (tests/helpers/timing.ts), use vi.useFakeTimers(), or, when nothing can be observed, settle(ms, reason).'
-const timerPromiseImportBans = ['node:timers/promises', 'timers/promises'].map((name) => ({
-  name,
-  importNames: ['setTimeout'],
-  message: BARE_SLEEP_MESSAGE,
-}))
+/**
+ * The message for the raw-SQL ban in src/.
+ */
+const RAW_SQL_MESSAGE =
+  "Raw SQL is limited to src/database/models and three listed files. Use drizzle's sql template, or add the file to eslint.config.mjs with a reason."
+/** The raw-SQL selectors match drizzle's `sql` by name, so an alias would slip past them. */
+const SQL_ALIAS_MESSAGE =
+  "Import drizzle's sql as `sql`, without an alias, so the raw SQL check can see it."
 
 /**
  * Every named function, method and class; inline callbacks and constructors
@@ -52,6 +53,8 @@ const JSDOC_CONTEXTS = [
 ]
 
 export default tseslint.config(
+  // A stale eslint-disable fails lint on its own, whatever --max-warnings says.
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
   {
     // tests/fixtures/** break the rules on purpose; lint-gates.test.ts lints them with `ignore: false`.
     ignores: [
@@ -63,27 +66,20 @@ export default tseslint.config(
       '.claude/**',
     ],
   },
-  js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
-  sonarjs.configs.recommended,
-  unicorn.configs.recommended,
-  promise.configs['flat/recommended'],
-  jsdoc.configs['flat/recommended-typescript'],
+  // The typescript-eslint parser and plugin with no rules and no type information.
+  tseslint.configs.base,
   {
-    languageOptions: {
-      globals: { ...globals.node },
-      parserOptions: {
-        // The build tsconfig covers src/ only; this wider project lets type-aware rules see tests/.
-        project: ['./tsconfig.typecheck.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
+    plugins: {
+      'check-file': checkFile,
+      'import-x': importX,
+      jsdoc,
+      sonarjs,
+      unicorn,
     },
-    plugins: { 'check-file': checkFile, 'import-x': importX },
     /**
-     * import-x settings. The resolver's `extensions` must list .ts, or the
-     * import-x rules skip every .ts import and neither no-cycle nor the
-     * restricted-paths zones fire. Its tsconfig path must be absolute: with a
-     * relative one, no-cycle misses cycles through aliased (`@/`) imports.
+     * import-x settings. The resolver's `extensions` must list .ts, or
+     * no-restricted-paths skips every .ts import and no zone fires. Its
+     * tsconfig path must be absolute, so aliased (`@/`) imports resolve.
      */
     settings: {
       'import-x/extensions': ['.ts', '.tsx', '.cts', '.mts', '.js', '.jsx', '.cjs', '.mjs'],
@@ -96,34 +92,52 @@ export default tseslint.config(
       ],
     },
     rules: {
-      // Collapses guard ladders such as canActorModifyTarget, and its output trips prefer-logical-operator-over-ternary.
-      'unicorn/prefer-ternary': 'off',
+      // Security rules with no Oxlint port.
+      'sonarjs/code-eval': 'error',
+      'sonarjs/content-length': 'error',
+      'sonarjs/content-security-policy': 'error',
+      'sonarjs/cookie-no-httponly': 'error',
+      'sonarjs/cors': 'error',
+      'sonarjs/csrf': 'error',
+      'sonarjs/encryption-secure-mode': 'error',
+      'sonarjs/file-permissions': 'error',
+      'sonarjs/hardcoded-secret-signatures': 'error',
+      'sonarjs/hashing': 'error',
+      'sonarjs/insecure-cookie': 'error',
+      'sonarjs/insecure-jwt-token': 'error',
+      'sonarjs/no-clear-text-protocols': 'error',
+      'sonarjs/no-hardcoded-ip': 'error',
+      'sonarjs/no-hardcoded-passwords': 'error',
+      'sonarjs/no-hardcoded-secrets': 'error',
+      'sonarjs/no-mime-sniff': 'error',
+      'sonarjs/no-os-command-from-path': 'error',
+      'sonarjs/no-referrer-policy': 'error',
+      'sonarjs/no-weak-cipher': 'error',
+      'sonarjs/no-weak-keys': 'error',
+      'sonarjs/production-debug': 'error',
+      'sonarjs/pseudo-random': 'error',
+      'sonarjs/publicly-writable-directories': 'error',
+      'sonarjs/session-regeneration': 'error',
+      'sonarjs/strict-transport-security': 'error',
+      'sonarjs/super-linear-regex': 'error',
+      'sonarjs/unverified-certificate': 'error',
+      'sonarjs/unverified-hostname': 'error',
+      'sonarjs/weak-ssl': 'error',
+      'sonarjs/x-powered-by': 'error',
 
       // env, db and repository are the canonical names (process.env, Drizzle's db, *.repository.ts files); params and def are allowed only for the list contract's exported names (ListParams, listParamsSchema, SortDef), locals still spell parameters.
       'unicorn/name-replacements': [
         'error',
         { replacements: { env: false, db: false, repository: false, params: false, def: false } },
       ],
+      'unicorn/consistent-boolean-name': 'error',
+      // Oxlint's copy of this rule checks only oxlint-disable comments, since it no longer reads eslint-disable ones (vite.config.ts).
+      'unicorn/no-abusive-eslint-disable': 'error',
+      'unicorn/no-async-promise-finally': 'error',
+      'unicorn/no-loop-iterable-mutation': 'error',
+      'unicorn/no-unsafe-property-key': 'error',
+      'unicorn/no-unused-builtin-method-return': 'error',
 
-      // Express finds error handlers by arity, so an unused fourth parameter is load-bearing.
-      '@typescript-eslint/no-unused-vars': [
-        'error',
-        {
-          argsIgnorePattern: '^_',
-          varsIgnorePattern: '^_',
-          caughtErrorsIgnorePattern: '^_',
-        },
-      ],
-
-      // No import order rule: the Prettier sort-imports plugin owns ordering.
-
-      // Following imports into node_modules ran lint out of memory at the default heap (@simplewebauthn/server's asn1 graph).
-      'import-x/no-cycle': ['error', { ignoreExternal: true }],
-      'import-x/no-self-import': 'error',
-      'import-x/no-useless-path-segments': 'error',
-      'import-x/no-duplicates': 'error',
-
-      // Layer boundaries (see ARCHITECTURE.md); lint-gates.test.ts proves each zone fires.
       'import-x/no-restricted-paths': [
         'error',
         {
@@ -174,51 +188,9 @@ export default tseslint.config(
         },
       ],
 
-      // Descriptions are required and types are not: types live in TypeScript.
-      'jsdoc/require-param-description': 'error',
-      'jsdoc/require-returns-description': 'error',
-      'jsdoc/require-param-type': 'off',
-      'jsdoc/require-returns-type': 'off',
       'jsdoc/check-alignment': 'error',
-      'jsdoc/check-param-names': 'error',
-      'jsdoc/check-tag-names': 'error',
-      'jsdoc/no-undefined-types': 'error',
-
-      // Configuration is read only through getEnv(), and logs go through the logger, except where exempted below.
-      'no-restricted-properties': [
-        'error',
-        {
-          object: 'process',
-          property: 'env',
-          message:
-            'Read configuration from @/configs/env.config, not process.env. See ARCHITECTURE.md, "Configuration".',
-        },
-        {
-          object: 'console',
-          property: 'error',
-          message: 'Use logger from @/services/logger.service.',
-        },
-        {
-          object: 'console',
-          property: 'warn',
-          message: 'Use logger from @/services/logger.service.',
-        },
-        {
-          object: 'console',
-          property: 'info',
-          message: 'Use logger from @/services/logger.service.',
-        },
-        {
-          object: 'console',
-          property: 'log',
-          message: 'Use logger from @/services/logger.service.',
-        },
-        {
-          object: 'console',
-          property: 'debug',
-          message: 'Use logger from @/services/logger.service.',
-        },
-      ],
+      // A returns tag on a function that returns nothing is a false claim.
+      'jsdoc/require-returns-check': 'error',
 
       'check-file/filename-naming-convention': [
         'error',
@@ -246,53 +218,20 @@ export default tseslint.config(
   {
     // The scrubber is byte-identical with the react and apex copies, whose ESLint has no sonarjs, so it cannot carry sonarjs disable comments; its regexes scan at most SCAN_MAX characters.
     files: ['src/services/errors/error-scrubber.service.ts'],
-    rules: { 'sonarjs/regex-complexity': 'off', 'sonarjs/super-linear-regex': 'off' },
+    rules: { 'sonarjs/super-linear-regex': 'off' },
   },
   {
     // tracing.ts is a fixed-name entrypoint loaded by path with --import, not a module type.
     files: ['src/observability/**/*.ts'],
     rules: { 'check-file/filename-naming-convention': 'off' },
   },
-  {
-    // Security: the staff searches, detail reads and stats read every tenant, user, email and onboarding record, so only platform services import them; lint-gates.test.ts proves this fires.
-    files: ['src/**/*.ts'],
-    ignores: ['src/services/platform-*.service.ts'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            {
-              group: [
-                '@/repositories/platform-tenant.repository',
-                '**/platform-tenant.repository',
-                '@/repositories/platform-stats.repository',
-                '**/platform-stats.repository',
-                '@/repositories/platform-user.repository',
-                '**/platform-user.repository',
-                '@/repositories/platform-email.repository',
-                '**/platform-email.repository',
-                '@/repositories/platform-onboarding.repository',
-                '**/platform-onboarding.repository',
-              ],
-              message:
-                'Only services/platform-*.service.ts may import the cross-tenant platform repositories.',
-            },
-          ],
-        },
-      ],
-    },
-  },
   /**
-   * Every controller-scoped rule. Handlers are arrow fields, so routes can
-   * mount them unbound; `unicorn/consistent-function-scoping` skips arrows
-   * here because it would report each one as movable out of its class. Models may be imported for types only, which needs
+   * Controllers may import models for types only, which needs
    * `allowTypeImports` (no-restricted-paths has no such option).
    */
   {
     files: ['src/controllers/**/*.ts'],
     rules: {
-      'unicorn/consistent-function-scoping': ['error', { checkArrowFunctions: false }],
       '@typescript-eslint/no-restricted-imports': [
         'error',
         {
@@ -308,39 +247,80 @@ export default tseslint.config(
       ],
     },
   },
-  {
-    // env.config.ts's whole job is parsing process.env.
-    files: ['src/configs/env.config.ts'],
-    rules: { 'no-restricted-properties': 'off' },
-  },
   /**
-   * logger.service.ts reports a Slack failure with console.error, so it never
-   * re-enters the logger. index.ts prints a failed boot check with
-   * console.error.
+   * Security: raw SQL bypasses drizzle's parameter binding, so in src/ it is
+   * limited to the models and three files, each listed with its reason.
+   * Tests are out of scope: their setup and migrations need raw SQL.
    */
   {
-    files: ['src/services/logger.service.ts', 'src/index.ts'],
-    rules: { 'no-restricted-properties': 'off' },
-  },
-  {
-    // tracing.ts loads before getEnv() and the logger, so it reads process.env and writes with console.
-    files: ['src/observability/tracing.ts'],
-    rules: { 'no-restricted-properties': 'off' },
-  },
-  /**
-   * Root configs and scripts sit outside the type-aware project, so they are
-   * linted syntactically. Listed by name, not `*.config.ts`, so src/configs
-   * stays type-checked.
-   */
-  {
-    files: [
-      '**/*.mjs',
-      'scripts/**/*.d.mts',
-      'vitest.config.ts',
-      'vitest.unit.config.ts',
-      'commitlint.config.js',
+    files: ['src/**/*.ts'],
+    ignores: [
+      'src/database/models/**',
+      // Splices fixed column names into the shared keyIn and isoText fragments, plus one constant tenant predicate.
+      'src/repositories/platform-onboarding.repository.ts',
+      // Emits the keyset seek operator (> or <) and the tuple separators, chosen in code from the sort direction.
+      'src/utilities/list-page.utilities.ts',
+      // Splices the status-rank CASE arms, built from the EMAIL_STATUS_RANK constant.
+      'src/repositories/email-message.repository.ts',
     ],
-    extends: [tseslint.configs.disableTypeChecked],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        // sql.raw called or taken as a value, and orm.sql.raw off a namespace import.
+        {
+          selector:
+            "MemberExpression[property.name='raw']:matches([object.name='sql'], [object.property.name='sql'])",
+          message: RAW_SQL_MESSAGE,
+        },
+        // sql['raw'] or any other computed key, which the name match above can't read.
+        {
+          selector: "MemberExpression[object.name='sql'][computed=true]",
+          message: RAW_SQL_MESSAGE,
+        },
+        {
+          selector:
+            "VariableDeclarator[init.name='sql'] > ObjectPattern > Property:matches([key.name='raw'], [key.value='raw'], [computed=true])",
+          message: RAW_SQL_MESSAGE,
+        },
+        // ({ raw } = sql), the same destructuring by assignment.
+        {
+          selector:
+            "AssignmentExpression[right.name='sql'] > ObjectPattern > Property:matches([key.name='raw'], [key.value='raw'], [computed=true])",
+          message: RAW_SQL_MESSAGE,
+        },
+        // new SQL(…) or new StringChunk(…) builds raw SQL without sql.raw. src imports SQL only as a type, so match the constructor call, not the import.
+        {
+          selector: 'NewExpression[callee.name=/^(SQL|StringChunk)$/]',
+          message: RAW_SQL_MESSAGE,
+        },
+        {
+          selector:
+            "ImportDeclaration[source.value=/^drizzle-orm(\\/|$)/] > ImportSpecifier[imported.name='sql'][local.name!='sql']",
+          message: SQL_ALIAS_MESSAGE,
+        },
+        // const s = sql, the same alias by assignment.
+        {
+          selector: "VariableDeclarator[init.name='sql'] > Identifier.id",
+          message: SQL_ALIAS_MESSAGE,
+        },
+        {
+          selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='unsafe']",
+          message: RAW_SQL_MESSAGE,
+        },
+        // A plain string, untagged template or concatenation as a query; drizzle's sql`…` is a TaggedTemplateExpression.
+        {
+          selector:
+            "CallExpression[callee.property.name='execute'][arguments.0.type=/^(Literal|TemplateLiteral|BinaryExpression)$/]",
+          message: RAW_SQL_MESSAGE,
+        },
+        // A String(…) conversion as a query, the same plain string by another route.
+        {
+          selector:
+            "CallExpression[callee.property.name='execute'][arguments.0.type='CallExpression'][arguments.0.callee.name='String']",
+          message: RAW_SQL_MESSAGE,
+        },
+      ],
+    },
   },
   /**
    * No test file lives under src/. The custom `errorMessage` replaces the
@@ -382,21 +362,6 @@ export default tseslint.config(
       'check-file/filename-naming-convention': 'off',
       // Test fixtures are known values, not secrets, e.g. a deliberately wrong JWT secret.
       'sonarjs/hardcoded-secret-signatures': 'off',
-      'no-restricted-properties': 'off',
-      'no-restricted-imports': [
-        'error',
-        {
-          paths: [
-            {
-              name: 'supertest',
-              importNames: ['default', 'agent'],
-              message:
-                'Use `request` from tests/helpers/request: it binds 127.0.0.1 (see that file).',
-            },
-            ...timerPromiseImportBans,
-          ],
-        },
-      ],
       // Timing: a bare sleep guesses a duration and fails under load (CLAUDE.md, "Test timing rules").
       'no-restricted-syntax': [
         'error',
@@ -413,14 +378,9 @@ export default tseslint.config(
     },
   },
   {
-    // The one place that wraps supertest's default export. The timer ban still applies.
-    files: ['tests/helpers/request.ts'],
-    rules: { 'no-restricted-imports': ['error', { paths: timerPromiseImportBans }] },
-  },
-  {
     // The one file that may wait on real time directly: it defines waitUntil and settle.
     files: ['tests/helpers/timing.ts'],
-    rules: { 'no-restricted-syntax': 'off', 'no-restricted-imports': 'off' },
+    rules: { 'no-restricted-syntax': 'off' },
   },
   {
     // Comment style is enforced; see CLAUDE.md.
@@ -429,7 +389,7 @@ export default tseslint.config(
     rules: { 'local/comment-style': 'error' },
   },
   {
-    // Lint tooling: its regexes are the tested contract, lint-docs.mjs is a CLI that runs git by name and prints to the terminal, and tests import these files as modules.
+    // Lint tooling: its regexes are the tested contract, lint-docs.mjs is a CLI that runs git by name, and its names mirror the files it checks.
     files: [
       'scripts/history-patterns.mjs',
       'scripts/comment-style.mjs',
@@ -439,24 +399,18 @@ export default tseslint.config(
       'scripts/vendor-passkey-aaguids.d.mts',
     ],
     rules: {
-      'sonarjs/regex-complexity': 'off',
       'sonarjs/super-linear-regex': 'off',
       'sonarjs/no-os-command-from-path': 'off',
-      'unicorn/no-null': 'off',
       'unicorn/name-replacements': 'off',
-      'unicorn/no-exports-in-scripts': 'off',
-      'unicorn/prefer-string-replace-all': 'off',
       'unicorn/consistent-boolean-name': 'off',
-      'no-restricted-properties': 'off',
     },
   },
   {
-    // Its filename mirrors lint-docs.mjs and it imports docRefProblems from it, one test double is named exists, and a filename is concatenated on purpose so lint:docs does not read it as a citation.
+    // Its filename mirrors lint-docs.mjs and it imports docRefProblems from it, and one test double is named exists.
     files: ['tests/unit/lint-docs.test.ts'],
     rules: {
       'unicorn/name-replacements': 'off',
       'unicorn/consistent-boolean-name': 'off',
-      'unicorn/no-useless-concat': 'off',
     },
   },
   {
@@ -470,23 +424,18 @@ export default tseslint.config(
           require: { FunctionDeclaration: false },
           contexts: JSDOC_CONTEXTS,
           checkConstructors: false,
-          // lint-staged runs eslint --fix, and this fixer inserts blank stubs.
+          // The pre-commit hook runs eslint --fix, and this fixer inserts blank stubs.
           enableFixer: false,
         },
       ],
       'jsdoc/require-description': ['error', { contexts: JSDOC_CONTEXTS }],
-      'jsdoc/no-blank-blocks': ['error', { enableFixer: false }],
       'jsdoc/check-param-names': ['error', { checkDestructured: false }],
-      'jsdoc/check-tag-names': ['error', { typed: true }],
       'jsdoc/no-types': 'error',
-      'jsdoc/require-param': 'off',
-      'jsdoc/require-returns': 'off',
     },
   },
   {
     // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift.
     files: ['scripts/**/*.d.mts'],
     rules: { 'jsdoc/require-jsdoc': 'off' },
-  },
-  prettier
+  }
 )

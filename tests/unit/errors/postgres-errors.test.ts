@@ -4,7 +4,7 @@
  */
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   isUniqueViolation,
   isUnstorableTextError,

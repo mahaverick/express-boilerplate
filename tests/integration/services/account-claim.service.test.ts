@@ -6,7 +6,7 @@
  * survive.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { claimNeverVerifiedAccount } from '@/services/account-claim.service'
 import { sql } from '@/services/database.service'

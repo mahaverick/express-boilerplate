@@ -31,7 +31,6 @@ export class FakeGoogleSuccessStrategy implements passport.Strategy {
    * type, but the real verify hands the callback the profile too.
    */
   authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
-    // eslint-disable-next-line unicorn/no-undeclared-class-members -- `success` is never a member of THIS class; passport injects it at runtime onto the per-request instance `this` refers to (`StrategyCreatedStatic`, passport's own `.d.ts`), which is exactly what `authenticate`'s `this: passport.StrategyCreated<...>` parameter type documents.
     this.success(this.profile as unknown as Express.User)
   }
 }

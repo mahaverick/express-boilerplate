@@ -10,7 +10,10 @@
  * told nothing beyond `INVALID_SIGNATURE`.
  */
 export type WebhookSignatureFailure =
-  'missing_headers' | 'malformed_headers' | 'stale_timestamp' | 'signature_mismatch'
+  | 'missing_headers'
+  | 'malformed_headers'
+  | 'stale_timestamp'
+  | 'signature_mismatch'
 
 /**
  * A webhook request whose signature check failed.

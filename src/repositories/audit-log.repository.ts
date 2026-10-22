@@ -13,7 +13,6 @@ import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/model
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import {
   defineList,
@@ -229,7 +228,6 @@ export class AuditLogRepository {
   async redactActor(userId: string, tx: DbTransaction): Promise<number> {
     const result = await tx
       .update(auditLogModel)
-      // eslint-disable-next-line unicorn/no-null -- SQL NULL is the erasure
       .set({ actorUserId: null, ip: null, userAgent: null })
       .where(eq(auditLogModel.actorUserId, userId))
     return result.count

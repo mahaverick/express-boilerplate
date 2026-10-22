@@ -6,7 +6,7 @@
  * by real Redis is covered separately, against the real thing, in
  * tests/integration/.
  */
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vite-plus/test'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
 import { logger } from '@/services/logger.service'
 import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'

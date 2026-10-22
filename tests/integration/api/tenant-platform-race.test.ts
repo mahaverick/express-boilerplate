@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -67,7 +67,6 @@ async function withPlatformRoleChangedAfterResolve(
   seen: SeenRead,
   run: () => Promise<void>
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findPlatformRole
   const platform = await platformTenant()
   let hasChanged = false
@@ -110,7 +109,6 @@ async function withMembershipRemovedAfterResolve(
   tenant: Tenant,
   run: () => Promise<void>
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findByUserAndTenant
   let hasChanged = false
   /**
@@ -162,7 +160,6 @@ async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string>
  * as a service trusting the earlier read would.
  */
 function trustingEarlierRead(seen: SeenRead): UserMembershipRepository['lockPlatformRole'] {
-  // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
   return () => Promise.resolve(seen.role ?? null)
 }
 

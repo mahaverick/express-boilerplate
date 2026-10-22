@@ -3,7 +3,7 @@
  * the Drizzle schema level, so `NewUserToken` requires it on every
  * insert.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { NewUserToken } from '@/database/models/user-token.model'
 
 /**
@@ -16,8 +16,8 @@ import type { NewUserToken } from '@/database/models/user-token.model'
  * If an edit re-adds `.default(...)` to `purpose`, it becomes
  * optional in `NewUserToken` again, the `@ts-expect-error` below stops
  * being consumed, and TypeScript reports "Unused '@ts-expect-error'
- * directive", which the `tsc -p tsconfig.typecheck.json --noEmit` step of
- * `pnpm lint` turns into a red gate. The compiler checks that gate, not
+ * directive", which the `tsc --noEmit` step of `pnpm lint` (and
+ * `pnpm typecheck`) turns into a red gate. The compiler checks that gate, not
  * anything this test executes at runtime: `tsc` either reports the unused
  * directive or it doesn't.
  */

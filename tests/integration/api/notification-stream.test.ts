@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import jwt from 'jsonwebtoken'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
@@ -153,12 +153,10 @@ class SseConnection {
    */
   constructor(baseUrl: string, path: string, headers: Record<string, string> = {}) {
     let resolveReady: (response: IncomingMessage) => void
-    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
     this.ready = new Promise((resolve) => {
       resolveReady = resolve
     })
     let resolveEnded: () => void
-    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- see the disable above.
     this.ended = new Promise((resolve) => {
       resolveEnded = resolve
     })
@@ -288,11 +286,8 @@ async function framesBeforeSentinel(
     type: 'tenant_invitation',
     title: 'Sentinel',
     body: 'Marks the end of what was emitted before it.',
-    // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns
     metadata: null,
-    // eslint-disable-next-line unicorn/no-null -- see above
     readAt: null,
-    // eslint-disable-next-line unicorn/no-null -- see above
     dedupeKey: null,
     createdAt: new Date(),
   })
@@ -611,7 +606,6 @@ describe('GET /api/v1/notifications/stream', () => {
       type: 'tenant_invitation',
       title: 'Pushed live',
       body: notification.body,
-      // eslint-disable-next-line unicorn/no-null -- asserting against the actual wire value: the SSE payload serializes an unread notification's readAt as JSON `null` (notification-stream.controller.ts's toStreamPayload), and `JSON.parse` produces a real `null` here, not `undefined`.
       readAt: null,
       createdAt: notification.createdAt.toISOString(),
     })
@@ -675,7 +669,6 @@ describe('GET /api/v1/notifications/stream', () => {
 
     const gate = { entered: false }
     const release = deferred()
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realFindByIdAndUser = NotificationRepository.prototype.findByIdAndUser
     /**
      * Holds `findByIdAndUser` at `gate` until the test releases it.
@@ -1100,11 +1093,8 @@ describe('GET /api/v1/notifications/stream', () => {
         type: 'tenant_invitation',
         title: 'Large',
         body,
-        // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns
         metadata: null,
-        // eslint-disable-next-line unicorn/no-null -- see above
         readAt: null,
-        // eslint-disable-next-line unicorn/no-null -- see above
         dedupeKey: null,
         createdAt: new Date(),
       })

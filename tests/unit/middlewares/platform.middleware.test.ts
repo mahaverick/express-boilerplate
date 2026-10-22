@@ -6,7 +6,7 @@
  * OPTIONS with the generic 404.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
 import { NOT_FOUND } from '@/errors/not-found-errors'
@@ -58,7 +58,6 @@ describe('requirePlatformRole', () => {
   })
 
   it('refuses a non-staff user with the generic 404', async () => {
-    // eslint-disable-next-line unicorn/no-null -- getPlatformMembership answers null for non-staff
     const calls = await run('viewer', null)
     const error = calls[0]?.[0]
 

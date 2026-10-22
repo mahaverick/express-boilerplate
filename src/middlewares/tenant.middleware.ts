@@ -88,7 +88,6 @@ async function principalFor(
       ...scope,
       role: membership.role,
       memberRole: membership.role,
-      // eslint-disable-next-line unicorn/no-null -- membership wins, so no platform role applies
       platformRole: null,
       access: 'member',
     }
@@ -98,7 +97,6 @@ async function principalFor(
   const platformRole = await platformRoleOf(userId, response)
   if (platformRole === null) return undefined
   await recordStaffVisit(userId, tenant.id, platformRole)
-  // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
   return { ...scope, role: platformRole, memberRole: null, platformRole, access: 'platform' }
 }
 

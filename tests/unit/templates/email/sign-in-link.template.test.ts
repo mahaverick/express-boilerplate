@@ -3,7 +3,7 @@
  * parts, escaping in the HTML part only, a subject with no token in it, the
  * staff-sent sentence, and tracking metadata that stores no link.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   renderSignInLinkTemplate,
   SIGN_IN_LINK_TEMPLATE_KEY,

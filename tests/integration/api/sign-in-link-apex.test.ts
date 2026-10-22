@@ -12,7 +12,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { LINK_INVALID_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
@@ -69,7 +69,6 @@ const REQUEST_ACCEPTED_BODY = {
   success: true,
   message: 'Check your inbox for a sign-in link.',
   statusCode: 202,
-  // eslint-disable-next-line unicorn/no-null -- the envelope's JSON null for "no data"
   data: null,
 }
 

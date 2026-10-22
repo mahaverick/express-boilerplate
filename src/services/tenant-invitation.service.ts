@@ -22,7 +22,6 @@ import {
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import type { InvalidCursorError } from '@/errors/list-errors'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -319,7 +318,6 @@ function isNotifiable(user: User | undefined): user is User {
  * @returns Its lowercased domain, or null when it has none or it is not a dotted hostname.
  */
 function auditEmailDomain(email: string): string | null {
-  // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
   return hostnameDomain(email) ?? null
 }
 
@@ -352,12 +350,10 @@ async function assertRecipientBudget(email: string, tenantId: string): Promise<v
  * @returns The instant the cooldown ends, or null when it is over or never began.
  */
 export function resendAvailableAt(lastSentAt: Date | null, now: number = Date.now()): Date | null {
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no cooldown applies
   if (lastSentAt === null) return null
   const availableAt = new Date(
     lastSentAt.getTime() + requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)
   )
-  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null once the cooldown is over
   return availableAt.getTime() > now ? availableAt : null
 }
 
@@ -486,7 +482,7 @@ async function dispatchInvitationMessages(
       })
     }
   }
-  return { emailSent: results[0]?.status === 'fulfilled' }
+  return { emailSent: results[0].status === 'fulfilled' }
 }
 
 /**
@@ -586,7 +582,7 @@ export async function invite(
   })
 
   const { invitee } = context
-  // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
+  // oxlint-disable-next-line promise/prefer-await-to-then -- fire-and-forget: the response must not wait on the queue
   dispatchInvitationMessages(context, isNotifiable(invitee) ? invitee : undefined).catch(
     (error: unknown) => {
       logger.error('Invitation messages failed', { error, invitationId: context.invitation.id })
@@ -670,7 +666,6 @@ export async function createOwnerInvitation(
       targetId: invitation.id,
       metadata: {
         emailDomain: auditEmailDomain(normalizedEmail),
-        // eslint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
         inviteeUserId: invitee?.id ?? null,
         reason,
       },
@@ -811,7 +806,7 @@ export async function resend(
   // The email context takes only `resentFromId`: the staff reason stays in the audit entry.
   const resendOptions: EmailResendOptions =
     options.resentFromId === undefined ? {} : { resentFromId: options.resentFromId }
-  // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
+  // oxlint-disable-next-line promise/prefer-await-to-then -- fire-and-forget: the response must not wait on the queue
   dispatchInvitationMessages(context, undefined, resendOptions).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })

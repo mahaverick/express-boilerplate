@@ -4,7 +4,7 @@
  * it, falling back to a plain web sign-in.
  */
 import type { Request } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { oauthIntentOf } from '@/controllers/helpers.controller'
 
 /**

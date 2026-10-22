@@ -2,7 +2,7 @@
  * @file assertEnvConsistent takes the env and the warn sink as arguments,
  * so every case here is a crafted env, never the memoised getEnv().
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { parseEnv } from '@/configs/env.config'
 

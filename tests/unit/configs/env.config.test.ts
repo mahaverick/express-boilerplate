@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   cursorSecret,
   EnvSchemaShape,
@@ -81,15 +81,13 @@ describe('parseEnv', () => {
   })
 
   it('defaults APP_PORT when absent', () => {
-    // Rest-sibling destructuring builds a source object missing this key; the APP_PORT binding itself is intentionally unused.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // oxlint-disable-next-line eslint/no-unused-vars -- rest-sibling destructuring builds a source object without APP_PORT; the binding itself is unused
     const { APP_PORT, ...rest } = valid
     expect(parseEnv(rest).APP_PORT).toBe(4040)
   })
 
   it('names every missing key in one message, not just the first', () => {
-    // Same rest-sibling pattern, dropping two keys this time.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // oxlint-disable-next-line eslint/no-unused-vars -- rest-sibling destructuring builds a source object without DATABASE_URL and REDIS_URL
     const { DATABASE_URL, REDIS_URL, ...rest } = valid
     let message = ''
     try {
@@ -201,7 +199,7 @@ describe('parseEnv', () => {
   })
 
   it('rejects an unparseable env var by name alongside every other problem, not alone', () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // oxlint-disable-next-line eslint/no-unused-vars -- rest-sibling destructuring builds a source object without DATABASE_URL
     const { DATABASE_URL, ...rest } = valid
     let message = ''
     try {
@@ -602,7 +600,7 @@ describe('APP_ENV and NODE_ENV', () => {
   })
 
   it('refuses a missing APP_ENV instead of defaulting it', () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // oxlint-disable-next-line eslint/no-unused-vars -- rest-sibling destructuring builds a source object without APP_ENV
     const { APP_ENV, ...rest } = valid
     expect(() => parseEnv(rest)).toThrow(/APP_ENV/)
   })
@@ -613,7 +611,7 @@ describe('APP_ENV and NODE_ENV', () => {
   })
 
   it('refuses a missing NODE_ENV instead of defaulting it to development', () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // oxlint-disable-next-line eslint/no-unused-vars -- rest-sibling destructuring builds a source object without NODE_ENV
     const { NODE_ENV, ...rest } = valid
     expect(() => parseEnv(rest)).toThrow(/NODE_ENV/)
   })

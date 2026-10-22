@@ -3,7 +3,7 @@
  * worker's own `REDIS_KEY_PREFIX`. No Worker runs in this file, so the
  * scheduled job stays delayed until `afterAll` removes it.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vite-plus/test'
 import { ensureRetentionSchedule, RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'
 import { closeQueue, getMaintenanceQueue } from '@/services/queue.service'
 

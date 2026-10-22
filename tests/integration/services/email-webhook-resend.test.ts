@@ -5,7 +5,7 @@
  * 404; tests/integration/api/email-webhook.test.ts covers that).
  */
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { sql } from '@/services/database.service'
 import { createResendEmailWebhookAdapter } from '@/services/email-webhook-resend.service'
 import { processEmailWebhook } from '@/services/email-webhook.service'

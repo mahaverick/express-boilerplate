@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { NOT_FOUND } from '@/errors/not-found-errors'
@@ -68,9 +68,7 @@ function stubAuthenticatedUser(userId: string) {
     thisRequest.user = {
       id: userId,
       email: 'stub@example.test',
-      // eslint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
       firstName: null,
-      // eslint-disable-next-line unicorn/no-null -- see comment above.
       lastName: null,
     }
     next()
@@ -158,7 +156,6 @@ describe('resolveTenant platform access (integration)', () => {
         isPlatformTenant: false,
         role: 'owner',
         memberRole: 'owner',
-        // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
         platformRole: null,
         access: 'member',
       },
@@ -180,7 +177,6 @@ describe('resolveTenant platform access (integration)', () => {
         tenantSlug: tenant.slug,
         isPlatformTenant: false,
         role: 'editor',
-        // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
         memberRole: null,
         platformRole: 'editor',
         access: 'platform',
@@ -201,7 +197,6 @@ describe('resolveTenant platform access (integration)', () => {
     expect(body.principal).toMatchObject({
       role: 'viewer',
       memberRole: 'viewer',
-      // eslint-disable-next-line unicorn/no-null -- membership wins, so no platform role is used
       platformRole: null,
       access: 'member',
     })

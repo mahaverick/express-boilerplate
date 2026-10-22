@@ -13,7 +13,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { LINK_INVALID_CODE, MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
@@ -72,7 +72,6 @@ const REQUEST_ACCEPTED_BODY = {
   success: true,
   message: 'Check your inbox for a sign-in link.',
   statusCode: 202,
-  // eslint-disable-next-line unicorn/no-null -- the envelope's JSON null for "no data"
   data: null,
 }
 
@@ -229,13 +228,19 @@ function verifyData(response: Response): VerifyData {
 }
 
 /**
- * The sign-in link in the newest mail to an address, from Mailpit.
+ * The sign-in link in the newest mail to an address, from Mailpit. The link
+ * row exists before the worker sends the mail, so it waits for the message.
  * @param email - The recipient.
  * @returns The link, parsed.
  */
 async function mailedLink(email: string): Promise<URL> {
-  const [message] = await findMailpitMessages(email)
-  if (!message) throw new Error(`no mail reached ${email}`)
+  const message = await waitUntil(
+    async () => {
+      const [newest] = await findMailpitMessages(email)
+      return newest
+    },
+    { message: `the link mailed to ${email}` }
+  )
   const detail = await getMailpitMessage(message.ID)
   const href = /https?:\/\/\S+\/auth\/link\?\S+/.exec(detail.Text)?.[0]
   if (href === undefined) throw new Error('the mail carries no sign-in link')
@@ -295,7 +300,7 @@ describe('POST /auth/link/request', () => {
     for (const response of responses) {
       expect(response.status).toBe(202)
       expect(response.body).toEqual(REQUEST_ACCEPTED_BODY)
-      expect(response.text).toBe(responses[0]?.text)
+      expect(response.text).toBe(responses[0].text)
     }
     // The follow-ups run after the reply; wait for the three that mail before cleanup.
     for (const email of [fresh, existing.email, mixedCase]) {
@@ -311,7 +316,6 @@ describe('POST /auth/link/request', () => {
     const email = uniqueEmail('before-lookup')
     const reached = deferred()
     const release = deferred()
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realFind = UserRepository.prototype.findByEmail
     /**
      * Stands in for `findByEmail`: it signals, then holds the lookup until released.
@@ -350,7 +354,6 @@ describe('POST /auth/link/request', () => {
       },
       { message: 'the issued link row' }
     )
-    // eslint-disable-next-line unicorn/no-null -- a sign_in_link row names no user
     expect(row).toMatchObject({ userId: null, app: 'web', revoked: false })
     const link = await mailedLink(email)
     expect(link.pathname).toBe('/auth/link')
@@ -747,7 +750,6 @@ describe('POST /auth/link/verify', () => {
     const email = uniqueEmail('register-race')
     const token = await issueTestLink(email)
     const seeded: { id?: string } = {}
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realCreate = UserRepository.prototype.create
     /**
      * Stands in for `UserRepository.create`: just before the click's insert,
@@ -785,7 +787,6 @@ describe('POST /auth/link/verify', () => {
         verified: false,
       })
       const token = await issueTestLink(user.email)
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realLock = UserRepository.prototype.lockById
       const changed = { done: false }
       /**
@@ -819,7 +820,6 @@ describe('POST /auth/link/verify', () => {
   it('creates no account when full maintenance begins between the peek and the claim', async () => {
     const email = uniqueEmail('flip-full')
     const token = await issueTestLink(email)
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realClaim = UserTokenRepository.prototype.claimOnce
     /**
      * Stands in for `claimOnce`: it claims, then switches the mode to `full` before the account is resolved.
@@ -941,7 +941,7 @@ describe('POST /auth/link/verify', () => {
         postVerifyWithEmail(token, user.email),
       ])
 
-      expect(swapped?.status).toBe(400)
+      expect(swapped.status).toBe(400)
       expect(matched.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
         200, 400,
       ])

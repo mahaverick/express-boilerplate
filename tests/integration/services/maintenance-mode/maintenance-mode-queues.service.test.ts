@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Queue } from 'bullmq'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { logger } from '@/services/logger.service'
 import {
   dedupeSchedulerJobs,
@@ -34,7 +34,6 @@ import { resetMaintenanceMode, storeMaintenanceMode } from '../../../helpers/mai
 import { waitUntil } from '../../../helpers/timing'
 
 const NOW = new Date('2026-10-06T10:00:30.000Z')
-// eslint-disable-next-line unicorn/no-null -- the contract uses null for "none"
 const NONE = null
 
 /**

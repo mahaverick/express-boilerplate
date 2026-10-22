@@ -3,7 +3,7 @@
  * `requireAuth` would have set, no database, no token.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { REAUTH_REQUIRED_CODE, STEP_UP_MAX_AGE_MS } from '@/constants/auth.constants'
 import { HttpError } from '@/errors/http-error'
 import { requireRecentAuth } from '@/middlewares/auth.middleware'

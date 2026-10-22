@@ -4,7 +4,7 @@
  * wrong key count or types), each as the one `InvalidCursorError`.
  */
 import { createHmac } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { z } from 'zod'
 import { cursorSecret } from '@/configs/env.config'
 import { CURSOR_INVALID_CODE, InvalidCursorError } from '@/errors/list-errors'

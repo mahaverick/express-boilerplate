@@ -45,7 +45,6 @@ export function createPasskeyProviderLookup(data: unknown): (aaguid: string) => 
    * @returns The data URI, or null.
    */
   const icon = (index: number | null): string | null => {
-    // eslint-disable-next-line unicorn/no-null -- the API's "no icon" value
     if (index === null) return null
     const uri = parsed.icons[index]
     if (uri === undefined)
@@ -62,7 +61,6 @@ export function createPasskeyProviderLookup(data: unknown): (aaguid: string) => 
   }
   return (aaguid) => {
     const entry = entries.get(aaguid.toLowerCase())
-    // eslint-disable-next-line unicorn/no-null -- the API's "no icon" value
     return entry ?? { name: 'Passkey', iconLight: null, iconDark: null }
   }
 }

@@ -3,7 +3,7 @@
  * both parts, escaping in the HTML part only, a subject with no token in it,
  * and tracking metadata that stores no link and never resends.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   renderStepUpLinkTemplate,
   STEP_UP_LINK_TEMPLATE_KEY,
@@ -50,7 +50,6 @@ describe('renderStepUpLinkTemplate', () => {
     expect(STEP_UP_LINK_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
       previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
-      // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     })
   })

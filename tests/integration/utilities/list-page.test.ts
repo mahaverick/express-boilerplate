@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { and, inArray, like, sql } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import { tenantModel } from '@/database/models/tenant.model'
 import { db } from '@/services/database.service'
 import { defineList, listPage, textSort } from '@/utilities/list-page.utilities'

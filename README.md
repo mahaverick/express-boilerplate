@@ -19,8 +19,9 @@ what is left to you.
 
 ## Requirements
 
-- Node.js >= 24 (pinned in [`.nvmrc`](.nvmrc)). `devEngines.runtime` in
-  `package.json` makes `pnpm install` refuse an older Node.
+- Node.js >= 24 (pinned in [`.node-version`](.node-version)).
+  `devEngines.runtime` in `package.json` makes `pnpm install` refuse an older
+  Node.
 - [pnpm](https://pnpm.io) 12.4.1, pinned by `packageManager` in
   `package.json`. Use pnpm only. Node 25 and later do not bundle Corepack, so
   install it first: `npm i -g corepack@0.36.0 && corepack enable`.
@@ -175,14 +176,15 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | Script                              | What it does                                                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.        |
-| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias`, and copies the migrations into `dist/database/`.       |
+| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias` on `tsconfig.build.json`, and copies the migrations.    |
 | `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                           |
-| `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).                        |
-| `pnpm lint:fix`                     | `eslint . --fix`.                                                                                   |
+| `pnpm lint`                         | `vp check` (Oxlint, Oxfmt), the untyped ESLint, then `tsc --noEmit` (`tsconfig.json`).              |
+| `pnpm lint:fix`                     | `vp check --fix`, then `eslint . --fix`.                                                            |
+| `pnpm typecheck`                    | `tsc --noEmit` over `src/`, `tests/` and `drizzle.config.ts` (`tsconfig.json`).                     |
 | `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                               |
 | `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                       |
-| `pnpm format`                       | `prettier --write .` over the whole repo.                                                           |
-| `pnpm format:check`                 | `prettier --check .`.                                                                               |
+| `pnpm format`                       | `vp fmt .` (Oxfmt) over the whole repo.                                                             |
+| `pnpm format:check`                 | `vp fmt --check .`.                                                                                 |
 | `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                     |
 | `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                     |
 | `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                             |
@@ -193,13 +195,16 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).              |
 | `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).      |
 | `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags).         |
-| `pnpm test`                         | `vitest run`. Needs the compose stack.                                                              |
-| `pnpm test:unit`                    | Every test except `tests/integration/**`, with no global setup; runs with Docker down.              |
-| `pnpm test:watch`                   | `vitest watch`.                                                                                     |
-| `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% on lines, functions, branches and statements.                 |
+| `pnpm test`                         | `vp test run`: both Vitest projects. Needs the compose stack.                                       |
+| `pnpm test:unit`                    | The `unit` project: every test but `tests/integration/**`, no global setup; runs with Docker down.  |
+| `pnpm test:integration`             | The `integration` project: `tests/integration/**`, with the per-worker databases. Needs the stack.  |
+| `pnpm test:watch`                   | `vp test watch`.                                                                                    |
+| `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                |
+| `pnpm gate`                         | The pre-push gate: lint, docs, knip, domain terms, coverage, build. Needs the compose stack.        |
+| `pnpm push [args]`                  | Runs `pnpm gate`, then `git push --no-verify` with your arguments.                                  |
 | `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`). |
 | `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
-| `pnpm prepare`                      | Installs the husky git hooks; `pnpm install` runs it.                                               |
+| `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                 |
 
 `pnpm platform:grant -- <email> <role>` gives the account at an address a role
 (`owner` to `viewer`) in the platform tenant, audited as

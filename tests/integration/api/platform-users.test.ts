@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -155,7 +155,6 @@ describe('GET /api/v1/platform/users/:id', () => {
       email: user.email,
       firstName: 'Ada',
       authProviders: ['email'],
-      // eslint-disable-next-line unicorn/no-null -- JSON null: not staff
       platformRole: null,
       membershipCount: 1,
       memberships: [{ tenantId: tenant.id, tenantName: 'Analytical Engines', role: 'owner' }],

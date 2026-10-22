@@ -104,7 +104,8 @@ export async function platformRoleOf(
   response: Response
 ): Promise<MembershipRole | null> {
   const earlier = (response as Partial<Response>).locals?.[PLATFORM_ROLE_LOCAL] as
-    PlatformRoleRead | undefined
+    | PlatformRoleRead
+    | undefined
   if (earlier?.userId === userId) return earlier.role
   return getPlatformMembership(userId)
 }

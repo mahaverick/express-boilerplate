@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { Job, type Queue, type Worker } from 'bullmq'
-import { expect, type MockInstance } from 'vitest'
+import { expect, type MockInstance } from 'vite-plus/test'
 import { emailQueueFor, type EmailJobData } from '@/jobs/email.job'
 import { addJob } from '@/services/queue.service'
 import {

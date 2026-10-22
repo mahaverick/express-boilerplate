@@ -2,7 +2,7 @@
  * @file The shared auth body pieces: the `app` a mailed link or OAuth
  * redirect opens, and the normalised email.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { emailSchema, frontendAppSchema } from '@/validators/auth.validators'
 
 describe('frontendAppSchema', () => {

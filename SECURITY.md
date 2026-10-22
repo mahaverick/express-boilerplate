@@ -71,7 +71,7 @@ link's address holds (`verifySignInLink`):
 - **Every dead link gets one answer.** An unknown, used, expired, revoked or
   malformed link, a deactivated account, an Apex link to an account that is not
   staff and a mismatched `email` all answer `400 LINK_INVALID`, `This link has
-expired or was already used.` It is a 400, never a 401, because the clients
+  expired or was already used.` It is a 400, never a 401, because the clients
   sign out on a 401.
 - **One presentation is one attempt.** The claim spends the row before its
   expiry is judged, so of two concurrent verifies of one link exactly one gets
@@ -618,7 +618,7 @@ registered address to a tenant directly
   `INVITATION_RECIPIENT_DAILY_LIMIT` (default 10) invitation mails to one address
   in 24 hours across every tenant, of which one tenant may send 3
   (`src/services/invitation-recipient-limit.service.ts`); past either, `429
-RATE_LIMITED`. The recipient ceiling fails open when Redis does not answer.
+  RATE_LIMITED`. The recipient ceiling fails open when Redis does not answer.
 
 ### Mail at rest
 

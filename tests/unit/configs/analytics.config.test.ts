@@ -3,7 +3,7 @@
  * posthogAppHost, isFlagsEnabled and posthogFlagUrl, which are pure
  * functions of the environment slice they are given.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   isAnalyticsEnabled,
   isErrorTrackingEnabled,

@@ -16,38 +16,82 @@ for unit tests ([DATABASE.md](DATABASE.md#the-test-database)).
 Run what CI runs:
 
 ```bash
-pnpm lint            # eslint + tsc --noEmit against tsconfig.typecheck.json
+pnpm lint            # vp check (Oxlint + Oxfmt), the untyped ESLint, tsc --noEmit
 pnpm lint:docs       # history phrasing, broken links and anchors in the docs
-pnpm format:check    # prettier over the repo, minus .prettierignore
 pnpm knip            # unused files, exports, types and dependencies
 pnpm test:coverage   # vitest, gated at 80% lines/functions/branches/statements
-pnpm build           # tsc + tsc-alias
+pnpm build           # tsc + tsc-alias against tsconfig.build.json
 ```
 
-All six must exit 0; run `pnpm format` if `format:check` does not.
-`pnpm lint` type-checks once, against `tsconfig.typecheck.json`, which extends
-`tsconfig.json` and widens its `include` to `tests/` and `drizzle.config.ts`.
+All five must exit 0, or run `pnpm gate`, which runs them all. `pnpm lint`
+fails on unformatted files; `pnpm format` fixes them.
+Oxlint runs every lint rule it can; ESLint runs only the rules Oxlint can't
+yet, listed with their reasons in [docs/lint-deferred.md](docs/lint-deferred.md).
+`pnpm lint` type-checks once, against `tsconfig.json`, which extends
+`tsconfig.build.json` and widens its `include` to `tests/` and
+`drizzle.config.ts`; `pnpm typecheck` runs that step alone.
 The two configs stay separate: see [CLAUDE.md](CLAUDE.md#code-conventions),
 which also holds the code conventions.
 
-## Git hooks (husky)
+## Tooling
 
-Hooks install with `pnpm install` (the `prepare` script). Commit normally; do
-not reach for `--no-verify` on a routine commit.
+[Vite+](https://viteplus.dev) (`vite-plus`, pinned exactly in `package.json`)
+runs the toolchain through `vp`; the `pnpm` scripts wrap it.
 
-- **`pre-commit`** checks that the lockfile is not stale, runs `lint-staged`
-  (eslint --fix and prettier on staged `src/` and `tests/` TypeScript, prettier
-  on staged JSON, JSONC and Markdown), runs `vitest run --changed HEAD` against
-  `vitest.unit.config.ts`, and regenerates and stages `.env.example` when
-  `env.config.ts` is staged. The unit config excludes `tests/integration/**`
-  and skips the database setup, so the hook runs with Docker down: a hook that
-  fails whenever Docker is down gets bypassed with `--no-verify` for good.
-  ESLint runs type-aware here, which is what catches floating and misused
-  promises; keep it in the hook.
+- **Lint:** Oxlint (type-aware, through `oxlint-tsgolint`) with its rules in
+  `vite.config.ts`. The leftover ESLint in `eslint.config.mjs` runs only what
+  Oxlint can't yet ([docs/lint-deferred.md](docs/lint-deferred.md)). `tsc
+  --noEmit` stays the type checker.
+- **Format:** Oxfmt (`pnpm format`, `pnpm format:check`). In VS Code, install
+  the Oxc extension (`oxc.oxc-vscode`); the devcontainer does.
+- **Tests:** `vp test` runs Vitest with the `unit` and `integration` projects.
+- **Hooks and push:** see [Git hooks](#git-hooks-vite). `pnpm gate` runs the
+  full local gate; `pnpm push` runs it, then pushes.
+- **Existing clone:** run `git config --unset core.hooksPath && pnpm prepare`
+  once ([Existing clones](#existing-clones)).
+
+## Git hooks (Vite+)
+
+Hooks live in `.vite-hooks/` and install with `pnpm install` (the `prepare`
+script runs `vp config`). Commit normally; do not reach for `--no-verify` on a
+routine commit.
+
+- **`pre-commit`** checks that the lockfile is not stale, runs `vp staged`
+  (the `staged` block in `vite.config.ts`: `vp check --fix` and `eslint --fix`
+  on staged `src/` and `tests/` TypeScript, `vp fmt` on staged JSON, JSONC and
+  Markdown), runs `vp test run --changed HEAD` on the `unit` project, and
+  regenerates and stages `.env.example` when `env.config.ts` is staged. The
+  `unit` project excludes `tests/integration/**` and skips the database setup,
+  so this hook runs with Docker down. Oxlint runs type-aware here
+  (it catches floating and misused promises); ESLint runs untyped. Keep both in
+  the hook.
 - **`commit-msg`** runs `commitlint` ([Commits](#commits)). `pnpm commit` opens
   an interactive prompt.
-- **`pre-push`** runs `pnpm lint` and `pnpm test:unit`, with no Docker needed.
-  Integration tests and the coverage gate run in CI, which `main` requires.
+- **`pre-push`** runs `pnpm gate` (`scripts/pre-push-gate.sh`), which mirrors
+  CI's `lint` and `test` jobs minus the audits: `pnpm lint`, `pnpm lint:docs`,
+  `pnpm knip`, the domain-terms check, `pnpm test:coverage` (unit and
+  integration), `pnpm build`, and a check that `.env.example` is current. It
+  needs the compose stack (`docker compose up -d postgres redis mailpit`) and
+  checks it first, so a stopped stack fails in about 2 s.
+
+**Push with `pnpm push`.** It takes `git push`'s arguments
+(`pnpm push origin HEAD`), runs the gate, and pushes only when the gate
+passes, with `--no-verify` so the gate does not run twice. A long pre-push
+hook can outlast the SSH connection and drop the push, and `git push` then
+reports a misleading exit code; `pnpm push` opens the connection only after
+the gate.
+
+### Existing clones
+
+A clone made while the hooks were husky's keeps `core.hooksPath=.husky/_`.
+`vp config` leaves a set `core.hooksPath` alone, so no hook runs, and
+`pnpm install` prints a warning. Fix it once:
+
+```bash
+git config --unset core.hooksPath && pnpm prepare
+```
+
+`pnpm install` alone skips `prepare` when the dependencies are up to date.
 
 ## Commits
 
@@ -104,7 +148,7 @@ These move together, or a gate below catches the one you missed:
    [ARCHITECTURE.md](ARCHITECTURE.md#environment-variables) from the schema,
    never by hand. `pnpm --silent env:table` prints it (`renderEnvTable()` in
    `src/scripts/generate-env-example.ts`). Paste its output over the table,
-   then run `pnpm exec prettier --write ARCHITECTURE.md`.
+   then run `pnpm exec vp fmt ARCHITECTURE.md`.
    `tests/unit/architecture-env-table.test.ts` compares the committed table
    with that output row for row, ignoring column padding.
 4. If the tests need a value, add it to `.env.test`.
@@ -126,8 +170,8 @@ that makes them required, and what runs after they pass on `main`, are in
 
 **`lint`** needs no services:
 
-- `pnpm lint`, `pnpm format:check` (the whole repo, `prettier --check .` minus
-  `.prettierignore`), `pnpm lint:docs` (no history phrasing in the Markdown or
+- `pnpm lint` (`vp check`: Oxlint and Oxfmt over the whole repo minus the
+  ignore patterns, then the untyped ESLint and `tsc --noEmit`), `pnpm lint:docs` (no history phrasing in the Markdown or
   in `#` comments of config files, no broken relative link or anchor, no code
   citing an upper-case `.md` file the repo root lacks) and `pnpm knip` (answer a
   finding as [CLAUDE.md](CLAUDE.md#unused-code-knip) describes).
@@ -219,13 +263,13 @@ runs monthly, before 6am on the first day.
   devcontainer image), wait for a human.
 - Vulnerability fixes open immediately, outside the schedule and the
   release-age wait, labelled `security`. A fixed version younger than 3 days
-  also needs an entry in `minimumReleaseAgeExclude`, or CI's frozen install
-  refuses it; delete that entry once the version is 3 days old.
+  waits: there is no exclude list, and a frozen install refuses a younger
+  version. Merge once it is 3 days old.
 - GitHub Actions are pinned to commit SHAs, and Renovate keeps the pins
   current.
 - TypeScript is held `<6.1.0` (see [CLAUDE.md](CLAUDE.md#versions)), and every
-  Node version pin (the docker `node` image, `.nvmrc`, `actions/setup-node`'s
-  `node-version:`, the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node`
+  Node version pin (the docker `node` image, `.node-version`, `actions/setup-node`'s
+  `node-version:` in `pr-title.yml`, the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node`
   tag) is held `<25`. Lift these deliberately, not by merging a Renovate PR, and
   bump `package.json`'s `engines.node` and `devEngines.runtime.version` by hand
   alongside: Renovate does not touch those `>=` ranges.
@@ -254,10 +298,8 @@ that adds it. The file's own comments carry the detail.
   a prebuilt binary for the host platform.
 - **`minimumReleaseAge: 4320`**: pnpm refuses any version published less than
   3 days (4320 minutes) ago, the window `renovate.json` also waits. A frozen
-  install checks every lockfile entry against it. An exception goes under a
-  `minimumReleaseAgeExclude` key, one `name@version` per entry, needed only
-  until that version is 3 days old; delete the entry then, and the key itself
-  once no exception remains.
+  install checks every lockfile entry against it. This repo keeps no
+  `minimumReleaseAgeExclude` list: wait out the 3 days.
 - **`overrides`**: patched versions of transitive dependencies whose parents
   have not taken them yet, one entry per advisory line: `ip-address` (via
   `express-rate-limit`, the only production one), `source-map-js`,

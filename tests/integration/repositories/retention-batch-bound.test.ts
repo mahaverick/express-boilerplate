@@ -9,7 +9,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { sql as drizzleSql } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
 import { EmailEventRepository } from '@/repositories/email-event.repository'

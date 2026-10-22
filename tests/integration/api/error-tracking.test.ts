@@ -16,7 +16,7 @@ import http from 'node:http'
 import net from 'node:net'
 import type { AddressInfo } from 'node:net'
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 
 const target = vi.hoisted((): { host: string; projectKey: string | undefined } => ({
   host: 'http://127.0.0.1:1',
@@ -133,12 +133,12 @@ function probeApp(): express.Express {
     await Promise.resolve()
     const kind = String(request_.params.kind)
     // The non-Error throws below are the case under test.
-    /* eslint-disable @typescript-eslint/only-throw-error, unicorn/no-null -- a falsy throw is the case under test */
+    /* oxlint-disable typescript/only-throw-error -- a falsy throw is the case under test */
     if (kind === 'string') throw 'boom'
     if (kind === 'null') throw null
     if (kind === 'object') throw { message: 'x', email: 'a@b.example' }
     throw Object.create(null)
-    /* eslint-enable @typescript-eslint/only-throw-error, unicorn/no-null */
+    /* oxlint-enable typescript/only-throw-error */
   })
   // Fails after the client's socket has closed (with `waitForClose=1`): with an abort error (`reset`) or any other (`plain`).
   router.get('/abort/:kind', async (request_: Request) => {

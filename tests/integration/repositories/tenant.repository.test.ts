@@ -13,7 +13,7 @@
  * settings row a real caller could never produce.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'

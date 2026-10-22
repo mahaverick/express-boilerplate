@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { AuditLog } from '@/database/models/audit-log.model'
 import { toAuditEntry, toPlatformAuditEntry } from '@/presenters/audit.presenter'
 
@@ -42,7 +42,6 @@ describe('toAuditEntry', () => {
   it('names an actor with no first or last name by their email', () => {
     const entry = toAuditEntry({
       entry: base,
-      // eslint-disable-next-line unicorn/no-null -- the users columns are nullable
       actor: { id: 'user-1', email: 'anon@example.test', firstName: null, lastName: '' },
       tenant,
     })
@@ -54,16 +53,12 @@ describe('toAuditEntry', () => {
     const system = {
       ...base,
       actorKind: 'system',
-      // eslint-disable-next-line unicorn/no-null -- a system entry has no actor
       actorUserId: null,
       access: 'system',
-      // eslint-disable-next-line unicorn/no-null -- no target
       targetType: null,
-      // eslint-disable-next-line unicorn/no-null -- no target
       targetId: null,
     } as unknown as AuditLog
 
-    // eslint-disable-next-line unicorn/no-null -- the left join found no user
     const entry = toAuditEntry({ entry: system, actor: null, tenant })
 
     expect(entry.actor).toBeNull()
@@ -73,7 +68,6 @@ describe('toAuditEntry', () => {
 
 describe('toPlatformAuditEntry', () => {
   it('adds the tenant', () => {
-    // eslint-disable-next-line unicorn/no-null -- a system entry has no actor
     const entry = toPlatformAuditEntry({ entry: base, actor: null, tenant })
 
     expect(entry.tenant).toEqual(tenant)

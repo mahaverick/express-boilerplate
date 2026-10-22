@@ -3,10 +3,9 @@
  * characters, a non-negative integer version, and a bounded confirm. Which
  * fields a change needs is the service's rule, not this schema's.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { changeMaintenanceModeBody } from '@/validators/maintenance-mode.validators'
 
-// eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "clear"
 const NONE = null
 
 describe('changeMaintenanceModeBody', () => {

@@ -4,7 +4,7 @@
  * rather than failing the insert.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { EmailEventRepository } from '@/repositories/email-event.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { sql } from '@/services/database.service'

@@ -5,7 +5,7 @@
  * into and out of timing out is logged once. Fake timers; the checks are
  * stand-ins, so nothing touches Postgres or Redis.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { READINESS_CHECK_DEADLINE_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'
 import { createReadinessProbe } from '@/services/readiness.service'

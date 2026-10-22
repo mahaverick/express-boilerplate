@@ -13,7 +13,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { createClient, type RedisClientType } from 'redis'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { Notification } from '@/database/models/notification.model'
 import { countStreams, registerStream, resetLifecycleForTests } from '@/services/lifecycle.service'
 import * as loggerModule from '@/services/logger.service'

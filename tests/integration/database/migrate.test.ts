@@ -2,7 +2,7 @@
  * @file The migrations ran in the main process before this file loaded
  * (`tests/helpers/global-setup.ts`). These tests assert what they produced.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { runMigrations } from '@/database/migrate'
 import { sql } from '@/services/database.service'
 

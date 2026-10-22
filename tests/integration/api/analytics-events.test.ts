@@ -15,7 +15,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Express } from 'express'
 import type { Test } from 'supertest'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 
 const capture = await vi.hoisted(async () => {
   const { HTTP_INSTRUMENTATION_CONFIG } = await import('@/observability/tracing')
@@ -67,7 +67,6 @@ type BatchEvent = FakePosthog['batches'][number][number]
 const PROBE_FIRST_NAME = 'Pii'
 const PROBE_LAST_NAME = 'Probe'
 const HEX_16 = /^[\da-f]{16}$/
-// eslint-disable-next-line unicorn/no-null -- JSON null, as the event carries it for "not staff"
 const NOT_STAFF = null
 // The longest backoff (600 s) plus the lease: past it, every leased row is claimable again.
 const PAST_LEASE_AND_BACKOFF_MS = (ANALYTICS_LEASE_SECONDS + 600 + 1) * 1000

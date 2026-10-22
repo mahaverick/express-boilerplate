@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv, type Env } from '@/configs/env.config'
 import {
   RATE_LIMITED_CODE,
@@ -71,9 +71,7 @@ function buildAppBehindAsUser(limiter: RequestHandler): Express {
       thisRequest.user = {
         id: userId,
         email: 'stub@example.test',
-        // eslint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
         firstName: null,
-        // eslint-disable-next-line unicorn/no-null -- see comment above.
         lastName: null,
       }
     }

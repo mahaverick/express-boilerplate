@@ -4,7 +4,7 @@
  * here does not compile, and the links are built by the same functions the
  * real flows call, then rendered through the template that carries them.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { buildInvitationAcceptUrl } from '@/services/frontend-links.service'
 import {
@@ -177,12 +177,7 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
       templateKey: 'welcome',
       variables: {
         firstName: 'Ada',
-        signInUrl: buildSignInLinkUrl(
-          RAW,
-          // eslint-disable-next-line unicorn/no-null -- a row with no stored redirect
-          { email: EMAIL, app: 'web', redirect: null },
-          'welcome'
-        ),
+        signInUrl: buildSignInLinkUrl(RAW, { email: EMAIL, app: 'web', redirect: null }, 'welcome'),
         expiresInMinutes: '15',
         expiresAt: '15:42 UTC on 20 October 2026',
         appName: 'App',
@@ -278,7 +273,6 @@ describe('links we send', () => {
   })
 
   it('names the welcome mail as the campaign of a welcome link', () => {
-    // eslint-disable-next-line unicorn/no-null -- a row with no stored redirect
     const row = { email: EMAIL, app: 'web' as const, redirect: null }
     expect(new URL(buildSignInLinkUrl(RAW, row, 'welcome')).searchParams.get('utm_campaign')).toBe(
       'welcome'

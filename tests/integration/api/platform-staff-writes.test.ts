@@ -4,7 +4,7 @@
  * `targetId` filter, which the Apex History cards read.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'

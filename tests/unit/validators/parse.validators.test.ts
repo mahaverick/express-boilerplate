@@ -6,7 +6,7 @@
  * copy zod's own messages are replaced with, so a schema that sets no message
  * still answers a person in plain words.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { z } from 'zod'
 import { HttpError } from '@/errors/http-error'
 import { parseBody } from '@/validators/parse.validators'
@@ -65,18 +65,18 @@ describe('parseBody', () => {
   })
 })
 
-describe("zod's default messages", () => {
-  /**
-   * The field messages a parse answers for one field and one input.
-   */
-  function fieldMessages(field: z.ZodType, input: unknown): string[] | undefined {
-    const errors = captureRejection(z.object({ field }), { field: input }).errors as Record<
-      string,
-      string[]
-    >
-    return errors.field
-  }
+/**
+ * The field messages a parse answers for one field and one input.
+ */
+function fieldMessages(field: z.ZodType, input: unknown): string[] | undefined {
+  const errors = captureRejection(z.object({ field }), { field: input }).errors as Record<
+    string,
+    string[]
+  >
+  return errors.field
+}
 
+describe("zod's default messages", () => {
   it.each([
     ['a missing value', z.string(), undefined, 'Enter a value.'],
     ['text where a number goes', z.number(), 'ten', 'Enter a number.'],

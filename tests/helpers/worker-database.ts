@@ -10,7 +10,7 @@
 /**
  * How many per-worker test databases exist, all created and migrated once,
  * up front, by `tests/helpers/global-setup.ts`, before any worker starts.
- * `vitest.config.ts` imports this constant for `maxWorkers` rather than
+ * `vite.config.ts` imports this constant for `maxWorkers` rather than
  * repeating the number, so the two values cannot drift apart — a worker
  * assigned a `VITEST_POOL_ID` with no database provisioned for it would
  * otherwise fail as a bare connection error, with nothing pointing at

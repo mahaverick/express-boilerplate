@@ -5,7 +5,7 @@
  * `flag_gate_no_tenant` without evaluating, and the handler carries its mark.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { HttpError } from '@/errors/http-error'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import { evaluateForRequest } from '@/middlewares/flag-context.middleware'
@@ -24,7 +24,6 @@ const PRINCIPAL: RequestPrincipal = {
   isPlatformTenant: false,
   role: 'viewer',
   memberRole: 'viewer',
-  // eslint-disable-next-line unicorn/no-null -- the principal's contract is `MembershipRole | null`
   platformRole: null,
   access: 'member',
 }

@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
@@ -109,16 +109,16 @@ describe('updatePreferences', () => {
       const [first, second] = await updates
       // A refusal shows its SQLSTATE (40P01 for a deadlock), the driver error or the query error's cause.
       const outcomes = [first, second].map((result) =>
-        result?.status === 'rejected'
+        result.status === 'rejected'
           ? String(
               (result.reason as { code?: unknown; cause?: { code?: unknown } }).cause?.code ??
                 (result.reason as { code?: unknown }).code ??
                 result.reason
             )
-          : result?.status
+          : result.status
       )
       expect(outcomes).toEqual(['fulfilled', 'fulfilled'])
-      if (first?.status !== 'fulfilled' || second?.status !== 'fulfilled') return
+      if (first.status !== 'fulfilled' || second.status !== 'fulfilled') return
       expect(first.value.map((row) => row.notificationType)).toEqual([
         'tenant_invitation',
         'maintenance_mode_changed',

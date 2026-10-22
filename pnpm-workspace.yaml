@@ -26,9 +26,10 @@ minimumReleaseAge: 4320
 # them yet. Each entry names the advisory it clears; remove it once every
 # parent resolves a patched version on its own (`pnpm why <name>`).
 overrides:
-  # GHSA-h3mg-xc3c-68pw, GHSA-j6r3-76f7-8jcv: via express-rate-limit, which
-  # calls only ipKeyGenerator (never isInSubnet). Production dependency.
-  ip-address@<10.7.1: ^10.7.1
+  # GHSA-h3mg-xc3c-68pw, GHSA-j6r3-76f7-8jcv, GHSA-rxp7-6hxx-x8q5: via
+  # express-rate-limit, which calls only ipKeyGenerator (never isInSubnet).
+  # Production dependency.
+  ip-address@<10.7.4: ^10.7.4
   # GHSA-68fv-2mgg-jv7q: via vitest > vite > postcss. Dev only.
   source-map-js@<1.2.2: ^1.2.2
   # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr: via
@@ -40,6 +41,8 @@ overrides:
   # GHSA-67mh-4wv8-2f99: drizzle-kit's legacy @esbuild-kit loader pins
   # esbuild 0.18; 0.25 is the version drizzle-kit itself already uses. Dev only.
   '@esbuild-kit/core-utils>esbuild': 0.25.12
+  vite@*: 'catalog:'
+  vitest@*: 'catalog:'
 auditConfig:
   ignoreGhsas:
     # braces <=3.0.3 stack exhaustion on deeply nested brace patterns; no
@@ -48,3 +51,16 @@ auditConfig:
     # passes none (default '/'), and braces parses patterns, never request
     # paths. Remove once braces ships a fix.
     - GHSA-vfj7-8cjw-p6xm
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vitest: 5.0.5
+  vite-plus: 1.3.0
+  '@vitest/coverage-v8': 5.0.5
+  '@vitest/ui': 5.0.5
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: '*'
+    vitest: '*'

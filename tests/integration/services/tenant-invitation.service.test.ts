@@ -5,7 +5,7 @@
  * `afterAll`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
@@ -767,7 +767,6 @@ describe('the resend cooldown', () => {
   })
 
   it('answers null for a row never stamped', () => {
-    // eslint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
     expect(resendAvailableAt(null, sentMs)).toBeNull()
   })
 
@@ -783,7 +782,6 @@ describe('the resend cooldown', () => {
 
     expect(resendCooldownError(lastSentAt, end).retryAfterSeconds).toBe(1)
     expect(resendCooldownError(lastSentAt, end + 60_000).retryAfterSeconds).toBe(1)
-    // eslint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
     expect(resendCooldownError(null, sentMs).retryAfterSeconds).toBe(1)
   })
 })

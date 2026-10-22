@@ -57,6 +57,23 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 }
 
 /**
+ * Register a repeatable job's schedule without waiting for it, logging a
+ * failure as a warning. Never rejects.
+ * @param register - The schedule's `ensure…Schedule` function.
+ * @param failureMessage - The warning logged when registering fails.
+ */
+async function registerInBackground(
+  register: () => Promise<void>,
+  failureMessage: string
+): Promise<void> {
+  try {
+    await register()
+  } catch (error) {
+    logger.warn(failureMessage, { error })
+  }
+}
+
+/**
  * Start the email, auth-email, notification and maintenance Workers, and the
  * analytics Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`
  * (feature flags need the project key, so `isFlagsEnabled()` implies the
@@ -95,7 +112,13 @@ export function startWorkers(): SupervisedWorkers {
   const retire = (workers: Worker[]): void => {
     const closing = closeLostWorkers(workers)
     retiring.add(closing)
-    void closing.finally(() => retiring.delete(closing))
+    void (async () => {
+      try {
+        await closing
+      } finally {
+        retiring.delete(closing)
+      }
+    })()
   }
 
   /**
@@ -121,23 +144,27 @@ export function startWorkers(): SupervisedWorkers {
         generation.workers.push(start())
       }
       // Each generation retries, so a Redis outage at boot can't leave the purge unscheduled.
-      void ensureRetentionSchedule().catch((error: unknown) => {
-        logger.warn('Registering the retention schedule failed', { error })
-      })
+      void registerInBackground(
+        ensureRetentionSchedule,
+        'Registering the retention schedule failed'
+      )
       if (isAnalyticsEnabled()) {
-        void ensureAnalyticsDrainSchedule().catch((error: unknown) => {
-          logger.warn('Registering the analytics drain schedule failed', { error })
-        })
+        void registerInBackground(
+          ensureAnalyticsDrainSchedule,
+          'Registering the analytics drain schedule failed'
+        )
       }
       if (isPosthogApiEnabled()) {
-        void ensureAnalyticsDeletionSchedule().catch((error: unknown) => {
-          logger.warn('Registering the PostHog deletion schedule failed', { error })
-        })
+        void registerInBackground(
+          ensureAnalyticsDeletionSchedule,
+          'Registering the PostHog deletion schedule failed'
+        )
       }
       if (isFlagsEnabled()) {
-        void ensureFlagDefinitionsSchedule().catch((error: unknown) => {
-          logger.warn('Registering the flag definitions schedule failed', { error })
-        })
+        void registerInBackground(
+          ensureFlagDefinitionsSchedule,
+          'Registering the flag definitions schedule failed'
+        )
       }
     } catch (error) {
       retire(generation.workers)

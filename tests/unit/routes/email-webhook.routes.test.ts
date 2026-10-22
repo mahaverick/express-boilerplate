@@ -4,7 +4,7 @@
  * an unknown provider's 404 and key buckets by arbitrary path text.
  */
 import type { RequestHandler, Router } from 'express'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { emailWebhookController } from '@/controllers/email-webhook.controller'
 import { requireEnabledEmailWebhookProvider } from '@/middlewares/email-webhook.middleware'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'

@@ -3,7 +3,7 @@
  * Drizzle table definitions, so the two cannot drift.
  */
 import { getTableConfig } from 'drizzle-orm/pg-core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { emailLogModel, TEMPLATE_KEY_MAX_LENGTH } from '@/database/models/email-log.model'
 import {
   emailMessageModel,

@@ -4,7 +4,7 @@
  * the shared list schema's tests.
  */
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   emailHealthQuerySchema,
   platformEmailListSchema,

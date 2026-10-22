@@ -7,7 +7,7 @@
  * this controller ever runs.
  */
 import type { NextFunction, Request, Response } from 'express'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { profileController } from '@/controllers/profile.controller'
 import { HttpError } from '@/errors/http-error'
 

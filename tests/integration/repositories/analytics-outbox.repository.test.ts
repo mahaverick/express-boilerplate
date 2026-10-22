@@ -6,7 +6,7 @@
  * outbox, because a claim takes any sendable row in the table.
  */
 import { eq } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import {
   analyticsOutboxModel,
   type NewAnalyticsOutboxRow,
@@ -15,7 +15,6 @@ import { analyticsOutboxRepository as repository } from '@/repositories/analytic
 import { db, sql } from '@/services/database.service'
 
 const NOW = new Date('2030-01-01T00:00:00.000Z')
-// eslint-disable-next-line unicorn/no-null -- the lease column's "never claimed" state, as postgres returns it
 const NONE = null
 const LEASE_SECONDS = 60
 const SECOND_MS = 1000

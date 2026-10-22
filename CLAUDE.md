@@ -373,9 +373,10 @@ points at the code or doc that holds the detail. How things work is in
   named `.test.ts`. Support code lives in `tests/helpers/` and
   `tests/fixtures/`.
 - **A test that reaches the real database or Redis lives under
-  `tests/integration/`, never `tests/unit/`.** The git hooks run unit tests
-  with Docker down, and `vitest.unit.config.ts` excludes by path only. Check
-  where a test's dependencies reach, not where its assertions live.
+  `tests/integration/`, never `tests/unit/`.** The pre-commit hook runs unit
+  tests with Docker down, and the `unit` project (`vite.config.ts`) excludes by path
+  only. Check where a test's dependencies reach, not where its assertions
+  live.
 - **HTTP tests use `request` or `agent` from `tests/helpers/request.ts`, never
   supertest directly** (lint enforces it). A hand-rolled test server calls
   `listen(0, '127.0.0.1')`: on macOS a `::` bind can take a port another
@@ -524,15 +525,20 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   in `@param`/`@returns`. Every other comment is a file JSDoc
   (`/** @file … */`) or a one-line `//` why, with no history;
   `local/comment-style` checks the form.
-- **Scope an eslint disable as narrowly as the rule allows,** and give a
+- **Scope a lint disable as narrowly as the rule allows, in the directive of
+  the tool that runs the rule:** `oxlint-disable` for a rule in
+  `vite.config.ts`, `eslint-disable` for one in `eslint.config.mjs`. Each tool
+  ignores the other's directives and fails on an unused one of its own. Give a
   scoped disable of a type-aware rule a comment on why the call site is safe.
 - **Don't import or "fix" `tests/fixtures/lint-cycle/` or
   `tests/fixtures/lint-zones/`.** They are committed violations that
   `tests/unit/lint-gates.test.ts` lints to prove each gate fires.
-- **Keep `tsconfig.json` and `tsconfig.typecheck.json` separate.** The build
-  config compiles `src/` with `rootDir: ./src`; widening its `include` to
-  `tests/` breaks the build with `TS6059`. The typecheck config is the wide one
-  lint uses.
+- **Keep `tsconfig.build.json` and `tsconfig.json` separate.**
+  `tsconfig.build.json` is the emit config: it compiles `src/` with
+  `rootDir: ./src`, and widening its `include` to `tests/` breaks the build
+  with `TS6059`. `tsconfig.json` is the wide `noEmit` config over `src/`,
+  `tests/` and `drizzle.config.ts`; `pnpm typecheck` and lint use it, and
+  tsgolint reads the nearest `tsconfig.json`.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`,** so
   `drizzle-kit` needs only `DATABASE_URL`
   ([DATABASE.md](DATABASE.md#drizzleconfigts-and-why-it-only-needs-database_url)).
@@ -540,10 +546,18 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   the CommonJS pino imported from ESM is never instrumented. After editing
   `otel-collector.yaml`, run `docker compose restart otel-collector`: it is
   bind-mounted, and `docker compose up -d` doesn't pick up the change.
-- **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm format:check`,
-  `pnpm knip`, `pnpm test:coverage` and `pnpm build` all exit 0**
-  ([CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr)). Don't drop
+- **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm knip`,
+  `pnpm test:coverage` and `pnpm build` all exit 0, or `pnpm gate` does**
+  ([CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr)). `pnpm gate`
+  runs all of them (the format check sits inside `pnpm lint`'s `vp check`),
+  and the pre-push hook runs `pnpm gate`. Don't drop
   type-aware lint from pre-commit to speed it up.
+- **Push with `pnpm push`, not `git push`.** It runs the gate first, then
+  `git push --no-verify`: a long pre-push hook can outlast the SSH connection
+  and drop the push behind a misleading exit code. A clone made while the
+  hooks were husky's keeps `core.hooksPath=.husky/_`, and `vp config` skips
+  it, so no hook runs; fix it once with
+  `git config --unset core.hooksPath && pnpm prepare`.
 - **Keep `ci.yml`'s concurrency group keyed on `github.event_name`, not
   `github.workflow`:** when `deploy.yml` calls `ci.yml`, `github.workflow` is
   the caller's name.
@@ -565,11 +579,11 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
 
 ## Versions
 
-- **Keep `typescript` within the `typescript` peer range of the
-  `typescript-eslint` version `package.json` pins:** `pnpm lint` depends on its
-  type-aware rules. Bump TypeScript past that range only once a
-  `typescript-eslint` release admits it, and lift the matching hold in
-  `renovate.json` with it.
+- **TypeScript stays below 6.1.** `tsc` 6 and typescript-eslint 8.70.1's parser
+  (used untyped by the leftover ESLint config) peer `typescript >=4.8.4 <6.1.0`.
+  Oxlint's type-aware engine bundles its own TS 7, so it does not constrain
+  this pin. `renovate.json` holds it; re-check the peer range of the
+  `typescript-eslint` version `package.json` pins before lifting the hold.
 - **Lift the TypeScript and Node holds in `renovate.json` by hand, never by
   merging a Renovate PR;** the steps are in
   [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy).

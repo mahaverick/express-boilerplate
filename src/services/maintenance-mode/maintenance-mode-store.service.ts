@@ -30,11 +30,8 @@ const RELOAD_MESSAGE = 'reload'
  */
 const UNKNOWN_SNAPSHOT: MaintenanceModeSnapshot = Object.freeze({
   mode: 'off',
-  // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
   message: null,
-  // eslint-disable-next-line unicorn/no-null -- as above
   since: null,
-  // eslint-disable-next-line unicorn/no-null -- as above
   changedAt: null,
   version: 0,
   known: false,
@@ -58,9 +55,7 @@ export function snapshotOf(row: MaintenanceModeStateRow): MaintenanceModeSnapsho
   const changedAt = row.changedAt.toISOString()
   return {
     mode: row.mode,
-    // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
     message: isOff ? null : row.message,
-    // eslint-disable-next-line unicorn/no-null -- as above
     since: isOff ? null : changedAt,
     changedAt,
     version: row.version,
@@ -146,7 +141,6 @@ export function createMaintenanceModeStore(
     isClosed: boolean
   } = {
     snapshot: UNKNOWN_SNAPSHOT,
-    // eslint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
     lastReloadError: null,
     subscriber: undefined,
     subscribing: undefined,
@@ -154,6 +148,13 @@ export function createMaintenanceModeStore(
     isStarted: false,
     isClosed: false,
   }
+
+  /**
+   * Reads `state.isClosed` afresh: TypeScript keeps a property narrowed
+   * across an `await`, so a direct read after one types as the value
+   * checked before it.
+   */
+  const isClosed = (): boolean => state.isClosed
 
   /**
    * Call every listener with the current snapshot, once the mode is known. A
@@ -179,15 +180,14 @@ export function createMaintenanceModeStore(
     if (state.isClosed) return
     try {
       const row = await read()
-      if (state.isClosed) return
+      if (isClosed()) return
       if (!state.snapshot.known || row.version > state.snapshot.version) {
         state.snapshot = snapshotOf(row)
       }
-      // eslint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
       state.lastReloadError = null
     } catch (error) {
       // A read that fails after stop() is shutdown noise: say nothing, notify no one.
-      if (state.isClosed) return
+      if (isClosed()) return
       // Once per failing streak: the backstop retries every interval.
       if (state.lastReloadError === null) {
         if (state.snapshot.known) {
@@ -222,7 +222,7 @@ export function createMaintenanceModeStore(
     })
     try {
       await client.connect()
-      if (state.isClosed || !client.isReady) throw new Error('Closed while connecting')
+      if (isClosed() || !client.isReady) throw new Error('Closed while connecting')
       await client.subscribe(maintenanceModeChannel(), () => {
         void reload()
       })
@@ -231,7 +231,7 @@ export function createMaintenanceModeStore(
     } catch (error) {
       if (state.subscriber === client) state.subscriber = undefined
       if (client.isOpen) client.destroy()
-      if (!state.isClosed) {
+      if (!isClosed()) {
         logger.warn('Maintenance-mode subscriber failed to start; the backstop keeps reloading', {
           error,
         })
@@ -259,7 +259,7 @@ export function createMaintenanceModeStore(
       if (state.isStarted || state.isClosed) return
       state.isStarted = true
       await reload()
-      if (state.isClosed) return
+      if (isClosed()) return
       void ensureSubscriber()
       state.timer = setInterval(() => {
         void reload()

@@ -3,7 +3,7 @@
  * longer than `LISTED_FLAG_KEY_MAX` is left out of both, and one warning per
  * snapshot names it. Redis and the snapshot store are mocks.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { LISTED_FLAG_KEY_MAX } from '@/constants/flags.constants'
 import { getFlagsStatus } from '@/services/flags/flag-counters.service'
 import { listableUnregisteredFlags } from '@/services/flags/flag-listing.service'
@@ -14,7 +14,6 @@ const store = vi.hoisted(() => ({ current: undefined as ParsedSnapshot | undefin
 
 vi.mock('@/services/flags/flag-snapshot.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/flags/flag-snapshot.service')>()
-  // eslint-disable-next-line unicorn/no-null -- the store answers null before a first load
   return { ...actual, getFlagSnapshot: () => store.current ?? null }
 })
 
@@ -24,7 +23,6 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
     ...actual,
     getRedis: () =>
       Promise.resolve({
-        // eslint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
         mGet: (keys: string[]) => Promise.resolve(keys.map(() => null)),
       }),
   }
@@ -66,7 +64,6 @@ describe('listableUnregisteredFlags', () => {
   })
 
   it('answers nothing without a snapshot', () => {
-    // eslint-disable-next-line unicorn/no-null -- the store answers null before a first load
     expect(listableUnregisteredFlags(null)).toEqual([])
   })
 

@@ -4,7 +4,7 @@
  * passes such an error through raw writes the parameters to the log.
  */
 import { inspect } from 'node:util'
-import type { MockInstance } from 'vitest'
+import type { MockInstance } from 'vite-plus/test'
 
 /**
  * The bound parameter a test must never find in a log payload: a sentinel

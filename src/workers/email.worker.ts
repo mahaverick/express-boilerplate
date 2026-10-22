@@ -95,7 +95,7 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
       jobId: job.id,
       templateKey,
     })
-    // eslint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
+    // oxlint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
     throw new Error(`Email job ${job.id} failed before sending, for template ${templateKey}`)
   }
   if (message === undefined) {

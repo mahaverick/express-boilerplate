@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import {
   INVITEE_DEACTIVATED_CODE,
@@ -102,7 +102,6 @@ describe('staff-created tenants', () => {
   async function createUser(isVerified = false): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
       email: `create-${randomUUID()}@example.test`,
-      // eslint-disable-next-line unicorn/no-null -- the column is nullable; null is unverified
       emailVerifiedAt: isVerified ? new Date() : null,
     })
     userIds.push(user.id)
@@ -163,9 +162,7 @@ describe('staff-created tenants', () => {
       ).toBe(true)
       expect(audit[1]?.metadata).toEqual({
         emailDomain: 'example.test',
-        // eslint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
         inviteeUserId: null,
-        // eslint-disable-next-line unicorn/no-null -- JSON null: no reason is asked at creation
         reason: null,
       })
     })
@@ -415,7 +412,6 @@ describe('staff-created tenants', () => {
         "This tenant is archived, so it can't get an owner invitation."
       )
 
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFind = TenantRepository.prototype.findByIdIncludingDeleted
       let calls = 0
       /**
@@ -429,7 +425,6 @@ describe('staff-created tenants', () => {
         calls += 1
         const found = await realFind.apply(this, arguments_)
         if (calls !== 1 || !found) return found
-        // eslint-disable-next-line unicorn/no-null -- the live row's deleted_at
         return { ...found, lifecycleState: 'active', deletedAt: null }
       }
       await withMutatedMethod(
@@ -505,7 +500,9 @@ describe('staff-created tenants', () => {
       )
 
       expect(response?.status).toBe(200)
-      expect((response?.body as { data: { emailSent: boolean } }).data.emailSent).toBe(false)
+      expect((response?.body as { data: { emailSent: boolean } } | undefined)?.data.emailSent).toBe(
+        false
+      )
       const pending = await sql<{ email: string }[]>`select email from tenant_invitations
         where tenant_id = ${tenantId} and accepted_at is null and revoked_at is null`
       expect(pending.map((row) => row.email)).toEqual([second])

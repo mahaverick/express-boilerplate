@@ -13,7 +13,7 @@ import path from 'node:path'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { dropScratchDatabase } from '../../helpers/scratch-database'
 import { baseDatabaseUrl } from '../../helpers/worker-database'
 

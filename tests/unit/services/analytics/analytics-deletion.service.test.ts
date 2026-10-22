@@ -8,7 +8,7 @@
  * PostHog are in
  * tests/integration/services/analytics/analytics-deletion.service.test.ts.
  */
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vite-plus/test'
 import { isPosthogApiEnabled } from '@/configs/analytics.config'
 import type { AnalyticsDeletionRow } from '@/database/models/analytics-deletion.model'
 import { AnalyticsDeletionRepository } from '@/repositories/analytics-deletion.repository'
@@ -34,7 +34,6 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * when the purge queued it, which the overdue check measures from.
  */
 function claimed(distinctId: string, createdAt: Date = NOW): AnalyticsDeletionRow {
-  // eslint-disable-next-line unicorn/no-null -- the column's "never failed" state
   return { distinctId, notBefore: NOW, attempts: 0, lastError: null, createdAt }
 }
 

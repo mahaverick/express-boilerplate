@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import type { EmailJobData } from '@/jobs/email.job'
 import { sql } from '@/services/database.service'
@@ -59,7 +59,6 @@ const REQUEST_ACCEPTED_BODY = {
   success: true,
   message: 'Check your inbox for a sign-in link.',
   statusCode: 202,
-  // eslint-disable-next-line unicorn/no-null -- the envelope's JSON null for "no data"
   data: null,
 }
 

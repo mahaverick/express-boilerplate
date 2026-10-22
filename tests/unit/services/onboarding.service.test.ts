@@ -3,7 +3,7 @@
  * precedence, the stuck boundary, optional and removed steps, and member
  * steps counting for the tenant once any active owner did them.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { OnboardingStep } from '@/constants/onboarding.constants'
 import type { OnboardingCompletion } from '@/database/models/onboarding-completion.model'
 import {
@@ -15,7 +15,6 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000
 const STARTED = new Date('2026-09-01T00:00:00.000Z')
 const OWNER = 'owner-1'
-// eslint-disable-next-line unicorn/no-null -- the columns' and the derived contract's "none"
 const NONE = null
 
 /**

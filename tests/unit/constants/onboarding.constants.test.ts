@@ -3,7 +3,7 @@
  * sets the CHECK constraints are built from, and the load-time assertion
  * every registry passes through.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   assertOnboardingRegistry,
   ONBOARDING_RANGES,

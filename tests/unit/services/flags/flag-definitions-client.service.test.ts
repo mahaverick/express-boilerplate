@@ -5,7 +5,7 @@
  * how each failure is classified. The host and keys come from a mocked
  * `getEnv()`, bound once the fake is listening.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { FLAG_DEFINITIONS_MAX_BYTES } from '@/constants/flags.constants'
 import { fetchFlagDefinitions } from '@/services/flags/flag-definitions-client.service'
 import { logger } from '@/services/logger.service'
@@ -16,7 +16,6 @@ import {
 } from '../../../helpers/fake-posthog'
 import { waitUntil } from '../../../helpers/timing'
 
-// eslint-disable-next-line unicorn/no-null -- the stored ETag's contract is null for none
 const NONE = null
 
 /**

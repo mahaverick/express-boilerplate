@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import express, { Router, type Express, type RequestHandler } from 'express'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import {
   classifyMaintenanceRoute,
   MAINTENANCE_ROUTE_RULES,

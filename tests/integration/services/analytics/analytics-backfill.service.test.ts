@@ -8,7 +8,7 @@
  * the same database, so assertions pick out this file's own.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { backfillTenantGroups } from '@/services/analytics/analytics-backfill.service'
 import { sql } from '@/services/database.service'
@@ -104,7 +104,6 @@ describe('backfillTenantGroups', () => {
     await insertTenant('active')
     await insertTenant('active')
     const calls = { count: 0 }
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the repository as `this`
     const realInsertMany = AnalyticsOutboxRepository.prototype.insertMany
 
     await withMutatedMethod(

@@ -4,7 +4,7 @@
  * configured frontend pass; any other Origin is refused 403.
  */
 import type { Request, Response } from 'express'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 
 const WEB_URL = 'https://app.example.com'
 const APEX_URL = 'https://admin.example.com/console'

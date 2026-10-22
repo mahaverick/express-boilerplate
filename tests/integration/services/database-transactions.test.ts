@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'

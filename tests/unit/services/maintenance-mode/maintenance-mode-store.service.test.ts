@@ -4,7 +4,7 @@
  * known mode on a later failure, the reload listeners, and the snapshot of
  * a row. Pub/sub, the backstop and a Redis outage are the integration tests'.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { MaintenanceMode } from '@/constants/maintenance-mode.constants'
 import type { MaintenanceModeStateRow } from '@/database/models/maintenance-mode-state.model'
 import { logger } from '@/services/logger.service'
@@ -16,7 +16,6 @@ import {
 import type { MaintenanceModeSnapshot } from '@/types/maintenance-mode'
 
 const CHANGED_AT = new Date('2026-10-06T10:42:00.000Z')
-// eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
 
 /**
@@ -26,9 +25,7 @@ function row(mode: MaintenanceMode, version: number): MaintenanceModeStateRow {
   return {
     id: 1,
     mode,
-    // eslint-disable-next-line unicorn/no-null -- the column is null while off
     message: mode === 'off' ? null : `message v${String(version)}`,
-    // eslint-disable-next-line unicorn/no-null -- no reason given
     reason: null,
     changedBy: 'user-1',
     changedAt: CHANGED_AT,

@@ -7,7 +7,7 @@
  * only, through a mocked `getEnv()`.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
 import {

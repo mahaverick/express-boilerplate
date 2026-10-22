@@ -7,7 +7,7 @@
  */
 import { context, INVALID_SPAN_CONTEXT, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
 import { requestContextStore } from '@/services/request-context.service'
 

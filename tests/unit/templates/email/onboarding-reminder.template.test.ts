@@ -2,7 +2,7 @@
  * @file Pure rendering — no database, no container, no I/O — so this
  * lives under tests/unit/, not tests/integration/.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   ONBOARDING_REMINDER_TEMPLATE_KEY,
   renderOnboardingReminderTemplate,

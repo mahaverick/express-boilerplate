@@ -3,7 +3,7 @@
  * stripped or refused, and `detectUnsupported` with one case per unsupported
  * construct.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import {
   FLAG_GROUP_PROPERTY_KEYS,
   FLAG_PERSON_PROPERTY_KEYS,
@@ -21,7 +21,6 @@ import {
 } from '@/validators/flag-definition.validators'
 
 const NOW = new Date('2026-10-05T12:00:00.000Z')
-// eslint-disable-next-line unicorn/no-null -- PostHog's JSON null
 const NONE = null
 
 const USER_ENTRY: FlagEntry = {

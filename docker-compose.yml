@@ -46,8 +46,10 @@ x-node-dev: &node-dev
 
 x-dev-env: &dev-env
   COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
-  # Every repo's `prepare` script runs husky, which has no git in here.
+  # Every repo's `prepare` script installs git hooks (husky or `vp config`),
+  # and there is no git in here.
   HUSKY: '0'
+  VP_GIT_HOOKS: '0'
 
 # What differs for the API inside the compose network: the infrastructure is
 # reached by service name on its container port, not on localhost's 5433,

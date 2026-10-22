@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { createApp as CreateApp } from '@/app'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import type { sql as SqlType } from '@/services/database.service'
@@ -245,7 +245,6 @@ describe('Google sign-in return target', () => {
   it('refuses an apex Google user demoted between the staff check and the session', async () => {
     const staff = await seedAccount('admin')
     const { AuthProviderRepository } = await import('@/repositories/auth-provider.repository')
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realCreate = AuthProviderRepository.prototype.create
     const demoted = { done: false }
     /**

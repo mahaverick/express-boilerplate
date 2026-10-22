@@ -3,7 +3,7 @@
  * parts, escaping in the HTML part only, and tracking metadata that stores
  * no link and never resends.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import type { PasskeySecurityVariables } from '@/templates/email/passkey-created.template'
 import {
   PASSKEY_DELETED_TEMPLATE_KEY,
@@ -55,7 +55,6 @@ describe('renderPasskeyDeletedTemplate', () => {
     expect(PASSKEY_DELETED_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
       previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-      // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     })
   })

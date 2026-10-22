@@ -27,11 +27,8 @@ export function fakeNotification(overrides: Partial<Notification> = {}): Notific
     type: 'tenant_invitation',
     title: 'You have an invitation',
     body: 'body',
-    // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt/dedupeKey are `T | null` columns.
     metadata: null,
-    // eslint-disable-next-line unicorn/no-null -- see above.
     readAt: null,
-    // eslint-disable-next-line unicorn/no-null -- see above.
     dedupeKey: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
@@ -54,7 +51,7 @@ export function notificationChannel(): string {
 export async function countSubscribers(client: RedisClientType): Promise<number> {
   const channel = notificationChannel()
   const counts = await client.pubSubNumSub(channel)
-  return Number(counts[channel] ?? 0)
+  return counts[channel] ?? 0
 }
 
 /**

@@ -12,7 +12,7 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
 import { startFakePosthog, type FakePosthog } from '../helpers/fake-posthog'
 
