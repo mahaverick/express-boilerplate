@@ -681,8 +681,77 @@
     "unicorn/require-proxy-trap-boolean-return",
     "unicorn/single-line-block-comment-style"
   ],
-  "off": [
-    "unicorn/no-null",
-    "typescript/unbound-method"
-  ]
+  "off": ["unicorn/no-null", "typescript/unbound-method", "jsdoc/require-property-type"],
+  "overrideOff": {
+    "**/*.ts, **/*.tsx, **/*.mts, **/*.cts": [
+      "eslint/constructor-super",
+      "eslint/getter-return",
+      "eslint/no-class-assign",
+      "eslint/no-const-assign",
+      "eslint/no-dupe-class-members",
+      "eslint/no-dupe-keys",
+      "eslint/no-func-assign",
+      "eslint/no-import-assign",
+      "eslint/no-new-native-nonconstructor",
+      "eslint/no-obj-calls",
+      "eslint/no-redeclare",
+      "eslint/no-setter-return",
+      "eslint/no-this-before-super",
+      "eslint/no-undef",
+      "eslint/no-unreachable",
+      "eslint/no-unsafe-negation",
+      "eslint/no-with"
+    ],
+    "**/*.js, **/*.mjs, **/*.cjs": [
+      "eslint/no-var",
+      "eslint/prefer-const",
+      "eslint/prefer-rest-params",
+      "eslint/prefer-spread"
+    ],
+    "**/*.mjs, scripts/**/*.d.mts, vite.config.ts, commitlint.config.js": [
+      "typescript/await-thenable",
+      "typescript/no-array-delete",
+      "typescript/no-base-to-string",
+      "typescript/no-deprecated",
+      "typescript/no-duplicate-type-constituents",
+      "typescript/no-floating-promises",
+      "typescript/no-for-in-array",
+      "typescript/no-implied-eval",
+      "typescript/no-meaningless-void-operator",
+      "typescript/no-misused-promises",
+      "typescript/no-redundant-type-constituents",
+      "typescript/no-unnecessary-boolean-literal-compare",
+      "typescript/no-unnecessary-condition",
+      "typescript/no-unnecessary-template-expression",
+      "typescript/no-unnecessary-type-assertion",
+      "typescript/no-unnecessary-type-conversion",
+      "typescript/no-unsafe-argument",
+      "typescript/no-unsafe-assignment",
+      "typescript/no-unsafe-call",
+      "typescript/no-unsafe-enum-comparison",
+      "typescript/no-unsafe-member-access",
+      "typescript/no-unsafe-return",
+      "typescript/no-unsafe-unary-minus",
+      "typescript/no-useless-default-assignment",
+      "typescript/only-throw-error",
+      "typescript/prefer-promise-reject-errors",
+      "typescript/prefer-regexp-exec",
+      "typescript/require-array-sort-compare",
+      "typescript/require-await",
+      "typescript/restrict-plus-operands",
+      "typescript/restrict-template-expressions"
+    ],
+    "src/services/errors/error-scrubber.service.ts": ["typescript/prefer-for-of"],
+    "src/services/platform-*.service.ts": ["eslint/no-restricted-imports"],
+    "src/configs/env.config.ts, src/services/logger.service.ts, src/index.ts, src/observability/tracing.ts": [
+      "eslint/no-restricted-properties"
+    ],
+    "scripts/history-patterns.mjs, scripts/comment-style.mjs, scripts/lint-docs.mjs, scripts/lint-docs.d.mts, scripts/vendor-passkey-aaguids.mjs, scripts/vendor-passkey-aaguids.d.mts": [
+      "eslint/no-restricted-properties",
+      "unicorn/prefer-string-replace-all"
+    ],
+    "tests/**/*.ts": ["eslint/no-restricted-properties"],
+    "tests/helpers/timing.ts": ["eslint/no-restricted-imports"],
+    "tests/unit/lint-docs.test.ts": ["eslint/no-useless-concat"]
+  }
 }

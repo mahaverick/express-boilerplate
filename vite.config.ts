@@ -77,7 +77,7 @@ const UNTYPED_FILES = ['**/*.mjs', 'scripts/**/*.d.mts', 'vite.config.ts', 'comm
 export default defineConfig({
   lint: {
     plugins: ['oxc', 'typescript', 'unicorn', 'promise', 'jsdoc', 'import', 'node', 'vitest'],
-    options: { typeAware: true, typeCheck: false },
+    options: { typeAware: true, typeCheck: false, denyWarnings: true },
     categories: { correctness: 'error' },
     env: { builtin: true, es2026: true, node: true },
     // tests/fixtures/** break the rules on purpose; lint-gates.test.ts lints them with `ignore: false`.
@@ -455,6 +455,8 @@ export default defineConfig({
       // Oxfmt owns these, as eslint-config-prettier did.
       'unicorn/number-literal-case': 'off',
       'eslint/no-unexpected-multiline': 'off',
+      // Off on origin/main: ESLint's kept jsdoc/no-types bans JSDoc types, so this would contradict it.
+      'jsdoc/require-property-type': 'off',
       /**
        * In the correctness category but never in origin/main, so outside the
        * migration's parity contract; each fires on code ESLint accepted
@@ -515,6 +517,7 @@ export default defineConfig({
           'typescript/no-floating-promises': 'off',
           'typescript/no-for-in-array': 'off',
           'typescript/no-implied-eval': 'off',
+          'typescript/no-meaningless-void-operator': 'off',
           'typescript/no-misused-promises': 'off',
           'typescript/no-redundant-type-constituents': 'off',
           'typescript/no-unnecessary-boolean-literal-compare': 'off',
@@ -529,6 +532,7 @@ export default defineConfig({
           'typescript/no-unsafe-member-access': 'off',
           'typescript/no-unsafe-return': 'off',
           'typescript/no-unsafe-unary-minus': 'off',
+          'typescript/no-useless-default-assignment': 'off',
           'typescript/only-throw-error': 'off',
           'typescript/prefer-promise-reject-errors': 'off',
           'typescript/prefer-regexp-exec': 'off',

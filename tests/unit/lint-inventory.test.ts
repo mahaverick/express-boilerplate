@@ -12,13 +12,15 @@ import { describe, expect, it } from 'vite-plus/test'
 
 /**
  * The audited rule lists. Oxlint names use the `plugin/rule` form; the
- * eslint and dropped lists keep their ESLint names.
+ * eslint and dropped lists keep their ESLint names. `overrideOff` maps each
+ * override's `files`, joined with ", ", to the rules it turns off.
  */
 interface LintInventory {
   oxlint: string[]
   eslint: string[]
   dropped: string[]
   off: string[]
+  overrideOff: Record<string, string[]>
 }
 
 /**
@@ -35,7 +37,10 @@ const inventory = JSON.parse(
  * The slice of vite.config.ts this file reads.
  */
 interface ViteConfigWithLint {
-  lint?: { rules?: Record<string, RuleValue> }
+  lint?: {
+    rules?: Record<string, RuleValue>
+    overrides?: { files: string[]; rules?: Record<string, RuleValue> }[]
+  }
 }
 
 /**
@@ -94,13 +99,39 @@ describe('lint inventory', () => {
     expect(extra, `oxlint rules enabled but not in the inventory: ${extra.join(', ')}`).toEqual([])
   })
 
-  it('turns off exactly the inventory off list', () => {
+  it('turns off every rule on the inventory off list', () => {
     const off = new Set(oxlintKeysAt(0))
     const missing = inventory.off.filter((rule) => !off.has(rule))
     expect(
       missing,
       `rules the inventory turns off but oxlint does not: ${missing.join(', ')}`
     ).toEqual([])
+  })
+
+  it('turns off in overrides exactly the rules the inventory lists', () => {
+    const actual: Record<string, string[]> = {}
+    for (const override of viteConfig.lint?.overrides ?? []) {
+      const off = Object.entries(override.rules ?? {})
+        .filter(([, value]) => severityOf(value) === 0)
+        .map(([rule]) => rule)
+      if (off.length === 0) continue
+      const key = override.files.join(', ')
+      actual[key] = [...(actual[key] ?? []), ...off]
+    }
+    const keys = new Set([...Object.keys(actual), ...Object.keys(inventory.overrideOff)])
+    const problems = [...keys].flatMap((key) => {
+      const expected = new Set(inventory.overrideOff[key])
+      const found = new Set(actual[key])
+      return [
+        ...[...found]
+          .filter((rule) => !expected.has(rule))
+          .map((rule) => `extra ${rule} in [${key}]`),
+        ...[...expected]
+          .filter((rule) => !found.has(rule))
+          .map((rule) => `missing ${rule} in [${key}]`),
+      ]
+    })
+    expect(problems, `override offs differ from the inventory: ${problems.join('; ')}`).toEqual([])
   })
 
   it('keeps every eslint-listed rule in eslint.config.mjs', async () => {
