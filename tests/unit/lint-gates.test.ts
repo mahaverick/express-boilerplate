@@ -644,4 +644,40 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       )
     })
   })
+
+  describe('raw SQL: sql.raw and .unsafe outside models', () => {
+    const rawSql = "import { sql } from 'drizzle-orm'\nexport const q = sql.raw('select 1')\n"
+
+    it('rejects sql.raw in a service', async () => {
+      const messages = await messagesFor('src/services/probe.service.ts', rawSql)
+      expect(messages.find((message) => message.ruleId === 'no-restricted-syntax')?.severity).toBe(
+        2
+      )
+    })
+
+    it('rejects .unsafe( in a utility', async () => {
+      const source =
+        "declare const client: { unsafe: (query: string) => unknown }\nclient.unsafe('select 1')\n"
+      const messages = await messagesFor('src/utilities/probe.utilities.ts', source)
+      expect(messages.find((message) => message.ruleId === 'no-restricted-syntax')?.severity).toBe(
+        2
+      )
+    })
+
+    it.each([
+      'src/database/models/probe.model.ts',
+      'src/repositories/platform-onboarding.repository.ts',
+      'src/utilities/list-page.utilities.ts',
+      'src/repositories/email-message.repository.ts',
+    ])('allows it in %s', async (filePath) => {
+      const ids = await ruleIdsFor(filePath, rawSql)
+      expect(ids).not.toContain('no-restricted-syntax')
+    })
+
+    it('does not apply under tests/', async () => {
+      // No bare sleep here, so a no-restricted-syntax hit could only come from the SQL selectors.
+      const ids = await ruleIdsFor('tests/integration/probe.test.ts', rawSql)
+      expect(ids).not.toContain('no-restricted-syntax')
+    })
+  })
 })

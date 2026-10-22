@@ -284,6 +284,7 @@ function writeSlice(baseline: Scrub, options: Options): void {
   }
   fs.writeFileSync(SLICE_FILE, JSON.stringify(slice))
   // Oxfmt reads its options from vite.config.ts's `fmt` block.
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- a developer script that runs the pnpm on the developer's own PATH
   execFileSync('pnpm', ['exec', 'vp', 'fmt', SLICE_FILE], { stdio: 'inherit' })
   console.log(`wrote ${SLICE_FILE}: ${Object.keys(allowed).length} of ${options.count} cases`)
 }

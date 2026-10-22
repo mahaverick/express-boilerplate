@@ -16,7 +16,7 @@ for unit tests ([DATABASE.md](DATABASE.md#the-test-database)).
 Run what CI runs:
 
 ```bash
-pnpm lint            # eslint + tsc --noEmit against tsconfig.json
+pnpm lint            # vp check (Oxlint + Oxfmt), the untyped ESLint, tsc --noEmit
 pnpm lint:docs       # history phrasing, broken links and anchors in the docs
 pnpm format:check    # Oxfmt over the repo, minus its ignorePatterns and .prettierignore
 pnpm knip            # unused files, exports, types and dependencies
@@ -25,6 +25,8 @@ pnpm build           # tsc + tsc-alias against tsconfig.build.json
 ```
 
 All six must exit 0; run `pnpm format` if `format:check` does not.
+Oxlint runs every lint rule it can; ESLint runs only the rules Oxlint can't
+yet, listed with their reasons in [docs/lint-deferred.md](docs/lint-deferred.md).
 `pnpm lint` type-checks once, against `tsconfig.json`, which extends
 `tsconfig.build.json` and widens its `include` to `tests/` and
 `drizzle.config.ts`; `pnpm typecheck` runs that step alone.

@@ -48,7 +48,6 @@
         "typescript-eslint",
         "prettier",
         "prettier-*",
-        "@ianvs/prettier-plugin-sort-imports",
         "vitest",
         "@vitest/*"
       ]
