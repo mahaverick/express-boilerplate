@@ -18,7 +18,7 @@ Run what CI runs:
 ```bash
 pnpm lint            # vp check (Oxlint + Oxfmt), the untyped ESLint, tsc --noEmit
 pnpm lint:docs       # history phrasing, broken links and anchors in the docs
-pnpm format:check    # Oxfmt over the repo, minus its ignorePatterns and .prettierignore
+pnpm format:check    # Oxfmt over the repo, minus its ignorePatterns
 pnpm knip            # unused files, exports, types and dependencies
 pnpm test:coverage   # vitest, gated at 80% lines/functions/branches/statements
 pnpm build           # tsc + tsc-alias against tsconfig.build.json
