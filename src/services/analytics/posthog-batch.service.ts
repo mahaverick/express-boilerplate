@@ -37,7 +37,9 @@ export interface PosthogBatchEvent {
  * refused, and sending it again unchanged would be refused again).
  */
 export type SendResult =
-  { kind: 'ack' } | { kind: 'retry'; status?: number } | { kind: 'rejected'; status: number }
+  | { kind: 'ack' }
+  | { kind: 'retry'; status?: number }
+  | { kind: 'rejected'; status: number }
 
 /**
  * 4xx statuses that describe the endpoint or the credentials, not the batch:

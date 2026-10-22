@@ -351,7 +351,7 @@ as described so it does not build them a second time under the lock, then run
   Then edit the `0014` file: delete its
   `DROP INDEX "users_email_unique";--> statement-breakpoint` line, and change
   the remaining statement to `CREATE UNIQUE INDEX IF NOT EXISTS
-"users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the
+  "users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the
   index you just built and rebuilds it under the lock. With it, the migration
   only records `0014` as applied.
 
@@ -505,7 +505,7 @@ as described so it does not build them a second time under the lock, then run
   it in a quiet window.
 
 - **`0025` holds `tenant_invitations` briefly.** Its nullable `ADD COLUMN
-last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
+  last_sent_at` is metadata-only, but it takes an `ACCESS EXCLUSIVE` lock on
   `tenant_invitations` until the batch commits, so invitation reads and writes
   wait for the batch.
 

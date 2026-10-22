@@ -100,7 +100,12 @@ export type FlagState = 'active' | 'inactive' | 'missing' | 'unsupported'
  * body over the size cap, or sent a body that is not the definitions shape.
  */
 export type FlagFetchErrorCode =
-  'unauthorized' | 'http_error' | 'timeout' | 'network' | 'body_too_large' | 'invalid_body'
+  | 'unauthorized'
+  | 'http_error'
+  | 'timeout'
+  | 'network'
+  | 'body_too_large'
+  | 'invalid_body'
 
 /**
  * The feature-flag section of the staff system status.
