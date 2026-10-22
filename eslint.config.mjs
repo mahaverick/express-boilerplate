@@ -24,6 +24,9 @@ const BARE_SLEEP_MESSAGE =
  */
 const RAW_SQL_MESSAGE =
   "Raw SQL is limited to src/database/models and three listed files. Use drizzle's sql template, or add the file to eslint.config.mjs with a reason."
+/** The raw-SQL selectors match drizzle's `sql` by name, so an alias would slip past them. */
+const SQL_ALIAS_MESSAGE =
+  "Import drizzle's sql as `sql`, without an alias, so the raw SQL check can see it."
 
 /**
  * Every named function, method and class; inline callbacks and constructors
@@ -259,13 +262,32 @@ export default tseslint.config(
     rules: {
       'no-restricted-syntax': [
         'error',
+        // sql.raw called or taken as a value, and orm.sql.raw off a namespace import.
         {
           selector:
-            "CallExpression[callee.type='MemberExpression'][callee.object.name='sql'][callee.property.name='raw']",
+            "MemberExpression[property.name='raw']:matches([object.name='sql'], [object.property.name='sql'])",
+          message: RAW_SQL_MESSAGE,
+        },
+        // sql['raw'] or any other computed key, which the name match above can't read.
+        { selector: "MemberExpression[object.name='sql'][computed=true]", message: RAW_SQL_MESSAGE },
+        {
+          selector:
+            "VariableDeclarator[init.name='sql'] > ObjectPattern > Property:matches([key.name='raw'], [key.value='raw'], [computed=true])",
           message: RAW_SQL_MESSAGE,
         },
         {
+          selector:
+            "ImportDeclaration[source.value='drizzle-orm'] > ImportSpecifier[imported.name='sql'][local.name!='sql']",
+          message: SQL_ALIAS_MESSAGE,
+        },
+        {
           selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='unsafe']",
+          message: RAW_SQL_MESSAGE,
+        },
+        // A plain string, untagged template or concatenation as a query; drizzle's sql`…` is a TaggedTemplateExpression.
+        {
+          selector:
+            "CallExpression[callee.property.name='execute'][arguments.0.type=/^(Literal|TemplateLiteral|BinaryExpression)$/]",
           message: RAW_SQL_MESSAGE,
         },
       ],

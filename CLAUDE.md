@@ -525,7 +525,10 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   in `@param`/`@returns`. Every other comment is a file JSDoc
   (`/** @file … */`) or a one-line `//` why, with no history;
   `local/comment-style` checks the form.
-- **Scope an eslint disable as narrowly as the rule allows,** and give a
+- **Scope a lint disable as narrowly as the rule allows, in the directive of
+  the tool that runs the rule:** `oxlint-disable` for a rule in
+  `vite.config.ts`, `eslint-disable` for one in `eslint.config.mjs`. Each tool
+  ignores the other's directives and fails on an unused one of its own. Give a
   scoped disable of a type-aware rule a comment on why the call site is safe.
 - **Don't import or "fix" `tests/fixtures/lint-cycle/` or
   `tests/fixtures/lint-zones/`.** They are committed violations that

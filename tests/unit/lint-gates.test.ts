@@ -1,82 +1,27 @@
 /**
  * @file These assert that the lint gates FIRE, not that the config file
  * contains certain keys. A gate that is configured but inert lints green
- * while enforcing nothing, which is worse than having no gate at all.
+ * while enforcing nothing, which is worse than having no gate at all. Each
+ * gate is probed through the tool that owns its rule: Oxlint
+ * (vite.config.ts) through tests/helpers/oxlint-probe.ts, and the rules
+ * ESLint still runs (eslint.config.mjs) through `lintText`.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { ESLint, type Linter } from 'eslint'
-import importX from 'eslint-plugin-import-x'
-import tseslint from 'typescript-eslint'
 import { describe, expect, it } from 'vite-plus/test'
+import { oxlintMessagesFor } from '../helpers/oxlint-probe'
 
 /**
- * Lints with the repo's real config (type-aware `parserOptions.project`),
- * `ignore: false` so the committed cycle fixtures under tests/fixtures/ can
- * be linted deliberately here, while `pnpm lint` keeps skipping them. Its
- * type-aware project is required for the no-cycle case below, whose
- * fixtures are real, committed files the project can resolve.
+ * Lints with the repo's real ESLint config, `ignore: false` so a committed
+ * fixture under tests/fixtures/ can be linted deliberately here while
+ * `pnpm lint` keeps skipping it. The config is untyped, so synthetic text at
+ * a path that isn't on disk lints like a real file.
  */
 const eslint = new ESLint({ cwd: process.cwd(), ignore: false })
 
 /**
- * Lints synthetic text at a `filePath` that need not exist on disk.
- * `parserOptions.project` resolves included files through a real tsconfig
- * watch program (see eslint.config.mjs), unlike `projectService`, so
- * a path that isn't really on disk fatals before any rule runs
- * under the type-checked rule set; `disableTypeChecked` avoids that, since
- * none of the rules exercised via `lintText` need type information.
- * `disallowAutomaticSingleRunInference` avoids a second failure mode: under
- * `CI=true`, typescript-estree treats a second parse of the same path as a
- * fix pass and builds an isolated program for it, and the probes below
- * reuse one path, which can crash a third-party type-aware rule such as
- * `sonarjs/deprecation` running on that virtual file.
- */
-const eslintText = new ESLint({
-  cwd: process.cwd(),
-  ignore: false,
-  overrideConfig: [
-    tseslint.configs.disableTypeChecked,
-    { languageOptions: { parserOptions: { disallowAutomaticSingleRunInference: true } } },
-  ],
-})
-
-/**
- * The lint-cycle fixture's own tsconfig, mapping "@/*" to "./*" instead of
- * the root tsconfig's "@/*" -> "./src/*" — needed because the aliased
- * fixture (tests/fixtures/lint-cycle/cycle-a.ts) imports "@/cycle-b", which
- * the repo's default project and resolver cannot see.
- */
-const aliasedCycleTsconfig = path.join(process.cwd(), 'tests/fixtures/lint-cycle/tsconfig.json')
-/**
- * Points BOTH the type-aware parser's project and the resolver's tsconfig
- * at {@link aliasedCycleTsconfig}. Overriding only one of the two either
- * fatals (the parser finds the file in no project) or leaves no-cycle
- * silently unable to resolve the aliased import.
- */
-const eslintAliasedCycle = new ESLint({
-  cwd: process.cwd(),
-  ignore: false,
-  overrideConfig: {
-    languageOptions: {
-      parserOptions: {
-        project: ['./tests/fixtures/lint-cycle/tsconfig.json'],
-        tsconfigRootDir: process.cwd(),
-      },
-    },
-    settings: {
-      'import-x/resolver-next': [
-        importX.createNodeResolver({
-          extensions: ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.node'],
-          tsconfig: { configFile: aliasedCycleTsconfig },
-        }),
-      ],
-    },
-  },
-})
-
-/**
- * Lints `source` at a synthetic `filePath` via {@link eslintText}; the path
+ * Lints `source` at a synthetic `filePath` via {@link eslint}; the path
  * selects the config and need not exist. Returns the lint messages.
  * @throws {Error} When ESLint fatals on `source`. A fatal reports with
  *   `ruleId: null`, which a caller mapping to `ruleId ?? ''` would silently
@@ -85,7 +30,7 @@ const eslintAliasedCycle = new ESLint({
  *   exists to catch, so it fails loudly instead.
  */
 const messagesFor = async (filePath: string, source: string): Promise<Linter.LintMessage[]> => {
-  const [result] = await eslintText.lintText(source, { filePath })
+  const [result] = await eslint.lintText(source, { filePath })
   const messages = result?.messages ?? []
   const fatal = messages.find((message) => message.fatal)
   if (fatal) throw new Error(`eslint fataled on ${filePath}: ${fatal.message}`)
@@ -102,23 +47,36 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
 }
 
 /**
- * This suite's own timeout, in place of the global test timeout
- * (vite.config.ts). On an idle machine the two cold tests (first
- * `lintText`, first `lintFiles`, building the real TS program the no-cycle
- * fixtures need) run in ~1.1-1.5 s each, and every later test in each group
- * costs 7-40 ms, since both ESLint instances above are module-scoped and
- * reused. Run right after `pnpm lint && pnpm build`, the sequence CI runs,
- * those same two cold tests were observed at 20.2 s and once at 61 s:
- * parallel vitest workers, v8 coverage instrumentation, and a just-finished
- * `tsc` all compete for the CPU while ESLint type-checks the project from
- * cold. The timeout is 10x that worst measured run (61 s x 10 = 610 s), the
- * headroom CLAUDE.md's test timing rule 3 asks of a bound not tied to a
- * product constant. Raising the global timeout instead would hide a real
- * slowdown anywhere else in the suite.
+ * The rule id of each finding Oxlint reports for `source` at `filePath`.
  */
-const LINT_GATE_TIMEOUT_MS = 610_000
+const oxlintRuleIdsFor = async (filePath: string, source: string): Promise<string[]> => {
+  const messages = await oxlintMessagesFor(filePath, source)
+  return messages.map((message) => message.ruleId)
+}
 
-describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
+/** Oxlint's id for the restricted-import bans: platform repositories and timer sleeps. */
+const RESTRICTED_IMPORTS = 'eslint/no-restricted-imports'
+/** Oxlint's id for the process.env and console bans. */
+const RESTRICTED_PROPERTIES = 'eslint/no-restricted-properties'
+/** Oxlint's id for the unused-variable rule. */
+const UNUSED_VARS = 'eslint/no-unused-vars'
+/** Oxlint's id for the import-cycle rule. */
+const NO_CYCLE = 'import/no-cycle'
+
+/**
+ * This suite's own timeout, in place of the global test timeout
+ * (vite.config.ts). An Oxlint probe spawns `vp lint` on a temp copy, about
+ * 0.6 s on an idle machine; the slowest test runs four in a row. Measured
+ * inside a full `pnpm test:unit` at load average 60, with this suite's tests
+ * running concurrently, that test took 15.2 s, the worst run seen. The
+ * timeout is 10x that (152 s, rounded up), the headroom CLAUDE.md's test
+ * timing rule 3 asks of a bound not tied to a product constant. Raising the
+ * global timeout instead would hide a real slowdown anywhere else.
+ */
+const LINT_GATE_TIMEOUT_MS = 160_000
+
+// Concurrent: each Oxlint probe is its own process and temp dir, and run one by one they took 96 s.
+describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent: true }, () => {
   it('rejects an undocumented export', async () => {
     const messages = await messagesFor(
       'src/utilities/probe.utilities.ts',
@@ -137,12 +95,7 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     expect(ids).not.toContain('jsdoc/require-jsdoc')
   })
 
-  /**
-   * Parameterized (sonarjs/parameterized-tests) rather than one `it()`
-   * per directory: three near-identical accepts/rejects pairs across
-   * src/controllers/, src/jobs/ and src/workers/ trip that rule
-   * otherwise.
-   */
+  /** One accepts/rejects pair per governed directory. */
   const governedDirectoryCases = [
     {
       label: 'a governed directory',
@@ -184,22 +137,22 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
 
   it('allows process.env inside env.config and blocks it elsewhere', async () => {
     const source = 'export const x = process.env.FOO\n'
-    expect(await ruleIdsFor('src/configs/env.config.ts', source)).not.toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/configs/env.config.ts', source)).not.toContain(
+      RESTRICTED_PROPERTIES
     )
-    expect(await ruleIdsFor('src/services/other.service.ts', source)).toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/services/other.service.ts', source)).toContain(
+      RESTRICTED_PROPERTIES
     )
   })
 
   it('allows console.error inside logger.service.ts and index.ts but blocks it elsewhere', async () => {
     const source = 'export function f(): void { console.error("x") }\n'
-    expect(await ruleIdsFor('src/services/logger.service.ts', source)).not.toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/services/logger.service.ts', source)).not.toContain(
+      RESTRICTED_PROPERTIES
     )
-    expect(await ruleIdsFor('src/index.ts', source)).not.toContain('no-restricted-properties')
-    expect(await ruleIdsFor('src/services/other.service.ts', source)).toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/index.ts', source)).not.toContain(RESTRICTED_PROPERTIES)
+    expect(await oxlintRuleIdsFor('src/services/other.service.ts', source)).toContain(
+      RESTRICTED_PROPERTIES
     )
   })
 
@@ -208,17 +161,17 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     const processEnvSource = 'export const x = process.env.FOO\n'
     const consoleSource = 'export function f(): void { console.info("x") }\n'
 
-    expect(await ruleIdsFor('src/observability/tracing.ts', processEnvSource)).not.toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/observability/tracing.ts', processEnvSource)).not.toContain(
+      RESTRICTED_PROPERTIES
     )
-    expect(await ruleIdsFor('src/observability/tracing.ts', consoleSource)).not.toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/observability/tracing.ts', consoleSource)).not.toContain(
+      RESTRICTED_PROPERTIES
     )
-    expect(await ruleIdsFor('src/observability/other.ts', processEnvSource)).toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/observability/other.ts', processEnvSource)).toContain(
+      RESTRICTED_PROPERTIES
     )
-    expect(await ruleIdsFor('src/observability/other.ts', consoleSource)).toContain(
-      'no-restricted-properties'
+    expect(await oxlintRuleIdsFor('src/observability/other.ts', consoleSource)).toContain(
+      RESTRICTED_PROPERTIES
     )
   })
 
@@ -234,43 +187,43 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     // Express identifies an error handler by arity (four parameters); `response` is used in the body (matching a real handler), so the rule's "after-used" default alone would not exempt the unused fourth — only the underscore prefix does.
     const source =
       'export function h(error: unknown, request: unknown, response: { end: () => void }, _next: unknown): void { response.end() }\n'
-    const ids = await ruleIdsFor('src/middlewares/probe.middleware.ts', source)
-    expect(ids).not.toContain('@typescript-eslint/no-unused-vars')
+    const ids = await oxlintRuleIdsFor('src/middlewares/probe.middleware.ts', source)
+    expect(ids).not.toContain(UNUSED_VARS)
   })
 
   it('still rejects a genuinely-unused parameter with no underscore', async () => {
     // If this does not fire, argsIgnorePattern has become a blanket suppression rather than an opt-in convention.
     const source =
       'export function h(error: unknown, request: unknown, response: { end: () => void }, next: unknown): void { response.end() }\n'
-    const messages = await messagesFor('src/middlewares/probe.middleware.ts', source)
-    const unusedVariablesMessage = messages.find(
-      (message) => message.ruleId === '@typescript-eslint/no-unused-vars'
-    )
+    const messages = await oxlintMessagesFor('src/middlewares/probe.middleware.ts', source)
+    const unusedVariablesMessage = messages.find((message) => message.ruleId === UNUSED_VARS)
     expect(unusedVariablesMessage?.severity).toBe(2)
   })
 
-  // no-cycle follows imports through real files on disk (import-x reads them with fs.readFileSync); this proves the rule fires at all, on a relative import.
+  // Oxlint follows a probe's imports through the copied src/ and fixtures; this proves the rule fires at all, on a relative import.
   it('rejects a circular import between real files (relative import)', async () => {
-    const results = await eslint.lintFiles(['tests/fixtures/lint-cycle/a.ts'])
-    const messages = results[0]?.messages ?? []
-    const cycleMessage = messages.find((message) => message.ruleId === 'import-x/no-cycle')
+    const fixture = 'tests/fixtures/lint-cycle/a.ts'
+    const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
+    const messages = await oxlintMessagesFor(fixture, source)
+    const cycleMessage = messages.find((message) => message.ruleId === NO_CYCLE)
     expect(cycleMessage?.severity).toBe(2)
   })
 
-  // Runs under its own resolver and tsconfig, so this does NOT guard eslint.config.mjs's own resolver settings — only the real-config case below does.
+  // Resolves "@/" through the fixture's own tsconfig, the nearest one Oxlint finds, so this does NOT guard the root tsconfig's alias; only the real-config case below does.
   it('rejects a circular import between real files (aliased "@/" import, own local tsconfig)', async () => {
-    const results = await eslintAliasedCycle.lintFiles(['tests/fixtures/lint-cycle/cycle-a.ts'])
-    const messages = results[0]?.messages ?? []
-    const cycleMessage = messages.find((message) => message.ruleId === 'import-x/no-cycle')
+    const fixture = 'tests/fixtures/lint-cycle/cycle-a.ts'
+    const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
+    const messages = await oxlintMessagesFor(fixture, source)
+    const cycleMessage = messages.find((message) => message.ruleId === NO_CYCLE)
     expect(cycleMessage?.severity).toBe(2)
   })
 
-  // The one case that guards eslint.config.mjs's `import-x/resolver-next`: auth.middleware.ts imports auth.constants.ts, so linting auth.constants.ts with an import of auth.middleware closes a real cycle through the "@/" alias, resolved by the real config. A cwd-relative tsconfig `configFile` there that resolved "@/*" to relative paths (which never === the absolute `physicalFilename` no-cycle compares against) would go red only here.
+  // The one case that guards the root tsconfig's "@/*" alias as Oxlint resolves it: auth.middleware.ts imports auth.constants.ts, so an auth.constants.ts that imports auth.middleware closes a real cycle through the alias.
   it('rejects a circular "@/" import resolved by the real config', async () => {
     const source =
       "import { requireAuth } from '@/middlewares/auth.middleware'\n\nexport const x = requireAuth\n"
-    const messages = await messagesFor('src/constants/auth.constants.ts', source)
-    const cycleMessage = messages.find((message) => message.ruleId === 'import-x/no-cycle')
+    const messages = await oxlintMessagesFor('src/constants/auth.constants.ts', source)
+    const cycleMessage = messages.find((message) => message.ruleId === NO_CYCLE)
     expect(cycleMessage?.severity).toBe(2)
   })
 
@@ -377,8 +330,8 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       'src/repositories/probe.repository.ts',
     ])('rejects an import from %s', async (syntheticPath) => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await messagesFor(syntheticPath, source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor(syntheticPath, source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
@@ -386,15 +339,15 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       const source =
         "import { PlatformTenantRepository } from './platform-tenant.repository'\n\n" +
         'export const repository = PlatformTenantRepository\n'
-      const messages = await messagesFor('src/repositories/probe.repository.ts', source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await ruleIdsFor('src/services/platform-tenant.service.ts', source)
-      expect(ids).not.toContain('no-restricted-imports')
+      const ids = await oxlintRuleIdsFor('src/services/platform-tenant.service.ts', source)
+      expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
@@ -408,8 +361,8 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       'src/repositories/probe.repository.ts',
     ])('rejects an import from %s', async (syntheticPath) => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await messagesFor(syntheticPath, source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor(syntheticPath, source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
@@ -417,15 +370,15 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       const source =
         "import { PlatformStatsRepository } from './platform-stats.repository'\n\n" +
         'export const repository = PlatformStatsRepository\n'
-      const messages = await messagesFor('src/repositories/probe.repository.ts', source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await ruleIdsFor('src/services/platform-stats.service.ts', source)
-      expect(ids).not.toContain('no-restricted-imports')
+      const ids = await oxlintRuleIdsFor('src/services/platform-stats.service.ts', source)
+      expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
@@ -439,8 +392,8 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       'src/repositories/probe.repository.ts',
     ])('rejects an import from %s', async (syntheticPath) => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await messagesFor(syntheticPath, source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor(syntheticPath, source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
@@ -448,15 +401,15 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       const source =
         "import { PlatformUserRepository } from './platform-user.repository'\n\n" +
         'export const repository = PlatformUserRepository\n'
-      const messages = await messagesFor('src/repositories/probe.repository.ts', source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await ruleIdsFor('src/services/platform-user.service.ts', source)
-      expect(ids).not.toContain('no-restricted-imports')
+      const ids = await oxlintRuleIdsFor('src/services/platform-user.service.ts', source)
+      expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
@@ -470,8 +423,8 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       'src/repositories/probe.repository.ts',
     ])('rejects an import from %s', async (syntheticPath) => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await messagesFor(syntheticPath, source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor(syntheticPath, source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
@@ -479,15 +432,15 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       const source =
         "import { PlatformEmailRepository } from './platform-email.repository'\n\n" +
         'export const repository = PlatformEmailRepository\n'
-      const messages = await messagesFor('src/repositories/probe.repository.ts', source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await ruleIdsFor('src/services/platform-email.service.ts', source)
-      expect(ids).not.toContain('no-restricted-imports')
+      const ids = await oxlintRuleIdsFor('src/services/platform-email.service.ts', source)
+      expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
@@ -501,8 +454,8 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       'src/repositories/probe.repository.ts',
     ])('rejects an import from %s', async (syntheticPath) => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await messagesFor(syntheticPath, source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor(syntheticPath, source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
@@ -510,15 +463,15 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       const source =
         "import { PlatformOnboardingRepository } from './platform-onboarding.repository'\n\n" +
         'export const repository = PlatformOnboardingRepository\n'
-      const messages = await messagesFor('src/repositories/probe.repository.ts', source)
-      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
       const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await ruleIdsFor('src/services/platform-onboarding.service.ts', source)
-      expect(ids).not.toContain('no-restricted-imports')
+      const ids = await oxlintRuleIdsFor('src/services/platform-onboarding.service.ts', source)
+      expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
@@ -586,31 +539,40 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
   describe('test timing: no bare sleeps under tests/', () => {
     const probePath = 'tests/integration/probe.test.ts'
     const bareSleeps = [
-      { label: 'a sleep() call', ruleId: 'no-restricted-syntax', source: 'await sleep(100)\n' },
+      {
+        label: 'a sleep() call',
+        lint: messagesFor,
+        ruleId: 'no-restricted-syntax',
+        source: 'await sleep(100)\n',
+      },
       {
         label: 'a setTimeout inside new Promise',
+        lint: messagesFor,
         ruleId: 'no-restricted-syntax',
         source: 'await new Promise((resolve) => setTimeout(resolve, 10))\n',
       },
       {
         label: 'a waitForTimeout() call',
+        lint: messagesFor,
         ruleId: 'no-restricted-syntax',
         source: 'await page.waitForTimeout(10)\n',
       },
       {
         label: 'setTimeout from node:timers/promises',
-        ruleId: 'no-restricted-imports',
+        lint: oxlintMessagesFor,
+        ruleId: RESTRICTED_IMPORTS,
         source: "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n",
       },
       {
         label: 'setTimeout from timers/promises',
-        ruleId: 'no-restricted-imports',
+        lint: oxlintMessagesFor,
+        ruleId: RESTRICTED_IMPORTS,
         source: "import { setTimeout as delay } from 'timers/promises'\n\nawait delay(10)\n",
       },
     ]
 
-    it.each(bareSleeps)('rejects $label', async ({ ruleId, source }) => {
-      const messages = await messagesFor(probePath, source)
+    it.each(bareSleeps)('rejects $label', async ({ lint, ruleId, source }) => {
+      const messages = await lint(probePath, source)
       expect(messages.find((message) => message.ruleId === ruleId)?.severity).toBe(2)
     })
 
@@ -622,26 +584,26 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       },
       { label: 'fake timers', source: 'vi.useFakeTimers()\nsetTimeout(() => undefined, 10)\n' },
     ])('allows $label', async ({ source }) => {
-      const ids = await ruleIdsFor(probePath, source)
-      expect(ids).not.toContain('no-restricted-syntax')
-      expect(ids).not.toContain('no-restricted-imports')
+      expect(await ruleIdsFor(probePath, source)).not.toContain('no-restricted-syntax')
+      expect(await oxlintRuleIdsFor(probePath, source)).not.toContain(RESTRICTED_IMPORTS)
     })
 
     it('exempts tests/helpers/timing.ts, the one file that defines the waits', async () => {
       const source =
         "import { setTimeout as delay } from 'node:timers/promises'\n\n" +
         'await new Promise((resolve) => setTimeout(resolve, 10))\nawait delay(10)\n'
-      const ids = await ruleIdsFor('tests/helpers/timing.ts', source)
-      expect(ids).not.toContain('no-restricted-syntax')
-      expect(ids).not.toContain('no-restricted-imports')
+      expect(await ruleIdsFor('tests/helpers/timing.ts', source)).not.toContain(
+        'no-restricted-syntax'
+      )
+      expect(await oxlintRuleIdsFor('tests/helpers/timing.ts', source)).not.toContain(
+        RESTRICTED_IMPORTS
+      )
     })
 
     it('keeps the timer import ban in tests/helpers/request.ts', async () => {
       const source = "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n"
-      const messages = await messagesFor('tests/helpers/request.ts', source)
-      expect(messages.find((message) => message.ruleId === 'no-restricted-imports')?.severity).toBe(
-        2
-      )
+      const messages = await oxlintMessagesFor('tests/helpers/request.ts', source)
+      expect(messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)?.severity).toBe(2)
     })
   })
 
@@ -662,6 +624,61 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       expect(messages.find((message) => message.ruleId === 'no-restricted-syntax')?.severity).toBe(
         2
       )
+    })
+
+    it.each([
+      {
+        label: 'a string literal passed to execute',
+        source:
+          "declare const db: { execute: (query: string) => unknown }\ndb.execute('select 1')\n",
+      },
+      {
+        label: 'an untagged template passed to execute',
+        source:
+          'declare const db: { execute: (query: string) => unknown }\ndeclare const id: string\ndb.execute(`select ${id}`)\n',
+      },
+      {
+        label: 'a concatenation passed to execute',
+        source:
+          "declare const db: { execute: (query: string) => unknown }\ndeclare const id: string\ndb.execute('select ' + id)\n",
+      },
+      {
+        label: "sql['raw'], a computed member",
+        source: "import { sql } from 'drizzle-orm'\nexport const q = sql['raw']('select 1')\n",
+      },
+      {
+        label: 'sql.raw taken as a value',
+        source:
+          "import { sql } from 'drizzle-orm'\nconst raw = sql.raw\nexport const q = raw('select 1')\n",
+      },
+      {
+        label: 'sql imported under an alias',
+        source: "import { sql as s } from 'drizzle-orm'\nexport const q = s.raw('select 1')\n",
+      },
+      {
+        label: 'raw destructured from sql',
+        source:
+          "import { sql } from 'drizzle-orm'\nconst { raw } = sql\nexport const q = raw('select 1')\n",
+      },
+      {
+        label: 'raw read off a namespace import',
+        source: "import * as orm from 'drizzle-orm'\nexport const q = orm.sql.raw('select 1')\n",
+      },
+    ])('rejects $label in a service', async ({ source }) => {
+      const messages = await messagesFor('src/services/probe.service.ts', source)
+      expect(messages.find((message) => message.ruleId === 'no-restricted-syntax')?.severity).toBe(
+        2
+      )
+    })
+
+    it('allows a tagged sql template passed to execute, the shape src uses', async () => {
+      const source =
+        "import { sql } from 'drizzle-orm'\n" +
+        'declare const tx: { execute: (query: unknown) => unknown }\n' +
+        'declare const id: string\n' +
+        'tx.execute(sql`select ${id}`)\n'
+      const ids = await ruleIdsFor('src/services/probe.service.ts', source)
+      expect(ids).not.toContain('no-restricted-syntax')
     })
 
     it.each([
