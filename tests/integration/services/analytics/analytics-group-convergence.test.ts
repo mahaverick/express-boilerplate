@@ -184,7 +184,6 @@ describe('group marker convergence', () => {
 
     await drainAnalyticsOutbox()
 
-    // oxlint-disable-next-line unicorn/no-null -- null is what clears the group's name in PostHog
     const scrub = { name: null, status: 'purged' }
     expect(sentMarkersFor(tenant.id).map((event) => event.properties.$group_set)).toEqual([scrub])
     expect(JSON.stringify(posthog().batches)).not.toContain('Purged Co')

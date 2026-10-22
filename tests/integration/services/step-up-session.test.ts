@@ -173,7 +173,6 @@ describe('session authentication time', () => {
       select authenticated_at as "authenticatedAt", consumed_at is not null as consumed
       from user_tokens where session_id = ${sessionId} and purpose = 'step_up_link'
     `
-    // oxlint-disable-next-line unicorn/no-null -- the column's SQL NULL: a link row never carries an authentication time
     expect(linkRow).toEqual({ authenticatedAt: null, consumed: true })
     expect(await authenticatedTimes(otherSessionId)).toEqual([
       (other.authenticatedAt?.getTime() ?? 0) - 60 * 60 * 1000,

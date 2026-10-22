@@ -400,7 +400,6 @@ describe('Google sign-in in read_only', () => {
     const email = googleEmail()
     const profile = googleProfile(email)
     const { UserRepository: Users } = await import('@/repositories/user.repository')
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realFindByEmail = Users.prototype.findByEmail
     /**
      * Stands in for `UserRepository.findByEmail`: read_only begins just before resolveGoogleUser's own lookup.
@@ -473,7 +472,6 @@ describe('getMaintenanceModeStatus', () => {
 
     expect(status).toMatchObject({
       mode: 'off',
-      // oxlint-disable-next-line unicorn/no-null -- the status's contract is null while off
       since: null,
       changedAt: '2026-10-07T09:30:00.000Z',
     })

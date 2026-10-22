@@ -129,7 +129,6 @@ export interface StoredFlagSnapshot {
 export async function readStoredFlagSnapshot(): Promise<StoredFlagSnapshot | null> {
   const redis = await getRedis()
   const raw = await redis.get(flagSnapshotKey())
-  // oxlint-disable-next-line unicorn/no-null -- the contract is null for nothing stored
   if (raw === null) return null
   const parsed = JSON.parse(raw) as unknown
   if (!isSnapshot(parsed)) throw new Error('The stored flag snapshot is not a snapshot')
@@ -143,7 +142,6 @@ export async function readStoredFlagSnapshot(): Promise<StoredFlagSnapshot | nul
  */
 export async function readFlagSnapshot(): Promise<ParsedSnapshot | null> {
   const stored = await readStoredFlagSnapshot()
-  // oxlint-disable-next-line unicorn/no-null -- the contract is null for nothing stored
   return stored === null ? null : stored.snapshot
 }
 
@@ -279,7 +277,6 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
     isClosed: boolean
     isReloadFailing: boolean
   } = {
-    // oxlint-disable-next-line unicorn/no-null -- the contract is null for no snapshot
     snapshot: null,
     subscriber: undefined,
     subscribing: undefined,

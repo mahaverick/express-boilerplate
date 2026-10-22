@@ -27,7 +27,6 @@ const app = createApp()
  */
 const tag = `lc${randomUUID().slice(0, 8)}`
 
-// oxlint-disable-next-line unicorn/no-null -- SQL NULL for a seeded nullable column
 const NONE = null
 
 /**

@@ -55,7 +55,6 @@ export const MAINTENANCE_MODE_CHANGED_TEMPLATE_META: EmailTemplateMeta<Maintenan
   {
     senderClass: 'general',
     previewVariables: ['firstName', 'appName', 'mode', 'changedAt'],
-    // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
     resendAction: null,
   }
 

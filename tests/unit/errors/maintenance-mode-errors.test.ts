@@ -10,7 +10,6 @@ import {
 } from '@/constants/maintenance-mode.constants'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 
-// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
 
 describe('MaintenanceModeError', () => {

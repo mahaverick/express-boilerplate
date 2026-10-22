@@ -23,9 +23,7 @@ export function flagContextFor(request: Request): Promise<FlagContext> {
   if (!request.user) return Promise.reject(new Error('flagContextFor runs after requireAuth'))
   request.flagContext ??= flagContextForUser(
     request.user.id,
-    // oxlint-disable-next-line unicorn/no-null -- the reader's contract is null for no tenant
     request.principal?.tenantId ?? null,
-    // oxlint-disable-next-line unicorn/no-null -- the reader's contract is null for no session
     request.sessionId ?? null
   )
   return request.flagContext

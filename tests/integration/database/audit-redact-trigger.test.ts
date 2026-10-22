@@ -78,7 +78,6 @@ describe('the audit redact exception', () => {
       select actor_kind as kind, actor_user_id as actor, ip, user_agent as ua, action from audit_logs where id = ${id}
     `
     // The entry still says a person acted; only who is gone.
-    // oxlint-disable-next-line unicorn/no-null -- the redacted columns read back as SQL NULL
     expect(row).toEqual({ kind: 'user', actor: null, ip: null, ua: null, action: 'tenant.updated' })
   })
 

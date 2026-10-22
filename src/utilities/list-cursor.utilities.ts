@@ -48,7 +48,6 @@ export interface ListScopeInput {
 /**
  * The scope's search slot when the request has none: JSON null, which no search text can equal.
  */
-// oxlint-disable-next-line unicorn/no-null -- the scope hashes JSON null for no search
 const NO_SEARCH = null
 
 /**

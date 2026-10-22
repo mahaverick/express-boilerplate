@@ -121,13 +121,11 @@ describe('EMAIL_TEMPLATE_META', () => {
           'stepsTotal',
           'overviewLink',
         ],
-        // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       maintenance_mode_changed: {
         senderClass: 'general',
         previewVariables: ['firstName', 'appName', 'mode', 'changedAt'],
-        // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       sign_in_link: {
@@ -138,19 +136,16 @@ describe('EMAIL_TEMPLATE_META', () => {
       step_up_link: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
-        // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       passkey_created: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-        // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       passkey_deleted: {
         senderClass: 'transactional',
         previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-        // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
       welcome: {
@@ -217,7 +212,6 @@ describe('assertTemplateMetaSafe', () => {
       sign_in_link: {
         senderClass: 'transactional' as const,
         previewVariables: ['firstName', name],
-        // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
     }
@@ -272,7 +266,6 @@ describe('EmailTemplateMeta type rules', () => {
       // @ts-expect-error -- the general sender is the one for token-free templates
       senderClass: 'transactional',
       previewVariables: ['firstName'],
-      // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     }
     expect(meta.senderClass).toBe('transactional')

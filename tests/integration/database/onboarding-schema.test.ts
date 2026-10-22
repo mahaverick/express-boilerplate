@@ -12,7 +12,6 @@ import { platformTenant } from '../../helpers/platform-staff'
 
 const tenantIds: string[] = []
 const userIds: string[] = []
-// oxlint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 afterEach(async () => {
@@ -76,11 +75,8 @@ describe('tenants onboarding columns', () => {
       from tenants where id = ${tenantId}`
     expect(row).toEqual({
       onboarding_tracked: false,
-      // oxlint-disable-next-line unicorn/no-null -- SQL NULL: no default
       onboarding_started_at: null,
-      // oxlint-disable-next-line unicorn/no-null -- as above
       onboarding_dismissed_at: null,
-      // oxlint-disable-next-line unicorn/no-null -- as above
       onboarding_dismissed_by: null,
     })
   })
@@ -104,7 +100,6 @@ describe('tenants onboarding columns', () => {
     const [row] = await sql`
       select onboarding_dismissed_by, onboarding_dismissed_at is not null as is_dismissed
       from tenants where id = ${tenantId}`
-    // oxlint-disable-next-line unicorn/no-null -- SQL NULL after ON DELETE SET NULL
     expect(row).toEqual({ onboarding_dismissed_by: null, is_dismissed: true })
   })
 })
@@ -208,7 +203,6 @@ describe('onboarding_completions foreign keys', () => {
     )
     const [row] =
       await sql`select completed_by, source from onboarding_completions where id = ${recorded}`
-    // oxlint-disable-next-line unicorn/no-null -- SQL NULL after ON DELETE SET NULL
     expect(row).toEqual({ completed_by: null, source: 'staff' })
   })
 })

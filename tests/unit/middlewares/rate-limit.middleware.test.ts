@@ -71,9 +71,7 @@ function buildAppBehindAsUser(limiter: RequestHandler): Express {
       thisRequest.user = {
         id: userId,
         email: 'stub@example.test',
-        // oxlint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
         firstName: null,
-        // oxlint-disable-next-line unicorn/no-null -- see comment above.
         lastName: null,
       }
     }

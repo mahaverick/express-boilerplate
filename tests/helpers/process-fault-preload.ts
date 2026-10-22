@@ -12,7 +12,6 @@
  */
 import net from 'node:net'
 
-// oxlint-disable-next-line @typescript-eslint/unbound-method -- re-applied below with the server as `this`
 const originalListen = net.Server.prototype.listen
 
 /**
@@ -41,6 +40,5 @@ net.Server.prototype.listen = listenOnFreePort as typeof originalListen
 const poll = setInterval(() => {
   if (process.listenerCount('uncaughtException') === 0) return
   clearInterval(poll)
-  // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth, the value under test
   throw new Error(`child process fault, stack limit ${String(Error.stackTraceLimit)}`)
 }, 20)

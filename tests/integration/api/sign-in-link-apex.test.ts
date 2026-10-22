@@ -69,7 +69,6 @@ const REQUEST_ACCEPTED_BODY = {
   success: true,
   message: 'Check your inbox for a sign-in link.',
   statusCode: 202,
-  // oxlint-disable-next-line unicorn/no-null -- the envelope's JSON null for "no data"
   data: null,
 }
 

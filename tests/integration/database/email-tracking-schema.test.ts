@@ -26,7 +26,6 @@ afterEach(async () => {
  */
 async function insertMessage(overrides: { resentFromId?: string } = {}): Promise<string> {
   const id = randomUUID()
-  // oxlint-disable-next-line unicorn/no-null -- a SQL NULL: postgres.js refuses undefined parameters
   const resentFromId = overrides.resentFromId ?? null
   await sql`
     insert into email_messages (id, recipient, template_key, sender_class, message_id_header, status, resent_from_id)
@@ -101,7 +100,6 @@ describe('email_events CHECKs', () => {
   })
 
   it.each([
-    // oxlint-disable-next-line unicorn/no-null -- a SQL NULL bounce_kind
     ['a bounce with no kind', 'bounced', null],
     ['a kind on a non-bounce', 'delivered', 'hard'],
   ])('refuses %s', async (_label, type, bounceKind) => {

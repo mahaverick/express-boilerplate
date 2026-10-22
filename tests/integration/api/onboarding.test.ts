@@ -30,7 +30,6 @@ const app = createApp()
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const tenantIds: string[] = []
-// oxlint-disable-next-line unicorn/no-null -- JSON null, as the API and the database return it
 const NONE = null
 
 afterEach(async () => {

@@ -69,11 +69,8 @@ const mockNotificationRow: Notification = {
   type: 'maintenance_mode_changed',
   title: 'Maintenance mode changed',
   body: 'body',
-  // oxlint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` database columns; see this const's own comment.
   metadata: null,
-  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   readAt: null,
-  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   dedupeKey: null,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
 }

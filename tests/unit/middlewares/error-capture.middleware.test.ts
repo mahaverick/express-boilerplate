@@ -105,7 +105,6 @@ describe('errorHandler and error tracking', () => {
     const { response, body } = mockResponse()
     const { request } = mockRequest()
 
-    // oxlint-disable-next-line unicorn/no-null -- the thrown value under test
     errorHandler(null, request, response, vi.fn())
 
     expect(reporter.reportErrorWithSpan).toHaveBeenCalledOnce()

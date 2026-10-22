@@ -67,7 +67,6 @@ async function withPlatformRoleChangedAfterResolve(
   seen: SeenRead,
   run: () => Promise<void>
 ): Promise<void> {
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findPlatformRole
   const platform = await platformTenant()
   let hasChanged = false
@@ -110,7 +109,6 @@ async function withMembershipRemovedAfterResolve(
   tenant: Tenant,
   run: () => Promise<void>
 ): Promise<void> {
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findByUserAndTenant
   let hasChanged = false
   /**
@@ -162,7 +160,6 @@ async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string>
  * as a service trusting the earlier read would.
  */
 function trustingEarlierRead(seen: SeenRead): UserMembershipRepository['lockPlatformRole'] {
-  // oxlint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
   return () => Promise.resolve(seen.role ?? null)
 }
 

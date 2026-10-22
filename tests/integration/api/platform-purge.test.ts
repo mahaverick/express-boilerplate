@@ -153,7 +153,6 @@ describe('POST /api/v1/platform/users/:id/purge', () => {
     expect(await sql`select 1 from users where id = ${gone.id}`).toHaveLength(0)
     const [sent] =
       await sql`select invited_by from tenant_invitations where id = ${gone.sentInvitationId}`
-    // oxlint-disable-next-line unicorn/no-null -- the foreign key sets it to SQL NULL
     expect(sent).toEqual({ invited_by: null })
     expect(await sql`select 1 from user_memberships where user_id = ${gone.id}`).toHaveLength(0)
     expect(
@@ -537,9 +536,7 @@ describe('email tracking rows in a purge', () => {
       await sql`select id, lifted_by from email_suppressions where id = any(${[active, liftedByThem]}) order by id`
     ).toEqual(
       [
-        // oxlint-disable-next-line unicorn/no-null -- SQL NULL: an active suppression has no lifter
         { id: active, lifted_by: null },
-        // oxlint-disable-next-line unicorn/no-null -- SQL NULL: the purged lifter is forgotten
         { id: liftedByThem, lifted_by: null },
       ].toSorted((a, b) => a.id.localeCompare(b.id))
     )
@@ -617,12 +614,10 @@ describe('onboarding rows in a purge', () => {
     )
     const [kept] =
       await sql`select completed_by from onboarding_completions where id = ${staffRow.id}`
-    // oxlint-disable-next-line unicorn/no-null -- the foreign key sets it to SQL NULL
     expect(kept).toEqual({ completed_by: null })
     const [tenant] = await sql`
       select onboarding_dismissed_by, onboarding_dismissed_at is not null as is_dismissed
       from tenants where id = ${gone.tenantId}`
-    // oxlint-disable-next-line unicorn/no-null -- the foreign key sets it to SQL NULL
     expect(tenant).toEqual({ onboarding_dismissed_by: null, is_dismissed: true })
   })
 

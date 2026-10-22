@@ -63,7 +63,6 @@ async function unownedInvitationMail(recipient: string, createdAt = new Date()):
   const message = await createTrackedMessage({
     recipient,
     templateKey: 'tenant_invitation',
-    // oxlint-disable-next-line unicorn/no-null -- the column's "no account"
     userId: null,
     createdAt,
   })

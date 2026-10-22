@@ -38,7 +38,6 @@ const OPTIONS: OnboardingProgressOptions = {
   stuckBefore: STUCK_BEFORE,
 }
 
-// oxlint-disable-next-line unicorn/no-null -- the column's "not set"
 const NOT_SET = null
 
 /**

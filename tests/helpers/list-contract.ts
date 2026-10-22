@@ -15,7 +15,6 @@ import type { RequestListener } from 'node:http'
 import { afterAll, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { request } from './request'
 
-// oxlint-disable-next-line unicorn/no-null -- the list contract sends JSON null for a missing cursor
 const NONE = null
 
 /**

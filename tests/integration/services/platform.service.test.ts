@@ -246,7 +246,6 @@ describe('platform.service', () => {
         {
           action: 'platform.member.granted',
           actorKind: 'system',
-          // oxlint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
           actorUserId: null,
           access: 'system',
           tenantId: platform.id,
@@ -292,7 +291,6 @@ describe('platform.service', () => {
         {
           action: 'user.created',
           actorKind: 'system',
-          // oxlint-disable-next-line unicorn/no-null -- the column is SQL NULL for a system actor
           actorUserId: null,
           access: 'system',
           tenantId: platform.id,

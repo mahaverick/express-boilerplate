@@ -27,11 +27,8 @@ export function fakeNotification(overrides: Partial<Notification> = {}): Notific
     type: 'tenant_invitation',
     title: 'You have an invitation',
     body: 'body',
-    // oxlint-disable-next-line unicorn/no-null -- Notification.metadata/readAt/dedupeKey are `T | null` columns.
     metadata: null,
-    // oxlint-disable-next-line unicorn/no-null -- see above.
     readAt: null,
-    // oxlint-disable-next-line unicorn/no-null -- see above.
     dedupeKey: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,

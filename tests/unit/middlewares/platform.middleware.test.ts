@@ -58,7 +58,6 @@ describe('requirePlatformRole', () => {
   })
 
   it('refuses a non-staff user with the generic 404', async () => {
-    // oxlint-disable-next-line unicorn/no-null -- getPlatformMembership answers null for non-staff
     const calls = await run('viewer', null)
     const error = calls[0]?.[0]
 

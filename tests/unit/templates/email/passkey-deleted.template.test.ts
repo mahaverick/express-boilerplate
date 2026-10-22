@@ -55,7 +55,6 @@ describe('renderPasskeyDeletedTemplate', () => {
     expect(PASSKEY_DELETED_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
       previewVariables: ['firstName', 'providerName', 'occurredAt', 'appName'],
-      // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     })
   })

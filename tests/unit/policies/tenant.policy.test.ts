@@ -157,7 +157,6 @@ describe('canPlatformActorModifyTarget', () => {
 })
 
 describe('canStaffMailTarget', () => {
-  // oxlint-disable-next-line unicorn/no-null -- the policy's "not staff" value
   const NOT_STAFF = null
   it.each<[MembershipRole, MembershipRole | null, boolean]>([
     ['owner', NOT_STAFF, true],

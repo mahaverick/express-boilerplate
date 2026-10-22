@@ -50,7 +50,6 @@ const MINUTE_MS = 60 * SECOND_MS
 // The longest backoff (600 s) plus the lease: past it, every leased row is claimable again.
 const PAST_LEASE_AND_BACKOFF_MS = (ANALYTICS_LEASE_SECONDS + 600 + 1) * SECOND_MS
 
-// oxlint-disable-next-line unicorn/no-null -- the column's "not leased" value, as postgres-js returns it
 const NOT_LEASED = null
 
 const fake: { posthog?: FakePosthog } = {}

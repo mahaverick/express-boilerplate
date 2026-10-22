@@ -79,9 +79,7 @@ function stubAuthenticatedUser(userId: string) {
     thisRequest.user = {
       id: userId,
       email: 'stub@example.test',
-      // oxlint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
       firstName: null,
-      // oxlint-disable-next-line unicorn/no-null -- see comment above.
       lastName: null,
     }
     next()
@@ -177,7 +175,6 @@ describe('resolveTenant + requireRole (integration)', () => {
         isPlatformTenant: false,
         role: 'owner',
         memberRole: 'owner',
-        // oxlint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
         platformRole: null,
         access: 'member',
       },

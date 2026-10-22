@@ -117,7 +117,6 @@ describe('createPlatformRouter', () => {
 
       expect(handlers).toHaveLength(3)
       expect(await runGate(handlers[0], 'viewer')).toEqual([[]])
-      // oxlint-disable-next-line unicorn/no-null -- getPlatformMembership answers null for non-staff
       const [refusal] = await runGate(handlers[0], null)
       expect(refusal?.[0]).toMatchObject({ message: NOT_FOUND.route.message, statusCode: 404 })
       expect(handlers[1]).toBe(handlersFor(router, 'get', '/tenants')[1])

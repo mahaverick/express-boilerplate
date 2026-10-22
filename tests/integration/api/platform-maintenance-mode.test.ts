@@ -43,7 +43,6 @@ import { clearRateLimiter } from '../../helpers/sign-in'
 const app = createApp()
 const ENVIRONMENT = 'local'
 const PATH = '/api/v1/platform/maintenance-mode'
-// oxlint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
 const NONE = null
 /**
  * Orders strings for `toSorted`.

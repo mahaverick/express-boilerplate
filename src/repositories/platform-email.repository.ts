@@ -258,7 +258,6 @@ function userOrNull(row: {
   deletedAt: Date | null
 }): EmailUserRow | null {
   if (row.id === null || row.email === null) {
-    // oxlint-disable-next-line unicorn/no-null -- no user row joined: purged, or the message had none
     return null
   }
   return {
@@ -355,8 +354,7 @@ function toRecord(row: MessageSelection): PlatformEmailRecord & { sortAt: string
     tenant:
       joinedTenantId !== null && joinedTenantName !== null && joinedTenantSlug !== null
         ? { id: joinedTenantId, name: joinedTenantName, slug: joinedTenantSlug }
-        : // oxlint-disable-next-line unicorn/no-null -- no tenant row joined: purged, or the message had none
-          null,
+        : null,
   }
 }
 

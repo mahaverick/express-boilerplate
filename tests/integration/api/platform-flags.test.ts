@@ -77,7 +77,6 @@ type FlagsMeta = import('@/types/flags').FlagsMetaResponse
  */
 type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 
-// oxlint-disable-next-line unicorn/no-null -- JSON null, as the list carries it
 const NONE = null
 
 /**

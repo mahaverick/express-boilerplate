@@ -286,11 +286,8 @@ describe('tenant.updated', () => {
 
     const result = await updateTenant({ userId: owner.id }, tenant.id, {
       name: 'Audit Co',
-      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       description: null,
-      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       logo: null,
-      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       website: null,
     })
 
@@ -304,7 +301,6 @@ describe('tenant.updated', () => {
 
     await updateTenant({ userId: owner.id }, tenant.id, {
       name: 'Audit Co',
-      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       description: null,
       website: 'https://acme.example',
     })
@@ -382,7 +378,6 @@ describe('tenant.settings_updated', () => {
     await updateSettings({ userId: owner.id }, tenant.id, {
       timezone: 'UTC',
       locale: 'fr',
-      // oxlint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
       metadata: null,
     })
 
@@ -578,7 +573,6 @@ describe('an invitation whose stored domain is no hostname', () => {
 
     const rows = await rowsFor(tenant.id, 'invitation.resent')
     expect(rows).toHaveLength(1)
-    // oxlint-disable-next-line unicorn/no-null -- the metadata stores JSON null
     expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: null })
   })
 
@@ -590,7 +584,6 @@ describe('an invitation whose stored domain is no hostname', () => {
 
     const rows = await rowsFor(tenant.id, 'invitation.revoked')
     expect(rows).toHaveLength(1)
-    // oxlint-disable-next-line unicorn/no-null -- the metadata stores JSON null
     expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: null })
   })
 })

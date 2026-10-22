@@ -7,12 +7,6 @@ import { errorResponse, messageResponse, successResponse } from '@/utilities/res
  * Builds a minimal mock Express response, enough to assert on `.status()`,
  * `.json()` and `.getHeader()` calls. Returns the response, its captured JSON
  * `body`, and the `status` and `getHeader` spies.
- *
- * The spies are returned as their own properties, not read back off
- * `response` in assertions: `response` is typed as `Response`, and
- * `@typescript-eslint/unbound-method` flags any reference to one of its
- * methods taken as a value rather than called, which `toHaveBeenCalledWith`
- * would otherwise trigger.
  */
 function mockResponse(): {
   response: Response
@@ -62,7 +56,6 @@ describe('messageResponse', () => {
       success: true,
       message: 'Signed out.',
       statusCode: 200,
-      // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
       data: null,
     })
   })
@@ -76,7 +69,6 @@ describe('messageResponse', () => {
       success: true,
       message: 'Accepted.',
       statusCode: 202,
-      // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
       data: null,
     })
   })

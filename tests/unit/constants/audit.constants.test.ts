@@ -72,7 +72,6 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     emailDomains: ['example.test', 'acme.example'],
     messageIds: ['message-1', 'message-2'],
   },
-  // oxlint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no tenant"
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
     from: 'off',
@@ -193,16 +192,13 @@ describe('AUDIT_ACTIONS', () => {
     const valid = VALID_METADATA[action]
     const schema = AUDIT_ACTIONS[action].metadata
     expect(schema.safeParse({ ...valid, emailDomain: 'ada@example.test' }).success).toBe(false)
-    // oxlint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no domain"
     expect(schema.safeParse({ ...valid, emailDomain: null }).success).toBe(true)
   })
 
   it('lets tenant.owner_invited record no invitee account and no reason (the invitation sent at creation)', () => {
     const schema = AUDIT_ACTIONS['tenant.owner_invited'].metadata
     const valid = VALID_METADATA['tenant.owner_invited']
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
     expect(schema.safeParse({ ...valid, inviteeUserId: null }).success).toBe(true)
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: created with the tenant, no reason asked
     expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
   })
 
@@ -329,7 +325,6 @@ describe('emailDomain shape', () => {
     '%s accepts a null domain, for a stored address that has no hostname',
     (action) => {
       expect(
-        // oxlint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no domain"
         AUDIT_ACTIONS[action].metadata.safeParse({ role: 'viewer', emailDomain: null }).success
       ).toBe(true)
     }

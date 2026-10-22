@@ -66,7 +66,6 @@ const fake = vi.hoisted(() => {
     mGet: (keys: string[]) => {
       record('mGet', [keys])
       if (state.isHung) return new Promise<never>(() => {})
-      // oxlint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
       return Promise.resolve(keys.map((key) => state.values.get(key) ?? null))
     },
   }
@@ -186,9 +185,7 @@ describe('getErrorTrackingStatus', () => {
       window: '15m',
       sent: 0,
       dropped: { throttled: 0, buffer_full: 0, rejected: 0, retry_exhausted: 0 },
-      // oxlint-disable-next-line unicorn/no-null -- the contract's JSON null
       lastSendOkAt: null,
-      // oxlint-disable-next-line unicorn/no-null -- the contract's JSON null
       lastSendError: null,
     })
     expect(warn).toHaveBeenCalledTimes(1)
@@ -277,9 +274,7 @@ describe('a 5xx storm while Redis is down', () => {
       window: '15m',
       sent: 0,
       dropped: { throttled: 0, buffer_full: 0, rejected: 0, retry_exhausted: 0 },
-      // oxlint-disable-next-line unicorn/no-null -- the contract's JSON null
       lastSendOkAt: null,
-      // oxlint-disable-next-line unicorn/no-null -- the contract's JSON null
       lastSendError: null,
     })
   })

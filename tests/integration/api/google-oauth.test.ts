@@ -451,7 +451,6 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const email = uniqueEmail()
         const existing = await userRepository.create({ email })
         createdIds.push(existing.id)
-        // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
         const realLock = Users.prototype.lockById
         const changed = { done: false }
         /**
@@ -790,7 +789,6 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   it('issues no session when the account is deactivated between lookup and issue', async () => {
     // completeGoogleSignIn re-reads the user under its row lock before issuing.
     const { UserRepository: Users } = await import('@/repositories/user.repository')
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realUpdate = Users.prototype.update
     const email = `google-race-${randomUUID()}@example.test`
     const profile = googleProfile({ email, emailVerified: true })

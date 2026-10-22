@@ -49,7 +49,6 @@ const tenantRepository = new TenantRepository()
 const tenantIds: string[] = []
 const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
 const SINCE = new Date('2026-10-06T10:42:00.000Z')
-// oxlint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
 const NONE = null
 
 /**

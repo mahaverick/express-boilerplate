@@ -9,7 +9,6 @@ const NOW = new Date('2026-10-05T12:00:00.000Z')
 const USER_ID = '0199b000-0000-7000-8000-000000000001'
 const TENANT_ID = '0199b000-0000-7000-8000-000000000002'
 const SESSION_ID = '0199b000-0000-7000-8000-000000000003'
-// oxlint-disable-next-line unicorn/no-null -- the input's contract uses null for "none"
 const NONE = null
 
 describe('buildFlagContext', () => {

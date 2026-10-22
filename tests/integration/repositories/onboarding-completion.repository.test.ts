@@ -51,7 +51,6 @@ describe('OnboardingCompletionRepository.insertIfNew', () => {
       source: 'auto',
     })
 
-    // oxlint-disable-next-line unicorn/no-null -- a tenant step's row has no member
     expect(first).toMatchObject({ tenantId: tenant.id, userId: null, source: 'auto' })
     expect(repeat).toBeUndefined()
     expect(await repository.listForTenant(tenant.id)).toHaveLength(1)

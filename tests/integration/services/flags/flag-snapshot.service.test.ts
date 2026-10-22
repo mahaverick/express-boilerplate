@@ -58,7 +58,6 @@ vi.mock('redis', async (importOriginal) => {
   }
 })
 
-// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const stores: FlagSnapshotStore[] = []
 

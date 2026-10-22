@@ -767,7 +767,6 @@ describe('the resend cooldown', () => {
   })
 
   it('answers null for a row never stamped', () => {
-    // oxlint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
     expect(resendAvailableAt(null, sentMs)).toBeNull()
   })
 
@@ -783,7 +782,6 @@ describe('the resend cooldown', () => {
 
     expect(resendCooldownError(lastSentAt, end).retryAfterSeconds).toBe(1)
     expect(resendCooldownError(lastSentAt, end + 60_000).retryAfterSeconds).toBe(1)
-    // oxlint-disable-next-line unicorn/no-null -- a row never stamped holds null, as the column does
     expect(resendCooldownError(null, sentMs).retryAfterSeconds).toBe(1)
   })
 })

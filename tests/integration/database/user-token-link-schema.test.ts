@@ -14,7 +14,6 @@ const PREFIX = `link-schema-${randomUUID()}-`
 const PREFIX_LIKE = `${PREFIX}%`
 const userIds: string[] = []
 const tenantIds: string[] = []
-// oxlint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 afterEach(async () => {

@@ -155,7 +155,6 @@ describe('GET /api/v1/platform/users/:id', () => {
       email: user.email,
       firstName: 'Ada',
       authProviders: ['email'],
-      // oxlint-disable-next-line unicorn/no-null -- JSON null: not staff
       platformRole: null,
       membershipCount: 1,
       memberships: [{ tenantId: tenant.id, tenantName: 'Analytical Engines', role: 'owner' }],

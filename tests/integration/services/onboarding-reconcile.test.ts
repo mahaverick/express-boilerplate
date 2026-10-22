@@ -44,7 +44,6 @@ import {
 } from '../../helpers/platform-users'
 
 const invitationRepository = new TenantInvitationRepository()
-// oxlint-disable-next-line unicorn/no-null -- awaiting the first owner: no start time
 const NOT_STARTED = null
 
 /**

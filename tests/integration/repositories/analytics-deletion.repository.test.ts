@@ -74,7 +74,6 @@ describe('AnalyticsDeletionRepository.insert', () => {
         distinctId: 'user-a',
         notBefore: at(MINUTE_MS),
         attempts: 0,
-        // oxlint-disable-next-line unicorn/no-null -- the column's "never failed" state
         lastError: null,
       },
     ])

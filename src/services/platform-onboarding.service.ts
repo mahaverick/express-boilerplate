@@ -168,7 +168,6 @@ export function daysStuckOf(
   lastProgressAt: Date | null,
   now: Date
 ): number | null {
-  // oxlint-disable-next-line unicorn/no-null -- JSON null: only a stuck tenant has days stuck
   if (state !== 'stuck' || lastProgressAt === null) return null
   return Math.floor((now.getTime() - lastProgressAt.getTime()) / DAY_MS)
 }
@@ -206,9 +205,7 @@ export function reminderBlockOf(input: {
   else if (input.ownerCount === 0) blockedBy = 'no_owner'
   else if (pendingUntil !== undefined) blockedBy = 'reminded_recently'
   return {
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: nothing blocks it
     blockedBy: blockedBy ?? null,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: no limit in force
     nextAllowedAt: pendingUntil ?? null,
   }
 }
@@ -229,7 +226,6 @@ function personOf(user: OnboardingUserRow): OnboardingPerson {
  * @returns Its key and title, or null.
  */
 function stepSummaryOf(step: OnboardingStep | undefined): OnboardingStepSummary | null {
-  // oxlint-disable-next-line unicorn/no-null -- JSON null: every required step is done
   return step === undefined ? null : { key: step.key, title: step.title }
 }
 
@@ -277,7 +273,6 @@ export async function getOnboardingFunnel(
     range,
     from,
     totals: { started, ...totals },
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: no tenant started in the range
     completionRate: started === 0 ? null : totals.complete / started,
     trackedTenants,
     steps: ONBOARDING_STEPS.map((step) => ({
@@ -370,9 +365,7 @@ function memberStatusOf(
   return {
     user: personOf(member),
     role: member.role,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: not done
     completedAt: completion?.completedAt ?? null,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: not done
     source: completion?.source ?? null,
   }
 }
@@ -430,18 +423,13 @@ function stepDetailOf(
     scope: step.scope,
     kind: step.completion.kind,
     required: step.required,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: not done
     completedAt: counted?.completedAt ?? null,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: not done
     source: counted?.source ?? null,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: automatic, or the actor was purged
     completedBy: counted?.completedBy ? personOf(counted.completedBy) : null,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: only a staff completion has a reason
     reason: counted?.reason ?? null,
     members:
       entries === undefined
-        ? // oxlint-disable-next-line unicorn/no-null -- JSON null: a tenant step has no per-member status
-          null
+        ? null
         : {
             completed: entries.filter((entry) => entry.completedAt !== null).length,
             total: entries.length,
@@ -474,7 +462,6 @@ function reminderViewOf(row: OnboardingReminderRow): OnboardingReminderView {
   return {
     id: row.id,
     sentAt: row.occurredAt,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: the staff member was purged
     sentBy: row.actor === null ? null : personOf(row.actor),
     reason: typeof reason === 'string' ? reason : '',
     recipientCount: typeof recipientCount === 'number' ? recipientCount : 0,
@@ -508,7 +495,6 @@ export async function getTenantOnboardingDetail(
     ),
   ])
   const owners = members.filter((member) => member.role === 'owner' && member.isActive)
-  // oxlint-disable-next-line unicorn/no-null -- JSON null: never reminded
   const lastSentAt = reminders[0]?.occurredAt ?? null
   const isOpen =
     progress.lifecycleState === 'active' &&
@@ -542,7 +528,6 @@ export async function getTenantOnboardingDetail(
     lastProgressAt: progress.lastProgressAt,
     completedAt: progress.completedAt,
     dismissedAt: progress.dismissedAt,
-    // oxlint-disable-next-line unicorn/no-null -- JSON null: not dismissed, or by a purged user
     dismissedBy: dismissedBy === undefined ? null : personOf(dismissedBy),
     daysStuck: daysStuckOf(progress.state, progress.lastProgressAt, now),
     requiredDone: progress.requiredDone,
@@ -846,7 +831,6 @@ export async function sendOnboardingReminder(
       lifecycleState: tenant.lifecycleState,
       state: progress.state,
       ownerCount: owners.length,
-      // oxlint-disable-next-line unicorn/no-null -- the rule's "never reminded"
       lastSentAt: lastSentAt ?? null,
       now,
     })
@@ -981,7 +965,6 @@ export async function reconcileOnboarding(): Promise<OnboardingReconcileResult> 
         })
         if (completion !== undefined) {
           stepsRestored += 1
-          // oxlint-disable-next-line unicorn/no-null -- the event's "no user": the reconcile acts for nobody
           await emitStepCompleted(completion, 'auto', null)
         }
       } catch (error) {

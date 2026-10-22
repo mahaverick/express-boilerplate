@@ -34,7 +34,6 @@ import { resetMaintenanceMode, storeMaintenanceMode } from '../../../helpers/mai
 import { waitUntil } from '../../../helpers/timing'
 
 const NOW = new Date('2026-10-06T10:00:30.000Z')
-// oxlint-disable-next-line unicorn/no-null -- the contract uses null for "none"
 const NONE = null
 
 /**

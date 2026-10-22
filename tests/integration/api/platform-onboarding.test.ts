@@ -32,7 +32,6 @@ interface ApiEnvelope<TData> {
   data?: TData
 }
 
-// oxlint-disable-next-line unicorn/no-null -- an unstarted tenant's onboarding_started_at
 const NOT_STARTED = null
 
 /**
@@ -220,7 +219,6 @@ describe('GET /api/v1/platform/onboarding/tenants', () => {
 
   it.each([
     ['in_progress', { startedAt: daysAgo(1) }],
-    // oxlint-disable-next-line unicorn/no-null -- awaiting the first owner
     ['awaiting_owner', { startedAt: null }],
     ['dismissed', { startedAt: daysAgo(30), dismissedAt: daysAgo(29) }],
   ] as const)('lists state=%s', async (state, options) => {

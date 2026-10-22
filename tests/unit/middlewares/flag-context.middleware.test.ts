@@ -13,7 +13,6 @@ import type { FlagContext } from '@/types/flags'
 vi.mock('@/services/flags/flag-context.service', () => ({ flagContextForUser: vi.fn() }))
 vi.mock('@/services/flags/flags.service', () => ({ evaluateKey: vi.fn() }))
 
-// oxlint-disable-next-line unicorn/no-null -- the context's contract uses null
 const NONE = null
 const USER_ID = '0199b000-0000-7000-8000-000000000001'
 const TENANT_ID = '0199b000-0000-7000-8000-000000000002'

@@ -133,12 +133,12 @@ function probeApp(): express.Express {
     await Promise.resolve()
     const kind = String(request_.params.kind)
     // The non-Error throws below are the case under test.
-    /* oxlint-disable @typescript-eslint/only-throw-error, unicorn/no-null -- a falsy throw is the case under test */
+    /* oxlint-disable @typescript-eslint/only-throw-error -- a falsy throw is the case under test */
     if (kind === 'string') throw 'boom'
     if (kind === 'null') throw null
     if (kind === 'object') throw { message: 'x', email: 'a@b.example' }
     throw Object.create(null)
-    /* oxlint-enable @typescript-eslint/only-throw-error, unicorn/no-null */
+    /* oxlint-enable @typescript-eslint/only-throw-error */
   })
   // Fails after the client's socket has closed (with `waitForClose=1`): with an abort error (`reset`) or any other (`plain`).
   router.get('/abort/:kind', async (request_: Request) => {

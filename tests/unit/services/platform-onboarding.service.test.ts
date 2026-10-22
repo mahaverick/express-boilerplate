@@ -18,7 +18,6 @@ import {
 } from '@/services/platform-onboarding.service'
 
 const NOW = new Date('2026-10-02T12:00:00.000Z')
-// oxlint-disable-next-line unicorn/no-null -- the functions' JSON null
 const NONE = null
 const DAY_MS = 24 * 60 * 60 * 1000
 

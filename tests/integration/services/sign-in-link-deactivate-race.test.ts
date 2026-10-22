@@ -30,7 +30,6 @@ async function verifyAround(
 ): Promise<PromiseSettledResult<unknown>> {
   const reached = deferred()
   const release = deferred()
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realUpdate = UserRepository.prototype.update
   /**
    * Stands in for `UserRepository.update`: it blocks the `lastLoggedInAt` write until released and

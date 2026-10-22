@@ -37,7 +37,6 @@ import {
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
 
-// oxlint-disable-next-line unicorn/no-null -- JSON null, as the API returns it
 const NONE = null
 
 const tenantRepository = new TenantRepository()

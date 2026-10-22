@@ -177,12 +177,7 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
       templateKey: 'welcome',
       variables: {
         firstName: 'Ada',
-        signInUrl: buildSignInLinkUrl(
-          RAW,
-          // oxlint-disable-next-line unicorn/no-null -- a row with no stored redirect
-          { email: EMAIL, app: 'web', redirect: null },
-          'welcome'
-        ),
+        signInUrl: buildSignInLinkUrl(RAW, { email: EMAIL, app: 'web', redirect: null }, 'welcome'),
         expiresInMinutes: '15',
         expiresAt: '15:42 UTC on 20 October 2026',
         appName: 'App',
@@ -278,7 +273,6 @@ describe('links we send', () => {
   })
 
   it('names the welcome mail as the campaign of a welcome link', () => {
-    // oxlint-disable-next-line unicorn/no-null -- a row with no stored redirect
     const row = { email: EMAIL, app: 'web' as const, redirect: null }
     expect(new URL(buildSignInLinkUrl(RAW, row, 'welcome')).searchParams.get('utm_campaign')).toBe(
       'welcome'

@@ -105,7 +105,6 @@ async function auditRevokedInvitations(
         targetId: invitation.id,
         metadata: {
           role: invitation.role,
-          // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           emailDomain: hostnameDomain(invitation.email) ?? null,
           ...(options.reason !== undefined && { reason: options.reason }),
         },

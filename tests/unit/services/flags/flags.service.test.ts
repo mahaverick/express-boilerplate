@@ -46,7 +46,6 @@ vi.mock('@/services/flags/flag-snapshot.service', () => ({ getFlagSnapshot: vi.f
 vi.mock('@/services/flags/flag-exposure.service', () => ({ recordExposure: vi.fn() }))
 vi.mock('@/services/flags/flag-counters.service', () => ({ recordUnknownVariant: vi.fn() }))
 
-// oxlint-disable-next-line unicorn/no-null -- the context's contract uses null
 const NONE = null
 const TENANT_ID = '0199b000-0000-7000-8000-000000000002'
 

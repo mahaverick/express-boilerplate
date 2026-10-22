@@ -157,7 +157,6 @@ describe('creating and listing passkeys', () => {
       name: 'Apple Passwords',
       synced: true,
       provider: { name: 'Apple Passwords' },
-      // oxlint-disable-next-line unicorn/no-null -- the API's JSON null for "never used"
       lastUsedAt: null,
     })
     expect(envelope(created).data.passkey).toMatchObject({

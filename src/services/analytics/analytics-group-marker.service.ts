@@ -44,7 +44,6 @@ function tenantKeyOf(row: AnalyticsOutboxRow): string | undefined {
  */
 function groupSetOf(tenant: TenantGroupSnapshot | undefined): TenantGroupSet {
   if (!tenant) {
-    // oxlint-disable-next-line unicorn/no-null -- null is what clears a group property in PostHog
     return { name: null, status: 'purged' }
   }
   return { name: tenant.name, status: tenant.status, created_at: tenant.createdAt.toISOString() }

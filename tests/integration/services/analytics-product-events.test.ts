@@ -62,7 +62,6 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 const PREFIX = `analytics-${randomUUID()}-`
-// oxlint-disable-next-line unicorn/no-null -- a non-staff user's platform role, as sent
 const NONE = null
 const createdTenantIds: string[] = []
 const registeredEmails: string[] = []

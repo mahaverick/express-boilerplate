@@ -104,7 +104,6 @@ describe('backfillTenantGroups', () => {
     await insertTenant('active')
     await insertTenant('active')
     const calls = { count: 0 }
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- called below with the repository as `this`
     const realInsertMany = AnalyticsOutboxRepository.prototype.insertMany
 
     await withMutatedMethod(

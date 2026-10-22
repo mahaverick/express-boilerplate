@@ -24,7 +24,6 @@ const PRINCIPAL: RequestPrincipal = {
   isPlatformTenant: false,
   role: 'viewer',
   memberRole: 'viewer',
-  // oxlint-disable-next-line unicorn/no-null -- the principal's contract is `MembershipRole | null`
   platformRole: null,
   access: 'member',
 }

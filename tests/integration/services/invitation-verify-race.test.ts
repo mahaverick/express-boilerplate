@@ -175,7 +175,6 @@ describe('invitation verify races', () => {
     const email = `invite-race-late-${randomUUID()}@example.test`
     usedEmails.push(email)
     const { tenant, rawToken } = await invitedTo(email)
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realFind = UserRepository.prototype.findByEmail
     const winner: { started: boolean; response?: Response } = { started: false }
     /**
@@ -212,7 +211,6 @@ describe('invitation verify races', () => {
     usedEmails.push(email)
     const { tenant, rawToken } = await invitedTo(email)
     const seeded: { id?: string } = {}
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realCreate = UserRepository.prototype.create
     /**
      * Stands in for `UserRepository.create`: just before the click's insert, a
@@ -254,7 +252,6 @@ describe('invitation verify races', () => {
       const email = `invite-race-mode-${randomUUID()}@example.test`
       usedEmails.push(email)
       const { rawToken } = await invitedTo(email)
-      // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realFind = TenantInvitationRepository.prototype.findValidByTokenHash
       /**
        * Stands in for `findValidByTokenHash`: the lookup succeeds, then the mode switches.
@@ -290,7 +287,6 @@ describe('invitation verify races', () => {
   it('answers MAINTENANCE_MODE, as sign-in verify does, when assertSignInAllowed refuses the account, and claims nothing', async () => {
     const invitee = await createTrackedUser({ verified: false })
     const { rawToken } = await invitedTo(invitee.email)
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realFind = UserRepository.prototype.findByEmail
     /**
      * Stands in for `UserRepository.findByEmail`: once the account is read, `full` begins.

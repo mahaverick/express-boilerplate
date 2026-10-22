@@ -449,11 +449,8 @@ describe('UserMembershipRepository lock modes', () => {
  */
 async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
   const calls: string[] = []
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realOwners = UserMembershipRepository.prototype.lockOwners
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realMemberships = UserMembershipRepository.prototype.lockMemberships
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realPlatformRole = UserMembershipRepository.prototype.lockPlatformRole
   /**
    * Wraps `lockOwners` so `recordModes` sees the mode each call site passes.

@@ -164,16 +164,11 @@ export async function getFlagsStatus(at: Date = new Date()): Promise<FlagsStatus
     (!Number.isFinite(checkedAtMs) || at.getTime() - checkedAtMs > FLAG_SNAPSHOT_STALE_MS)
   const status: FlagsStatus = {
     enabled: isEnabled,
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     snapshotAt: snapshot?.fetchedAt ?? null,
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     checkedAt: snapshot?.checkedAt ?? null,
     stale: isStale,
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     lastFetchOk: null,
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     lastFetchError: null,
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     propertyMatchingVersion: snapshot?.propertyMatchingVersion ?? null,
     counts: { ...countsOf(snapshot), unknownVariant15m: 0 },
   }

@@ -245,7 +245,6 @@ describe('Google sign-in return target', () => {
   it('refuses an apex Google user demoted between the staff check and the session', async () => {
     const staff = await seedAccount('admin')
     const { AuthProviderRepository } = await import('@/repositories/auth-provider.repository')
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
     const realCreate = AuthProviderRepository.prototype.create
     const demoted = { done: false }
     /**

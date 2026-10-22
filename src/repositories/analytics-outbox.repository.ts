@@ -125,7 +125,6 @@ export class AnalyticsOutboxRepository {
       .update(outbox)
       .set({
         rejections: sql`least(${outbox.rejections} + 1, ${MAX_ATTEMPTS})`,
-        // oxlint-disable-next-line unicorn/no-null -- a null lease is the column's "released" state
         claimedUntil: null,
       })
       .where(inArray(outbox.id, ids))

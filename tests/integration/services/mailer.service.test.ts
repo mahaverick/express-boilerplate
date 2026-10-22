@@ -675,7 +675,6 @@ describe('sendMail', () => {
        */
       const sendFailureCall = capturedErrorCalls.find((call) => call[0] === 'Mail send failed')
       expect(sendFailureCall).toBeDefined()
-      // oxlint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
       const inspectedLogged = inspect(sendFailureCall?.[1], { depth: null })
       expect(inspectedLogged).not.toContain(rawToken)
       expect(inspectedLogged).not.toContain(confirmUrl)

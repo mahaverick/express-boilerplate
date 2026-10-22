@@ -166,7 +166,6 @@ describe('owner re-issue vs the old invitee accepting', () => {
     // Pause the accept after it claimed the invitation and inserted the owner membership, before commit.
     const reached = deferred<number>()
     const release = deferred()
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realInsert = UserMembershipRepository.prototype.insertIfAbsent
     /**
      * Pauses the accept after its owner membership insert, reporting its backend pid, until

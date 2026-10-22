@@ -21,7 +21,6 @@ import {
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const createdTenantIds: string[] = []
-// oxlint-disable-next-line unicorn/no-null -- the function's contract uses null for "none"
 const NONE = null
 
 afterEach(async () => {

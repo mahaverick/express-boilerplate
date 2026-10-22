@@ -21,7 +21,6 @@ import {
 } from '@/validators/flag-definition.validators'
 
 const DAY_MS = 86_400_000
-// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 
 /**
@@ -35,17 +34,11 @@ const FLAG_REASON_POSTHOG_CODES: Readonly<Record<FlagReason, string | null>> = {
   no_condition_match: 'no_condition_match',
   holdout: 'holdout_condition_value',
   'fallback:no_tenant': 'no_group_type',
-  // oxlint-disable-next-line unicorn/no-null -- PostHog omits an inactive flag
   'fallback:inactive': null,
-  // oxlint-disable-next-line unicorn/no-null -- express's own fallback
   'fallback:unconfigured': null,
-  // oxlint-disable-next-line unicorn/no-null -- express's own fallback
   'fallback:snapshot_missing': null,
-  // oxlint-disable-next-line unicorn/no-null -- express's own fallback
   'fallback:flag_missing': null,
-  // oxlint-disable-next-line unicorn/no-null -- express's own fallback
   'fallback:unsupported': null,
-  // oxlint-disable-next-line unicorn/no-null -- express's own fallback
   'fallback:inconclusive': null,
 }
 

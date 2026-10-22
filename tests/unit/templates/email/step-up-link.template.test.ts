@@ -50,7 +50,6 @@ describe('renderStepUpLinkTemplate', () => {
     expect(STEP_UP_LINK_TEMPLATE_META).toEqual({
       senderClass: 'transactional',
       previewVariables: ['firstName', 'expiresInMinutes', 'expiresAt', 'appName'],
-      // oxlint-disable-next-line unicorn/no-null -- the registry's "never resent" value
       resendAction: null,
     })
   })

@@ -89,7 +89,6 @@ const userId = randomUUID()
 const tenantId = randomUUID()
 const invitationId = randomUUID()
 const seeded = { refresh: tokenHash(), sign_in_link: tokenHash(), step_up_link: tokenHash() }
-// oxlint-disable-next-line unicorn/no-null -- a SQL NULL parameter: postgres.js refuses undefined
 const SQL_NULL = null
 
 beforeAll(async () => {
@@ -162,11 +161,8 @@ describe('migration 0030 over rows of every 0029 purpose', () => {
       from user_tokens order by purpose`
 
     expect(rows).toEqual([
-      // oxlint-disable-next-line unicorn/no-null -- the new column starts NULL
       { purpose: 'refresh', tokenHash: seeded.refresh, invitationId: null },
-      // oxlint-disable-next-line unicorn/no-null -- the new column starts NULL
       { purpose: 'sign_in_link', tokenHash: seeded.sign_in_link, invitationId: null },
-      // oxlint-disable-next-line unicorn/no-null -- the new column starts NULL
       { purpose: 'step_up_link', tokenHash: seeded.step_up_link, invitationId: null },
     ])
   })

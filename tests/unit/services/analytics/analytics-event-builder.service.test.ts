@@ -72,7 +72,6 @@ const BANNED_FIELD_PROBE = 'Banned Field Probe'
  * Text only a `slug` field is given: a tenant slug must never reach an event.
  */
 const SLUG_PROBE = 'slug-probe-co'
-// oxlint-disable-next-line unicorn/no-null -- audit_logs columns are nullable, and the row type says so
 const NONE = null
 
 /**

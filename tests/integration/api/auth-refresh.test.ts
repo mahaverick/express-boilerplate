@@ -386,7 +386,6 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
         success: true,
         message: 'Signed out.',
         statusCode: 200,
-        // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,
       })
     })

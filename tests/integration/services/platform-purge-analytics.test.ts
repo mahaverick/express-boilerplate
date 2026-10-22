@@ -23,7 +23,6 @@ import {
 const REASON = 'Erasure request, ticket 9002'
 const MINUTE_MS = 60_000
 
-// oxlint-disable-next-line @typescript-eslint/unbound-method -- called below with the repository as `this`
 const realDeleteForDistinctId = AnalyticsOutboxRepository.prototype.deleteForDistinctId
 
 afterEach(async () => {

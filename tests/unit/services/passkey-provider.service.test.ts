@@ -22,9 +22,7 @@ describe('passkeyProvider', () => {
   it('falls back to Passkey for an unknown AAGUID', () => {
     expect(passkeyProvider('00000000-0000-0000-0000-000000000000')).toEqual({
       name: 'Passkey',
-      // oxlint-disable-next-line unicorn/no-null -- the API's "no icon" value
       iconLight: null,
-      // oxlint-disable-next-line unicorn/no-null -- the API's "no icon" value
       iconDark: null,
     })
   })
@@ -52,7 +50,6 @@ describe('createPasskeyProviderLookup', () => {
     const provider = createPasskeyProviderLookup(data)('aaaaaaaa-0000-0000-0000-000000000001')
     expect(provider).toEqual({
       name: 'Big',
-      // oxlint-disable-next-line unicorn/no-null -- the API's "no icon" value
       iconLight: null,
       iconDark: 'data:image/png;base64,AAAA',
     })
@@ -83,7 +80,6 @@ describe('createPasskeyProviderLookup', () => {
       createPasskeyProviderLookup({
         source,
         icons: [],
-        // oxlint-disable-next-line unicorn/no-null -- the stored "no icon" value
         entries: { x: { name: 'X', light: 3, dark: null } },
       })
     ).toThrow(/out of range/)

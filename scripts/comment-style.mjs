@@ -6,7 +6,7 @@
 import { findHistory } from './history-patterns.mjs'
 
 const DIRECTIVE =
-  /^\s*(?:eslint-disable|eslint-enable|@ts-(?:expect-error|ignore|nocheck|check)|prettier-ignore|(?:c8|v8|istanbul)\s+ignore|@vite-ignore|webpackChunkName|@vitest-environment|[#@]__PURE__|\/\s*<reference\b)/
+  /^\s*(?:eslint-disable|eslint-enable|oxlint-disable|oxlint-enable|oxfmt-ignore|@ts-(?:expect-error|ignore|nocheck|check)|prettier-ignore|(?:c8|v8|istanbul)\s+ignore|@vite-ignore|webpackChunkName|@vitest-environment|[#@]__PURE__|\/\s*<reference\b)/
 
 /**
  * Whether a block comment is the whole body of a JSX expression container on one line.

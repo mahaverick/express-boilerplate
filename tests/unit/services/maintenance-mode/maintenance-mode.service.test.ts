@@ -24,11 +24,7 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
     ...actual,
     getRedis: () =>
       Promise.resolve({
-        get: () =>
-          redis.isHung
-            ? new Promise<never>(() => {})
-            : // oxlint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
-              Promise.resolve(null),
+        get: () => (redis.isHung ? new Promise<never>(() => {}) : Promise.resolve(null)),
         publish: redis.publish,
         set: redis.set,
       }),

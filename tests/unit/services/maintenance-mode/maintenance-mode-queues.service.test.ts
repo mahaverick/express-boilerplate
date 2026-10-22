@@ -42,7 +42,6 @@ vi.mock('@/services/queue.service', async (importOriginal) => {
   }
 })
 
-// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
 const NOW = new Date('2026-10-06T10:00:30.000Z')
 
@@ -212,11 +211,8 @@ describe('getQueuePauseStates with a Redis that stalls', () => {
     await vi.advanceTimersByTimeAsync(1)
     await pending
     expect(settled).toHaveBeenCalledWith([
-      // oxlint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
       { name: 'email', paused: null, active: null },
-      // oxlint-disable-next-line unicorn/no-null -- as above
       { name: 'auth-email', paused: null, active: null },
-      // oxlint-disable-next-line unicorn/no-null -- as above
       { name: 'notification', paused: null, active: null },
     ])
     expect(warn).toHaveBeenCalledTimes(1)

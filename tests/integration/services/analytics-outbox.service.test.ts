@@ -453,7 +453,6 @@ describe('staff status rows', () => {
     expect(rows.map((row) => row.event)).toEqual(['member_left', '$set'])
     expect(rows[1]).toMatchObject({
       distinctId: leaver.id,
-      // oxlint-disable-next-line unicorn/no-null -- the $set row records JSON null for "not staff"
       properties: { $set: { is_staff: false, platform_role: null } },
     })
   })

@@ -40,6 +40,12 @@ describe('local/comment-style', () => {
       '// eslint-disable-next-line no-console -- CLI output\n// why\nconsole.log(1)\n',
     ],
     ['a block eslint directive', '/* eslint-disable no-console */\nconsole.log(1)\n'],
+    [
+      'an oxlint directive then a why',
+      '// oxlint-disable-next-line no-console -- CLI output\n// why\nconsole.log(1)\n',
+    ],
+    ['a block oxlint directive', '/* oxlint-disable no-console */\nconsole.log(1)\n'],
+    ['an oxfmt ignore then a why', '// oxfmt-ignore\n// why\nconst a = 1\n'],
     ['a triple-slash reference', '/// <reference types="vite/client" />\nexport {}\n'],
     ['a pure annotation', 'export const a = /*#__PURE__*/ f()\n'],
     ['a vitest environment directive', '// @vitest-environment node\n// why\nexport {}\n'],

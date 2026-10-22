@@ -15,7 +15,6 @@ import { analyticsOutboxRepository as repository } from '@/repositories/analytic
 import { db, sql } from '@/services/database.service'
 
 const NOW = new Date('2030-01-01T00:00:00.000Z')
-// oxlint-disable-next-line unicorn/no-null -- the lease column's "never claimed" state, as postgres returns it
 const NONE = null
 const LEASE_SECONDS = 60
 const SECOND_MS = 1000

@@ -122,7 +122,6 @@ class PasskeyController extends BaseController {
       {
         user: toProfileResponse(session.user, session.platformRole),
         accessToken: session.accessToken,
-        // oxlint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
         redirect: null,
         isNewUser: false,
       },

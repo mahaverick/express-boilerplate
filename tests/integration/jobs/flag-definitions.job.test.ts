@@ -53,7 +53,6 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
   return { ...actual, isFlagsEnabled: vi.fn(() => true) }
 })
 
-// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const T0 = new Date('2026-10-05T12:00:00.000Z')
 const T1 = new Date('2026-10-05T12:00:30.000Z')

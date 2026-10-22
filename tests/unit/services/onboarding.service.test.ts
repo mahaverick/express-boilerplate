@@ -15,7 +15,6 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000
 const STARTED = new Date('2026-09-01T00:00:00.000Z')
 const OWNER = 'owner-1'
-// oxlint-disable-next-line unicorn/no-null -- the columns' and the derived contract's "none"
 const NONE = null
 
 /**

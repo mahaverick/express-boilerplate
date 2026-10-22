@@ -14,7 +14,6 @@ const store = vi.hoisted(() => ({ current: undefined as ParsedSnapshot | undefin
 
 vi.mock('@/services/flags/flag-snapshot.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/flags/flag-snapshot.service')>()
-  // oxlint-disable-next-line unicorn/no-null -- the store answers null before a first load
   return { ...actual, getFlagSnapshot: () => store.current ?? null }
 })
 
@@ -24,7 +23,6 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
     ...actual,
     getRedis: () =>
       Promise.resolve({
-        // oxlint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
         mGet: (keys: string[]) => Promise.resolve(keys.map(() => null)),
       }),
   }
@@ -66,7 +64,6 @@ describe('listableUnregisteredFlags', () => {
   })
 
   it('answers nothing without a snapshot', () => {
-    // oxlint-disable-next-line unicorn/no-null -- the store answers null before a first load
     expect(listableUnregisteredFlags(null)).toEqual([])
   })
 

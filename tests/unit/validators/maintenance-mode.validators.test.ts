@@ -6,7 +6,6 @@
 import { describe, expect, it } from 'vite-plus/test'
 import { changeMaintenanceModeBody } from '@/validators/maintenance-mode.validators'
 
-// oxlint-disable-next-line unicorn/no-null -- the API's contract uses null for "clear"
 const NONE = null
 
 describe('changeMaintenanceModeBody', () => {

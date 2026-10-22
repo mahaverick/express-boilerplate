@@ -473,7 +473,6 @@ describe('/api/v1/notifications', () => {
         success: true,
         message: 'Notification deleted.',
         statusCode: 200,
-        // oxlint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
         data: null,
       })
     })

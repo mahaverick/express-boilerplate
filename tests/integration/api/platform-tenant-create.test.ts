@@ -102,7 +102,6 @@ describe('staff-created tenants', () => {
   async function createUser(isVerified = false): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
       email: `create-${randomUUID()}@example.test`,
-      // oxlint-disable-next-line unicorn/no-null -- the column is nullable; null is unverified
       emailVerifiedAt: isVerified ? new Date() : null,
     })
     userIds.push(user.id)
@@ -163,9 +162,7 @@ describe('staff-created tenants', () => {
       ).toBe(true)
       expect(audit[1]?.metadata).toEqual({
         emailDomain: 'example.test',
-        // oxlint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
         inviteeUserId: null,
-        // oxlint-disable-next-line unicorn/no-null -- JSON null: no reason is asked at creation
         reason: null,
       })
     })
@@ -415,7 +412,6 @@ describe('staff-created tenants', () => {
         "This tenant is archived, so it can't get an owner invitation."
       )
 
-      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFind = TenantRepository.prototype.findByIdIncludingDeleted
       let calls = 0
       /**
@@ -429,7 +425,6 @@ describe('staff-created tenants', () => {
         calls += 1
         const found = await realFind.apply(this, arguments_)
         if (calls !== 1 || !found) return found
-        // oxlint-disable-next-line unicorn/no-null -- the live row's deleted_at
         return { ...found, lifecycleState: 'active', deletedAt: null }
       }
       await withMutatedMethod(

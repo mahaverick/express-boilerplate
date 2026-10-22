@@ -39,22 +39,15 @@ const mockTenant: Tenant = {
   id: 'tenant-1',
   name: 'Acme Inc',
   slug: 'acme',
-  // oxlint-disable-next-line unicorn/no-null -- Tenant.description/logo/website are `T | null` database columns.
   description: null,
-  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   logo: null,
-  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   website: null,
   lifecycleState: 'active',
   isPlatform: false,
   onboardingTracked: false,
-  // oxlint-disable-next-line unicorn/no-null -- an untracked tenant has no onboarding clock.
   onboardingStartedAt: null,
-  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   onboardingDismissedAt: null,
-  // oxlint-disable-next-line unicorn/no-null -- see comment above.
   onboardingDismissedBy: null,
-  // oxlint-disable-next-line unicorn/no-null -- Tenant.deletedAt is a `Date | null` soft-delete column.
   deletedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -97,7 +90,6 @@ function memberPrincipal(role: MembershipRole): RequestPrincipal {
     isPlatformTenant: false,
     role,
     memberRole: role,
-    // oxlint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
     platformRole: null,
     access: 'member',
   }
@@ -172,7 +164,6 @@ describe('resolveTenant', () => {
     findByUserAndTenantSpy = vi.spyOn(UserMembershipRepository.prototype, 'findByUserAndTenant')
     findPlatformRoleSpy = vi
       .spyOn(UserMembershipRepository.prototype, 'findPlatformRole')
-      // oxlint-disable-next-line unicorn/no-null -- not staff
       .mockResolvedValue(null)
     recordPlatformAccessSpy = vi
       .spyOn(auditService, 'recordPlatformAccess')
@@ -378,7 +369,6 @@ describe('resolveTenant', () => {
       tenantSlug: 'acme',
       isPlatformTenant: false,
       role: 'admin',
-      // oxlint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
       memberRole: null,
       platformRole: 'admin',
       access: 'platform',
@@ -531,7 +521,6 @@ describe('requireMembership', () => {
   it('refuses staff reaching the tenant through a platform role, even an owner, with 404', () => {
     const principal: RequestPrincipal = {
       ...memberPrincipal('owner'),
-      // oxlint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
       memberRole: null,
       platformRole: 'owner',
       access: 'platform',
@@ -593,7 +582,6 @@ describe('requireRecentAuthOnPlatformTenant', () => {
 function staffRequest(fields: { authTime?: number; body?: unknown }): Request {
   const principal: RequestPrincipal = {
     ...memberPrincipal('owner'),
-    // oxlint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
     memberRole: null,
     platformRole: 'owner',
     access: 'platform',

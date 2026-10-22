@@ -29,7 +29,6 @@ import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 const originalClaimOnce = UserTokenRepository.prototype.claimOnce.bind(new UserTokenRepository())
-// oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
 const realLockById = UserRepository.prototype.lockById
 
 /**

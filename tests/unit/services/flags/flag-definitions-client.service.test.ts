@@ -16,7 +16,6 @@ import {
 } from '../../../helpers/fake-posthog'
 import { waitUntil } from '../../../helpers/timing'
 
-// oxlint-disable-next-line unicorn/no-null -- the stored ETag's contract is null for none
 const NONE = null
 
 /**

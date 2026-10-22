@@ -38,12 +38,6 @@ vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => {
  * A minimal mock Express response, enough for errorHandler to call
  * `.status().json()` and `.getHeader()` against, with a reader for the JSON
  * body and the `status` spy.
- *
- * The `status` spy is returned as its own property, not read back off
- * `response` in assertions: `response` is typed as `Response`, and
- * `@typescript-eslint/unbound-method` flags any reference to one of its
- * methods taken as a value rather than called, which `toHaveBeenCalledWith`
- * would otherwise trigger.
  */
 function mockResponse(): { response: Response; body: () => unknown; status: Mock } {
   let captured: unknown
@@ -151,7 +145,6 @@ describe('errorHandler', () => {
       vi.fn()
     )
 
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
     expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '42')
     expect(body()).toMatchObject({ statusCode: 429, code: 'STEP_UP_LINK_COOLDOWN' })
   })
@@ -160,7 +153,6 @@ describe('errorHandler', () => {
     const { response } = mockResponse()
     errorHandler(new HttpError('invalid', 400), {} as never, response, vi.fn())
 
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- the mock's own vi.fn, read as a spy, never called unbound
     expect(response.setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything())
   })
 

@@ -124,7 +124,6 @@ function existingFlagOf(raw: unknown): ExistingFlag | undefined {
     key,
     isMultivariate: parsed.multivariate !== undefined && parsed.multivariate !== null,
     variantKeys: variants.map((variant) => String(variant.key)),
-    // oxlint-disable-next-line unicorn/no-null -- PostHog's null means person aggregation
     aggregationIndex: typeof index === 'number' ? index : null,
   }
 }

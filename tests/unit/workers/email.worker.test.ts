@@ -37,21 +37,16 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
     recipient: 'user@example.com',
     templateKey: 'step_up_link',
     userId: 'user-123',
-    // oxlint-disable-next-line unicorn/no-null -- a nullable column's value
     tenantId: null,
-    // oxlint-disable-next-line unicorn/no-null -- a nullable column's value
     invitationId: null,
     linkApp: 'web',
     senderClass: 'transactional',
     messageIdHeader: `<${MESSAGE_ID}@mail.example.com>`,
-    // oxlint-disable-next-line unicorn/no-null -- a nullable column's value
     jobKey: null,
     variables: { firstName: 'Ada', appName: 'Test' },
     status: 'queued',
-    // oxlint-disable-next-line unicorn/no-null -- a nullable column's value
     failureOrigin: null,
     statusUpdatedAt: new Date('2026-01-01T00:00:00.000Z'),
-    // oxlint-disable-next-line unicorn/no-null -- a nullable column's value
     resentFromId: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,

@@ -100,7 +100,6 @@ describe('updateTenantSchema free-text fields', () => {
   })
 
   it('null still clears description (safeText does not run against null)', () => {
-    // oxlint-disable-next-line unicorn/no-null -- the PATCH "clear" contract: null clears the description, and the safeText refinement lets it through
     const result = updateTenantSchema.safeParse({ description: null })
     expect(result.success).toBe(true)
   })
@@ -124,7 +123,6 @@ describe('scanJson', () => {
   it('finds a NUL in a nested key or string value', () => {
     expect(scanJson({ a: [{ b: 'x\u{0}' }] }).hasNul).toBe(true)
     expect(scanJson({ a: { 'b\u{0}': 1 } }).hasNul).toBe(true)
-    // oxlint-disable-next-line unicorn/no-null -- JSON null, as a request body carries it
     expect(scanJson({ a: ['x', 1, true, null] }).hasNul).toBe(false)
   })
 

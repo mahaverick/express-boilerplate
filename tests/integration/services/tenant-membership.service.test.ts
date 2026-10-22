@@ -93,11 +93,9 @@ async function pendingFrom(tenant: Tenant, inviter: User, role: MembershipRole):
 async function meetingAtLockOwners(
   start: () => Promise<unknown>[]
 ): Promise<{ arrivals: number; outcomes: (string | number)[] }> {
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realLockOwners = UserMembershipRepository.prototype.lockOwners
   let arrivals = 0
   let releaseBarrier: () => void
-  // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
   const barrier = new Promise<void>((resolve) => {
     releaseBarrier = resolve
   })

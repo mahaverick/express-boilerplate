@@ -29,7 +29,6 @@ describe('extractErrorCode', () => {
 
   it('returns UNKNOWN_ERROR_CODE for a non-object rejection', () => {
     expect(extractErrorCode('smtp exploded')).toBe(UNKNOWN_ERROR_CODE)
-    // oxlint-disable-next-line unicorn/no-null -- exercising extractErrorCode's own `error === null` branch
     expect(extractErrorCode(null)).toBe(UNKNOWN_ERROR_CODE)
     expect(extractErrorCode(undefined)).toBe(UNKNOWN_ERROR_CODE)
   })
@@ -44,7 +43,6 @@ describe('extractErrorCode', () => {
 describe('redactedMailErrorForLog', () => {
   it('passes a non-object rejection through unchanged — nothing to redact from a primitive', () => {
     expect(redactedMailErrorForLog('smtp exploded')).toBe('smtp exploded')
-    // oxlint-disable-next-line unicorn/no-null -- exercising redactedMailErrorForLog's own `error === null` branch
     expect(redactedMailErrorForLog(null)).toBeNull()
   })
 

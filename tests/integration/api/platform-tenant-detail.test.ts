@@ -135,7 +135,6 @@ describe('GET /api/v1/platform/tenants/:id', () => {
       slug: tenant.slug,
       website: 'https://example.test',
       lifecycleState: 'active',
-      // oxlint-disable-next-line unicorn/no-null -- JSON null: a live tenant
       deletedAt: null,
       settings: { timezone: 'UTC', locale: 'en' },
       memberCount: 1,

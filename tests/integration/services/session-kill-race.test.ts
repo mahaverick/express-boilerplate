@@ -54,7 +54,6 @@ async function killWithRotationBeforeLock(
   kill: () => Promise<unknown>
 ): Promise<IssuedRefreshToken> {
   const prototype = UserRepository.prototype
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
   const original = prototype.lockById
   let minted: IssuedRefreshToken | undefined
   /**

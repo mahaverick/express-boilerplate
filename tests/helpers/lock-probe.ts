@@ -233,7 +233,6 @@ export async function waitForWaiter(
  */
 export function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let settle: ((value: T) => void) | undefined
-  // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
   const promise = new Promise<T>((resolve) => {
     settle = resolve
   })

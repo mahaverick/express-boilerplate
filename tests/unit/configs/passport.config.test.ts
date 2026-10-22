@@ -190,7 +190,6 @@ describe('configurePassport', () => {
 
     verify('access-token', 'refresh-token', profile, done)
 
-    // oxlint-disable-next-line unicorn/no-null -- asserting against Passport's own Node-style callback convention (see passport.config.ts's own disable comment on the line this proves).
     expect(done).toHaveBeenCalledWith(null, profile)
   })
 })

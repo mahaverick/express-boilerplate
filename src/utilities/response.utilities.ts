@@ -36,7 +36,6 @@ export function successResponse<T>(
  * @param status - HTTP status. Defaults to 200.
  */
 export function messageResponse(response: Response, message: string, status = 200): void {
-  // oxlint-disable-next-line unicorn/no-null -- the envelope uses JSON null for "no data"; undefined would drop the key from the JSON
   successResponse(response, null, message, status)
 }
 

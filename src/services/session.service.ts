@@ -170,7 +170,6 @@ async function createRefreshRow(
 export function signAccessToken(
   user: User,
   sessionId: string,
-  // oxlint-disable-next-line unicorn/no-null -- the stored column is null for a session before migration 0018
   authenticatedAt: Date | null = null
 ): string {
   const env = getEnv()
@@ -253,7 +252,6 @@ export async function issueRefreshToken(
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
   const sessionStartedAt = new Date()
-  // oxlint-disable-next-line unicorn/no-null -- the stored column is null for a session that is not a recent sign-in
   const authenticatedAt = options.recentAuth === false ? null : sessionStartedAt
 
   const { raw, expiresAt } = await createRefreshRow(

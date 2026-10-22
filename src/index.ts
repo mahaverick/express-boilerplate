@@ -124,7 +124,6 @@ async function boot(): Promise<void> {
  */
 function main(): void {
   applyNetworkDefaults()
-  // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth; Node runs only on V8
   Error.stackTraceLimit = ERROR_FRAME_LIMIT
   try {
     assertEnvConsistent(getEnv(), (message) => {

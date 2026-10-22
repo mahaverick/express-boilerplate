@@ -16,7 +16,6 @@ import {
 import type { MaintenanceModeSnapshot } from '@/types/maintenance-mode'
 
 const CHANGED_AT = new Date('2026-10-06T10:42:00.000Z')
-// oxlint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
 
 /**
@@ -26,9 +25,7 @@ function row(mode: MaintenanceMode, version: number): MaintenanceModeStateRow {
   return {
     id: 1,
     mode,
-    // oxlint-disable-next-line unicorn/no-null -- the column is null while off
     message: mode === 'off' ? null : `message v${String(version)}`,
-    // oxlint-disable-next-line unicorn/no-null -- no reason given
     reason: null,
     changedBy: 'user-1',
     changedAt: CHANGED_AT,

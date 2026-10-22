@@ -164,11 +164,8 @@ describe('toPosthogBatchEvent', () => {
       event: EVENT.event,
       distinctId: EVENT.distinct_id,
       source: 'audit',
-      // oxlint-disable-next-line unicorn/no-null -- the row has no access, as the signature reads it
       access: null,
-      // oxlint-disable-next-line unicorn/no-null -- nor a target type
       targetType: null,
-      // oxlint-disable-next-line unicorn/no-null -- nor a target id
       targetId: null,
       tenant: 'tenant-1',
     })

@@ -491,7 +491,6 @@ describe('exceptionListOf with hostile values', () => {
 
   it('reads a null-prototype object and a null-prototype error', () => {
     expect(exceptionListOf(Object.create(null) as object)[0]?.value).toBe('Non-Error object thrown')
-    // oxlint-disable-next-line unicorn/no-null -- a null prototype is the case under test
     const error = Object.setPrototypeOf(new Error('np'), null) as Error
     expect(exceptionListOf(error)[0]?.value).toBe('np')
   })

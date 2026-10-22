@@ -18,7 +18,6 @@ import { toPosthogBatchEvent } from '@/services/analytics/posthog-batch.service'
 const AT = new Date('2026-10-05T12:00:00.000Z')
 const USER_ID = '0199b000-0000-7000-8000-000000000001'
 const TENANT_ID = '0199b000-0000-7000-8000-000000000002'
-// oxlint-disable-next-line unicorn/no-null -- the input's contract is null for no tenant
 const NONE = null
 
 describe('buildFlagExposureEvent', () => {

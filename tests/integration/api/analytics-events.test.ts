@@ -67,7 +67,6 @@ type BatchEvent = FakePosthog['batches'][number][number]
 const PROBE_FIRST_NAME = 'Pii'
 const PROBE_LAST_NAME = 'Probe'
 const HEX_16 = /^[\da-f]{16}$/
-// oxlint-disable-next-line unicorn/no-null -- JSON null, as the event carries it for "not staff"
 const NOT_STAFF = null
 // The longest backoff (600 s) plus the lease: past it, every leased row is claimable again.
 const PAST_LEASE_AND_BACKOFF_MS = (ANALYTICS_LEASE_SECONDS + 600 + 1) * 1000

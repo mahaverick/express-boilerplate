@@ -499,7 +499,6 @@ export function createPinoLogger(options: LoggerOptions): Logger {
   return pino(
     {
       level: options.level,
-      // oxlint-disable-next-line unicorn/no-null -- pino's own LoggerOptions type requires `null`, not `undefined`, to suppress the default pid/hostname bindings
       base: null,
       messageKey: 'message',
       timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,

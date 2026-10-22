@@ -29,7 +29,6 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
   return { ...actual, isAnalyticsEnabled: () => analytics.isEnabled }
 })
 
-// oxlint-disable-next-line unicorn/no-null -- the context's contract uses null
 const NONE = null
 const KEY = 'example_cta_experiment'
 const BOLD: FlagEvaluation = { value: 'bold', reason: 'condition_match', conditionIndex: 0 }

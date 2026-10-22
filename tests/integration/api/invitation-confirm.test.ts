@@ -699,7 +699,6 @@ describe('POST /api/v1/invitations/confirm', () => {
     async (mode, code) => {
       const invitee = await createTrackedUser({ email: uniqueEmail(`mode-${mode}`) })
       const { tenant, invitationId, raw } = await invitedWithLink(invitee.email)
-      // oxlint-disable-next-line @typescript-eslint/unbound-method -- captured to call inside the mutated version, with its own `this`
       const realFind = TenantInvitationRepository.prototype.findValidById
       /**
        * Stands in for `findValidById`: the lookup succeeds, then the mode switches.

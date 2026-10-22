@@ -193,7 +193,6 @@ function keyIn(column: SQL, keys: readonly string[]): SQL {
  * @returns The Date, or null.
  */
 function dateOf(text: string | null): Date | null {
-  // oxlint-disable-next-line unicorn/no-null -- the column is nullable
   return text === null ? null : new Date(text)
 }
 
@@ -603,8 +602,7 @@ export class PlatformOnboardingRepository {
       completedAt: row.completedAt,
       completedBy:
         row.completedById === null || row.completedByEmail === null
-          ? // oxlint-disable-next-line unicorn/no-null -- no actor, or a purged one
-            null
+          ? null
           : {
               id: row.completedById,
               email: row.completedByEmail,
@@ -675,8 +673,7 @@ export class PlatformOnboardingRepository {
       metadata: row.metadata,
       actor:
         row.actorId === null || row.actorEmail === null
-          ? // oxlint-disable-next-line unicorn/no-null -- redacted, or the actor was purged
-            null
+          ? null
           : {
               id: row.actorId,
               email: row.actorEmail,

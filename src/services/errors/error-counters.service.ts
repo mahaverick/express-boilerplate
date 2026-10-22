@@ -182,9 +182,7 @@ export async function getErrorTrackingStatus(at: Date = new Date()): Promise<Err
     window: '15m',
     sent: 0,
     dropped: noDrops(),
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     lastSendOkAt: null,
-    // oxlint-disable-next-line unicorn/no-null -- the contract sends JSON null
     lastSendError: null,
   }
   const current = epochMinuteOf(at)

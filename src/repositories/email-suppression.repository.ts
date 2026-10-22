@@ -109,7 +109,6 @@ export class EmailSuppressionRepository {
   async clearLiftedBy(userId: string, tx: DbTransaction): Promise<number> {
     const result = await tx
       .update(emailSuppressionModel)
-      // oxlint-disable-next-line unicorn/no-null -- SQL NULL: no one is recorded as the lifter
       .set({ liftedBy: null })
       .where(eq(emailSuppressionModel.liftedBy, userId))
     return result.count

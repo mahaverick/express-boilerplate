@@ -21,7 +21,6 @@ import {
 } from '@/validators/flag-definition.validators'
 
 const NOW = new Date('2026-10-05T12:00:00.000Z')
-// oxlint-disable-next-line unicorn/no-null -- PostHog's JSON null
 const NONE = null
 
 const USER_ENTRY: FlagEntry = {

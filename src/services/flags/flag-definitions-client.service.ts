@@ -104,7 +104,6 @@ async function resultOf(response: Response): Promise<FlagDefinitionsResult> {
   if (bytes === undefined) return { kind: 'error', code: 'body_too_large' }
   const body = parsedJson(bytes)
   if (body === undefined) return { kind: 'error', code: 'invalid_body' }
-  // oxlint-disable-next-line unicorn/no-null -- the result's contract is null for no ETag
   return { kind: 'ok', body, etag: response.headers.get('etag') ?? null }
 }
 

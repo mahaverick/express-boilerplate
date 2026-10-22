@@ -402,9 +402,7 @@ describe('GET /api/v1/platform/emails/:id', () => {
       id: original.id,
       status: 'bounced',
       linkApp: 'web',
-      // oxlint-disable-next-line unicorn/no-null -- JSON null: never failed
       failureOrigin: null,
-      // oxlint-disable-next-line unicorn/no-null -- JSON null: not a resend
       resentFromId: null,
       resentAsIds: [resend.id],
       suppression: { id: suppression.id, reason: 'hard_bounce' },
@@ -412,7 +410,6 @@ describe('GET /api/v1/platform/emails/:id', () => {
     })
     expect(detail.attempts).toEqual([
       expect.objectContaining({ id: failedAttempt, status: 'failed', errorCode: 'ECONNECTION' }),
-      // oxlint-disable-next-line unicorn/no-null -- JSON null: a sent attempt has no code
       expect.objectContaining({ id: sentAttempt, status: 'sent', errorCode: null }),
     ])
     expect(detail.events).toEqual([

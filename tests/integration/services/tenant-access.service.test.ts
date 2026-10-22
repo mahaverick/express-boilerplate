@@ -138,7 +138,6 @@ describe('tenant-access.service', () => {
     const releaseDemotion = deferred()
     const staffPid = deferred<number>()
 
-    // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realUpdateRole = UserMembershipRepository.prototype.updateRole
     /**
      * `updateRole` that, after the real update, signals that the demotion holds S's platform
@@ -278,7 +277,6 @@ describe('tenant-access.service', () => {
      */
     it('serialises a staff write behind a concurrent demotion (the FOR SHARE lock)', async () => {
       const race = await raceStaffRemovalAgainstDemotion(
-        // oxlint-disable-next-line @typescript-eslint/unbound-method -- called with `this` bound by recordingRead
         UserMembershipRepository.prototype.lockPlatformRole
       )
       await expectRefusedOnTheDemotedRole(race)

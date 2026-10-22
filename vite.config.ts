@@ -77,7 +77,14 @@ const UNTYPED_FILES = ['**/*.mjs', 'scripts/**/*.d.mts', 'vite.config.ts', 'comm
 export default defineConfig({
   lint: {
     plugins: ['oxc', 'typescript', 'unicorn', 'promise', 'jsdoc', 'import', 'node', 'vitest'],
-    options: { typeAware: true, typeCheck: false, denyWarnings: true },
+    options: {
+      typeAware: true,
+      typeCheck: false,
+      denyWarnings: true,
+      reportUnusedDisableDirectives: 'error',
+      // eslint-disable comments belong to the rules eslint.config.mjs still runs; Oxlint's own are oxlint-disable.
+      respectEslintDisableDirectives: false,
+    },
     categories: { correctness: 'error' },
     env: { builtin: true, es2026: true, node: true },
     // tests/fixtures/** break the rules on purpose; lint-gates.test.ts lints them with `ignore: false`.

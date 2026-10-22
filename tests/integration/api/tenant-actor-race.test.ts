@@ -72,7 +72,6 @@ async function withActorChangedAfterResolve(
   change: ActorChange,
   run: () => Promise<void>
 ): Promise<void> {
-  // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findByUserAndTenant
   let hasChanged = false
   /**
@@ -282,7 +281,6 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
 
     expect(await invitationState(invitation.id)).toEqual({
       tokenHash: invitation.tokenHash,
-      // oxlint-disable-next-line unicorn/no-null -- the column is SQL NULL while pending
       revokedAt: null,
     })
   })

@@ -20,7 +20,6 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
   return { ...actual, getEnv: () => ({ ...actual.getEnv(), SESSION_SECRET: secret.value }) }
 })
 
-// oxlint-disable-next-line unicorn/no-null -- the signer's "absent"
 const NONE = null
 
 const FIELDS: SignedEventFields = {

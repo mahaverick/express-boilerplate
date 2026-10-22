@@ -34,7 +34,6 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * when the purge queued it, which the overdue check measures from.
  */
 function claimed(distinctId: string, createdAt: Date = NOW): AnalyticsDeletionRow {
-  // oxlint-disable-next-line unicorn/no-null -- the column's "never failed" state
   return { distinctId, notBefore: NOW, attempts: 0, lastError: null, createdAt }
 }
 

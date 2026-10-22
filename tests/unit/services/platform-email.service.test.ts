@@ -190,14 +190,10 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
     status: 'sent',
     senderClass: 'transactional',
     linkApp: 'web',
-    // oxlint-disable-next-line unicorn/no-null -- the column is nullable
     failureOrigin: null,
     userId,
-    // oxlint-disable-next-line unicorn/no-null -- no tenant
     tenantId: null,
-    // oxlint-disable-next-line unicorn/no-null -- no invitation
     invitationId: null,
-    // oxlint-disable-next-line unicorn/no-null -- not a resend
     resentFromId: null,
     createdAt: new Date(),
     statusUpdatedAt: new Date(),
@@ -205,14 +201,11 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
       id: userId,
       email: 'ada@example.test',
       firstName: 'Ada',
-      // oxlint-disable-next-line unicorn/no-null -- no last name
       lastName: null,
       isActive: true,
       isVerified: true,
-      // oxlint-disable-next-line unicorn/no-null -- a live user
       deletedAt: null,
     },
-    // oxlint-disable-next-line unicorn/no-null -- no tenant
     tenant: null,
     ...overrides,
   }
@@ -242,7 +235,6 @@ describe('canResendFor', () => {
     }
   )
 
-  // oxlint-disable-next-line unicorn/no-null -- null is an actor with no platform role
   it.each<MembershipRole | null>(['viewer', 'editor', 'manager', null])(
     'is false for a %s',
     (role) => {
@@ -269,7 +261,6 @@ describe('canResendFor', () => {
   })
 
   it('is false for a legacy row without a user, and for a soft-deleted user', () => {
-    // oxlint-disable-next-line unicorn/no-null -- a backfilled row has no user
     const legacy = message({ userId: null, user: null })
     expect(canResendFor(ACTOR, legacy, context())).toBe(false)
     const gone = message()
@@ -366,7 +357,6 @@ describe('canResendFor', () => {
     })
 
     it('is false without the ids, or when the invitation is gone or in another tenant', () => {
-      // oxlint-disable-next-line unicorn/no-null -- a backfilled row has no invitation id
       expect(canResendFor(ACTOR, message({ ...invitation, invitationId: null }), context())).toBe(
         false
       )

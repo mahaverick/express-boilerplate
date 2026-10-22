@@ -252,7 +252,6 @@ describe('POST /platform/tenants/:id/onboarding/steps/:key/complete', () => {
   it('answers 409 not_tracked for an untracked tenant and one awaiting its owner', async () => {
     const { token } = await createTrackedStaff('admin')
     const { tenant: untracked } = await createOnboardingTenant({ isTracked: false })
-    // oxlint-disable-next-line unicorn/no-null -- awaiting the first owner
     const { tenant: awaiting } = await createOnboardingTenant({ startedAt: null })
 
     for (const tenant of [untracked, awaiting]) {
@@ -439,7 +438,6 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
       startedAt: daysAgo(3),
       dismissedAt: daysAgo(1),
     })
-    // oxlint-disable-next-line unicorn/no-null -- awaiting the first owner
     const { tenant: awaiting } = await createOnboardingTenant({ startedAt: null })
     const { tenant: untracked } = await createOnboardingTenant({ isTracked: false })
 
@@ -525,7 +523,6 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
       // Pause the first reminder in its transaction, tenant row held, before it reads the limit (pool of 2).
       const reached = deferred<number>()
       const release = deferred()
-      // oxlint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realLatest = PlatformOnboardingRepository.prototype.latestReminderAt
       let calls = 0
       /**

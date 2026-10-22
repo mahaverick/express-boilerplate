@@ -110,7 +110,6 @@ describe('resolveGroupMarkers', () => {
   it('scrubs a tenant with no row: a null name and the status purged', async () => {
     const [resolved] = await resolveGroupMarkers([marker(randomUUID())])
 
-    // oxlint-disable-next-line unicorn/no-null -- null is what clears the property in PostHog
     expect(resolved?.properties.$group_set).toEqual({ name: null, status: 'purged' })
   })
 

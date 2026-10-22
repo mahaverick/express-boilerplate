@@ -49,7 +49,6 @@ function passthroughGoogleProfile(
   done: VerifyCallback
 ): void {
   // Cast: Passport's `VerifyCallback` names `Express.User`, which this codebase types as the JWT user.
-  // oxlint-disable-next-line unicorn/no-null -- Passport's own Node-style callback convention uses `null` as the "no error" sentinel; `VerifyCallback` is a third-party signature this file must match exactly
   done(null, profile as unknown as Express.User)
 }
 

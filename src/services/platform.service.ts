@@ -209,7 +209,6 @@ async function grantOnce(email: string, role: MembershipRole): Promise<UserMembe
     const granted = await grantInTransaction(user.id, role, tx)
     return {
       membership: granted,
-      // oxlint-disable-next-line unicorn/no-null -- the address held an account already
       createdUserId: found ? null : user.id,
     }
   })
@@ -245,7 +244,6 @@ async function createForGrant(email: string, tx: DbTransaction): Promise<User> {
       access: 'system',
       tenantId: platform.id,
       targetId: user.id,
-      // oxlint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
       metadata: { emailDomain: hostnameDomain(user.email) ?? null },
     },
     tx

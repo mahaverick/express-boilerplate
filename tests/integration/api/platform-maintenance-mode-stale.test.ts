@@ -52,7 +52,6 @@ describe('a change that waits for its notices', () => {
     const before = await request(app).get(PATH).set('Authorization', `Bearer ${first.token}`)
     const version = (before.body as { data: PlatformMaintenanceModeView }).data.version
     let releaseWait!: (outcome: 'done') => void
-    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
     const held = new Promise<'done'>((resolve) => {
       releaseWait = resolve
     })
@@ -88,7 +87,6 @@ describe('a change that waits for its notices', () => {
     const before = await request(app).get(PATH).set('Authorization', `Bearer ${first.token}`)
     const version = (before.body as { data: PlatformMaintenanceModeView }).data.version
     let releaseWait!: (outcome: 'done') => void
-    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
     const held = new Promise<'done'>((resolve) => {
       releaseWait = resolve
     })

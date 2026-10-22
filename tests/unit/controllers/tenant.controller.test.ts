@@ -30,7 +30,6 @@ const authenticatedPrincipal: RequestPrincipal = {
   isPlatformTenant: false,
   role: 'owner',
   memberRole: 'owner',
-  // oxlint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
   platformRole: null,
   access: 'member',
 }
