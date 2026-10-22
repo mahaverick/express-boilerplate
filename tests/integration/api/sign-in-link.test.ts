@@ -228,13 +228,19 @@ function verifyData(response: Response): VerifyData {
 }
 
 /**
- * The sign-in link in the newest mail to an address, from Mailpit.
+ * The sign-in link in the newest mail to an address, from Mailpit. The link
+ * row exists before the worker sends the mail, so it waits for the message.
  * @param email - The recipient.
  * @returns The link, parsed.
  */
 async function mailedLink(email: string): Promise<URL> {
-  const [message] = await findMailpitMessages(email)
-  if (!message) throw new Error(`no mail reached ${email}`)
+  const message = await waitUntil(
+    async () => {
+      const [newest] = await findMailpitMessages(email)
+      return newest
+    },
+    { message: `the link mailed to ${email}` }
+  )
   const detail = await getMailpitMessage(message.ID)
   const href = /https?:\/\/\S+\/auth\/link\?\S+/.exec(detail.Text)?.[0]
   if (href === undefined) throw new Error('the mail carries no sign-in link')
