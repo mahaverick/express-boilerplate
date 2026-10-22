@@ -62,9 +62,21 @@ jobs:
         # runs the same code.
         run: sh scripts/check-domain-terms.sh
 
-  test:
+  # One shard of the suite. Each shard runs its own Postgres, Redis and
+  # Mailpit, so the shards share nothing. A shard writes a coverage blob and
+  # enforces no threshold; the `test` job below merges the blobs and enforces
+  # it on the whole suite. Keep `shard` a list of 1..N: the `test` job counts
+  # the blobs against the N in their names.
+  test-shard:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      # How many workers (and per-worker databases) a shard runs; the default is 8.
+      VITEST_WORKERS: 8
     services:
       # GitHub's `services:` blocks cannot mount a file, so the init.sql that
       # docker-compose uses to create the test role/database is unavailable
@@ -117,7 +129,14 @@ jobs:
           # commands (see DATABASE.md).
           DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
       - name: Test with coverage gate
-        run: pnpm test:coverage
+        # Thresholds are zeroed here: a shard sees a third of the suite.
+        # The `test` job enforces vite.config.ts's thresholds on the merge.
+        run: >-
+          pnpm exec vp test run --coverage
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          --reporter=blob
+          --coverage.thresholds.lines=0 --coverage.thresholds.functions=0
+          --coverage.thresholds.branches=0 --coverage.thresholds.statements=0
         env:
           # The services: above publish the container-default ports 5432/6379,
           # so DATABASE_URL/REDIS_URL here differ from .env.test (the compose
@@ -143,7 +162,67 @@ jobs:
           SMTP_HOST: 127.0.0.1
           MAIL_FROM_TRANSACTIONAL: auth@mail.example.test
           ERROR_TRACKING_ENABLED: false
-      # The env block above must mirror committed .env.test. When they drift, a
+      - name: Upload the test blob
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: blob-${{ matrix.shard }}
+          path: .vitest/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # The required check. It merges the shards' blobs and enforces the coverage
+  # thresholds on the whole suite, then runs the checks that need no services.
+  test:
+    needs: test-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fail unless every shard passed
+        if: needs.test-shard.result != 'success'
+        run: |
+          echo "::error::A test shard failed or was cancelled. Open the failed test-shard job for its log."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # setup-vp installs Vite+, Node and the pnpm that packageManager names.
+      # run-install is off so the install below stays `--frozen-lockfile`,
+      # with hooks disabled.
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        with:
+          node-version-file: .node-version
+          cache: true
+          run-install: false
+      - run: pnpm install --frozen-lockfile
+        env:
+          HUSKY: '0'
+          VP_GIT_HOOKS: '0'
+      - name: Download the test blobs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: blob-*
+          path: .vitest/
+          merge-multiple: true
+      - name: Check every shard's blob is present
+        run: |
+          shopt -s nullglob
+          blobs=(.vitest/blob/blob-*-*.json)
+          if [ "${#blobs[@]}" -eq 0 ]; then
+            echo "::error::No test blobs found. Open the test-shard jobs for their logs."
+            exit 1
+          fi
+          # A blob is named blob-<shard>-<total>.json, so the total comes from the run itself.
+          total=$(basename "${blobs[0]}" .json | sed -E 's/^blob-[0-9]+-//')
+          if [ "${#blobs[@]}" -ne "$total" ]; then
+            echo "::error::Found ${#blobs[@]} of $total test blobs. Open the test-shard jobs for their logs."
+            exit 1
+          fi
+      - name: Merge the reports and enforce coverage
+        run: pnpm exec vp test --merge-reports --coverage
+      # The test-shard env block must mirror committed .env.test. When they drift, a
       # test passes locally and fails in CI (or worse, the reverse) for reasons
       # that look nothing like the cause. This compares both directions, keys
       # and values, and reads only that step's env: block: a key that appears

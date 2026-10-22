@@ -8,6 +8,23 @@
  */
 
 /**
+ * The worker count for an environment: `VITEST_WORKERS` when set, else 8.
+ * CI sets it per runner; a local run takes the default.
+ * @param env - The environment to read (`process.env` outside tests).
+ * @returns An integer from 1 to 16.
+ * @throws {Error} When `VITEST_WORKERS` is set and is not an integer from 1 to 16.
+ */
+export function workerCountFrom(env: Record<string, string | undefined>): number {
+  const raw = env.VITEST_WORKERS
+  if (raw === undefined) return 8
+  const count = Number(raw)
+  if (!Number.isInteger(count) || count < 1 || count > 16) {
+    throw new Error(`VITEST_WORKERS must be an integer from 1 to 16, got "${raw}"`)
+  }
+  return count
+}
+
+/**
  * How many per-worker test databases exist, all created and migrated once,
  * up front, by `tests/helpers/global-setup.ts`, before any worker starts.
  * `vite.config.ts` imports this constant for `maxWorkers` rather than
@@ -16,7 +33,7 @@
  * otherwise fail as a bare connection error, with nothing pointing at
  * "`maxWorkers` and `WORKER_COUNT` disagree" as the actual cause.
  */
-export const WORKER_COUNT = 8
+export const WORKER_COUNT = workerCountFrom(process.env)
 
 // Test-infrastructure-only, never read by application code: the untouched base DATABASE_URL, stashed before useWorkerDatabase() below overwrites it.
 const BASE_DATABASE_URL_KEY = 'TEST_DATABASE_BASE_URL'
