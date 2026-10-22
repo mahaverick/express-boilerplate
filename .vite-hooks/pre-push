@@ -1,0 +1,5 @@
+# The full gate: lint, unit and integration tests with the coverage gate, and
+# the build. It needs the Docker stack and fails in about 2 s without it.
+# `pnpm push` runs the same gate before git opens the SSH connection.
+set -e
+sh scripts/pre-push-gate.sh

@@ -19,6 +19,8 @@ FROM base AS deps
 # file on disk to allow the native builds and apply the excludes.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN corepack install
+# `prepare` runs `vp config`; there is no git repository in the image to hook.
+ENV VP_GIT_HOOKS=0
 # Cache mount keeps the store between builds without baking it into a layer.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile

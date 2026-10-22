@@ -373,8 +373,8 @@ points at the code or doc that holds the detail. How things work is in
   named `.test.ts`. Support code lives in `tests/helpers/` and
   `tests/fixtures/`.
 - **A test that reaches the real database or Redis lives under
-  `tests/integration/`, never `tests/unit/`.** The git hooks run unit tests
-  with Docker down, and the `unit` project (`vite.config.ts`) excludes by path
+  `tests/integration/`, never `tests/unit/`.** The pre-commit hook runs unit
+  tests with Docker down, and the `unit` project (`vite.config.ts`) excludes by path
   only. Check where a test's dependencies reach, not where its assertions
   live.
 - **HTTP tests use `request` or `agent` from `tests/helpers/request.ts`, never
@@ -548,8 +548,16 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   bind-mounted, and `docker compose up -d` doesn't pick up the change.
 - **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm format:check`,
   `pnpm knip`, `pnpm test:coverage` and `pnpm build` all exit 0**
-  ([CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr)). Don't drop
+  ([CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr)). `pnpm gate`
+  runs all of them (the format check inside `pnpm lint`'s `vp check`), and
+  the pre-push hook runs `pnpm gate`. Don't drop
   type-aware lint from pre-commit to speed it up.
+- **Push with `pnpm push`, not `git push`.** It runs the gate first, then
+  `git push --no-verify`: a long pre-push hook can outlast the SSH connection
+  and drop the push behind a misleading exit code. A clone made while the
+  hooks were husky's keeps `core.hooksPath=.husky/_`, and `vp config` skips
+  it, so no hook runs; fix it once with
+  `git config --unset core.hooksPath && pnpm prepare`.
 - **Keep `ci.yml`'s concurrency group keyed on `github.event_name`, not
   `github.workflow`:** when `deploy.yml` calls `ci.yml`, `github.workflow` is
   the caller's name.

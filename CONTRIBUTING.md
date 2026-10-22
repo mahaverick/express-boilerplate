@@ -33,24 +33,47 @@ yet, listed with their reasons in [docs/lint-deferred.md](docs/lint-deferred.md)
 The two configs stay separate: see [CLAUDE.md](CLAUDE.md#code-conventions),
 which also holds the code conventions.
 
-## Git hooks (husky)
+## Git hooks (Vite+)
 
-Hooks install with `pnpm install` (the `prepare` script). Commit normally; do
-not reach for `--no-verify` on a routine commit.
+Hooks live in `.vite-hooks/` and install with `pnpm install` (the `prepare`
+script runs `vp config`). Commit normally; do not reach for `--no-verify` on a
+routine commit.
 
-- **`pre-commit`** checks that the lockfile is not stale, runs `lint-staged`
-  (eslint --fix and `vp fmt` on staged `src/` and `tests/` TypeScript, `vp fmt`
-  on staged JSON, JSONC and Markdown), runs `vp test run --changed HEAD` on the
-  `unit` project, and regenerates and stages `.env.example` when
-  `env.config.ts` is staged. The `unit` project excludes `tests/integration/**`
-  and skips the database setup, so the hook runs with Docker down: a hook that
-  fails whenever Docker is down gets bypassed with `--no-verify` for good.
-  ESLint runs type-aware here, which is what catches floating and misused
-  promises; keep it in the hook.
+- **`pre-commit`** checks that the lockfile is not stale, runs `vp staged`
+  (the `staged` block in `vite.config.ts`: `vp check --fix` and `eslint --fix`
+  on staged `src/` and `tests/` TypeScript, `vp fmt` on staged JSON, JSONC and
+  Markdown), runs `vp test run --changed HEAD` on the `unit` project, and
+  regenerates and stages `.env.example` when `env.config.ts` is staged. The
+  `unit` project excludes `tests/integration/**` and skips the database setup,
+  so this hook runs with Docker down. Oxlint and ESLint run type-aware here,
+  which is what catches floating and misused promises; keep them in the hook.
 - **`commit-msg`** runs `commitlint` ([Commits](#commits)). `pnpm commit` opens
   an interactive prompt.
-- **`pre-push`** runs `pnpm lint` and `pnpm test:unit`, with no Docker needed.
-  Integration tests and the coverage gate run in CI, which `main` requires.
+- **`pre-push`** runs `pnpm gate` (`scripts/pre-push-gate.sh`), which mirrors
+  CI's `lint` and `test` jobs minus the audits: `pnpm lint`, `pnpm lint:docs`,
+  `pnpm knip`, the domain-terms check, `pnpm test:coverage` (unit and
+  integration), `pnpm build`, and a check that `.env.example` is current. It
+  needs the compose stack (`docker compose up -d postgres redis mailpit`) and
+  checks it first, so a stopped stack fails in about 2 s.
+
+**Push with `pnpm push`.** It takes `git push`'s arguments
+(`pnpm push origin HEAD`), runs the gate, and pushes only when the gate
+passes, with `--no-verify` so the gate does not run twice. A long pre-push
+hook can outlast the SSH connection and drop the push, and `git push` then
+reports a misleading exit code; `pnpm push` opens the connection only after
+the gate.
+
+### Existing clones
+
+A clone made while the hooks were husky's keeps `core.hooksPath=.husky/_`.
+`vp config` leaves a set `core.hooksPath` alone, so no hook runs, and
+`pnpm install` prints a warning. Fix it once:
+
+```bash
+git config --unset core.hooksPath && pnpm prepare
+```
+
+`pnpm install` alone skips `prepare` when the dependencies are up to date.
 
 ## Commits
 

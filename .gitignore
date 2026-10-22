@@ -141,3 +141,6 @@ dist
 # Vitest reporter output (a JSON reporter run writes .vitest/json/output.json).
 # Generated on every run; was committed once by accident in #33.
 .vitest/
+
+# Vite+ hook dispatcher, written by `vp config`
+.vite-hooks/_

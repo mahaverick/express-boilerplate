@@ -746,6 +746,7 @@
     "src/configs/env.config.ts, src/services/logger.service.ts, src/index.ts, src/observability/tracing.ts": [
       "eslint/no-restricted-properties"
     ],
+    "scripts/check-test-services.mjs": ["eslint/no-restricted-properties"],
     "scripts/history-patterns.mjs, scripts/comment-style.mjs, scripts/lint-docs.mjs, scripts/lint-docs.d.mts, scripts/vendor-passkey-aaguids.mjs, scripts/vendor-passkey-aaguids.d.mts": [
       "eslint/no-restricted-properties",
       "unicorn/prefer-string-replace-all"

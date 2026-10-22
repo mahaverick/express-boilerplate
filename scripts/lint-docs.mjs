@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url'
 import { findHistory } from './history-patterns.mjs'
 
 const HASH_COMMENT_FILE =
-  /(?:^|\/)(?:Dockerfile|nginx\.conf|\.env\.example)$|\.(?:ya?ml|sh|conf)$|^\.husky\/[^/]+$/
+  /(?:^|\/)(?:Dockerfile|nginx\.conf|\.env\.example)$|\.(?:ya?ml|sh|conf)$|^\.vite-hooks\/[^/_][^/]*$/
 const CODE_FILE = /\.(?:[cm]?[jt]s|tsx)$/
 const LINK =
   /!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)|^\s*\[[^\]]+\]:\s*<?(\S+?)>?\s*$/gm

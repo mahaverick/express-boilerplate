@@ -202,7 +202,7 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                |
 | `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`). |
 | `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
-| `pnpm prepare`                      | Installs the husky git hooks; `pnpm install` runs it.                                               |
+| `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                 |
 
 `pnpm platform:grant -- <email> <role>` gives the account at an address a role
 (`owner` to `viewer`) in the platform tenant, audited as

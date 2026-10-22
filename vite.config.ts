@@ -597,6 +597,11 @@ export default defineConfig({
         },
       },
       {
+        // The pre-push service check: a CLI that loads .env.test into process.env and prints to the terminal.
+        files: ['scripts/check-test-services.mjs'],
+        rules: { 'eslint/no-restricted-properties': 'off' },
+      },
+      {
         files: ['tests/**/*.ts'],
         rules: {
           'eslint/no-restricted-properties': 'off',
@@ -632,6 +637,18 @@ export default defineConfig({
         rules: { 'eslint/no-useless-concat': 'off' },
       },
     ],
+  },
+  /**
+   * What the pre-commit hook runs on staged files (`vp staged`). The
+   * no-error-on-unmatched-pattern flags and ESLint's `--no-warn-ignored` let a
+   * commit whose staged files are all ignored pass.
+   */
+  staged: {
+    '{src,tests}/**/*.ts': [
+      'vp check --fix --no-error-on-unmatched-pattern',
+      'eslint --fix --max-warnings 0 --no-warn-ignored',
+    ],
+    '**/*.{json,jsonc,md}': ['vp fmt --no-error-on-unmatched-pattern'],
   },
   fmt: {
     semi: false,
