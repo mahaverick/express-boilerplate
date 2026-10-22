@@ -9,8 +9,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ESLint, type Linter } from 'eslint'
-import { describe, expect, it } from 'vite-plus/test'
-import { oxlintMessagesFor, UNUSED_DIRECTIVE_RULE_ID } from '../helpers/oxlint-probe'
+import { beforeAll, describe, expect, it } from 'vite-plus/test'
+import {
+  oxlintMessagesFor,
+  registerOxlintProbe,
+  runOxlintProbes,
+  UNUSED_DIRECTIVE_RULE_ID,
+} from '../helpers/oxlint-probe'
 
 /**
  * Lints with the repo's real ESLint config, `ignore: false` so a committed
@@ -46,6 +51,10 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
   return messages.map((message) => message.ruleId ?? '')
 }
 
+/** A committed fixture's text. */
+const readFixture = (fixture: string): string =>
+  fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
+
 /**
  * The rule id of each finding Oxlint reports for `source` at `filePath`.
  */
@@ -64,19 +73,16 @@ const UNUSED_VARS = 'eslint/no-unused-vars'
 const NO_CYCLE = 'import/no-cycle'
 
 /**
- * This suite's own timeout, in place of the global test timeout
- * (vite.config.ts). An Oxlint probe spawns `vp lint` on a temp copy, about
- * 0.6 s on an idle machine; the slowest test runs four in a row. Measured
- * inside a full `pnpm test:unit` at load average 60, with this suite's tests
- * running concurrently, that test took 15.2 s, the worst run seen. The
- * timeout is 10x that (152 s, rounded up), the headroom CLAUDE.md's test
- * timing rule 3 asks of a bound not tied to a product constant. Raising the
- * global timeout instead would hide a real slowdown anywhere else.
+ * This suite's own timeout, for each test and the `beforeAll` batch, in place
+ * of the global one. The worst whole-file run measured was 7.1 s (load
+ * average 17); this is 10x that, rounded up, per CLAUDE.md's test timing rule 3.
  */
-const LINT_GATE_TIMEOUT_MS = 160_000
+const LINT_GATE_TIMEOUT_MS = 75_000
 
-// Concurrent: each Oxlint probe is its own process and temp dir, and run one by one they took 96 s.
-describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent: true }, () => {
+describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
+  // Every Oxlint probe below registers while the file is collected; this lints them all in one batch.
+  beforeAll(runOxlintProbes, LINT_GATE_TIMEOUT_MS)
+
   it('rejects an undocumented export', async () => {
     const messages = await messagesFor(
       'src/utilities/probe.utilities.ts',
@@ -135,42 +141,57 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
     }
   )
 
+  const processEnvSource = 'export const x = process.env.FOO\n'
+  const consoleErrorSource = 'export function f(): void { console.error("x") }\n'
+  const consoleInfoSource = 'export function f(): void { console.info("x") }\n'
+  for (const filePath of ['src/configs/env.config.ts', 'src/services/other.service.ts']) {
+    registerOxlintProbe(filePath, processEnvSource)
+  }
+  for (const filePath of [
+    'src/services/logger.service.ts',
+    'src/index.ts',
+    'src/services/other.service.ts',
+  ]) {
+    registerOxlintProbe(filePath, consoleErrorSource)
+  }
+  for (const filePath of ['src/observability/tracing.ts', 'src/observability/other.ts']) {
+    registerOxlintProbe(filePath, processEnvSource)
+    registerOxlintProbe(filePath, consoleInfoSource)
+  }
+
   it('allows process.env inside env.config and blocks it elsewhere', async () => {
-    const source = 'export const x = process.env.FOO\n'
-    expect(await oxlintRuleIdsFor('src/configs/env.config.ts', source)).not.toContain(
+    expect(await oxlintRuleIdsFor('src/configs/env.config.ts', processEnvSource)).not.toContain(
       RESTRICTED_PROPERTIES
     )
-    expect(await oxlintRuleIdsFor('src/services/other.service.ts', source)).toContain(
+    expect(await oxlintRuleIdsFor('src/services/other.service.ts', processEnvSource)).toContain(
       RESTRICTED_PROPERTIES
     )
   })
 
   it('allows console.error inside logger.service.ts and index.ts but blocks it elsewhere', async () => {
-    const source = 'export function f(): void { console.error("x") }\n'
-    expect(await oxlintRuleIdsFor('src/services/logger.service.ts', source)).not.toContain(
+    expect(
+      await oxlintRuleIdsFor('src/services/logger.service.ts', consoleErrorSource)
+    ).not.toContain(RESTRICTED_PROPERTIES)
+    expect(await oxlintRuleIdsFor('src/index.ts', consoleErrorSource)).not.toContain(
       RESTRICTED_PROPERTIES
     )
-    expect(await oxlintRuleIdsFor('src/index.ts', source)).not.toContain(RESTRICTED_PROPERTIES)
-    expect(await oxlintRuleIdsFor('src/services/other.service.ts', source)).toContain(
+    expect(await oxlintRuleIdsFor('src/services/other.service.ts', consoleErrorSource)).toContain(
       RESTRICTED_PROPERTIES
     )
   })
 
   // tracing.ts loads via `--import` before getEnv() has run, so like env.config.ts/logger.service.ts/index.ts it may read process.env directly and use console.*; the exemption is scoped to this one filename, not the whole directory.
   it('allows process.env and console.* inside tracing.ts but blocks them in a sibling file', async () => {
-    const processEnvSource = 'export const x = process.env.FOO\n'
-    const consoleSource = 'export function f(): void { console.info("x") }\n'
-
     expect(await oxlintRuleIdsFor('src/observability/tracing.ts', processEnvSource)).not.toContain(
       RESTRICTED_PROPERTIES
     )
-    expect(await oxlintRuleIdsFor('src/observability/tracing.ts', consoleSource)).not.toContain(
+    expect(await oxlintRuleIdsFor('src/observability/tracing.ts', consoleInfoSource)).not.toContain(
       RESTRICTED_PROPERTIES
     )
     expect(await oxlintRuleIdsFor('src/observability/other.ts', processEnvSource)).toContain(
       RESTRICTED_PROPERTIES
     )
-    expect(await oxlintRuleIdsFor('src/observability/other.ts', consoleSource)).toContain(
+    expect(await oxlintRuleIdsFor('src/observability/other.ts', consoleInfoSource)).toContain(
       RESTRICTED_PROPERTIES
     )
   })
@@ -183,46 +204,60 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
     expect(ids).not.toContain('check-file/filename-naming-convention')
   })
 
+  // Express identifies an error handler by arity (four parameters); `response` is used in the body (matching a real handler), so the rule's "after-used" default alone would not exempt the unused fourth — only the underscore prefix does.
+  const underscoreParameterSource =
+    'export function h(error: unknown, request: unknown, response: { end: () => void }, _next: unknown): void { response.end() }\n'
+  const unusedParameterSource =
+    'export function h(error: unknown, request: unknown, response: { end: () => void }, next: unknown): void { response.end() }\n'
+  registerOxlintProbe('src/middlewares/probe.middleware.ts', underscoreParameterSource)
+  registerOxlintProbe('src/middlewares/probe-unused.middleware.ts', unusedParameterSource)
+
   it('allows a deliberately-unused underscore-prefixed handler parameter', async () => {
-    // Express identifies an error handler by arity (four parameters); `response` is used in the body (matching a real handler), so the rule's "after-used" default alone would not exempt the unused fourth — only the underscore prefix does.
-    const source =
-      'export function h(error: unknown, request: unknown, response: { end: () => void }, _next: unknown): void { response.end() }\n'
-    const ids = await oxlintRuleIdsFor('src/middlewares/probe.middleware.ts', source)
+    const ids = await oxlintRuleIdsFor(
+      'src/middlewares/probe.middleware.ts',
+      underscoreParameterSource
+    )
     expect(ids).not.toContain(UNUSED_VARS)
   })
 
   it('still rejects a genuinely-unused parameter with no underscore', async () => {
     // If this does not fire, argsIgnorePattern has become a blanket suppression rather than an opt-in convention.
-    const source =
-      'export function h(error: unknown, request: unknown, response: { end: () => void }, next: unknown): void { response.end() }\n'
-    const messages = await oxlintMessagesFor('src/middlewares/probe.middleware.ts', source)
+    const messages = await oxlintMessagesFor(
+      'src/middlewares/probe-unused.middleware.ts',
+      unusedParameterSource
+    )
     const unusedVariablesMessage = messages.find((message) => message.ruleId === UNUSED_VARS)
     expect(unusedVariablesMessage?.severity).toBe(2)
   })
 
+  const relativeCycleFixture = 'tests/fixtures/lint-cycle/a.ts'
+  const aliasedCycleFixture = 'tests/fixtures/lint-cycle/cycle-a.ts'
+  const authCycleSource =
+    "import { requireAuth } from '@/middlewares/auth.middleware'\n\nexport const x = requireAuth\n"
+  registerOxlintProbe(relativeCycleFixture, readFixture(relativeCycleFixture))
+  registerOxlintProbe(aliasedCycleFixture, readFixture(aliasedCycleFixture))
+  registerOxlintProbe('src/constants/auth.constants.ts', authCycleSource)
+
   // Oxlint follows a probe's imports through the copied src/ and fixtures; this proves the rule fires at all, on a relative import.
   it('rejects a circular import between real files (relative import)', async () => {
-    const fixture = 'tests/fixtures/lint-cycle/a.ts'
-    const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-    const messages = await oxlintMessagesFor(fixture, source)
+    const messages = await oxlintMessagesFor(
+      relativeCycleFixture,
+      readFixture(relativeCycleFixture)
+    )
     const cycleMessage = messages.find((message) => message.ruleId === NO_CYCLE)
     expect(cycleMessage?.severity).toBe(2)
   })
 
   // Resolves "@/" through the fixture's own tsconfig, the nearest one Oxlint finds, so this does NOT guard the root tsconfig's alias; only the real-config case below does.
   it('rejects a circular import between real files (aliased "@/" import, own local tsconfig)', async () => {
-    const fixture = 'tests/fixtures/lint-cycle/cycle-a.ts'
-    const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-    const messages = await oxlintMessagesFor(fixture, source)
+    const messages = await oxlintMessagesFor(aliasedCycleFixture, readFixture(aliasedCycleFixture))
     const cycleMessage = messages.find((message) => message.ruleId === NO_CYCLE)
     expect(cycleMessage?.severity).toBe(2)
   })
 
   // The one case that guards the root tsconfig's "@/*" alias as Oxlint resolves it: auth.middleware.ts imports auth.constants.ts, so an auth.constants.ts that imports auth.middleware closes a real cycle through the alias.
   it('rejects a circular "@/" import resolved by the real config', async () => {
-    const source =
-      "import { requireAuth } from '@/middlewares/auth.middleware'\n\nexport const x = requireAuth\n"
-    const messages = await oxlintMessagesFor('src/constants/auth.constants.ts', source)
+    const messages = await oxlintMessagesFor('src/constants/auth.constants.ts', authCycleSource)
     const cycleMessage = messages.find((message) => message.ruleId === NO_CYCLE)
     expect(cycleMessage?.severity).toBe(2)
   })
@@ -322,155 +357,188 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
 
   describe('no-restricted-imports: repositories/platform-tenant.repository', () => {
     const fixture = 'tests/fixtures/lint-zones/service-imports-platform-tenant-repository.ts'
-
-    it.each([
+    const fixtureSource = readFixture(fixture)
+    const relativeSource =
+      "import { PlatformTenantRepository } from './platform-tenant.repository'\n\n" +
+      'export const repository = PlatformTenantRepository\n'
+    const rejectPaths = [
       'src/services/tenant.service.ts',
       'src/services/audit.service.ts',
       'src/middlewares/probe.middleware.ts',
-      'src/repositories/probe.repository.ts',
-    ])('rejects an import from %s', async (syntheticPath) => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await oxlintMessagesFor(syntheticPath, source)
+      'src/repositories/probe-tenant.repository.ts',
+    ]
+    for (const syntheticPath of rejectPaths) registerOxlintProbe(syntheticPath, fixtureSource)
+    registerOxlintProbe('src/repositories/probe-tenant.repository.ts', relativeSource)
+    registerOxlintProbe('src/services/platform-tenant.service.ts', fixtureSource)
+
+    it.each(rejectPaths)('rejects an import from %s', async (syntheticPath) => {
+      const messages = await oxlintMessagesFor(syntheticPath, fixtureSource)
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('rejects a relative import of the same module', async () => {
-      const source =
-        "import { PlatformTenantRepository } from './platform-tenant.repository'\n\n" +
-        'export const repository = PlatformTenantRepository\n'
-      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const messages = await oxlintMessagesFor(
+        'src/repositories/probe-tenant.repository.ts',
+        relativeSource
+      )
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await oxlintRuleIdsFor('src/services/platform-tenant.service.ts', source)
+      const ids = await oxlintRuleIdsFor('src/services/platform-tenant.service.ts', fixtureSource)
       expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
   describe('no-restricted-imports: repositories/platform-stats.repository', () => {
     const fixture = 'tests/fixtures/lint-zones/service-imports-platform-stats-repository.ts'
-
-    it.each([
+    const fixtureSource = readFixture(fixture)
+    const relativeSource =
+      "import { PlatformStatsRepository } from './platform-stats.repository'\n\n" +
+      'export const repository = PlatformStatsRepository\n'
+    const rejectPaths = [
       'src/services/tenant.service.ts',
       'src/services/audit.service.ts',
       'src/middlewares/probe.middleware.ts',
-      'src/repositories/probe.repository.ts',
-    ])('rejects an import from %s', async (syntheticPath) => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await oxlintMessagesFor(syntheticPath, source)
+      'src/repositories/probe-stats.repository.ts',
+    ]
+    for (const syntheticPath of rejectPaths) registerOxlintProbe(syntheticPath, fixtureSource)
+    registerOxlintProbe('src/repositories/probe-stats.repository.ts', relativeSource)
+    registerOxlintProbe('src/services/platform-stats.service.ts', fixtureSource)
+
+    it.each(rejectPaths)('rejects an import from %s', async (syntheticPath) => {
+      const messages = await oxlintMessagesFor(syntheticPath, fixtureSource)
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('rejects a relative import of the same module', async () => {
-      const source =
-        "import { PlatformStatsRepository } from './platform-stats.repository'\n\n" +
-        'export const repository = PlatformStatsRepository\n'
-      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const messages = await oxlintMessagesFor(
+        'src/repositories/probe-stats.repository.ts',
+        relativeSource
+      )
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await oxlintRuleIdsFor('src/services/platform-stats.service.ts', source)
+      const ids = await oxlintRuleIdsFor('src/services/platform-stats.service.ts', fixtureSource)
       expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
   describe('no-restricted-imports: repositories/platform-user.repository', () => {
     const fixture = 'tests/fixtures/lint-zones/service-imports-platform-user-repository.ts'
-
-    it.each([
+    const fixtureSource = readFixture(fixture)
+    const relativeSource =
+      "import { PlatformUserRepository } from './platform-user.repository'\n\n" +
+      'export const repository = PlatformUserRepository\n'
+    const rejectPaths = [
       'src/services/profile.service.ts',
       'src/services/auth.service.ts',
       'src/controllers/probe.controller.ts',
-      'src/repositories/probe.repository.ts',
-    ])('rejects an import from %s', async (syntheticPath) => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await oxlintMessagesFor(syntheticPath, source)
+      'src/repositories/probe-user.repository.ts',
+    ]
+    for (const syntheticPath of rejectPaths) registerOxlintProbe(syntheticPath, fixtureSource)
+    registerOxlintProbe('src/repositories/probe-user.repository.ts', relativeSource)
+    registerOxlintProbe('src/services/platform-user.service.ts', fixtureSource)
+
+    it.each(rejectPaths)('rejects an import from %s', async (syntheticPath) => {
+      const messages = await oxlintMessagesFor(syntheticPath, fixtureSource)
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('rejects a relative import of the same module', async () => {
-      const source =
-        "import { PlatformUserRepository } from './platform-user.repository'\n\n" +
-        'export const repository = PlatformUserRepository\n'
-      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const messages = await oxlintMessagesFor(
+        'src/repositories/probe-user.repository.ts',
+        relativeSource
+      )
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await oxlintRuleIdsFor('src/services/platform-user.service.ts', source)
+      const ids = await oxlintRuleIdsFor('src/services/platform-user.service.ts', fixtureSource)
       expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
   describe('no-restricted-imports: repositories/platform-email.repository', () => {
     const fixture = 'tests/fixtures/lint-zones/service-imports-platform-email-repository.ts'
-
-    it.each([
+    const fixtureSource = readFixture(fixture)
+    const relativeSource =
+      "import { PlatformEmailRepository } from './platform-email.repository'\n\n" +
+      'export const repository = PlatformEmailRepository\n'
+    const rejectPaths = [
       'src/services/email-webhook.service.ts',
       'src/services/mailer.service.ts',
       'src/controllers/probe.controller.ts',
-      'src/repositories/probe.repository.ts',
-    ])('rejects an import from %s', async (syntheticPath) => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await oxlintMessagesFor(syntheticPath, source)
+      'src/repositories/probe-email.repository.ts',
+    ]
+    for (const syntheticPath of rejectPaths) registerOxlintProbe(syntheticPath, fixtureSource)
+    registerOxlintProbe('src/repositories/probe-email.repository.ts', relativeSource)
+    registerOxlintProbe('src/services/platform-email.service.ts', fixtureSource)
+
+    it.each(rejectPaths)('rejects an import from %s', async (syntheticPath) => {
+      const messages = await oxlintMessagesFor(syntheticPath, fixtureSource)
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('rejects a relative import of the same module', async () => {
-      const source =
-        "import { PlatformEmailRepository } from './platform-email.repository'\n\n" +
-        'export const repository = PlatformEmailRepository\n'
-      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const messages = await oxlintMessagesFor(
+        'src/repositories/probe-email.repository.ts',
+        relativeSource
+      )
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await oxlintRuleIdsFor('src/services/platform-email.service.ts', source)
+      const ids = await oxlintRuleIdsFor('src/services/platform-email.service.ts', fixtureSource)
       expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
 
   describe('no-restricted-imports: repositories/platform-onboarding.repository', () => {
     const fixture = 'tests/fixtures/lint-zones/service-imports-platform-onboarding-repository.ts'
-
-    it.each([
+    const fixtureSource = readFixture(fixture)
+    const relativeSource =
+      "import { PlatformOnboardingRepository } from './platform-onboarding.repository'\n\n" +
+      'export const repository = PlatformOnboardingRepository\n'
+    const rejectPaths = [
       'src/services/onboarding.service.ts',
       'src/services/tenant.service.ts',
       'src/controllers/probe.controller.ts',
-      'src/repositories/probe.repository.ts',
-    ])('rejects an import from %s', async (syntheticPath) => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const messages = await oxlintMessagesFor(syntheticPath, source)
+      'src/repositories/probe-onboarding.repository.ts',
+    ]
+    for (const syntheticPath of rejectPaths) registerOxlintProbe(syntheticPath, fixtureSource)
+    registerOxlintProbe('src/repositories/probe-onboarding.repository.ts', relativeSource)
+    registerOxlintProbe('src/services/platform-onboarding.service.ts', fixtureSource)
+
+    it.each(rejectPaths)('rejects an import from %s', async (syntheticPath) => {
+      const messages = await oxlintMessagesFor(syntheticPath, fixtureSource)
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('rejects a relative import of the same module', async () => {
-      const source =
-        "import { PlatformOnboardingRepository } from './platform-onboarding.repository'\n\n" +
-        'export const repository = PlatformOnboardingRepository\n'
-      const messages = await oxlintMessagesFor('src/repositories/probe.repository.ts', source)
+      const messages = await oxlintMessagesFor(
+        'src/repositories/probe-onboarding.repository.ts',
+        relativeSource
+      )
       const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
       expect(restricted?.severity).toBe(2)
     })
 
     it('allows services/platform-*.service.ts', async () => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
-      const ids = await oxlintRuleIdsFor('src/services/platform-onboarding.service.ts', source)
+      const ids = await oxlintRuleIdsFor(
+        'src/services/platform-onboarding.service.ts',
+        fixtureSource
+      )
       expect(ids).not.toContain(RESTRICTED_IMPORTS)
     })
   })
@@ -571,38 +639,47 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
       },
     ]
 
-    it.each(bareSleeps)('rejects $label', async ({ lint, ruleId, source }) => {
-      const messages = await lint(probePath, source)
-      expect(messages.find((message) => message.ruleId === ruleId)?.severity).toBe(2)
-    })
-
-    it.each([
+    const allowedWaits = [
       { label: 'settle(ms, reason)', source: "await settle(10, 'absence has no event')\n" },
       {
         label: 'a setImmediate hop',
         source: 'await new Promise((resolve) => setImmediate(resolve))\n',
       },
       { label: 'fake timers', source: 'vi.useFakeTimers()\nsetTimeout(() => undefined, 10)\n' },
-    ])('allows $label', async ({ source }) => {
+    ]
+    const timingSource =
+      "import { setTimeout as delay } from 'node:timers/promises'\n\n" +
+      'await new Promise((resolve) => setTimeout(resolve, 10))\nawait delay(10)\n'
+    const timerImportSource =
+      "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n"
+    for (const { lint, source } of bareSleeps) {
+      if (lint === oxlintMessagesFor) registerOxlintProbe(probePath, source)
+    }
+    for (const { source } of allowedWaits) registerOxlintProbe(probePath, source)
+    registerOxlintProbe('tests/helpers/timing.ts', timingSource)
+    registerOxlintProbe('tests/helpers/request.ts', timerImportSource)
+
+    it.each(bareSleeps)('rejects $label', async ({ lint, ruleId, source }) => {
+      const messages = await lint(probePath, source)
+      expect(messages.find((message) => message.ruleId === ruleId)?.severity).toBe(2)
+    })
+
+    it.each(allowedWaits)('allows $label', async ({ source }) => {
       expect(await ruleIdsFor(probePath, source)).not.toContain('no-restricted-syntax')
       expect(await oxlintRuleIdsFor(probePath, source)).not.toContain(RESTRICTED_IMPORTS)
     })
 
     it('exempts tests/helpers/timing.ts, the one file that defines the waits', async () => {
-      const source =
-        "import { setTimeout as delay } from 'node:timers/promises'\n\n" +
-        'await new Promise((resolve) => setTimeout(resolve, 10))\nawait delay(10)\n'
-      expect(await ruleIdsFor('tests/helpers/timing.ts', source)).not.toContain(
+      expect(await ruleIdsFor('tests/helpers/timing.ts', timingSource)).not.toContain(
         'no-restricted-syntax'
       )
-      expect(await oxlintRuleIdsFor('tests/helpers/timing.ts', source)).not.toContain(
+      expect(await oxlintRuleIdsFor('tests/helpers/timing.ts', timingSource)).not.toContain(
         RESTRICTED_IMPORTS
       )
     })
 
     it('keeps the timer import ban in tests/helpers/request.ts', async () => {
-      const source = "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n"
-      const messages = await oxlintMessagesFor('tests/helpers/request.ts', source)
+      const messages = await oxlintMessagesFor('tests/helpers/request.ts', timerImportSource)
       expect(messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)?.severity).toBe(2)
     })
   })
@@ -613,6 +690,11 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
    */
   describe('disable directives', () => {
     const probePath = 'src/services/probe.service.ts'
+    const blanketOxlintSource = '/* oxlint-disable */\nexport const a = 1\n'
+    const unusedDirectiveSource =
+      '// oxlint-disable-next-line eslint/no-console -- probe\nexport const a = 1\n'
+    registerOxlintProbe(probePath, blanketOxlintSource)
+    registerOxlintProbe(probePath, unusedDirectiveSource)
 
     it('rejects a blanket eslint-disable', async () => {
       const messages = await messagesFor(probePath, '/* eslint-disable */\nexport const a = 1\n')
@@ -623,21 +705,42 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
     })
 
     it('rejects a blanket oxlint-disable', async () => {
-      const messages = await oxlintMessagesFor(
-        probePath,
-        '/* oxlint-disable */\nexport const a = 1\n'
-      )
+      const messages = await oxlintMessagesFor(probePath, blanketOxlintSource)
       const abusive = messages.find(
         (message) => message.ruleId === 'unicorn/no-abusive-eslint-disable'
       )
       expect(abusive?.severity).toBe(2)
     })
 
+    it('rejects an eslint-disable that suppresses nothing, as an error', async () => {
+      const source =
+        '// eslint-disable-next-line no-restricted-syntax -- probe\nexport const a = 1\n'
+      const messages = await messagesFor(probePath, source)
+      const unused = messages.find(
+        (message) => message.ruleId === null && message.message.startsWith('Unused eslint-disable')
+      )
+      expect(unused?.severity).toBe(2)
+    })
+
     it('rejects an oxlint-disable that suppresses nothing', async () => {
-      const source = '// oxlint-disable-next-line eslint/no-console -- probe\nexport const a = 1\n'
-      const messages = await oxlintMessagesFor(probePath, source)
+      const messages = await oxlintMessagesFor(probePath, unusedDirectiveSource)
       const unused = messages.find((message) => message.ruleId === UNUSED_DIRECTIVE_RULE_ID)
       expect(unused?.severity).toBe(2)
+    })
+  })
+
+  describe('the Oxlint probe helper', () => {
+    it.each(['../outside.ts', '/outside.ts', 'src/../../outside.ts'])(
+      'refuses the path %s, outside the lint scope',
+      (filePath) => {
+        expect(() => registerOxlintProbe(filePath, 'export {}\n')).toThrow(/outside the lint scope/)
+      }
+    )
+
+    it('fails on a probe that was never registered', async () => {
+      await expect(
+        oxlintMessagesFor('src/services/never.service.ts', 'export {}\n')
+      ).rejects.toThrow(/not registered/)
     })
   })
 
@@ -688,6 +791,16 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS, concurrent
       {
         label: 'sql imported under an alias',
         source: "import { sql as s } from 'drizzle-orm'\nexport const q = s.raw('select 1')\n",
+      },
+      {
+        label: 'sql imported under an alias from a drizzle-orm subpath',
+        source:
+          "import { sql as s } from 'drizzle-orm/pg-core'\nexport const q = s.raw('select 1')\n",
+      },
+      {
+        label: 'sql rebound to another name',
+        source:
+          "import { sql } from 'drizzle-orm'\nconst s = sql\nexport const q = s.raw('select 1')\n",
       },
       {
         label: 'raw destructured from sql',

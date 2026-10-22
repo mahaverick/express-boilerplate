@@ -80,7 +80,7 @@ describe('renderTenantInvitationTemplate', () => {
   )
 
   it('refuses to render without an accept link', () => {
-    // oxlint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling destructuring drops the key under test
+    // oxlint-disable-next-line eslint/no-unused-vars -- rest-sibling destructuring drops the key under test
     const { acceptUrl, ...withoutUrl } = validVariables
     expect(() => renderTenantInvitationTemplate(withoutUrl as TenantInvitationVariables)).toThrow(
       /acceptUrl/

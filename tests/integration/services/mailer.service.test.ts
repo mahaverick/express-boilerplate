@@ -119,7 +119,7 @@ const rejectWithAuthError: StubbedSendMail = () => {
 /**
  * A `sendMail` stub that rejects with a string, which has no `.code` to extract.
  */
-// oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- deliberately a non-Error rejection, to prove extractErrorCode never assumes an object shape
+// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- deliberately a non-Error rejection, to prove extractErrorCode never assumes an object shape
 const rejectWithAString: StubbedSendMail = () => Promise.reject('smtp exploded')
 
 /**

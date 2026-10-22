@@ -16,7 +16,7 @@ declare global {
      * What `request.user` holds once `requireAuth` has run: the client-visible
      * user projection, on the field `@types/passport` declares.
      */
-    // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- empty on purpose: extending `Express.User` types passport's own `Request.user` declaration
+    // oxlint-disable-next-line typescript/no-empty-object-type -- empty on purpose: extending `Express.User` types passport's own `Request.user` declaration
     interface User extends AuthenticatedUser {}
 
     /**

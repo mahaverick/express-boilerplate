@@ -48,7 +48,7 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
     ...actual,
     isErrorTrackingEnabled: () => {
       if (tracking.shouldThrow) throw new Error('config unreadable')
-      // oxlint-disable-next-line @typescript-eslint/only-throw-error -- a thrown non-Error is the value under test
+      // oxlint-disable-next-line typescript/only-throw-error -- a thrown non-Error is the value under test
       if (tracking.thrown !== undefined) throw tracking.thrown
       return tracking.isEnabled
     },

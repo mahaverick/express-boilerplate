@@ -53,6 +53,8 @@ const JSDOC_CONTEXTS = [
 ]
 
 export default tseslint.config(
+  // A stale eslint-disable fails lint on its own, whatever --max-warnings says.
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
   {
     // tests/fixtures/** break the rules on purpose; lint-gates.test.ts lints them with `ignore: false`.
     ignores: [
@@ -282,7 +284,12 @@ export default tseslint.config(
         },
         {
           selector:
-            "ImportDeclaration[source.value='drizzle-orm'] > ImportSpecifier[imported.name='sql'][local.name!='sql']",
+            "ImportDeclaration[source.value=/^drizzle-orm(\\/|$)/] > ImportSpecifier[imported.name='sql'][local.name!='sql']",
+          message: SQL_ALIAS_MESSAGE,
+        },
+        // const s = sql, the same alias by assignment.
+        {
+          selector: "VariableDeclarator[init.name='sql'] > Identifier.id",
           message: SQL_ALIAS_MESSAGE,
         },
         {
