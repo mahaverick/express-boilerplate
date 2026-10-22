@@ -71,6 +71,17 @@ describe('checkTestServices', () => {
     await expect(checkTestServices(env)).resolves.toEqual({ ok: true })
   })
 
+  it('probes localhost on 127.0.0.1 without resolving the name', async () => {
+    const listening = await Promise.all([listen(), listen(), listen(), listen()])
+    servers.push(...listening.map(({ server }) => server))
+    const env = envFor(
+      listening.map(({ port }) => port),
+      'localhost'
+    )
+
+    await expect(checkTestServices(env)).resolves.toEqual({ ok: true })
+  })
+
   it('gives up within the timeout', async () => {
     const started = performance.now()
 

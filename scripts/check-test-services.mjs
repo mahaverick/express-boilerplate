@@ -34,6 +34,22 @@ const accepts = (host, port, timeoutMs) =>
   })
 
 /**
+ * Whether host:port accepts a connection. `localhost` is probed as 127.0.0.1
+ * and ::1 directly: resolving it can stall for seconds on macOS, which would
+ * report a running service as down.
+ * @param host - The host to connect to.
+ * @param port - The port to connect to.
+ * @param timeoutMs - How long to wait before counting it as down.
+ * @returns True when any address for the host accepted.
+ */
+const reachable = async (host, port, timeoutMs) => {
+  if (host === '') return false
+  const hosts = host === 'localhost' ? ['127.0.0.1', '::1'] : [host]
+  const results = await Promise.all(hosts.map((each) => accepts(each, port, timeoutMs)))
+  return results.includes(true)
+}
+
+/**
  * The host and port of a URL, with a default port when the URL has none.
  * @param value - The URL.
  * @param defaultPort - The port to use when the URL names none.
@@ -62,7 +78,7 @@ export async function checkTestServices(env, timeoutMs = DEFAULT_TIMEOUT_MS) {
     ['mailpit-http', target(env.MAILPIT_URL ?? 'http://127.0.0.1:8025', 8025)],
   ]
   const up = await Promise.all(
-    services.map(([, { host, port }]) => host !== '' && accepts(host, port, timeoutMs))
+    services.map(([, { host, port }]) => reachable(host, port, timeoutMs))
   )
   const down = services.filter((_, index) => !up[index]).map(([name]) => name)
   return down.length === 0 ? { ok: true } : { ok: false, down }
