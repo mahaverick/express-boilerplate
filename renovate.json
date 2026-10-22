@@ -46,8 +46,11 @@
         "eslint-*",
         "@eslint/*",
         "typescript-eslint",
-        "prettier",
-        "prettier-*",
+        "vite-plus",
+        "@voidzero-dev/*",
+        "oxlint",
+        "oxlint-tsgolint",
+        "oxfmt",
         "vitest",
         "@vitest/*"
       ]

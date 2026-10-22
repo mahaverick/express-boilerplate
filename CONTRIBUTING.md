@@ -18,13 +18,13 @@ Run what CI runs:
 ```bash
 pnpm lint            # vp check (Oxlint + Oxfmt), the untyped ESLint, tsc --noEmit
 pnpm lint:docs       # history phrasing, broken links and anchors in the docs
-pnpm format:check    # Oxfmt over the repo, minus its ignorePatterns
 pnpm knip            # unused files, exports, types and dependencies
 pnpm test:coverage   # vitest, gated at 80% lines/functions/branches/statements
 pnpm build           # tsc + tsc-alias against tsconfig.build.json
 ```
 
-All six must exit 0; run `pnpm format` if `format:check` does not.
+All five must exit 0, or run `pnpm gate`, which runs them all. `pnpm lint`
+fails on unformatted files; `pnpm format` fixes them.
 Oxlint runs every lint rule it can; ESLint runs only the rules Oxlint can't
 yet, listed with their reasons in [docs/lint-deferred.md](docs/lint-deferred.md).
 `pnpm lint` type-checks once, against `tsconfig.json`, which extends
@@ -32,6 +32,23 @@ yet, listed with their reasons in [docs/lint-deferred.md](docs/lint-deferred.md)
 `drizzle.config.ts`; `pnpm typecheck` runs that step alone.
 The two configs stay separate: see [CLAUDE.md](CLAUDE.md#code-conventions),
 which also holds the code conventions.
+
+## Tooling
+
+[Vite+](https://viteplus.dev) (`vite-plus`, pinned exactly in `package.json`)
+runs the toolchain through `vp`; the `pnpm` scripts wrap it.
+
+- **Lint:** Oxlint (type-aware, through `oxlint-tsgolint`) with its rules in
+  `vite.config.ts`. The leftover ESLint in `eslint.config.mjs` runs only what
+  Oxlint can't yet ([docs/lint-deferred.md](docs/lint-deferred.md)). `tsc
+  --noEmit` stays the type checker.
+- **Format:** Oxfmt (`pnpm format`, `pnpm format:check`). In VS Code, install
+  the Oxc extension (`oxc.oxc-vscode`); the devcontainer does.
+- **Tests:** `vp test` runs Vitest with the `unit` and `integration` projects.
+- **Hooks and push:** see [Git hooks](#git-hooks-vite). `pnpm gate` runs the
+  full local gate; `pnpm push` runs it, then pushes.
+- **Existing clone:** run `git config --unset core.hooksPath && pnpm prepare`
+  once ([Existing clones](#existing-clones)).
 
 ## Git hooks (Vite+)
 
@@ -45,8 +62,9 @@ routine commit.
   Markdown), runs `vp test run --changed HEAD` on the `unit` project, and
   regenerates and stages `.env.example` when `env.config.ts` is staged. The
   `unit` project excludes `tests/integration/**` and skips the database setup,
-  so this hook runs with Docker down. Oxlint and ESLint run type-aware here,
-  which is what catches floating and misused promises; keep them in the hook.
+  so this hook runs with Docker down. Oxlint runs type-aware here
+  (it catches floating and misused promises); ESLint runs untyped. Keep both in
+  the hook.
 - **`commit-msg`** runs `commitlint` ([Commits](#commits)). `pnpm commit` opens
   an interactive prompt.
 - **`pre-push`** runs `pnpm gate` (`scripts/pre-push-gate.sh`), which mirrors
@@ -152,8 +170,8 @@ that makes them required, and what runs after they pass on `main`, are in
 
 **`lint`** needs no services:
 
-- `pnpm lint`, `pnpm format:check` (the whole repo, `vp fmt --check .` minus
-  its ignore patterns), `pnpm lint:docs` (no history phrasing in the Markdown or
+- `pnpm lint` (`vp check`: Oxlint and Oxfmt over the whole repo minus the
+  ignore patterns, then the untyped ESLint and `tsc --noEmit`), `pnpm lint:docs` (no history phrasing in the Markdown or
   in `#` comments of config files, no broken relative link or anchor, no code
   citing an upper-case `.md` file the repo root lacks) and `pnpm knip` (answer a
   finding as [CLAUDE.md](CLAUDE.md#unused-code-knip) describes).
@@ -245,8 +263,8 @@ runs monthly, before 6am on the first day.
   devcontainer image), wait for a human.
 - Vulnerability fixes open immediately, outside the schedule and the
   release-age wait, labelled `security`. A fixed version younger than 3 days
-  also needs an entry in `minimumReleaseAgeExclude`, or CI's frozen install
-  refuses it; delete that entry once the version is 3 days old.
+  waits: there is no exclude list, and a frozen install refuses a younger
+  version. Merge once it is 3 days old.
 - GitHub Actions are pinned to commit SHAs, and Renovate keeps the pins
   current.
 - TypeScript is held `<6.1.0` (see [CLAUDE.md](CLAUDE.md#versions)), and every
@@ -280,10 +298,8 @@ that adds it. The file's own comments carry the detail.
   a prebuilt binary for the host platform.
 - **`minimumReleaseAge: 4320`**: pnpm refuses any version published less than
   3 days (4320 minutes) ago, the window `renovate.json` also waits. A frozen
-  install checks every lockfile entry against it. An exception goes under a
-  `minimumReleaseAgeExclude` key, one `name@version` per entry, needed only
-  until that version is 3 days old; delete the entry then, and the key itself
-  once no exception remains.
+  install checks every lockfile entry against it. This repo keeps no
+  `minimumReleaseAgeExclude` list: wait out the 3 days.
 - **`overrides`**: patched versions of transitive dependencies whose parents
   have not taken them yet, one entry per advisory line: `ip-address` (via
   `express-rate-limit`, the only production one), `source-map-js`,

@@ -546,11 +546,11 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   the CommonJS pino imported from ESM is never instrumented. After editing
   `otel-collector.yaml`, run `docker compose restart otel-collector`: it is
   bind-mounted, and `docker compose up -d` doesn't pick up the change.
-- **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm format:check`,
-  `pnpm knip`, `pnpm test:coverage` and `pnpm build` all exit 0**
+- **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm knip`,
+  `pnpm test:coverage` and `pnpm build` all exit 0, or `pnpm gate` does**
   ([CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr)). `pnpm gate`
-  runs all of them (the format check inside `pnpm lint`'s `vp check`), and
-  the pre-push hook runs `pnpm gate`. Don't drop
+  runs all of them (the format check sits inside `pnpm lint`'s `vp check`),
+  and the pre-push hook runs `pnpm gate`. Don't drop
   type-aware lint from pre-commit to speed it up.
 - **Push with `pnpm push`, not `git push`.** It runs the gate first, then
   `git push --no-verify`: a long pre-push hook can outlast the SSH connection

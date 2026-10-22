@@ -178,8 +178,8 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.        |
 | `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias` on `tsconfig.build.json`, and copies the migrations.    |
 | `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                           |
-| `pnpm lint`                         | `eslint .`, then `tsc --noEmit` over `src/` and `tests/` (`tsconfig.json`).                         |
-| `pnpm lint:fix`                     | `eslint . --fix`.                                                                                   |
+| `pnpm lint`                         | `vp check` (Oxlint, Oxfmt), the untyped ESLint, then `tsc --noEmit` (`tsconfig.json`).              |
+| `pnpm lint:fix`                     | `vp check --fix`, then `eslint . --fix`.                                                            |
 | `pnpm typecheck`                    | `tsc --noEmit` over `src/`, `tests/` and `drizzle.config.ts` (`tsconfig.json`).                     |
 | `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                               |
 | `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                       |
@@ -200,6 +200,8 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 | `pnpm test:integration`             | The `integration` project: `tests/integration/**`, with the per-worker databases. Needs the stack.  |
 | `pnpm test:watch`                   | `vp test watch`.                                                                                    |
 | `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                |
+| `pnpm gate`                         | The pre-push gate: lint, docs, knip, domain terms, coverage, build. Needs the compose stack.        |
+| `pnpm push [args]`                  | Runs `pnpm gate`, then `git push --no-verify` with your arguments.                                  |
 | `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`). |
 | `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
 | `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                 |

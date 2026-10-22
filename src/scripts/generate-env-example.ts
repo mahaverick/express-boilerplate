@@ -66,7 +66,7 @@ export function render(shape: Record<string, z.ZodType>): string {
  *
  * One row per field, in schema order: whether it is required, its default,
  * and its `.describe()` text with `|` escaped. The output is unpadded;
- * prettier pads the columns once it is pasted into ARCHITECTURE.md.
+ * the formatter pads the columns once it is pasted into ARCHITECTURE.md.
  * @param shape - The schema's field map (`EnvSchema.shape`), keyed by environment variable name.
  * @returns The Markdown table, header row first, with no trailing newline.
  */
