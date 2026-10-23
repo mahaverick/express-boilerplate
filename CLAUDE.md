@@ -411,9 +411,10 @@ points at the code or doc that holds the detail. How things work is in
   (`tests/integration/services/retention.service.test.ts`).
 - **The suite runs at `LOG_LEVEL=silent`.** Debug with
   `LOG_LEVEL=debug pnpm test <file>`.
-- **To change test parallelism, change `WORKER_COUNT`**
-  (`tests/helpers/worker-database.ts`), which provisions one database per
-  worker and sets `maxWorkers`. A worker with no database fails as a bare
+- **To change test parallelism, set `VITEST_WORKERS`** (default 8, an integer
+  from 1 to 16; read by `workerCountFrom` in `tests/helpers/worker-database.ts`).
+  `WORKER_COUNT` is its result: it provisions one database per worker and sets
+  `maxWorkers`. A worker with no database fails as a bare
   connection error. Two concurrent `pnpm test` runs on one compose stack share
   the worker databases and prefixes, so they are unsupported.
 - **The compose ports 5433/6380 are deliberate,** so the stack never meets a

@@ -91,6 +91,7 @@ export default defineConfig({
     ignorePatterns: [
       'dist/**',
       'coverage/**',
+      '.vitest/**',
       'node_modules/**',
       'tests/fixtures/**',
       '.worktrees/**',

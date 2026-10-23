@@ -164,7 +164,7 @@ These move together, or a gate below catches the one you missed:
 ## CI
 
 `ci.yml` runs on every pull request, on `workflow_dispatch`, and as the gate
-`deploy.yml` calls before it builds an image. It has three jobs. The ruleset
+`deploy.yml` calls before it builds an image. It has four kinds of job: `lint`, four `test-shard` jobs, `test` and `docker`. The ruleset
 that makes them required, and what runs after they pass on `main`, are in
 [ARCHITECTURE.md](ARCHITECTURE.md#deploying).
 
@@ -190,12 +190,22 @@ that makes them required, and what runs after they pass on `main`, are in
   everything. The step refuses to run on a blank line. Explain a term in this
   document or a commit message instead.
 
-**`test`** runs against Postgres 18, Redis and Mailpit services:
+**`test-shard`** runs four times in parallel, each with its own Postgres 18,
+Redis and Mailpit services:
 
-- `pnpm db:migrate` against the service database, then `pnpm test:coverage`
-  with the 80% gate on lines, functions, branches and statements.
-- A step that compares the `Test with coverage gate` step's `env:` block with
-  `.env.test` in both directions (step 5 above).
+- `pnpm db:migrate` against the service database.
+- One quarter of the suite (`vp test run --coverage --shard=n/4`), with the
+  coverage thresholds off. Each shard uploads its result as a `blob-n` artifact.
+  Open the failed shard's log for test output.
+
+**`test`** needs all four shards. It fails if any shard failed or was cancelled.
+It runs no tests itself:
+
+- It downloads the four blobs, fails if one is missing, then merges them
+  (`vp test --merge-reports --coverage`) and enforces the 80% gate on lines,
+  functions, branches and statements over the whole suite.
+- A step that compares the `Test with coverage gate` step's `env:` block in
+  `test-shard` with `.env.test` in both directions (step 5 above).
 - `pnpm build`.
 - `pnpm audit --prod --audit-level moderate`, which fails on a moderate, high
   or critical advisory in production dependencies.
