@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.0.2](https://github.com/mahaverick/express-boilerplate/compare/v8.0.1...v8.0.2) (2026-10-23)
+
+
+### Performance Improvements
+
+* **ci:** shard tests and cache Docker layers ([#147](https://github.com/mahaverick/express-boilerplate/issues/147)) ([93da02d](https://github.com/mahaverick/express-boilerplate/commit/93da02d8f41ab054649fb78c074fa52e3a97a5a1))
+
 ## [8.0.1](https://github.com/mahaverick/express-boilerplate/compare/v8.0.0...v8.0.1) (2026-10-20)
 
 
