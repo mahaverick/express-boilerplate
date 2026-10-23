@@ -17,9 +17,10 @@ concurrency:
 permissions:
   contents: read
 
-# `lint` needs no services, so it runs beside `test` and a lint failure
-# surfaces without waiting for Postgres, Redis and Mailpit. `test` holds the
-# steps that need them and the remaining checks.
+# `lint` needs no services, so it runs beside `test-shard` and a lint failure
+# surfaces without waiting for Postgres, Redis and Mailpit. `test-shard` holds
+# the services and runs a slice of the suite. `test` merges the shards' results
+# and runs the remaining checks.
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -76,9 +77,9 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     env:
-      # Workers (and per-worker databases) per shard, on a 4-vCPU runner. Over
-      # three runs each, 4 and 8 gave the same slowest shard (129-140 s against
-      # 130-148 s), so this takes the fewer connections. Local runs default to 8.
+      # Workers (and per-worker databases) per shard, on a 4-vCPU runner. At
+      # three shards and three runs each, 4 and 8 gave the same slowest shard
+      # (129-140 s against 130-148 s), so this takes the fewer connections. Local runs default to 8.
       VITEST_WORKERS: 4
     services:
       # GitHub's `services:` blocks cannot mount a file, so the init.sql that

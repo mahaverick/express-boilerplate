@@ -21,7 +21,7 @@ Per job, median (min-max):
 | Job                              |            Before |        After PR 1 |               After PR 2 |
 | :------------------------------- | ----------------: | ----------------: | -----------------------: |
 | `lint`                           | 108-168 s (range) |    54.5 s (42-61) |           51.5 s (41-61) |
-| `test` (single job)              | 262-276 s (range) | 305.5 s (226-333) |                      n/a |
+| `test` (single job)              |               n/a | 305.5 s (226-333) |                      n/a |
 | `test-shard (n)`, slowest of 4   |               n/a |               n/a |          118 s (105-125) |
 | `test-shard (n)`, all 40 jobs    |               n/a |               n/a |           108 s (93-125) |
 | `test` (merge and coverage gate) |               n/a |               n/a |           32.5 s (27-36) |
@@ -57,8 +57,8 @@ On PR 2's head, one `pnpm gate` run took 136 s (exit 0, 608 s user CPU). The loa
 
 ## Findings
 
-- **Four shards, four workers each.** With 3 runs each, 8 workers per shard gave a slowest shard of 130-148 s and 4 workers gave 129-140 s. Four shards at four workers gave 115-118 s. Each shard adds about 45 s of setup (checkout, install, migrations), so a fifth shard gains little.
-- **Coverage is enforced on the merge.** Each shard writes a blob and applies no threshold. The `test` job merges the blobs and applies the 99% gate to the whole suite. Two proofs show both gates work: with the threshold at 99% lines the merged run failed ([run 39859048128](https://github.com/mahaverick/express-boilerplate/actions/runs/39859048128): lines 98.29%), and a deliberately failing shard failed `test` ([run 39859534908](https://github.com/mahaverick/express-boilerplate/actions/runs/39859534908)).
+- **Four shards, four workers each.** At three shards and 3 runs each, 8 workers per shard gave a slowest shard of 130-148 s and 4 workers gave 129-140 s. Four shards at four workers gave 115-118 s. Each shard adds about 45 s of setup (checkout, install, migrations), so a fifth shard gains little.
+- **Coverage is enforced on the merge.** Each shard writes a blob and applies no threshold. The `test` job merges the blobs and applies the 80% thresholds from `vite.config.ts` to the whole suite. Two proofs show both gates work: with the threshold temporarily at 99% lines the merged run failed ([run 39859048128](https://github.com/mahaverick/express-boilerplate/actions/runs/39859048128): lines 98.29%), and a deliberately failing shard failed `test` ([run 39859534908](https://github.com/mahaverick/express-boilerplate/actions/runs/39859534908)).
 - **Test isolation stays on.** In the spike, `--no-isolate` broke 46 unit tests (module-level `vi.mock` state) and saved nothing (41 s against 43 s). CI time is set by the integration suite under coverage, so sharding is the lever.
 - **Docker layer cache.** The cache cut the build step from 78 s (cold) to 14 s (warm).
 
