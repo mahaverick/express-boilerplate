@@ -241,18 +241,22 @@ describe('runBillingSeed', () => {
     expect(graceLeft).toBeLessThanOrEqual(2 * DAY_MS)
   })
 
-  it('leaves each row as a sync of its fake subscriptions would', async () => {
+  it('leaves each row as a sync of its fake subscriptions would, so a sync sends nothing', async () => {
+    const before = await sendCounts()
     for (const tenant of await seededTenants()) {
-      const before = await readBilling(tenant.id)
+      const { syncedAt: _s, version: _v, updatedAt: _u, ...seeded } = await readBilling(tenant.id)
       await syncTenantBilling(tenant.id, 'job')
-      const after = await readBilling(tenant.id)
-      expect({ slug: tenant.slug, state: after.state }).toStrictEqual({
-        slug: tenant.slug,
-        state: before.state,
-      })
-      expect(after.currentPeriodEnd).toStrictEqual(before.currentPeriodEnd)
-      expect(after.cancelAtPeriodEnd).toBe(before.cancelAtPeriodEnd)
+      const {
+        syncedAt: _s2,
+        version: _v2,
+        updatedAt: _u2,
+        ...synced
+      } = await readBilling(tenant.id)
+      expect({ slug: tenant.slug, ...synced }).toStrictEqual({ slug: tenant.slug, ...seeded })
     }
+    expect(await sendCounts()).toStrictEqual(before)
+    expect(await queuedJobs(getEmailQueue())).toHaveLength(0)
+    expect(await queuedJobs(getNotificationQueue())).toHaveLength(0)
   })
 
   it('puts back the same 13 workspaces on a rerun', async () => {

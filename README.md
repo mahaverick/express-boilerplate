@@ -250,9 +250,10 @@ replaces. It prints each slug, id and state.
 `pnpm billing:time-travel -- --tenant <slug> --days <n>` (local only) moves
 one workspace's trial start and end, period end, past-due, halt and pause
 dates back `n` days, with its fake subscriptions' dates, then queues a sync of
-it and one billing run. With `pnpm dev` running, the run moves a trial past
-its end to Free, ends a grace or a cancelled period, or hands over a
-scheduled switch within seconds. Reminder and notice stamps do not move: one
+it and one billing run, which a running worker (`pnpm dev`) takes within
+seconds: a trial moved past its end goes to Free. The fake never charges a
+subscription by itself, so after a scheduled switch hands over, the new
+subscription stays unpaid on the fake. Reminder and notice stamps do not move: one
 already sent stays sent, and one not yet sent goes out on the next run once
 its time has come.
 It refuses a workspace on a real provider, so a real subscription's dates
