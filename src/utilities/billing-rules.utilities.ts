@@ -221,7 +221,7 @@ export function isPeriodEndAtOrBeforeSync(row: {
  * How long a cancel marker counts: past the provider call and its webhook's
  * arrival.
  */
-export const CANCEL_MARKER_MS = 15 * 60 * 1000
+const CANCEL_MARKER_MS = 15 * 60 * 1000
 
 /**
  * Who asked for a cancel on record: an owner (their id, null once their
