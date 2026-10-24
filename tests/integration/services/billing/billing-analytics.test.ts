@@ -24,7 +24,6 @@ import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-b
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { resolveGroupMarkers } from '@/services/analytics/analytics-group-marker.service'
 import {
-  markCancel,
   trackCheckoutConfirmed,
   trackProviderEvent,
   trackTrialReminder,
@@ -33,6 +32,7 @@ import { sendPayerLeft, sendTrialEnding } from '@/services/billing/billing-email
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { processBillingWebhookEvent } from '@/services/billing/billing-webhook.service'
+import { markCancel } from '@/services/billing/cancel-marker.service'
 import { cancelPaid, confirmCheckout, startCheckout } from '@/services/billing/checkout.service'
 import { countLimitHits } from '@/services/billing/plan-limit-hits.service'
 import { db, sql } from '@/services/database.service'
@@ -656,10 +656,10 @@ describe('a failed owner cancel', () => {
         await expect(cancelPaid({ userId: owner.id }, tenantId)).rejects.toBeDefined()
       }
     )
-    const client = await getRedis()
-    expect(
-      await client.exists(redisKey('billing', 'cancel-marker', tenantId, subscriptionId))
-    ).toBe(0)
+    expect(await readBilling(tenantId)).toMatchObject({
+      cancelMarkerSubscriptionId: null,
+      cancelMarkerBy: null,
+    })
     await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
     await fake.fakeAdvance(subscriptionId, 'cancelled')
     await syncTenantBilling(tenantId, 'job')
@@ -667,6 +667,39 @@ describe('a failed owner cancel', () => {
     expect(await propertiesOf(tenantId, 'subscription_cancel_scheduled')).toMatchObject({
       by: 'suspension',
     })
+  })
+})
+
+describe("an owner's past-due cancel whose webhook lands first", () => {
+  it('reads cancelled in analytics and in the mail alike', async () => {
+    const { tenantId, owner, subscriptionId } = await payingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenantId, {
+      state: 'past_due',
+      pastDueSince: new Date(Date.now() - DAY_MS),
+      haltedAt: new Date(Date.now() - DAY_MS),
+    })
+    const original = fake.cancelSubscription.bind(fake)
+
+    await withMutatedMethod(
+      fake,
+      'cancelSubscription',
+      async (id: string, isAtCycleEnd: boolean) => {
+        const cancelled = await original(id, isAtCycleEnd)
+        await syncTenantBilling(tenantId, 'webhook')
+        return cancelled
+      },
+      async () => {
+        await cancelPaid({ userId: owner.id }, tenantId)
+      }
+    )
+
+    const downgraded = await oneEvent(tenantId, 'downgraded_to_free')
+    expect(downgraded.properties).toMatchObject({ downgrade_cause: 'cancelled' })
+    const moved = await sql<{ variables: Record<string, string> }[]>`
+      select variables from email_messages
+      where tenant_id = ${tenantId} and template_key = 'moved_to_free'`
+    expect(moved.map((row) => row.variables['downgradeCause'])).toStrictEqual(['cancelled'])
   })
 })
 

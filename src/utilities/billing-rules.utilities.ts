@@ -16,6 +16,7 @@ import {
   type EntitlementKey,
   type EntitlementValue,
 } from '@/constants/entitlements.constants'
+import type { TenantBillingRecord } from '@/database/models/billing.model'
 import type {
   BillingGraceInput,
   BillingStateInput,
@@ -212,4 +213,48 @@ export function isStandInPeriodEnd(row: {
     row.syncedAt !== null &&
     row.currentPeriodEnd.getTime() <= row.syncedAt.getTime()
   )
+}
+
+/**
+ * How long a cancel marker counts: past the provider call and its webhook's
+ * arrival.
+ */
+export const CANCEL_MARKER_MS = 15 * 60 * 1000
+
+/**
+ * Who asked for a cancel on record: an owner (their id, null once their
+ * account is gone), or staff, who are never named.
+ */
+export type CancelMarker = { by: 'owner'; userId: string | null } | { by: 'staff' }
+
+/**
+ * The cancel of a row's current subscription on record, and who asked for
+ * it: the marker an owner's or a staff cancel wrote on the row before it
+ * called the provider, while it names that subscription and is recent.
+ * @param row - The row, as it stood before the change being reported.
+ * @param now - The current time.
+ * @returns The marker, or null when none stands.
+ */
+export function cancelMarkerOf(
+  row: Pick<
+    TenantBillingRecord,
+    | 'providerSubscriptionId'
+    | 'cancelMarkerSubscriptionId'
+    | 'cancelMarkerBy'
+    | 'cancelMarkerUserId'
+    | 'cancelMarkerAt'
+  >,
+  now: Date
+): CancelMarker | null {
+  if (
+    row.cancelMarkerSubscriptionId === null ||
+    row.cancelMarkerSubscriptionId !== row.providerSubscriptionId ||
+    row.cancelMarkerAt === null ||
+    now.getTime() - row.cancelMarkerAt.getTime() > CANCEL_MARKER_MS
+  ) {
+    return null
+  }
+  if (row.cancelMarkerBy === 'staff') return { by: 'staff' }
+  if (row.cancelMarkerBy === 'owner') return { by: 'owner', userId: row.cancelMarkerUserId }
+  return null
 }

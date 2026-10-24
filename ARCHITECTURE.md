@@ -1209,9 +1209,13 @@ refusal has no stamp and no repeat path; its time is when it happened.
 `plan_feature_blocked` and `plan_limit_approaching` are written with
 `enqueueAnalyticsOrThrow` after their hourly throttle key is claimed, and the
 key is released when the write fails, so a failure never silences them for the
-hour. An owner's cancel sets a 15-minute Redis marker before it calls the
-provider, so a cancel its webhook brings in first is still `by: owner`; a
-cancel that fails clears the marker, and a suspended or archived
+hour. An owner's cancel writes a marker on the billing row before it calls
+the provider (`cancel_marker_*`, `src/services/billing/cancel-marker.service.ts`),
+whether or not analytics is on, so a cancel its webhook brings in first is
+still `by: owner`, and its move to Free reads cause `cancelled` in the mail
+and in analytics alike (a past-due one included). The marker counts for 15
+minutes and only while it names the current subscription; the cancel's own
+write clears it, and a cancel that fails clears it, and a suspended or archived
 workspace's cancel reads `by: suspension` whatever the marker says. A staff
 cancel sets the same marker, which reads `by: staff`, also behind the
 suspension; only the staff cancel's own write reads `by: staff` on a

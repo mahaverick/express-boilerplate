@@ -247,6 +247,12 @@ marked by a comment in its file (0024's has none):
   read authenticated), and `card_change_started_at` with
   `card_change_started_by` (who opened a card change, and when), with its
   foreign key to `users`.
+- `0035` is generated whole. It adds the cancel marker to `tenant_billing`:
+  `cancel_marker_subscription_id`, `cancel_marker_by` (`owner` or `staff`,
+  checked), `cancel_marker_user_id` (the owner, with its foreign key to
+  `users`, set null on delete) and `cancel_marker_at`. An owner's or staff
+  cancel writes it before it calls the provider, so a sync that brings the
+  cancel in first reads it as theirs in the mail and in analytics.
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until
@@ -675,6 +681,12 @@ as described so it does not build them a second time under the lock, then run
   rewrite (a brief `ACCESS EXCLUSIVE` on `tenant_billing`). The foreign key on
   `card_change_started_by` takes `SHARE ROW EXCLUSIVE` on `users`; every row
   is NULL, so its validation finds nothing to check.
+
+- **`0035` blocks writes to `users` until the batch commits,** as `0034`
+  does: four nullable columns with no default (a catalog change with no
+  rewrite), a foreign key on `cancel_marker_user_id` that takes
+  `SHARE ROW EXCLUSIVE` on `users`, and a CHECK that every row (all NULL)
+  passes. `tenant_billing` takes a brief `ACCESS EXCLUSIVE` for the scan.
 
 ## The test database
 

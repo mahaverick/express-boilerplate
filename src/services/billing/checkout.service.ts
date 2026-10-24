@@ -57,8 +57,6 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import {
-  clearCancelMarker,
-  markCancel,
   trackCheckoutConfirmed,
   trackCheckoutStarted,
 } from '@/services/billing/billing-analytics.service'
@@ -74,6 +72,7 @@ import {
   BillingSyncConflictError,
   syncTenantBilling,
 } from '@/services/billing/billing-sync.service'
+import { clearCancelMarker, markCancel } from '@/services/billing/cancel-marker.service'
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
 import { lockBilling } from '@/services/billing/trial.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
@@ -1252,6 +1251,13 @@ export async function cancelSubscriptions(
         patch.haltedAt = null
         patch.pausedAt = null
       }
+    }
+    // The marker has done its work once this write lands: a later sync reads no cancel from it.
+    if (currentId !== null && locked.cancelMarkerSubscriptionId === currentId) {
+      patch.cancelMarkerSubscriptionId = null
+      patch.cancelMarkerBy = null
+      patch.cancelMarkerUserId = null
+      patch.cancelMarkerAt = null
     }
     if (isNextCancelled && locked.nextSubscriptionId === nextId) {
       patch.nextSubscriptionId = null

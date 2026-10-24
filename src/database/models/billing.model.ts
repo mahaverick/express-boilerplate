@@ -244,6 +244,21 @@ export const tenantBillingModel = pgTable(
      * When the scheduler cancelled the subscription of a suspended or archived workspace.
      */
     lifecycleCancelSentAt: timestamp('lifecycle_cancel_sent_at', { withTimezone: true }),
+    /**
+     * The cancel an owner or staff member asked for, recorded before the
+     * provider is called, so a sync that brings the cancel in first still
+     * reads it as theirs: the subscription, who (`owner` or `staff`), the
+     * owner, and when. Cleared when the cancel fails or its write lands.
+     */
+    cancelMarkerSubscriptionId: varchar('cancel_marker_subscription_id', {
+      length: PROVIDER_ID_LENGTH,
+    }),
+    cancelMarkerBy: varchar('cancel_marker_by', { length: 8 }).$type<'owner' | 'staff'>(),
+    cancelMarkerUserId: varchar('cancel_marker_user_id', { length: 36 }).references(
+      () => userModel.id,
+      { onDelete: 'set null' }
+    ),
+    cancelMarkerAt: timestamp('cancel_marker_at', { withTimezone: true }),
     disputeOpen: boolean('dispute_open').notNull().default(false),
     syncedAt: timestamp('synced_at', { withTimezone: true }),
     version: integer('version').notNull().default(1),
@@ -254,6 +269,10 @@ export const tenantBillingModel = pgTable(
     check(
       'tenant_billing_state_check',
       sql`${table.state} in (${sql.raw(sqlValueList(BILLING_STATES))})`
+    ),
+    check(
+      'tenant_billing_cancel_marker_by_check',
+      sql`${table.cancelMarkerBy} is null or ${table.cancelMarkerBy} in ('owner', 'staff')`
     ),
     check(
       'tenant_billing_provider_check',

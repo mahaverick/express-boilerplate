@@ -514,6 +514,10 @@ const RESET_COLUMNS = {
   winback7dSentAt: null,
   winback30dSentAt: null,
   lifecycleCancelSentAt: null,
+  cancelMarkerSubscriptionId: null,
+  cancelMarkerBy: null,
+  cancelMarkerUserId: null,
+  cancelMarkerAt: null,
   disputeOpen: false,
   syncedAt: null,
 } as const satisfies Partial<NewTenantBilling>

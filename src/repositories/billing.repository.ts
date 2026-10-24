@@ -1204,6 +1204,61 @@ export class BillingRepository {
   }
 
   /**
+   * Record who is cancelling a workspace's subscription, before the provider
+   * is called. A plain update of the marker columns, which moves no version:
+   * the marker changes no billing state.
+   * @param tenantId - The workspace.
+   * @param marker - The subscription, who, the owner and when.
+   * @param marker.subscriptionId - The subscription being cancelled.
+   * @param marker.by - `owner` or `staff`.
+   * @param marker.userId - The owner, or null for staff.
+   * @param marker.at - When the cancel was asked for.
+   * @param executor - Where to run the query. Defaults to the pool.
+   */
+  async setCancelMarker(
+    tenantId: string,
+    marker: { subscriptionId: string; by: 'owner' | 'staff'; userId: string | null; at: Date },
+    executor: DbExecutor = db
+  ): Promise<void> {
+    await executor
+      .update(tenantBillingModel)
+      .set({
+        cancelMarkerSubscriptionId: marker.subscriptionId,
+        cancelMarkerBy: marker.by,
+        cancelMarkerUserId: marker.userId,
+        cancelMarkerAt: marker.at,
+      })
+      .where(eq(tenantBillingModel.tenantId, tenantId))
+  }
+
+  /**
+   * Forget a workspace's cancel marker when it names a subscription.
+   * @param tenantId - The workspace.
+   * @param subscriptionId - The subscription the marker must name.
+   * @param executor - Where to run the query. Defaults to the pool.
+   */
+  async clearCancelMarker(
+    tenantId: string,
+    subscriptionId: string,
+    executor: DbExecutor = db
+  ): Promise<void> {
+    await executor
+      .update(tenantBillingModel)
+      .set({
+        cancelMarkerSubscriptionId: null,
+        cancelMarkerBy: null,
+        cancelMarkerUserId: null,
+        cancelMarkerAt: null,
+      })
+      .where(
+        and(
+          eq(tenantBillingModel.tenantId, tenantId),
+          eq(tenantBillingModel.cancelMarkerSubscriptionId, subscriptionId)
+        )
+      )
+  }
+
+  /**
    * Clear one workspace's lifecycle cancel claim.
    * @param tenantId - The workspace.
    * @param executor - Where to run the query. Defaults to the pool.

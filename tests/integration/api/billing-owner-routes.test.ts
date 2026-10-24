@@ -563,6 +563,35 @@ describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
     expect(moved.map((row) => row.variables['downgradeCause'])).toStrictEqual(['cancelled'])
   })
 
+  it("mails cancelled for an owner's past-due cancel whose webhook lands before the owner's write, with analytics off", async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, {
+      state: 'past_due',
+      pastDueSince: new Date(Date.now() - DAY_MS),
+      haltedAt: new Date(Date.now() - DAY_MS),
+    })
+    const original = fake.cancelSubscription.bind(fake)
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+    cancel.mockImplementation(async (id: string, isAtCycleEnd: boolean) => {
+      const cancelled = await original(id, isAtCycleEnd)
+      // The provider's webhook is synced before the owner's own write lands.
+      await syncTenantBilling(tenant.id, 'webhook')
+      return cancelled
+    })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+    cancel.mockRestore()
+
+    expect(response.status).toBe(200)
+    expect(await billingColumn(tenant.id, 'state')).toBe('free')
+    const moved = await sql<{ variables: Record<string, string> }[]>`
+      select variables from email_messages
+      where tenant_id = ${tenant.id} and template_key = 'moved_to_free'`
+    expect(moved.map((row) => row.variables['downgradeCause'])).toStrictEqual(['cancelled'])
+  })
+
   it('refuses a second cancel with 409 NO_SUBSCRIPTION', async () => {
     const { tenant, owner } = await workspace()
     await makePaying(tenant.id)

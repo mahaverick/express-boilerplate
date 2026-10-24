@@ -32,6 +32,7 @@ import type {
   BillingState,
 } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
+import type { CancelMarker } from '@/utilities/billing-rules.utilities'
 
 /**
  * Why a workspace moved to Free, for its email: a trial's end has its own.
@@ -72,6 +73,13 @@ export interface TransitionContext {
    * not `payment_failed`. Counts only with source `owner`.
    */
   isOwnerCancel?: boolean
+  /**
+   * The cancel on record for the row's current subscription before the
+   * change (`cancelMarkerOf`), whatever made the change: a cancel the
+   * provider's webhook brings in before the owner's or staff member's own
+   * write still reads as theirs, as analytics reads it.
+   */
+  cancelMarker?: CancelMarker | null
 }
 
 /**
@@ -172,8 +180,11 @@ export function billingTransitions(
     }
   }
   if (before.state !== 'free' && after.state === 'free') {
-    const isStaffCancel = source === 'staff' && context.isStaffCancel === true
-    const isOwnerCancel = source === 'owner' && context.isOwnerCancel === true
+    const marker = context.cancelMarker ?? null
+    const isStaffCancel =
+      (source === 'staff' && context.isStaffCancel === true) || marker?.by === 'staff'
+    const isOwnerCancel =
+      (source === 'owner' && context.isOwnerCancel === true) || marker?.by === 'owner'
     transitions.push({
       kind: 'moved_to_free',
       cause: downgradeCauseOf(before, isStaffCancel, isOwnerCancel),

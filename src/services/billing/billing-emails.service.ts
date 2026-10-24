@@ -62,6 +62,7 @@ import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
 import { payerLeftNextStep } from '@/templates/email/payer-left.template'
 import {
+  cancelMarkerOf,
   graceEndsAt,
   isStandInPeriodEnd,
   mergeEntitlements,
@@ -684,6 +685,8 @@ export async function sendBillingDiffEmails(
       isStaffCancel: extras.isStaffCancel === true,
       // Only an owner's own write passes its actor: their cancel, a past-due one included.
       isOwnerCancel: source === 'owner' && extras.actorUserId !== undefined,
+      // The marker the cancel wrote before calling the provider, as analytics reads it.
+      cancelMarker: cancelMarkerOf(before, new Date()),
     })
     // A suspended or archived workspace's members are not told it went Paid.
     const fulfilled = isWorkspaceActive ? (extras.fulfilledRequests ?? []) : []
