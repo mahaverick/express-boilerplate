@@ -64,7 +64,7 @@ import { payerLeftNextStep } from '@/templates/email/payer-left.template'
 import {
   cancelMarkerOf,
   graceEndsAt,
-  isStandInPeriodEnd,
+  isPeriodEndAtOrBeforeSync,
   mergeEntitlements,
 } from '@/utilities/billing-rules.utilities'
 import {
@@ -1004,7 +1004,7 @@ export async function sendRenewalUpcoming(row: TenantBillingRecord): Promise<voi
     const due = await stillDue(row, 'active', 'renewal_upcoming', async (fresh) => {
       if (fresh.cancelAtPeriodEnd || fresh.priceId === null) return false
       // A stand-in period end an adoption stored before its cycle was paid: no renewal date to state.
-      if (isStandInPeriodEnd(fresh)) return false
+      if (isPeriodEndAtOrBeforeSync(fresh)) return false
       const [price] = await planRepository.findPricesByIds([fresh.priceId])
       return price?.interval === 'year'
     })
