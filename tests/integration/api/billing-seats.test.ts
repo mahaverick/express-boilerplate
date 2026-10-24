@@ -392,6 +392,122 @@ describe('the members limit on joins', () => {
   })
 })
 
+/**
+ * A workspace that took 5 people on Paid and fell back to Free, plus a
+ * pending invitation of `role` from its owner to a person with an account.
+ * @returns The workspace, the invitee and the invitation's raw token and id.
+ */
+async function overLimitWithInvitation(role: MembershipRole) {
+  const { tenant, owner } = await workspace()
+  await putTenantOnPaid(tenant.id)
+  await addViewers(tenant, 4)
+  const invitee = await createTrackedUser()
+  const seeded = await seedInvitation(tenant, { email: invitee.email, role, invitedBy: owner.id })
+  await downgrade(tenant.id)
+  return { tenant, invitee, ...seeded }
+}
+
+describe('who a full workspace still lets join', () => {
+  it('lets a non-owner join at exactly the limit', async () => {
+    const { tenant, owner } = await workspace(1)
+    const invitee = await createTrackedUser()
+    const { rawToken } = await seedInvitation(tenant, {
+      email: invitee.email,
+      invitedBy: owner.id,
+    })
+
+    const response = await acceptAs(invitee, rawToken)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { alreadyMember: false } })
+  })
+
+  it('answers a member who accepts again alreadyMember, over the limit, and claims the invitation', async () => {
+    const { tenant, owner } = await workspace()
+    await putTenantOnPaid(tenant.id)
+    const [member] = await addViewers(tenant, 4)
+    const { rawToken, invitationId } = await seedInvitation(tenant, {
+      email: member?.email ?? '',
+      invitedBy: owner.id,
+    })
+    await downgrade(tenant.id)
+
+    const response = await acceptAs(member as User, rawToken)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { alreadyMember: true } })
+    const [row] = await sql<{ accepted_at: Date | null }[]>`
+      select accepted_at from tenant_invitations where id = ${invitationId}`
+    expect(row?.accepted_at).not.toBeNull()
+  })
+
+  it("refuses an owner's owner invitation at accept when the workspace is full", async () => {
+    const { tenant, invitee, rawToken } = await overLimitWithInvitation('owner')
+
+    const response = await acceptAs(invitee, rawToken)
+
+    expect(response.status).toBe(402)
+    expect(response.body).toMatchObject(FULL)
+    expect(response.body).not.toHaveProperty('details')
+    expect(await membershipRepository.findByUserAndTenant(invitee.id, tenant.id)).toBeUndefined()
+  })
+
+  it("refuses an owner's owner invitation at confirm when the workspace is full", async () => {
+    const { invitee, invitationId } = await overLimitWithInvitation('owner')
+    const link = await confirmLinkFor(invitee.email, invitationId)
+
+    const response = await request(app).post('/api/v1/invitations/confirm').send({ token: link })
+
+    expect(response.status).toBe(402)
+    expect(response.body).toMatchObject(FULL)
+    expect(response.body).not.toHaveProperty('details')
+  })
+
+  it("refuses an owner's owner invitation to a new address at one-click verify when full", async () => {
+    const { tenant, owner } = await workspace()
+    await putTenantOnPaid(tenant.id)
+    await addViewers(tenant, 4)
+    const email = freshEmail()
+    const { rawToken } = await seedInvitation(tenant, { email, role: 'owner', invitedBy: owner.id })
+    await downgrade(tenant.id)
+
+    const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+
+    expect(response.status).toBe(402)
+    expect(response.body).toMatchObject(FULL)
+    expect(response.body).not.toHaveProperty('details')
+  })
+
+  it('lets a new address join an ownerless workspace at 3 of 3 as owner by one click', async () => {
+    const tenant = await ownerlessWorkspace(3)
+    const { user: staff } = await createTrackedStaff('admin')
+    const email = freshEmail()
+    const { rawToken } = await seedInvitation(tenant, { email, role: 'owner', invitedBy: staff.id })
+
+    const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+
+    expect(response.status).toBe(200)
+  })
+
+  it('lets an address with an account confirm into an ownerless workspace at 3 of 3 as owner', async () => {
+    const tenant = await ownerlessWorkspace(3)
+    const { user: staff } = await createTrackedStaff('admin')
+    const invitee = await createTrackedUser()
+    const { invitationId } = await seedInvitation(tenant, {
+      email: invitee.email,
+      role: 'owner',
+      invitedBy: staff.id,
+    })
+    const link = await confirmLinkFor(invitee.email, invitationId)
+
+    const response = await request(app).post('/api/v1/invitations/confirm').send({ token: link })
+
+    expect(response.status).toBe(200)
+    const membership = await membershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+    expect(membership?.role).toBe('owner')
+  })
+})
+
 describe("a staff-made workspace's trial on its first owner's join", () => {
   it('starts when a new address joins as owner by one click', async () => {
     const tenant = await ownerlessWorkspace()

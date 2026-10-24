@@ -773,9 +773,9 @@ export async function resend(
     // A staff resend (audited, with a reason) skips the cooldown.
     const hasCooldown = options.resentFromId === undefined
     if (hasCooldown) assertResendCooldownOver(pending)
-    // An expired invitation holds no seat, so renewing it takes one, under the seat lock.
+    // An expired invitation holds no seat, so renewing it takes one, under the seat lock. Expiry is read by the database clock, as the seat count reads it.
     if (
-      pending.expiresAt <= new Date() &&
+      !(await hasInvitationSeat(tenantId, pending.email, tx)) &&
       (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined
     ) {
       await assertWithinLimit(tenantId, 'members', 1, tx)
@@ -1008,7 +1008,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     if (valid.invitation.role === 'owner' || valid.tenant.isPlatform) {
       await lockUserForOwnership(user.id, () => new HttpError('Sign in to continue.', 401), tx)
     }
-    await lockSeatForJoin(valid, tx)
+    await lockSeatForJoin(valid, user.id, tx)
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
@@ -1057,17 +1057,35 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
  * Take the seat lock for a join, after the user-row step and before the
  * claim, and refuse the join when the workspace is over its members limit,
  * as after a downgrade. The invitation already holds a seat, so the join adds
- * none. An owner invitation skips the check, as a staff owner invitation
- * skips it when sent: a workspace must always be able to get an owner. The
- * refusal carries no count: the invitee is not a member yet.
+ * none. Two joins skip the check: a user who is already a member, whose
+ * accept adds nobody; and an owner invitation while the workspace has no
+ * active owner, since a workspace must always be able to get one (the staff
+ * owner invitation skips the check when sent for the same reason). An owner
+ * invitation to a workspace that has an active owner is checked like any
+ * other. Both reads after the seat lock are plain reads that lock nothing,
+ * so the lock order is unchanged; they run after the seat lock, so a second
+ * owner join queued behind the first sees the owner it added. The refusal
+ * carries no count: the invitee is not a member yet.
  * @param valid - The invitation and its workspace, as read before the transaction or inside it without a lock.
+ * @param userId - The joining user.
  * @param tx - The join's transaction.
  * @throws {HttpError} 402 `PLAN_LIMIT_REACHED`, with no `details`.
  */
-async function lockSeatForJoin(valid: ValidInvitation, tx: DbTransaction): Promise<void> {
+async function lockSeatForJoin(
+  valid: ValidInvitation,
+  userId: string,
+  tx: DbTransaction
+): Promise<void> {
   if ((await lockSeats(valid.tenant, tx)) === undefined) return
-  if (valid.invitation.role === 'owner') return
-  await assertWithinLimit(valid.tenant.id, 'members', 0, tx, { audience: 'outsider' })
+  const tenantId = valid.tenant.id
+  if (await userMembershipRepository.findByUserAndTenant(userId, tenantId, tx)) return
+  if (
+    valid.invitation.role === 'owner' &&
+    (await userMembershipRepository.countActiveOwners(tenantId, tx)) === 0
+  ) {
+    return
+  }
+  await assertWithinLimit(tenantId, 'members', 0, tx, { audience: 'outsider' })
 }
 
 /**
@@ -1440,7 +1458,7 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
   const sessionId = randomUUID()
   const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
     const user = await createInvitedAccount(valid.invitation.email, tx)
-    await lockSeatForJoin(valid, tx)
+    await lockSeatForJoin(valid, user.id, tx)
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
     if (!claimed) throw invitationInvalid()
@@ -1512,7 +1530,7 @@ export async function confirmInvitation(
     const user = account
       ? await lockActiveInvitee(account.id, tx)
       : await createInvitedAccount(email, tx, confirmInvalid)
-    await lockSeatForJoin(valid, tx)
+    await lockSeatForJoin(valid, user.id, tx)
     const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
     if (link?.invitationId !== invitationId) throw confirmInvalid()
     const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)

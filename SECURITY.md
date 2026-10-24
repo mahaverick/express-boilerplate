@@ -598,8 +598,10 @@ registered address to a tenant directly
   `402 PLAN_LIMIT_REACHED` with no `details`: the invitee is not a member, so
   the workspace's count and limit stay hidden. The check runs under the seat
   lock before the claim, so the refusal spends neither the invitation nor the
-  confirm link. An owner invitation is never refused, so a workspace can
-  always get an owner.
+  confirm link. Two joins are never refused: a user who is already a member,
+  and an owner invitation while the workspace has no active owner, so a
+  workspace can always get an owner. An owner invitation to a workspace that
+  has an owner is checked like any other.
 - **Consent.** The link was mailed to the invited address, so one click on it
   proves the mailbox
   ([Invitation links are single-use](#invitation-links-are-single-use)). A
