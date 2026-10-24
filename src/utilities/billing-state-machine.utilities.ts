@@ -439,6 +439,8 @@ class BillingMapping {
   /**
    * The interval switch: cancel the current subscription at cycle end once
    * the next one is authenticated, and hand over when the current one ends.
+   * A next subscription paid only after the current one renewed is refunded
+   * as a duplicate instead, and the current one kept.
    * Only an `authenticated` or `active` next subscription counts: one that
    * reads `pending`, `halted` or `paused` has a failed charge, and the switch
    * waits rather than cancel a paying subscription for it. Whether its payer
@@ -463,6 +465,21 @@ class BillingMapping {
       }
     }
     if (next.status !== 'authenticated' && next.status !== 'active') return
+    if (current !== undefined && this.hasRenewedPast(current, next)) {
+      this.actions.push(
+        { kind: 'refund_duplicate', subscriptionId: next.id },
+        {
+          kind: 'alert',
+          alert: 'reconcile_repair',
+          message: `Interval switch ${next.id} was paid after subscription ${current.id} renewed, so the switch was cancelled and refunded and ${current.id} kept.`,
+          subscriptionId: next.id,
+        }
+      )
+      draft.nextSubscriptionId = null
+      draft.nextPriceId = null
+      draft.nextAuthenticatedAt = null
+      return
+    }
     // The first read wins, so the switch shows from when it was first authenticated.
     draft.nextAuthenticatedAt ??= this.now
     const hasPeriodEnded = draft.currentPeriodEnd !== null && this.now >= draft.currentPeriodEnd
@@ -483,6 +500,30 @@ class BillingMapping {
     if (!draft.cancelAtPeriodEnd && STATUS_CLASS[current.status] === 'live') {
       this.actions.push({ kind: 'cancel_current_at_cycle_end', subscriptionId: current.id })
     }
+  }
+
+  /**
+   * Whether a running current subscription that is not cancelling has
+   * already started the cycle the next subscription was to take over: its
+   * new cycle began at or after the next one's start, or its paid cycle ends
+   * after the stored period end. The switch was paid too late, and handing
+   * over or cancelling the current one would waste a cycle already charged.
+   * @param current - The current subscription.
+   * @param next - The authenticated or active next subscription.
+   * @returns True when the current subscription renewed past the switch.
+   */
+  hasRenewedPast(current: ProviderSubscription, next: ProviderSubscription): boolean {
+    const { draft } = this
+    if (draft.cancelAtPeriodEnd || STATUS_CLASS[current.status] !== 'live') return false
+    if (
+      next.startAt !== null &&
+      current.currentStart !== null &&
+      current.currentStart >= next.startAt
+    ) {
+      return true
+    }
+    const paid = paidThrough(current)
+    return paid !== null && draft.currentPeriodEnd !== null && paid > draft.currentPeriodEnd
   }
 
   /**

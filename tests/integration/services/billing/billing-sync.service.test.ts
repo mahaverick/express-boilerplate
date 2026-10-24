@@ -836,6 +836,41 @@ describe('syncTenantBilling', () => {
     ).toStrictEqual([['active', 'active', 'interval_switch']])
   })
 
+  it('refunds a switch paid only after the current subscription renewed, and keeps the current one', async () => {
+    const { tenantId, subscriptionId } = await createPayingWorkspace()
+    // The switch was to start at the period end the row still holds, just before the renewal charged.
+    const renewalAt = new Date(Date.now() - 60_000)
+    await setBilling(tenantId, { currentPeriodEnd: renewalAt })
+    const nextId = await createSubscription(
+      { tenantId, priceId: plans.yearPriceId },
+      'year',
+      renewalAt
+    )
+    await setBilling(tenantId, { nextSubscriptionId: nextId, nextPriceId: plans.yearPriceId })
+    await fake.fakeAdvance(nextId, 'authenticated')
+    const renewed = await fake.fetchSubscription(subscriptionId)
+
+    await syncTenantBilling(tenantId, 'webhook')
+
+    expect(await readBilling(tenantId)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: subscriptionId,
+      priceId: plans.monthPriceId,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: renewed.currentEnd,
+      nextSubscriptionId: null,
+      nextPriceId: null,
+      nextAuthenticatedAt: null,
+    })
+    expect(await fake.fetchSubscription(nextId)).toMatchObject({ status: 'cancelled' })
+    expect(await fake.fetchSubscription(subscriptionId)).toMatchObject({ status: 'active' })
+    const alerts = await alertsOf(tenantId)
+    expect(alerts).toContainEqual({
+      kind: 'reconcile_repair',
+      message: `Interval switch ${nextId} was paid after subscription ${subscriptionId} renewed, so the switch was cancelled and refunded and ${subscriptionId} kept.`,
+    })
+  })
+
   it('ignores a subscription whose notes name another workspace, and alerts staff', async () => {
     const { tenantId } = await createWorkspace()
     const other = await createWorkspace()

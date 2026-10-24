@@ -260,6 +260,81 @@ describe('POST /api/v1/tenants/:slug/billing/interval', () => {
     expect(response.status).toBe(409)
     expect(response.body).toMatchObject({ code: 'NO_SUBSCRIPTION' })
   })
+
+  it('refuses a switch inside the checkout window before the renewal with 409 SWITCH_TOO_CLOSE_TO_RENEWAL', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    // Under the hour a checkout lives plus the hour of margin before the renewal.
+    await setBilling(tenant.id, { currentPeriodEnd: new Date(Date.now() + 110 * 60 * 1000) })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/interval`, { interval: 'year' })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({ code: 'SWITCH_TOO_CLOSE_TO_RENEWAL' })
+    expect((response.body as { message: string }).message).toMatch(
+      /^You can switch after your renewal on \d{1,2} \w+ \d{4}\.$/
+    )
+    expect(await billingColumn(tenant.id, 'nextSubscriptionId')).toBeNull()
+  })
+
+  it('allows a switch just outside that window, whose checkout lapses at least an hour before its first charge', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    const periodEnd = new Date(Date.now() + 125 * 60 * 1000)
+    await setBilling(tenant.id, { currentPeriodEnd: periodEnd })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/interval`, { interval: 'year' })
+
+    expect(response.status).toBe(200)
+    const next = await fake.fetchSubscription(String(dataOf(response.body).subscriptionId))
+    expect(next.startAt?.getTime()).toBe(periodEnd.getTime())
+    expect(next.expireBy?.getTime()).toBeLessThanOrEqual(periodEnd.getTime() - 60 * 60 * 1000)
+  })
+
+  it('keeps the usual hour of expiry on a switch checkout far from the renewal', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    const before = Date.now()
+
+    const response = await postAs(owner, `${tenant.slug}/billing/interval`, { interval: 'year' })
+
+    expect(response.status).toBe(200)
+    const next = await fake.fetchSubscription(String(dataOf(response.body).subscriptionId))
+    const expireBy = next.expireBy?.getTime() ?? 0
+    expect(expireBy).toBeGreaterThanOrEqual(before + 60 * 60 * 1000)
+    expect(expireBy).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000)
+  })
+
+  it('refuses a resubscribe too close to the period end for its checkout to lapse first, with 409 SUBSCRIPTION_EXISTS', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    await setBilling(tenant.id, {
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: new Date(Date.now() + 65 * 60 * 1000),
+    })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({ code: 'SUBSCRIPTION_EXISTS' })
+    expect((response.body as { message: string }).message).toMatch(
+      /^Your subscription ends on \d{1,2} \w+ \d{4}\. Upgrade again after that\.$/
+    )
+    expect(await billingColumn(tenant.id, 'nextSubscriptionId')).toBeNull()
+  })
+
+  it('lets a resubscribe checkout lapse an hour before the period end', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    const periodEnd = new Date(Date.now() + 90 * 60 * 1000)
+    await setBilling(tenant.id, { cancelAtPeriodEnd: true, currentPeriodEnd: periodEnd })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+
+    expect(response.status).toBe(200)
+    const next = await fake.fetchSubscription(String(dataOf(response.body).subscriptionId))
+    expect(next.expireBy?.getTime()).toBe(periodEnd.getTime() - 60 * 60 * 1000)
+  })
 })
 
 describe('POST /api/v1/tenants/:slug/billing/interval before the first charge', () => {

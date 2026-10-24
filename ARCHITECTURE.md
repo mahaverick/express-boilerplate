@@ -1417,6 +1417,14 @@ map; the detail lives in the sections it links.
   daily reconcile all call it; the mapping itself is pure
   (`src/utilities/billing-state-machine.utilities.ts`). A failed provider read
   writes nothing, and the job retries.
+- **Interval switch.** A switch starts a next subscription at the period end,
+  and the sync cancels the current one at its cycle end once the next one is
+  authenticated. A switch inside the checkout's hour plus an hour's margin
+  before the renewal is refused with 409 `SWITCH_TOO_CLOSE_TO_RENEWAL`, and a
+  checkout that starts at the period end (a switch or a resubscribe) lapses at
+  least an hour before it, so it can't be paid after the renewal charged. A
+  next subscription the sync still reads as paid after the current one renewed
+  is cancelled and refunded as a duplicate, and the current one kept.
 - **Provider.** `getBillingProvider()`
   (`src/services/billing/billing-provider.service.ts`) answers Razorpay when
   its keys are set, the fake when `BILLING_FAKE_PROVIDER` is (local only), and

@@ -430,10 +430,105 @@ describe('nextBillingRow: the interval switch', () => {
   it('does not hand over while the current subscription runs and is not cancelling', () => {
     const result = map(
       switching(),
-      { current: sub('sub_cur', 'active'), next: sub('sub_next', 'authenticated') },
+      {
+        current: sub('sub_cur', 'active'),
+        next: sub('sub_next', 'authenticated', { startAt: at(30) }),
+      },
       at(31)
     )
     expect(result.patch).not.toHaveProperty('providerSubscriptionId')
+  })
+})
+
+describe('nextBillingRow: a switch paid after the current subscription renewed', () => {
+  /**
+   * The current subscription after it charged the cycle from day 30.
+   */
+  const renewed = sub('sub_cur', 'active', {
+    currentStart: at(30),
+    currentEnd: at(60),
+    paidCount: 2,
+  })
+
+  it('refunds the next subscription, keeps the current one, and alerts staff naming both', () => {
+    const result = map(
+      switching(),
+      { current: renewed, next: sub('sub_next', 'authenticated', { startAt: at(30) }) },
+      at(31)
+    )
+    expect(result.patch).toStrictEqual({
+      currentPeriodEnd: at(60),
+      nextSubscriptionId: null,
+      nextPriceId: null,
+    })
+    expect(result.cause).toBeNull()
+    expect(result.actions).toStrictEqual([
+      { kind: 'refund_duplicate', subscriptionId: 'sub_next' },
+      {
+        kind: 'alert',
+        alert: 'reconcile_repair',
+        message:
+          'Interval switch sub_next was paid after subscription sub_cur renewed, so the switch was cancelled and refunded and sub_cur kept.',
+        subscriptionId: 'sub_next',
+      },
+    ])
+  })
+
+  it('refunds it when the current paid cycle ends after the stored period end, and clears its stamp', () => {
+    const current = sub('sub_cur', 'active', { currentStart: null, currentEnd: at(60) })
+    const result = map(
+      switching({ nextAuthenticatedAt: at(0) }),
+      { current, next: sub('sub_next', 'active', { startAt: at(30), currentEnd: at(395) }) },
+      at(31)
+    )
+    expect(result.patch).toMatchObject({
+      nextSubscriptionId: null,
+      nextPriceId: null,
+      nextAuthenticatedAt: null,
+    })
+    expect(result.patch).not.toHaveProperty('providerSubscriptionId')
+    expect(result.actions).toContainEqual({ kind: 'refund_duplicate', subscriptionId: 'sub_next' })
+    expect(result.actions).not.toContainEqual({
+      kind: 'cancel_current_at_cycle_end',
+      subscriptionId: 'sub_cur',
+    })
+  })
+
+  it('still hands over normally when the next one was authenticated before the renewal', () => {
+    const before = map(switching(), {
+      current: sub('sub_cur', 'active'),
+      next: sub('sub_next', 'authenticated', { startAt: at(30) }),
+    })
+    expect(before.actions).toStrictEqual([
+      { kind: 'cancel_current_at_cycle_end', subscriptionId: 'sub_cur' },
+    ])
+
+    const handover = map(
+      switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(1) }),
+      {
+        current: sub('sub_cur', 'cancelled'),
+        next: sub('sub_next', 'active', {
+          startAt: at(30),
+          currentStart: at(30),
+          currentEnd: at(395),
+        }),
+      },
+      at(30)
+    )
+    expect(handover.patch).toMatchObject({ providerSubscriptionId: 'sub_next' })
+    expect(handover.actions).toStrictEqual([{ kind: 'promote_next' }])
+  })
+
+  it('never refunds a resubscribe: the current one is cancelling and cannot renew', () => {
+    const result = map(
+      switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(0) }),
+      { current: renewed, next: sub('sub_next', 'authenticated', { startAt: at(30) }) },
+      at(29)
+    )
+    expect(result.actions).not.toContainEqual({
+      kind: 'refund_duplicate',
+      subscriptionId: 'sub_next',
+    })
   })
 })
 

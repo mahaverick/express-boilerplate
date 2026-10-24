@@ -27,10 +27,12 @@ import {
   CHECKOUT_TOTAL_COUNT,
   INVOICE_PAGE_SIZE,
   INVOICES_OWNER_ONLY_MESSAGE,
+  NEXT_CHECKOUT_MARGIN_MS,
   NO_SUBSCRIPTION_CODE,
   SAME_INTERVAL_CODE,
   SUBSCRIPTION_EXISTS_CODE,
   SWITCH_BEFORE_FIRST_CHARGE_CODE,
+  SWITCH_TOO_CLOSE_TO_RENEWAL_CODE,
   type BillingInterval,
   type StaffCancelWhen,
 } from '@/constants/billing.constants'
@@ -474,20 +476,35 @@ function trialStart(row: TenantBillingRecord, now: Date): Date | null {
 }
 
 /**
+ * The latest a checkout may lapse: an hour after it opens, and for one that
+ * starts at the current period end, no later than the margin before that
+ * start, so it can never be paid after the current subscription renewed.
+ * @param slot - Where the checkout goes.
+ * @param now - The current time.
+ * @returns The expiry.
+ */
+function checkoutExpiry(slot: CheckoutSlot, now: Date): Date {
+  const usual = now.getTime() + CHECKOUT_EXPIRY_MS
+  if (slot.slot !== 'next' || slot.startAt === null) return new Date(usual)
+  return new Date(Math.min(usual, slot.startAt.getTime() - NEXT_CHECKOUT_MARGIN_MS))
+}
+
+/**
  * Where an upgrade checkout goes, or why it is refused. A live current
  * subscription refuses it, unless it is cancelling with paid time left: then
- * it is a resubscribe that starts at the period end.
+ * it is a resubscribe that starts at the period end, refused when its
+ * checkout would have too little time left before the margin it must lapse by.
  * @param row - The row.
  * @param provider - The running provider.
  * @param now - The current time.
  * @returns The slot.
  * @throws {HttpError} 409 `SUBSCRIPTION_EXISTS`.
  */
-function upgradeSlot(
+async function upgradeSlot(
   row: TenantBillingRecord,
   provider: BillingProviderClient,
   now: Date
-): CheckoutSlot {
+): Promise<CheckoutSlot> {
   if (isOtherProvider(row, provider) && (row.state === 'free' || row.state === 'trialing')) {
     return { slot: 'pending', startAt: trialStart(row, now), isTakeover: true }
   }
@@ -502,7 +519,13 @@ function upgradeSlot(
       throw subscriptionExists('Your workspace is already on Paid. Manage it under Billing.')
     }
     if (row.currentPeriodEnd !== null && row.currentPeriodEnd > now) {
-      return { slot: 'next', startAt: row.currentPeriodEnd, isTakeover: false }
+      const slot: CheckoutSlot = { slot: 'next', startAt: row.currentPeriodEnd, isTakeover: false }
+      if (checkoutExpiry(slot, now).getTime() - now.getTime() < CHECKOUT_REUSE_MIN_REMAINING_MS) {
+        throw subscriptionExists(
+          `Your subscription ends on ${await formatBillingDate(row.tenantId, row.currentPeriodEnd)}. Upgrade again after that.`
+        )
+      }
+      return slot
     }
   }
   return { slot: 'pending', startAt: trialStart(row, now), isTakeover: false }
@@ -510,13 +533,16 @@ function upgradeSlot(
 
 /**
  * Where an interval switch goes, or why it is refused: it needs an active,
- * not cancelling subscription past its first charge, on another interval.
+ * not cancelling subscription past its first charge, on another interval,
+ * and a renewal far enough away that the switch's checkout, open an hour,
+ * lapses the margin before it: a checkout paid after the renewal charged
+ * would bill both subscriptions.
  * @param row - The row.
  * @param provider - The running provider.
  * @param now - The current time.
  * @param interval - The interval asked for.
  * @returns The slot: the next subscription, from the period end.
- * @throws {HttpError} 409 `NO_SUBSCRIPTION` or `SAME_INTERVAL`.
+ * @throws {HttpError} 409 `NO_SUBSCRIPTION`, `SAME_INTERVAL` or `SWITCH_TOO_CLOSE_TO_RENEWAL`.
  */
 async function switchSlot(
   row: TenantBillingRecord,
@@ -546,6 +572,16 @@ async function switchSlot(
   if (row.currentPeriodEnd === null || row.currentPeriodEnd <= now) {
     throw noSubscription('Your renewal payment is still processing. Try again in 1 hour.')
   }
+  if (
+    row.currentPeriodEnd.getTime() - now.getTime() <
+    CHECKOUT_EXPIRY_MS + NEXT_CHECKOUT_MARGIN_MS
+  ) {
+    throw new HttpError(
+      `You can switch after your renewal on ${await formatBillingDate(row.tenantId, row.currentPeriodEnd)}.`,
+      409,
+      SWITCH_TOO_CLOSE_TO_RENEWAL_CODE
+    )
+  }
   const current = await priceById(row.priceId)
   if (current?.interval === interval) {
     throw new HttpError(
@@ -559,25 +595,29 @@ async function switchSlot(
 
 /**
  * Whether a stored checkout can be handed to the browser again: unpaid, for
- * the same price and first charge, and not about to lapse.
+ * the same price and first charge, not about to lapse, and lapsing no later
+ * than a new checkout for the slot would.
  * @param sub - The stored subscription.
  * @param priceId - The price asked for.
- * @param startAt - The first charge asked for.
+ * @param slot - The slot and first charge asked for.
  * @param now - The current time.
  * @returns True when it can be reused.
  */
 function isReusable(
   sub: ProviderSubscription,
   priceId: string,
-  startAt: Date | null,
+  slot: CheckoutSlot,
   now: Date
 ): boolean {
+  const { startAt } = slot
   return (
     sub.status === 'created' &&
     sub.notes.priceId === priceId &&
     (sub.startAt?.getTime() ?? null) === (startAt?.getTime() ?? null) &&
-    (sub.expireBy === null ||
-      sub.expireBy.getTime() - now.getTime() > CHECKOUT_REUSE_MIN_REMAINING_MS)
+    (sub.expireBy === null
+      ? slot.slot !== 'next'
+      : sub.expireBy.getTime() - now.getTime() > CHECKOUT_REUSE_MIN_REMAINING_MS &&
+        sub.expireBy <= checkoutExpiry(slot, now))
   )
 }
 
@@ -673,8 +713,8 @@ async function checkoutAttempts(
       }
     }
     let chosen: ProviderSubscription
-    if (held !== undefined && isReusable(held, price.id, slot.startAt, now)) chosen = held
-    else if (created !== undefined && isReusable(created, price.id, slot.startAt, now)) {
+    if (held !== undefined && isReusable(held, price.id, slot, now)) chosen = held
+    else if (created !== undefined && isReusable(created, price.id, slot, now)) {
       chosen = created
     } else {
       // A previous pass's checkout no longer fits (its first charge moved): it is never handed out.
@@ -687,7 +727,7 @@ async function checkoutAttempts(
         provider.createSubscription({
           providerPlanId,
           totalCount: CHECKOUT_TOTAL_COUNT[interval],
-          expireBy: new Date(now.getTime() + CHECKOUT_EXPIRY_MS),
+          expireBy: checkoutExpiry(slot, now),
           startAt: slot.startAt,
           notes: { tenantId, appEnv: getEnv().APP_ENV, priceId: price.id },
         })

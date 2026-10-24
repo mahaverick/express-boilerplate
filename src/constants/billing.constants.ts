@@ -135,6 +135,13 @@ export const CHECKOUT_EXPIRY_MS = 60 * 60 * 1000
 export const CHECKOUT_REUSE_MIN_REMAINING_MS = 10 * 60 * 1000
 
 /**
+ * How long before its first charge a checkout that starts at the current
+ * period end (an interval switch or a resubscribe) must lapse: a payment
+ * that lands after the current subscription renewed would charge twice.
+ */
+export const NEXT_CHECKOUT_MARGIN_MS = 60 * 60 * 1000
+
+/**
  * How many invoices one page of a workspace's invoice list holds.
  */
 export const INVOICE_PAGE_SIZE = 20
@@ -185,6 +192,12 @@ export const INVOICES_OWNER_ONLY_MESSAGE = 'Only a workspace owner can see invoi
  * Error code: an interval switch before a deferred start's first charge.
  */
 export const SWITCH_BEFORE_FIRST_CHARGE_CODE = 'SWITCH_BEFORE_FIRST_CHARGE'
+
+/**
+ * Error code: an interval switch so close to the current renewal that its
+ * checkout could still be paid after the renewal charged.
+ */
+export const SWITCH_TOO_CLOSE_TO_RENEWAL_CODE = 'SWITCH_TOO_CLOSE_TO_RENEWAL'
 
 /**
  * Where in the product a member asked an owner to upgrade.
