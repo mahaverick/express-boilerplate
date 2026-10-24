@@ -328,10 +328,11 @@ in this order:
    calls the payment provider only before or after its transaction; so do the
    billing scheduler's writes. A suspend or archive never touches it: after
    its commit it queues a prompt cancel job, and the scheduler's lifecycle
-   step, which takes the same claim, is the fallback. A user's delete or
-   purge takes it after the user row to clear them as payer (`clearPayer`),
-   and a tenant purge takes it after the platform-role row to check that no
-   subscription arrived since its provider check;
+   step, which takes the same claim, is the fallback. A user's delete takes
+   it after the user row, and a user's purge after the memberships and the
+   platform-role row and before the user row's delete, to clear them as payer
+   (`clearPayer`); a tenant purge takes it after the platform-role row to
+   check that no subscription arrived since its provider check;
 6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
 7. a user's notification preference rows, in `NOTIFICATION_TYPES` order

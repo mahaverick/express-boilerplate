@@ -1045,8 +1045,9 @@ export class BillingRepository {
    * before writes again from the new row. A payer's own rows only: a
    * workspace another person pays for is untouched.
    *
-   * Lock order: the billing rows, after the user row and before any
-   * invitation or membership-row write.
+   * Lock order: the billing rows, before any invitation or membership-row
+   * write. A delete takes them after the user row; a purge, after the
+   * memberships and the platform-role row and before it deletes the user row.
    * @param userId - The user.
    * @param tx - The delete's or purge's transaction.
    * @returns The rows as they were before the clear, in workspace order.

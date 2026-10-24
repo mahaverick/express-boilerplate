@@ -622,10 +622,12 @@ export async function sendHeldBackWarnings(tenantId: string): Promise<void> {
   try {
     const row = await billingRepository.findByTenantId(tenantId)
     if (row === undefined) return
+    // Only a row still past due is told its payment stopped; a recovery clears the stamps anyway.
+    const isPastDue = row.state === 'past_due'
     const before: TenantBillingRecord = {
       ...row,
-      haltedAt: null,
-      pausedAt: null,
+      haltedAt: isPastDue ? null : row.haltedAt,
+      pausedAt: isPastDue ? null : row.pausedAt,
       cancelAtPeriodEnd: false,
     }
     await sendBillingDiffEmails(before, row, 'staff')
