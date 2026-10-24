@@ -877,8 +877,9 @@ entries they acted in, and queues the deletion of their PostHog person with its
 events and recordings. A tenant purge removes the tenant and its own audit
 entries. Each purge is recorded in the platform tenant. A tenant purge is
 refused while the payment provider shows a subscription that may still charge
-a card, and when the provider can't be read, so no card is charged for a
-tenant that is gone. A user purge, like a user delete, clears the user as
+a card, and whenever the tenant holds a subscription the provider can't be
+asked about (payments off, another account or mode, or a failed read): a purge
+never proceeds unchecked, so no card is charged for a tenant that is gone. A user purge, like a user delete, clears the user as
 payer along with the billing address they gave.
 [ARCHITECTURE.md](ARCHITECTURE.md#analytics), under Purges and what stays in
 PostHog, describes what stays there.

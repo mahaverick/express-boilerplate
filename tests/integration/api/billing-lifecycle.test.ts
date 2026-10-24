@@ -480,8 +480,29 @@ describe('the purge of a workspace that pays', () => {
     })
   })
 
-  it('purges a Free workspace with payments off', async () => {
+  it('refuses 502 when payments are off and a Free workspace still holds an old subscription id', async () => {
     const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.cancelSubscription(subscriptionId, false)
+    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+    // Without the provider, a halted subscription that could resume looks the same as this one.
+    paymentsSwitch.on = false
+
+    await expect(purgeTenant(await staffOwner(), tenant.id, 'Ticket 42')).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+    })
+    expect(await rowsOf(tenant.id)).toStrictEqual({ tenant: true, billing: true })
+  })
+
+  it('purges a workspace that holds no subscription id with payments off', async () => {
+    const { tenant } = await workspace()
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: null,
+      pendingSubscriptionId: null,
+      nextSubscriptionId: null,
+    })
     await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
     paymentsSwitch.on = false
 

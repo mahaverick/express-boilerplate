@@ -939,9 +939,11 @@ notification rows, which the retention purge deletes, so a suspension longer
 than their retention can send a warning again on reactivation. A tenant purge reads every
 subscription id the row holds, whatever its state, and is refused with 409
 while the provider shows any as running, with 502 when the provider doesn't
-know one (keys of another account), and with 503 or 502 when it can't be read;
-with payments off it is refused while the row's state may still charge. The
-billing row then goes with the tenant.
+know one (keys of another account), and with 503 or 502 when it can't be read.
+With payments off, or a row of another provider or mode, it is refused with
+502 while the row holds any subscription id: a halted subscription on a Free
+row can resume at the provider. A row with no id purges. The billing row then
+goes with the tenant.
 
 The analytics Worker runs one job at a time, so this process never has two of
 its jobs talking to PostHog at once. Two replicas may; the drain and the

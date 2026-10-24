@@ -9,10 +9,7 @@
  */
 import { sql } from 'drizzle-orm'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
-import {
-  CANCEL_BUFFER_DAYS,
-  PAYMENT_PROVIDER_UNAVAILABLE_CODE,
-} from '@/constants/billing.constants'
+import { PAYMENT_PROVIDER_UNAVAILABLE_CODE } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { isUnknownIdError } from '@/errors/billing-provider-errors'
@@ -56,8 +53,6 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
-const DAY_MS = 24 * 60 * 60 * 1000
-
 /**
  * The refusal of a purge while a subscription may still charge a card.
  */
@@ -98,75 +93,31 @@ function heldIds(row: TenantBillingRecord): string[] {
 }
 
 /**
- * The subscriptions a billing row may still be charged through by its
- * state alone, for when the provider can't be asked: the current one while
- * the row pays (a cancelling one until its period and buffer have passed),
- * and any checkout or scheduled switch. A Free row keeps its last
- * subscription's id, which this leaves out.
- * @param row - The billing row.
- * @param now - The time of the purge.
- * @returns The ids.
- */
-function possiblyLiveIds(row: TenantBillingRecord, now: Date): string[] {
-  const ids: string[] = []
-  const isPaying = row.state === 'active' || row.state === 'past_due'
-  const bufferEnd =
-    row.currentPeriodEnd === null
-      ? null
-      : row.currentPeriodEnd.getTime() + CANCEL_BUFFER_DAYS * DAY_MS
-  const isPastBuffer = row.cancelAtPeriodEnd && bufferEnd !== null && bufferEnd < now.getTime()
-  if (isPaying && !isPastBuffer && row.providerSubscriptionId !== null) {
-    ids.push(row.providerSubscriptionId)
-  }
-  for (const id of [row.pendingSubscriptionId, row.nextSubscriptionId]) {
-    if (id !== null) ids.push(id)
-  }
-  return ids
-}
-
-/**
- * What the purge's provider check covered, for the re-check under lock.
- */
-interface PurgeCheck {
-  /**
-   * Which ids of a row the check is about: every held one when the provider
-   * was asked, else those the row's state may still charge through.
-   */
-  idsOf: (row: TenantBillingRecord) => string[]
-  /**
-   * The ids the check found ended.
-   */
-  checked: ReadonlySet<string>
-}
-
-/**
  * Refuse the purge of a workspace whose subscription may still charge a
- * card. When the running provider can read the row, every id it holds is
- * read, whatever the row's state (a failed cancel can leave a Free row
- * holding a halted subscription): any status but cancelled, completed or
- * expired refuses with 409, and an id the provider does not know refuses with
- * 502. A purge never proceeds blind: a provider failure refuses with 503 or
- * 502, and so does a row the running provider cannot read (payments off, or
- * another provider or mode) whose state may still charge. Runs before the
- * purge's transaction, since no provider call happens inside one.
+ * card. Every id the row holds is read, whatever the row's state (a failed
+ * cancel can leave a Free row holding a halted subscription, which can
+ * resume): any status but cancelled, completed or expired refuses with 409,
+ * and an id the provider does not know refuses with 502. A purge never
+ * proceeds without that check: a provider failure refuses with 503 or 502,
+ * and a row holding any id that the running provider can't read (payments
+ * off, or another provider or mode) refuses with 502. A row holding no id
+ * needs no check. Runs before the purge's transaction, since no provider
+ * call happens inside one.
  * @param row - The workspace's billing row.
- * @param now - The time of the purge.
- * @returns What the check covered.
- * @throws {HttpError} 409 while a subscription runs; 502 for an unknown subscription or a row this server can't read; 503 or 502 when the provider fails.
+ * @returns The ids the provider showed ended, for the re-check under lock.
+ * @throws {HttpError} 409 while a subscription runs; 502 for an unknown subscription or a row this server can't check; 503 or 502 when the provider fails.
  */
-async function assertNoLiveSubscription(row: TenantBillingRecord, now: Date): Promise<PurgeCheck> {
+async function assertNoLiveSubscription(row: TenantBillingRecord): Promise<ReadonlySet<string>> {
+  const ids = heldIds(row)
+  if (ids.length === 0) return new Set()
   const provider = getBillingProvider()
   if (provider === null || isOtherProvider(row, provider)) {
-    if (possiblyLiveIds(row, now).length > 0) {
-      throw new HttpError(
-        "This server can't reach the tenant's subscription. Cancel it in the provider's dashboard, then purge from a server that has payments on.",
-        502,
-        PAYMENT_PROVIDER_UNAVAILABLE_CODE
-      )
-    }
-    return { idsOf: (locked) => possiblyLiveIds(locked, now), checked: new Set() }
+    throw new HttpError(
+      "This server can't reach the tenant's subscription. Cancel it in the provider's dashboard, then purge from a server that has payments on.",
+      502,
+      PAYMENT_PROVIDER_UNAVAILABLE_CODE
+    )
   }
-  const ids = heldIds(row)
   for (const id of ids) {
     const sub = await callProvider(async () => {
       try {
@@ -178,7 +129,7 @@ async function assertNoLiveSubscription(row: TenantBillingRecord, now: Date): Pr
     }, PURGE_CHECK_REFUSED_MESSAGE)
     if (!ENDED_STATUSES.has(sub.status)) throw new HttpError(LIVE_SUBSCRIPTION_MESSAGE, 409)
   }
-  return { idsOf: heldIds, checked: new Set(ids) }
+  return new Set(ids)
 }
 
 /**
@@ -312,7 +263,7 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
  * @param tenantId - The tenant.
  * @param reason - Why, for the audit log.
  * @returns Resolves once the transaction commits.
- * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown tenant or the actor lost the owner role; 409 for the platform tenant, a tenant that is not archived, or one whose subscription still runs; 503 when the provider does not answer; 502 when it refuses the read, does not know a subscription the row holds, or this server can't reach it.
+ * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown tenant or the actor lost the owner role; 409 for the platform tenant, a tenant that is not archived, or one whose subscription still runs; 503 when the provider does not answer; 502 when it refuses the read, does not know a subscription the row holds, or the row holds any subscription id this server can't check (payments off, or another provider or mode).
  */
 export async function purgeTenant(actor: Actor, tenantId: string, reason: string): Promise<void> {
   const found = await tenantRepository.findByIdIncludingDeleted(tenantId)
@@ -320,12 +271,9 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
   if (found.isPlatform || found.lifecycleState !== 'archived') {
     throw new HttpError('Archive this tenant before you purge it.', 409)
   }
-  const now = new Date()
   const billing = await billingRepository.findByTenantId(tenantId)
-  const check: PurgeCheck =
-    billing === undefined
-      ? { idsOf: heldIds, checked: new Set() }
-      : await assertNoLiveSubscription(billing, now)
+  const checked =
+    billing === undefined ? new Set<string>() : await assertNoLiveSubscription(billing)
 
   await withTransaction(async (tx) => {
     // The tenant's owner rows, then every membership, before the platform role: the order every membership write takes.
@@ -334,7 +282,7 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
     await assertStillPlatformRole(actor, 'owner', tx)
     // The seat lock's place: a webhook's sync may have brought a subscription in since the check.
     const locked = await billingRepository.lockByTenantId(tenantId, tx)
-    if (locked !== undefined && check.idsOf(locked).some((id) => !check.checked.has(id))) {
+    if (locked !== undefined && heldIds(locked).some((id) => !checked.has(id))) {
       throw new HttpError(LIVE_SUBSCRIPTION_MESSAGE, 409)
     }
     const members = await userMembershipRepository.listByTenant(tenantId, tx)
