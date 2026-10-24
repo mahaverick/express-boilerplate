@@ -37,6 +37,13 @@ export interface PaymentFailedVariables {
    */
   amount: string
   /**
+   * What stopped the payments: `halted` when a payment failed and the
+   * provider stopped retrying, `paused` when the payer paused the
+   * subscription from their bank or UPI app. Any other value reads as
+   * `halted`.
+   */
+  stoppedBy: string
+  /**
    * The last day to update the card, as a date in the workspace's time zone.
    */
   graceEndsOn: string
@@ -53,7 +60,7 @@ export interface PaymentFailedVariables {
  */
 export const PAYMENT_FAILED_TEMPLATE_META: EmailTemplateMeta<PaymentFailedVariables> = {
   senderClass: 'general',
-  previewVariables: ['appName', 'tenantName', 'amount', 'graceEndsOn', 'billingLink'],
+  previewVariables: ['appName', 'tenantName', 'amount', 'stoppedBy', 'graceEndsOn', 'billingLink'],
   resendAction: null,
 }
 
@@ -61,29 +68,31 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof PaymentFailedVariables> = [
   'appName',
   'tenantName',
   'amount',
+  'stoppedBy',
   'graceEndsOn',
   'billingLink',
 ]
 
 /**
- * Render the payment failed email: plain-text and HTML parts with one
- * button, every value escaped in the HTML part.
+ * Render the payment failed email, or its paused variant: plain-text and
+ * HTML parts with one button, every value escaped in the HTML part. Both keep
+ * the same next step and Free date.
  * @param variables - See `PaymentFailedVariables`.
  * @returns The rendered subject, text and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderPaymentFailedTemplate(variables: PaymentFailedVariables): RenderedEmail {
-  const { appName, tenantName, amount, graceEndsOn, billingLink } = requireEmailVariables(
-    variables,
-    REQUIRED_VARIABLE_NAMES,
-    PAYMENT_FAILED_TEMPLATE_KEY
-  )
+  const { appName, tenantName, amount, stoppedBy, graceEndsOn, billingLink } =
+    requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, PAYMENT_FAILED_TEMPLATE_KEY)
+  const isPaused = stoppedBy === 'paused'
   return renderBillingEmail({
     templateKey: PAYMENT_FAILED_TEMPLATE_KEY,
-    subject: `Your payment of ₹${amount} failed`,
+    subject: isPaused ? 'Your Paid subscription is paused' : `Your payment of ₹${amount} failed`,
     appName,
     paragraphs: [
-      `The payment of ₹${amount} for ${tenantName} on Paid failed.`,
+      isPaused
+        ? `Your subscription for ${tenantName} was paused from your bank or UPI app.`
+        : `Your payment of ₹${amount} for ${tenantName} failed.`,
       `Update your card by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
     ],
     button: { label: 'Update your card', link: billingLink },

@@ -106,9 +106,11 @@ function kinds(
   source: Parameters<typeof billingTransitions>[2] = 'webhook',
   context: TransitionContext = CONTEXT
 ): string[] {
-  return billingTransitions(before, after, source, context).map((transition) =>
-    transition.kind === 'moved_to_free' ? `${transition.kind}:${transition.cause}` : transition.kind
-  )
+  return billingTransitions(before, after, source, context).map((transition) => {
+    if (transition.kind === 'moved_to_free') return `${transition.kind}:${transition.cause}`
+    if (transition.kind === 'payment_failed') return `${transition.kind}:${transition.stoppedBy}`
+    return transition.kind
+  })
 }
 
 describe('billingTransitions', () => {
@@ -128,8 +130,23 @@ describe('billingTransitions', () => {
     const pastDue = paying({ state: 'past_due', pastDueSince: NOW })
     const halted = paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW })
     expect(kinds(paying(), pastDue)).toEqual([])
-    expect(kinds(pastDue, halted)).toEqual(['payment_failed'])
+    expect(kinds(pastDue, halted)).toEqual(['payment_failed:halted'])
     expect(kinds(halted, halted)).toEqual([])
+  })
+
+  it('warns once when the subscription is paused, which starts the grace period too', () => {
+    const paused = paying({ pausedAt: NOW })
+    expect(kinds(paying(), paused)).toEqual(['payment_failed:paused'])
+    expect(kinds(paused, paused)).toEqual([])
+  })
+
+  it('warns again for a second halt after a recovery', () => {
+    const halted = paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW })
+    const later = new Date(NOW.getTime() + 40 * 24 * 60 * 60 * 1000)
+    expect(kinds(halted, paying())).toEqual([])
+    expect(kinds(paying(), { ...halted, haltedAt: later, pastDueSince: later })).toEqual([
+      'payment_failed:halted',
+    ])
   })
 
   it('confirms a cancel at the period end', () => {
@@ -182,6 +199,19 @@ describe('billingTransitions', () => {
     ['a staff change', paying(), 'staff', 'staff'],
   ] as const)('names the cause of a move to Free after %s', (_name, before, source, cause) => {
     expect(kinds(before, row({ version: 9 }), source)).toEqual([`moved_to_free:${cause}`])
+  })
+
+  it('asks a suspended or archived workspace to act in Billing for nothing', () => {
+    const context = { ...CONTEXT, isWorkspaceActive: false }
+    const trial = row({ state: 'trialing', planId: 'plan-paid' })
+    const halted = paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW })
+    expect(kinds(trial, row(), 'job', context)).toEqual([])
+    expect(kinds(paying(), halted, 'webhook', context)).toEqual([])
+    expect(kinds(row(), paying(), 'webhook', context)).toEqual([])
+    const scheduled = paying({ nextSubscriptionId: 'sub_2', nextPriceId: 'price-year' })
+    expect(
+      kinds(scheduled, { ...scheduled, nextAuthenticatedAt: NOW }, 'webhook', context)
+    ).toEqual([])
   })
 
   it('names a suspension or archive as the cause for a workspace that is not active', () => {

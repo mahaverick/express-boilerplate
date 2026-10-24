@@ -6,6 +6,7 @@
  */
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
+import { EMAIL_STATUS_RANK } from '@/constants/email.constants'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import { redactedForLog } from '@/errors/postgres-errors'
 import type { EmailJobData } from '@/jobs/email.job'
@@ -59,7 +60,9 @@ async function createMessageForUntrackedJob(job: Job<EmailJobData>): Promise<Ema
  * In order: find the job's message row (creating it for an untracked
  * job); skip the send when the row is gone (purged since the job was
  * queued) or the recipient is suppressed, which marks the row `suppressed`
- * and completes the job with no `email_logs` row and no retry; otherwise send
+ * and completes the job with no `email_logs` row and no retry; skip it when
+ * the row already ranks at or above `sent`, so a job run again never sends
+ * twice; otherwise send
  * with the row's Message-ID and record `sent`.
  *
  * `sendMail` never rejects; it resolves `'failed'` for every failure,
@@ -100,6 +103,15 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
   }
   if (message === undefined) {
     logger.info('Email job skipped: its message no longer exists', { jobId: job.id, templateKey })
+    return
+  }
+  // A job run again after its send was recorded (a stalled job, a re-add of a once-only key) sends nothing.
+  if (EMAIL_STATUS_RANK[message.status] >= EMAIL_STATUS_RANK.sent) {
+    logger.info('Email job skipped: its message was already sent', {
+      jobId: job.id,
+      templateKey,
+      messageId: message.id,
+    })
     return
   }
 

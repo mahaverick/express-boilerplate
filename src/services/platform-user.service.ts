@@ -16,6 +16,7 @@ import {
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import {
   PlatformUserRepository,
@@ -51,6 +52,7 @@ import type {
 
 const platformUserRepository = new PlatformUserRepository()
 const authProviderRepository = new AuthProviderRepository()
+const billingRepository = new BillingRepository()
 const emailMessageRepository = new EmailMessageRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
@@ -666,6 +668,7 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
     }
 
     await userRepository.softDelete(target.id, tx)
+    await billingRepository.closeAllOpenUpgradeRequestsOf(target.id, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
     await authProviderRepository.deleteFederatedForUser(target.id, tx)
     await revokeInvitationsSentBy(actor, target.id, tx)

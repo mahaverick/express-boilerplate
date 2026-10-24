@@ -878,6 +878,50 @@ export class BillingRepository {
   }
 
   /**
+   * Delete a member's open upgrade requests in one workspace, when they leave
+   * or are removed: a request outlives no membership, so its fulfilment
+   * never tells someone who is gone. Fulfilled requests are kept.
+   * @param tenantId - The workspace.
+   * @param userId - The member.
+   * @param tx - The membership delete's transaction.
+   * @returns How many were deleted.
+   */
+  async closeOpenUpgradeRequests(
+    tenantId: string,
+    userId: string,
+    tx: DbTransaction
+  ): Promise<number> {
+    const deleted = await tx
+      .delete(upgradeRequestModel)
+      .where(
+        and(
+          eq(upgradeRequestModel.tenantId, tenantId),
+          eq(upgradeRequestModel.requestedBy, userId),
+          isNull(upgradeRequestModel.fulfilledAt)
+        )
+      )
+      .returning({ id: upgradeRequestModel.id })
+    return deleted.length
+  }
+
+  /**
+   * Delete a user's open upgrade requests in every workspace, when their
+   * account is deleted. Fulfilled requests are kept.
+   * @param userId - The user.
+   * @param tx - The delete's transaction.
+   * @returns How many were deleted.
+   */
+  async closeAllOpenUpgradeRequestsOf(userId: string, tx: DbTransaction): Promise<number> {
+    const deleted = await tx
+      .delete(upgradeRequestModel)
+      .where(
+        and(eq(upgradeRequestModel.requestedBy, userId), isNull(upgradeRequestModel.fulfilledAt))
+      )
+      .returning({ id: upgradeRequestModel.id })
+    return deleted.length
+  }
+
+  /**
    * Delete the open upgrade requests whose expiry passed at or before `now`.
    * Fulfilled requests are kept.
    * @param now - The run's time.

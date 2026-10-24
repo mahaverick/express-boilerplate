@@ -9,7 +9,9 @@
  * request mails its requester alone. A type with a notification (payment
  * failed) reaches each owner as a notification job carrying the email, so the
  * email is not also sent directly; the billing address has no account, so it
- * gets the email directly.
+ * gets the email directly. A requester who is no longer a member is told
+ * nothing, and a suspended or archived workspace gets only its move to Free,
+ * with no button (`billingTransitions`).
  *
  * Once: every mail's job key, and a notification's dedupe key, is built from
  * the workspace, the transition's own stamp (the subscription id, the halt
@@ -46,7 +48,6 @@ import { buildBillingLink, buildTenantHomeLink } from '@/services/billing/billin
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
-import { countOf } from '@/templates/email/billing-layout.template'
 import { graceEndsAt } from '@/utilities/billing-rules.utilities'
 import {
   billingTransitions,
@@ -129,7 +130,8 @@ function sendKey(...parts: readonly string[]): string {
 
 /**
  * The workspace's active owners, once each by address, and the billing
- * address when it is no owner's.
+ * address when it is no owner's: an address a deactivated owner holds counts
+ * as an owner's, so it is not mailed either.
  * @param tenantId - The workspace.
  * @param billingEmail - The address the payer gave, if any.
  * @returns The owners and the extra billing address.
@@ -139,13 +141,18 @@ async function billingRecipients(
   billingEmail: string | null
 ): Promise<{ owners: BillingRecipient[]; billingAddress: string | null }> {
   const members = await membershipRepository.listByTenant(tenantId)
+  // Every owner's address, a deactivated owner's included: the billing address is never mailed in their place.
+  const ownerAddresses = new Set<string>()
   const byAddress = new Map<string, BillingRecipient>()
   for (const { membership, user } of members) {
-    if (membership.role !== 'owner' || !user.active) continue
+    if (membership.role !== 'owner') continue
     const address = user.email.toLowerCase()
-    if (!byAddress.has(address)) byAddress.set(address, { userId: user.id, email: user.email })
+    ownerAddresses.add(address)
+    if (user.active && !byAddress.has(address)) {
+      byAddress.set(address, { userId: user.id, email: user.email })
+    }
   }
-  const isOwnersAddress = billingEmail !== null && byAddress.has(billingEmail.toLowerCase())
+  const isOwnersAddress = billingEmail !== null && ownerAddresses.has(billingEmail.toLowerCase())
   return {
     owners: [...byAddress.values()],
     billingAddress: billingEmail === null || isOwnersAddress ? null : billingEmail,
@@ -292,9 +299,11 @@ async function trialSummary(tenant: Tenant): Promise<string> {
   const lines: string[] = []
   for (const [key, usage] of Object.entries(entitlements.limits)) {
     if (usage.limit === null || usage.used <= usage.limit) continue
-    const noun = ENTITLEMENTS[key as EntitlementKey].label.toLowerCase().replace(/s$/, '')
+    const definition: EntitlementDefinition = ENTITLEMENTS[key as EntitlementKey]
+    const unit = definition.unit ?? { one: key, other: key }
+    const allowed = usage.limit === 1 ? `1 ${unit.one}` : `${String(usage.limit)} ${unit.other}`
     lines.push(
-      `Free allows ${countOf(String(usage.limit), noun)}, and ${tenant.name} has ${String(usage.used)}. No one new can join while it has ${String(usage.limit)} or more.`
+      `Free allows ${allowed}, and ${tenant.name} has ${String(usage.used)}. No one new can join while it has ${String(usage.limit)} or more.`
     )
   }
   const lost = (Object.keys(ENTITLEMENTS) as EntitlementKey[]).filter((key) => {
@@ -357,16 +366,21 @@ async function sendTransition(
       return
     }
     case 'payment_failed': {
+      const { stoppedBy } = transition
+      const stoppedAt = stoppedBy === 'paused' ? after.pausedAt : after.haltedAt
       const settings = await planRepository.getSettings()
       const graceEnd = graceEndsAt(after, settings.pastDueGraceDays)
-      if (price === undefined || graceEnd === null || after.haltedAt === null) break
+      if (price === undefined || graceEnd === null || stoppedAt === null) break
       const amount = formatRupees(price.amountMinor)
       const graceEndsOn = dateOf(graceEnd)
       await notifyOwners(context, {
         type: 'billing_payment_failed',
         templateKey: 'payment_failed',
-        stamp: String(after.haltedAt.getTime()),
-        title: `Your payment of ₹${amount} failed`,
+        stamp: `${stoppedBy}-${String(stoppedAt.getTime())}`,
+        title:
+          stoppedBy === 'paused'
+            ? 'Your Paid subscription is paused'
+            : `Your payment of ₹${amount} failed`,
         body: `Update your card by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
         messageFor: (to) => ({
           to,
@@ -375,6 +389,7 @@ async function sendTransition(
             appName,
             tenantName,
             amount,
+            stoppedBy,
             graceEndsOn,
             billingLink: buildBillingLink(tenant.slug, 'payment_failed'),
           },
@@ -473,7 +488,8 @@ async function sendMovedToFree(
 
 /**
  * Tell each member whose upgrade request the change fulfilled, once per
- * request. A requester whose account is gone or inactive is skipped.
+ * request. A requester whose account is gone or inactive, or who is no
+ * longer a member, is skipped.
  * @param context - The workspace.
  * @param requests - The fulfilled requests.
  */
@@ -485,6 +501,9 @@ async function sendRequestsFulfilled(
   for (const request of requests) {
     const requester = await userRepository.findById(request.requestedBy)
     if (requester === undefined || !requester.active) continue
+    // A requester who left or was removed is told nothing about the workspace.
+    const membership = await membershipRepository.findByUserAndTenant(requester.id, tenant.id)
+    if (membership === undefined) continue
     await mailOnce(
       context,
       'upgrade_request_fulfilled',
@@ -521,14 +540,16 @@ export async function sendBillingDiffEmails(
   try {
     const tenant = await tenantRepository.findByIdIncludingDeleted(tenantId)
     if (tenant === undefined || tenant.isPlatform) return
+    const isWorkspaceActive = tenant.lifecycleState === 'active' && tenant.deletedAt === null
     const priceIds = [after.priceId, after.nextPriceId].filter((id) => id !== null)
     const priceRows = await planRepository.findPricesByIds(priceIds)
     const prices = new Map(priceRows.map((price) => [price.id, price]))
     const transitions = billingTransitions(before, after, source, {
-      isWorkspaceActive: tenant.lifecycleState === 'active' && tenant.deletedAt === null,
+      isWorkspaceActive,
       intervalOf: (priceId) => (priceId === null ? undefined : prices.get(priceId)?.interval),
     })
-    const fulfilled = extras.fulfilledRequests ?? []
+    // A suspended or archived workspace's members are not told it went Paid.
+    const fulfilled = isWorkspaceActive ? (extras.fulfilledRequests ?? []) : []
     if (transitions.length === 0 && fulfilled.length === 0) return
     const context = await loadContext(tenant, after.billingEmail)
     for (const transition of transitions) {

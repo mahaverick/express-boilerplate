@@ -25,6 +25,7 @@ import {
   canPlatformActorModifyTarget,
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -40,6 +41,7 @@ import type { Actor, StaffReasonOption, TenantAccess } from '@/types/actor'
 import type { RowLockMode } from '@/types/lock-mode'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
+const billingRepository = new BillingRepository()
 const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
@@ -491,6 +493,7 @@ export async function removeMember(
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
     if (!wasDeleted) throw notFoundError('member')
+    await billingRepository.closeOpenUpgradeRequests(tenantId, targetUserId, tx)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, options, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, undefined, tx)
@@ -555,6 +558,7 @@ export async function leaveTenant(
     }
     const wasDeleted = await userMembershipRepository.delete(own.id, tx)
     if (!wasDeleted) throw notFoundError('tenant')
+    await billingRepository.closeOpenUpgradeRequests(tenantId, actor.userId, tx)
     await revokeInvitationsSentIn(actor, 'member', tenantId, actor.userId, undefined, {}, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, actor.userId, undefined, tx)

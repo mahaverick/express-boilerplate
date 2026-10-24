@@ -21,6 +21,19 @@ describe('ENTITLEMENTS', () => {
     }
   })
 
+  it('names the unit of every limit, singular and plural, and of no feature', () => {
+    for (const definition of Object.values(ENTITLEMENTS)) {
+      const definitionUnit = 'unit' in definition ? definition.unit : undefined
+      if (definition.kind === 'limit') {
+        expect(typeof definitionUnit?.one).toBe('string')
+        expect(typeof definitionUnit?.other).toBe('string')
+      } else {
+        expect(definitionUnit).toBeUndefined()
+      }
+    }
+    expect(ENTITLEMENTS.members.unit).toEqual({ one: 'member', other: 'members' })
+  })
+
   it('keeps a soft threshold between 0 and 1 on limits only', () => {
     for (const definition of Object.values(ENTITLEMENTS)) {
       if (!('softAt' in definition)) continue

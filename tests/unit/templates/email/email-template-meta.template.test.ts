@@ -153,6 +153,7 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     tenantName: 'Acme',
     amount: '999',
+    stoppedBy: 'halted',
     graceEndsOn: '7 November 2026',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
@@ -342,7 +343,14 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       payment_failed: {
         senderClass: 'general',
-        previewVariables: ['appName', 'tenantName', 'amount', 'graceEndsOn', 'billingLink'],
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'amount',
+          'stoppedBy',
+          'graceEndsOn',
+          'billingLink',
+        ],
         resendAction: null,
       },
       moved_to_free: {

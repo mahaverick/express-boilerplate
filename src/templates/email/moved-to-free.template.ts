@@ -92,7 +92,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof MovedToFreeVariables> = [
 
 /**
  * Render the moved to free email: plain-text and HTML parts with one
- * button, every value escaped in the HTML part.
+ * button (none for the lifecycle cause, which asks for no action), every value escaped in the HTML part.
  * @param variables - See `MovedToFreeVariables`.
  * @returns The rendered subject, text and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
@@ -103,14 +103,18 @@ export function renderMovedToFreeTemplate(variables: MovedToFreeVariables): Rend
     REQUIRED_VARIABLE_NAMES,
     MOVED_TO_FREE_TEMPLATE_KEY
   )
+  const isLifecycle = downgradeCause === 'lifecycle'
   return renderBillingEmail({
     templateKey: MOVED_TO_FREE_TEMPLATE_KEY,
     subject: `Your ${appName} workspace moved to Free`,
     appName,
-    paragraphs: [
-      `${tenantName} moved to Free. ${causeSentence(downgradeCause)}`.trimEnd(),
-      'Nothing is deleted. To get Paid back, upgrade from Billing.',
-    ],
-    button: { label: 'Upgrade to Paid', link: billingLink },
+    paragraphs: isLifecycle
+      ? [`${tenantName} moved to Free. ${causeSentence(downgradeCause)}`]
+      : [
+          `${tenantName} moved to Free. ${causeSentence(downgradeCause)}`.trimEnd(),
+          'Nothing is deleted. To get Paid back, upgrade from Billing.',
+        ],
+    // A suspended or archived workspace's owners can't act in Billing, so its notice has no button.
+    button: isLifecycle ? null : { label: 'Upgrade to Paid', link: billingLink },
   })
 }

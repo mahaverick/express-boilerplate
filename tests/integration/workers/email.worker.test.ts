@@ -224,13 +224,24 @@ describe('email.worker', () => {
     createdRecipients.push(recipient)
     const message = stepUpLinkMessage(recipient)
     const tracked = await createQueuedMessage(message, '')
-    await emailMessageRepository.advanceStatus(tracked.id, 'delivered')
     const job = {
       id: `delivered-first-${randomUUID()}`,
       data: { ...message, userId: '', messageId: tracked.id },
     } as unknown as Job<EmailJobData>
+    const transporter = getMailTransporter()
+    const send = transporter.sendMail.bind(transporter)
 
-    await processEmailJob(job)
+    // The provider's delivered event lands after the send and before the worker records sent.
+    await withMutatedMethod(
+      transporter,
+      'sendMail',
+      async (options: Parameters<typeof send>[0]) => {
+        const info = await send(options)
+        await emailMessageRepository.advanceStatus(tracked.id, 'delivered')
+        return info
+      },
+      () => processEmailJob(job)
+    )
 
     const found = await emailMessageRepository.findById(tracked.id)
     expect(found?.status).toBe('delivered')
@@ -241,6 +252,22 @@ describe('email.worker', () => {
     const [sent] = await findMailpitMessages(recipient)
     if (sent) await deleteMailpitMessage(sent.ID)
   }, 15_000)
+
+  it('sends nothing for a job run again after its message was sent', async () => {
+    const recipient = uniqueRecipient('sent-already')
+    createdRecipients.push(recipient)
+    const message = stepUpLinkMessage(recipient)
+    const tracked = await createQueuedMessage(message, '')
+    await emailMessageRepository.advanceStatus(tracked.id, 'sent')
+    const job = {
+      id: `sent-already-${randomUUID()}`,
+      data: { ...message, userId: '', messageId: tracked.id },
+    } as unknown as Job<EmailJobData>
+
+    await processEmailJob(job)
+
+    expect(await emailLogRepository.findByRecipient(recipient)).toEqual([])
+  })
 
   it('records one mail that fails five times as one failed message with five attempts', async () => {
     const transporter = getMailTransporter()

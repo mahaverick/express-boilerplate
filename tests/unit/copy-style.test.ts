@@ -501,15 +501,16 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
   ],
-  payment_failed: [
+  payment_failed: (['halted', 'paused'] as const).map((stoppedBy) =>
     renderPaymentFailedTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
       amount: '999',
+      stoppedBy,
       graceEndsOn: '7 November 2026',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
-    }),
-  ],
+    })
+  ),
   moved_to_free: (['payment_failed', 'cancelled', 'staff', 'lifecycle'] as const).map(
     (downgradeCause) =>
       renderMovedToFreeTemplate({

@@ -5,20 +5,24 @@
  * in. Each rule fires on one column's move, so a write that repeats the same
  * state fires none.
  *
+ * A suspended or archived workspace gets no mail that asks its owners to act
+ * in Billing: the only one it gets is the move to Free of a paying row, cause
+ * `lifecycle`, which carries no button. For an active workspace:
+ *
  * - Paid welcome: the row becomes `active` from another state with a new
  *   current subscription. A recovery on the same subscription is not new.
- * - Payment failed: `haltedAt` is set, once per halt.
+ * - Payment stopped: `haltedAt` is set (the payment failed) or `pausedAt` is
+ *   set (paused from the payer's bank or UPI app), once per stamp. Both start
+ *   the grace period.
  * - Paid cancelled: `cancelAtPeriodEnd` turns on while Paid runs, unless a
- *   scheduled switch or resubscribe continues it, or the workspace is
- *   suspended or archived (the move to Free says why).
+ *   scheduled switch or resubscribe continues it.
  * - Interval switch scheduled: the next subscription is first authenticated
  *   and bills another interval than the current one. A resubscribe on the
  *   same interval sends nothing.
  * - Moved to Free: the row becomes `free`. Its cause, first match wins:
- *   `staff` for a staff change; `trial_ended` from a trial; `lifecycle` for a
- *   suspended or archived workspace; `payment_failed` from a past-due,
- *   halted or paused row; `cancelled` otherwise (a cancelled, completed or
- *   expired subscription).
+ *   `staff` for a staff change; `trial_ended` from a trial; `payment_failed`
+ *   from a past-due, halted or paused row; `cancelled` otherwise (a
+ *   cancelled, completed or expired subscription).
  */
 import type {
   BillingHistorySource,
@@ -37,7 +41,7 @@ export type DowngradeCause = 'trial_ended' | 'payment_failed' | 'cancelled' | 's
  */
 export type BillingTransition =
   | { kind: 'paid_welcome' }
-  | { kind: 'payment_failed' }
+  | { kind: 'payment_failed'; stoppedBy: 'halted' | 'paused' }
   | { kind: 'paid_cancelled' }
   | { kind: 'interval_switch_scheduled' }
   | { kind: 'moved_to_free'; cause: DowngradeCause }
@@ -62,24 +66,37 @@ export interface TransitionContext {
 const PAYING_STATES: ReadonlySet<BillingState> = new Set(['active', 'past_due'])
 
 /**
- * Why a workspace moved to Free.
+ * Why an active workspace moved to Free.
  * @param before - The row it left.
  * @param source - What made the change.
- * @param context - The workspace facts.
  * @returns The cause.
  */
 function downgradeCauseOf(
   before: TenantBillingRecord,
-  source: BillingHistorySource,
-  context: TransitionContext
+  source: BillingHistorySource
 ): DowngradeCause {
   if (source === 'staff') return 'staff'
   if (before.state === 'trialing') return 'trial_ended'
-  if (!context.isWorkspaceActive) return 'lifecycle'
   if (before.state === 'past_due' || before.haltedAt !== null || before.pausedAt !== null) {
     return 'payment_failed'
   }
   return 'cancelled'
+}
+
+/**
+ * What a suspended or archived workspace is told: only that a paying row
+ * moved to Free, since its owners can't act in Billing.
+ * @param before - The row before the change.
+ * @param after - The row after it.
+ * @returns The lifecycle move, or nothing.
+ */
+function inactiveTransitions(
+  before: TenantBillingRecord,
+  after: TenantBillingRecord
+): BillingTransition[] {
+  return PAYING_STATES.has(before.state) && after.state === 'free'
+    ? [{ kind: 'moved_to_free', cause: 'lifecycle' }]
+    : []
 }
 
 /**
@@ -106,6 +123,7 @@ export function billingTransitions(
   source: BillingHistorySource,
   context: TransitionContext
 ): BillingTransition[] {
+  if (!context.isWorkspaceActive) return inactiveTransitions(before, after)
   const transitions: BillingTransition[] = []
   if (
     before.state !== 'active' &&
@@ -116,14 +134,16 @@ export function billingTransitions(
     transitions.push({ kind: 'paid_welcome' })
   }
   if (before.haltedAt === null && after.haltedAt !== null) {
-    transitions.push({ kind: 'payment_failed' })
+    transitions.push({ kind: 'payment_failed', stoppedBy: 'halted' })
+  }
+  if (before.pausedAt === null && after.pausedAt !== null) {
+    transitions.push({ kind: 'payment_failed', stoppedBy: 'paused' })
   }
   if (
     !before.cancelAtPeriodEnd &&
     after.cancelAtPeriodEnd &&
     PAYING_STATES.has(after.state) &&
-    !isContinued(after) &&
-    context.isWorkspaceActive
+    !isContinued(after)
   ) {
     transitions.push({ kind: 'paid_cancelled' })
   }
@@ -135,7 +155,7 @@ export function billingTransitions(
     }
   }
   if (before.state !== 'free' && after.state === 'free') {
-    transitions.push({ kind: 'moved_to_free', cause: downgradeCauseOf(before, source, context) })
+    transitions.push({ kind: 'moved_to_free', cause: downgradeCauseOf(before, source) })
   }
   return transitions
 }

@@ -297,6 +297,7 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
         appName: 'App',
         tenantName: 'Acme',
         amount: '999',
+        stoppedBy: 'halted',
         graceEndsOn: '7 November 2026',
         billingLink: buildBillingLink('acme', 'payment_failed', getEnv().WEB_URL),
       },

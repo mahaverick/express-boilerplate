@@ -689,6 +689,7 @@ export function buildPreviewMessage(
             appName: fill('appName'),
             tenantName: fill('tenantName'),
             amount: fill('amount'),
+            stoppedBy: fill('stoppedBy'),
             graceEndsOn: fill('graceEndsOn'),
             billingLink: fill('billingLink'),
           },

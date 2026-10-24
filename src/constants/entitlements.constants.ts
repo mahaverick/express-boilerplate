@@ -39,6 +39,11 @@ export interface EntitlementDefinition {
    * For a limit, the share of the cap (0 to 1) at which a warning starts.
    */
   softAt?: number
+  /**
+   * For a limit, what one of its counted things is called, for copy such as
+   * "Free allows 3 members".
+   */
+  unit?: { one: string; other: string }
 }
 
 /**
@@ -51,6 +56,7 @@ export const ENTITLEMENTS = {
     description: 'People in the workspace, counting pending invitations.',
     defaults: { free: 3, paid: null },
     softAt: 0.8,
+    unit: { one: 'member', other: 'members' },
   },
   advanced_example: {
     kind: 'feature',

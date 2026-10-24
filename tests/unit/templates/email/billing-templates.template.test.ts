@@ -217,12 +217,14 @@ const CASES: readonly TemplateCase[] = [
       appName: 'Acme',
       tenantName: 'Rocket Co',
       amount: '999',
+      stoppedBy: 'halted',
       graceEndsOn: '7 November 2026',
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
     subject: 'Your payment of ₹999 failed',
     sentences: [
+      'Your payment of ₹999 for Rocket Co failed.',
       'Update your card by 7 November 2026 to keep Paid. After that, Rocket Co moves to Free.',
     ],
     linkVariable: 'billingLink',
@@ -451,5 +453,40 @@ describe('billing email templates', () => {
     })
     expect(rendered.subject).toBe('Your plan switches to monthly billing on 7 November 2026')
     expect(rendered.text).toContain('pays ₹999 a month.')
+  })
+})
+
+describe('billing email variants', () => {
+  it('tells a paused subscription apart from a failed payment, with the same next step', () => {
+    const rendered = renderPaymentFailedTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      amount: '999',
+      stoppedBy: 'paused',
+      graceEndsOn: '7 November 2026',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.subject).toBe('Your Paid subscription is paused')
+    expect(rendered.text).toContain(
+      'Your subscription for Rocket Co was paused from your bank or UPI app.'
+    )
+    expect(rendered.text).not.toContain('failed')
+    expect(rendered.text).toContain(
+      'Update your card by 7 November 2026 to keep Paid. After that, Rocket Co moves to Free.'
+    )
+    expect(rendered.html).toContain(`<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">`)
+  })
+
+  it('gives a suspended or archived workspace no button and no upgrade ask', () => {
+    const rendered = renderMovedToFreeTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      downgradeCause: 'lifecycle',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.html).not.toContain('<a ')
+    expect(rendered.text).not.toContain(BILLING_LINK)
+    expect(rendered.text).not.toContain('upgrade')
+    expect(rendered.text).toContain('Rocket Co moved to Free.')
   })
 })

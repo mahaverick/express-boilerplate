@@ -1,6 +1,6 @@
 /**
  * @file The shape every billing email shares: a greeting, short paragraphs,
- * one button and the sign-off, in a plain-text and an HTML part. Each billing
+ * one button (none for a notice that asks for no action) and the sign-off, in a plain-text and an HTML part. Each billing
  * template builds its subject and paragraphs as plain text and hands them
  * here, which escapes every one for the HTML part, so no template writes HTML
  * itself. Its links carry no token, so the button's link is also printed for
@@ -33,9 +33,10 @@ export interface BillingEmailContent {
    */
   paragraphs: readonly string[]
   /**
-   * The one button: its label and its UTM-tagged link.
+   * The one button: its label and its UTM-tagged link. Null for a notice
+   * that asks for no action.
    */
-  button: { label: string; link: string }
+  button: { label: string; link: string } | null
 }
 
 /**
@@ -60,22 +61,22 @@ export function renderBillingEmail(content: BillingEmailContent): RenderedEmail 
     'Hi,',
     '',
     ...paragraphs.flatMap((paragraph) => [paragraph, '']),
-    `${button.label}:`,
-    '',
-    button.link,
-    '',
+    ...(button === null ? [] : [`${button.label}:`, '', button.link, '']),
     `— The ${appName} team`,
   ].join('\n')
 
-  const link = escapeHtmlForEmail(button.link)
+  const buttonHtml =
+    button === null
+      ? ''
+      : `    <p><a href="${escapeHtmlForEmail(button.link)}">${escapeHtmlForEmail(button.label)}</a></p>
+    <p>Or paste this link into your browser: ${escapeHtmlForEmail(button.link)}</p>
+`
   const html = `<!doctype html>
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi,</p>
 ${paragraphs.map((paragraph) => `    <p>${escapeHtmlForEmail(paragraph)}</p>`).join('\n')}
-    <p><a href="${link}">${escapeHtmlForEmail(button.label)}</a></p>
-    <p>Or paste this link into your browser: ${link}</p>
-    <p>— The ${escapeHtmlForEmail(appName)} team</p>
+${buttonHtml}    <p>— The ${escapeHtmlForEmail(appName)} team</p>
   </body>
 </html>`
 

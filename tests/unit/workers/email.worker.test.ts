@@ -109,6 +109,16 @@ describe('processEmailJob', () => {
     vi.mocked(emailMessageService.markMessageSuppressed).mockReset().mockResolvedValue()
   })
 
+  it.each(['sent', 'delivered', 'bounced'] as const)(
+    'sends nothing for a message already %s, so a job run again never mails twice',
+    async (status) => {
+      vi.mocked(emailMessageService.findMessage).mockResolvedValue(messageRow({ status }))
+      await expect(processEmailJob(mockJob())).resolves.toBeUndefined()
+      expect(mailerService.sendMail).not.toHaveBeenCalled()
+      expect(emailMessageService.markMessageSent).not.toHaveBeenCalled()
+    }
+  )
+
   it("sends with the message's id and Message-ID header, then records sent", async () => {
     vi.mocked(mailerService.sendMail).mockResolvedValue('sent')
     await expect(processEmailJob(mockJob())).resolves.toBeUndefined()

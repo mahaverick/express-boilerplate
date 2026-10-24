@@ -22,8 +22,10 @@ import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { cancelPaid } from '@/services/billing/checkout.service'
 import { sql } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
+import { deleteUser } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
+import { leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import { processNotificationJob } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import {
@@ -39,7 +41,11 @@ import {
   workspace,
 } from '../../../helpers/billing-api'
 import { withMutatedMethod } from '../../../helpers/mutate'
-import { createTrackedUser, deleteTrackedUsers } from '../../../helpers/platform-users'
+import {
+  createTrackedStaff,
+  createTrackedUser,
+  deleteTrackedUsers,
+} from '../../../helpers/platform-users'
 import { queuedJobs } from '../../../helpers/queue-jobs'
 
 vi.mock('@/services/billing/billing-provider.service', async () => {
@@ -156,6 +162,34 @@ async function variablesOf(
 ): Promise<Record<string, string> | undefined> {
   const [first] = await mailsOf(tenantId, templateKey)
   return first?.variables
+}
+
+/**
+ * Open an upgrade request for a member, valid for a day.
+ * @param tenantId - The workspace.
+ * @param userId - The member.
+ * @returns The request.
+ */
+async function openRequest(tenantId: string, userId: string) {
+  const { request } = await billingRepository.openUpgradeRequest({
+    tenantId,
+    requestedBy: userId,
+    surface: 'members',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  })
+  return request
+}
+
+/**
+ * A member's open upgrade requests in any workspace.
+ * @param userId - The member.
+ * @returns The ids.
+ */
+async function openRequestsOf(userId: string): Promise<{ id: string }[]> {
+  const rows = await sql<
+    { id: string }[]
+  >`select id from upgrade_requests where requested_by = ${userId} and fulfilled_at is null`
+  return [...rows]
 }
 
 /**
@@ -401,6 +435,101 @@ describe('billing emails', () => {
     expect(await readBilling(tenantId)).toHaveProperty('state', 'free')
     expect(await mailsOf(tenantId, 'trial_ended')).toHaveLength(3)
     expect(await mailsOf(tenantId, 'moved_to_free')).toHaveLength(0)
+  })
+
+  it('tells a paused subscription apart from a halt, and warns once for each', async () => {
+    const { tenantId, owner, coOwner, row } = await team()
+    const paid = paidFrom(row)
+    const paused = { ...paid, pausedAt: PERIOD_END, version: paid.version + 1 }
+
+    await emitBillingDiff(paid, paused, 'webhook')
+    await emitBillingDiff(paid, paused, 'webhook')
+
+    expect(await variablesOf(tenantId, 'payment_failed')).toMatchObject({ stoppedBy: 'paused' })
+    const notices = await queuedJobs<NotificationJobData>(getNotificationQueue())
+    expect(notices.map((job) => job.data.userId).toSorted()).toEqual(
+      [owner.id, coOwner.id].toSorted()
+    )
+    expect(notices[0]?.data.title).toBe('Your Paid subscription is paused')
+  })
+
+  it('warns again for a second halt with its own time', async () => {
+    const { tenantId, row } = await team()
+    const paid = paidFrom(row)
+    const firstHalt = { ...paid, state: 'past_due' as const, haltedAt: PERIOD_END }
+    const secondAt = new Date(PERIOD_END.getTime() + 40 * 24 * 60 * 60 * 1000)
+    const secondHalt = { ...firstHalt, haltedAt: secondAt, pastDueSince: secondAt }
+
+    await emitBillingDiff(paid, firstHalt, 'webhook')
+    await emitBillingDiff(paid, secondHalt, 'webhook')
+
+    // The billing address gets each halt's email directly; owners get theirs through two notifications each.
+    expect(await recipientsOf(tenantId, 'payment_failed')).toEqual([
+      'accounts@example.test',
+      'accounts@example.test',
+    ])
+    expect(await queuedJobs(getNotificationQueue())).toHaveLength(4)
+  })
+
+  it('never mails the billing address in place of a deactivated owner who holds it', async () => {
+    const { tenantId, owner, coOwner, row } = await team()
+    await sql`update users set active = false where id = ${coOwner.id}`
+    const held = { ...row, billingEmail: coOwner.email.toUpperCase() }
+
+    await emitBillingDiff(held, paidFrom(held), 'webhook')
+
+    expect(await recipientsOf(tenantId, 'paid_welcome')).toEqual([owner.email])
+  })
+
+  it('tells no requester who is no longer a member', async () => {
+    const { tenantId, viewer, row } = await team()
+    const request = await openRequest(tenantId, viewer.id)
+    await sql`delete from user_memberships where user_id = ${viewer.id} and tenant_id = ${tenantId}`
+
+    await emitBillingDiff(row, paidFrom(row), 'webhook', { fulfilledRequests: [request] })
+
+    expect(await mailsOf(tenantId, 'upgrade_request_fulfilled')).toHaveLength(0)
+    expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(3)
+  })
+
+  it('closes a member’s open upgrade requests when they leave, are removed or are deleted', async () => {
+    const { tenantId, owner, coOwner, viewer } = await team()
+    const editor = await createTrackedUser()
+    await sql`insert into user_memberships (user_id, tenant_id, role) values (${editor.id}, ${tenantId}, 'editor')`
+    for (const user of [viewer, editor, coOwner]) await openRequest(tenantId, user.id)
+
+    await leaveTenant({ userId: viewer.id }, tenantId)
+    await removeMember({ userId: owner.id }, tenantId, editor.id)
+    const { user: staff } = await createTrackedStaff('admin')
+    await deleteUser({ userId: staff.id }, coOwner.id, 'Closing the account')
+
+    for (const user of [viewer, editor, coOwner]) {
+      expect(await openRequestsOf(user.id)).toHaveLength(0)
+    }
+  })
+
+  it('sends a suspended workspace no "subscribe again" mail for its cycle-end cancel', async () => {
+    const { tenantId } = await team()
+    await makePaying(tenantId)
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
+
+    await runFrequentBilling(new Date())
+
+    expect(await readBilling(tenantId)).toHaveProperty('cancelAtPeriodEnd', true)
+    expect(await mailsOf(tenantId, 'paid_cancelled')).toHaveLength(0)
+    expect(await mailsOf(tenantId, 'moved_to_free')).toHaveLength(0)
+  })
+
+  it('tells a suspended workspace it moved to Free, with no button', async () => {
+    const { tenantId, row } = await team()
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
+    const cancelling = { ...paidFrom(row), cancelAtPeriodEnd: true }
+
+    await emitBillingDiff(cancelling, { ...row, version: cancelling.version + 1 }, 'job')
+
+    expect(await variablesOf(tenantId, 'moved_to_free')).toMatchObject({
+      downgradeCause: 'lifecycle',
+    })
   })
 
   it('never fails the change when a send fails', async () => {
