@@ -890,7 +890,11 @@ and counted), for each running subscription of the last three days whose
 notes name a workspace whose row does not hold it, and for each workspace
 whose webhook event failed in the last three days. Two overlapping runs act
 once: each step claims its rows, re-checks them under the row lock, or leaves
-them to the sync's versioned write.
+them to the sync's versioned write. A run occupies one of the billing
+Worker's two slots while it lasts, so webhook and sync jobs share the other;
+the daily run only queues jobs and ends quickly. A suspend followed by an
+archive replaces the suspension's cycle-end cancel with an immediate one: the
+claim taken before the archive is released.
 
 The analytics Worker runs one job at a time, so this process never has two of
 its jobs talking to PostHog at once. Two replicas may; the drain and the

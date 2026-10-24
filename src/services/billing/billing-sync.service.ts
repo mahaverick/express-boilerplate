@@ -32,6 +32,7 @@ import type {
   ProviderRefundOutcome,
   ProviderSubscription,
 } from '@/types/billing'
+import { isOtherProvider } from '@/utilities/billing-rules.utilities'
 import {
   isRunning,
   nextBillingRow,
@@ -584,20 +585,6 @@ async function runFollowUps(
     }
   }
   return { shouldResync }
-}
-
-/**
- * Whether a row's subscriptions live with another provider or mode than the
- * running one, whose ids this provider cannot read.
- * @param row - The row.
- * @param provider - The running provider.
- * @returns True when the row names a different provider or mode.
- */
-function isOtherProvider(row: TenantBillingRecord, provider: BillingProviderClient): boolean {
-  return (
-    (row.provider !== null && row.provider !== provider.kind) ||
-    (row.providerMode !== null && row.providerMode !== provider.mode)
-  )
 }
 
 /**

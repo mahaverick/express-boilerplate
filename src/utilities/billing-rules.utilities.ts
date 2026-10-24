@@ -3,7 +3,13 @@
  * the plan that state maps to, and how plan values and grants combine into
  * entitlements. No I/O.
  */
-import { CANCEL_BUFFER_DAYS, type BillingState, type PlanKey } from '@/constants/billing.constants'
+import {
+  CANCEL_BUFFER_DAYS,
+  type BillingProvider,
+  type BillingProviderMode,
+  type BillingState,
+  type PlanKey,
+} from '@/constants/billing.constants'
 import {
   ENTITLEMENTS,
   type EntitlementDefinition,
@@ -153,4 +159,22 @@ export function limitUsage(limit: number | null, used: number, softAt = 0.8): Li
 export function extendTrialEnd(current: Date | null, now: Date, days: number): Date {
   const base = current && current > now ? current : now
   return addDays(base, days)
+}
+
+/**
+ * Whether a billing row's subscriptions live with another provider or mode
+ * than the running one, whose ids that provider cannot read. An unset
+ * provider or mode matches any.
+ * @param row - The row's provider and mode.
+ * @param running - The running provider's kind and mode.
+ * @returns True when the row names a different provider or mode.
+ */
+export function isOtherProvider(
+  row: { provider: BillingProvider | null; providerMode: BillingProviderMode | null },
+  running: { kind: BillingProvider; mode: BillingProviderMode }
+): boolean {
+  return (
+    (row.provider !== null && row.provider !== running.kind) ||
+    (row.providerMode !== null && row.providerMode !== running.mode)
+  )
 }

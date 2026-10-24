@@ -23,7 +23,7 @@
 import { getEnv } from '@/configs/env.config'
 import { CANCEL_BUFFER_DAYS } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
-import { ProviderError } from '@/errors/billing-provider-errors'
+import { isUnknownIdError } from '@/errors/billing-provider-errors'
 import { addBillingSyncJob } from '@/jobs/billing.job'
 import { BillingRepository, type ProviderScope } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
@@ -38,6 +38,7 @@ import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import { isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { isRunning } from '@/utilities/billing-state-machine.utilities'
 
 const billingRepository = new BillingRepository()
@@ -211,17 +212,6 @@ async function alertOnce(tenantId: string | null, message: string): Promise<void
 }
 
 /**
- * Whether a sync failure leaves the workspace's subscriptions unknown for
- * now: a provider error a retry can change. A refusal (an id the provider
- * does not know) cannot change, so it is not.
- * @param error - What the sync threw.
- * @returns True when a later run should try again before acting.
- */
-function isTransientSyncFailure(error: unknown): boolean {
-  return !(error instanceof ProviderError) || error.retryable
-}
-
-/**
  * Move one lapsed trial to Free. A row that holds a subscription is synced
  * first, so a paid checkout makes it active instead; the move happens only
  * if the row is still a lapsed trial under the lock, so two runs move it once.
@@ -229,7 +219,7 @@ function isTransientSyncFailure(error: unknown): boolean {
  * @param now - The run's time.
  * @param freePlanId - The Free plan's id.
  * @returns `acted` when this call moved it.
- * @throws {Error} When a sync fails in a way a later run may resolve; nothing is written.
+ * @throws {Error} When the sync fails for any reason but an unknown subscription id; staff are alerted once and nothing is written, so a later run tries again.
  */
 async function endTrial(
   row: TenantBillingRecord,
@@ -244,11 +234,21 @@ async function endTrial(
     try {
       await syncTenantBilling(row.tenantId, 'job', { now })
     } catch (error) {
-      if (isTransientSyncFailure(error)) throw error
-      logger.warn('A lapsed trial holds a subscription the provider refused to read', {
+      if (!isUnknownIdError(error)) {
+        await alertOnce(
+          row.tenantId,
+          'The trial ended, but the provider could not read its subscriptions, so it is not on Free yet. Check the provider, then resync the workspace.'
+        )
+        throw error
+      }
+      logger.warn('A lapsed trial holds a subscription the provider does not know', {
         error,
         tenantId: row.tenantId,
       })
+      await alertOnce(
+        row.tenantId,
+        'The trial ended holding a subscription the provider does not know, so the workspace moved to Free. Check its billing.'
+      )
     }
   }
   const written = await withTransaction(async (tx) => {
@@ -277,6 +277,15 @@ async function endTrial(
   if (written === undefined) return 'skipped'
   await emitBillingDiff(written.before, written.after, 'job')
   return 'acted'
+}
+
+/**
+ * The alert raised when a lifecycle cancel could not be made.
+ * @param subscriptionId - The subscription.
+ * @returns The message.
+ */
+function lifecycleCancelFailure(subscriptionId: string): string {
+  return `Could not cancel subscription ${subscriptionId} of a suspended or archived workspace. Cancel it at the provider.`
 }
 
 /**
@@ -314,10 +323,7 @@ async function didCancelForLifecycle(
       tenantId,
       subscriptionId,
     })
-    await alertOnce(
-      tenantId,
-      `Could not cancel subscription ${subscriptionId} of a suspended or archived workspace. Cancel it at the provider.`
-    )
+    await alertOnce(tenantId, lifecycleCancelFailure(subscriptionId))
     return false
   }
 }
@@ -345,31 +351,53 @@ async function markCancelling(tenantId: string, subscriptionId: string): Promise
 
 /**
  * Cancel what a claimed suspended or archived workspace still holds, then
- * sync it. The current subscription is cancelled at its cycle end for a
- * suspension and now for an archive; a deferred start (no cycle yet), a
- * scheduled switch and a checkout are always cancelled now, since the
- * provider refuses a cycle-end cancel without a cycle and no card may be
- * charged later.
+ * sync it. The workspace's lifecycle state is read again first: one that is
+ * active again has its claim released and is skipped. The current
+ * subscription is cancelled at its cycle end for a suspension and now for an
+ * archive, which also replaces a suspension's cycle-end cancel; a deferred
+ * start (no cycle yet), a scheduled switch and a checkout are always
+ * cancelled now, since the provider refuses a cycle-end cancel without a
+ * cycle and no card may be charged later. When the current subscription
+ * cannot be read, an archive cancels it now anyway, and a suspension alerts
+ * staff once.
  * @param provider - The payment provider.
- * @param row - The claimed row, with the workspace's lifecycle state.
+ * @param row - The claimed row.
  * @param now - The run's time.
- * @returns `acted`.
+ * @returns `acted`, or `skipped` for a workspace that is active again or gone.
  */
 async function cancelLifecycleRow(
   provider: BillingProviderClient,
-  row: TenantBillingRecord & { lifecycleState: 'suspended' | 'archived' },
+  row: TenantBillingRecord,
   now: Date
-): Promise<'acted'> {
+): Promise<'acted' | 'skipped'> {
   const { tenantId } = row
+  const tenant = await tenantRepository.findByIdIncludingDeleted(tenantId)
+  if (tenant === undefined) return 'skipped'
+  if (tenant.lifecycleState === 'active') {
+    await billingRepository.releaseLifecycleCancelClaim(tenantId)
+    return 'skipped'
+  }
+  const isArchived = tenant.lifecycleState === 'archived'
   const currentId =
-    (row.state === 'active' || row.state === 'past_due') && !row.cancelAtPeriodEnd
+    (row.state === 'active' || row.state === 'past_due') && (isArchived || !row.cancelAtPeriodEnd)
       ? row.providerSubscriptionId
       : null
   if (currentId !== null) {
-    const current = await provider.fetchSubscription(currentId)
-    if (!ENDED_STATUSES.has(current.status)) {
+    let current: ProviderSubscription | undefined
+    try {
+      current = await provider.fetchSubscription(currentId)
+    } catch (error) {
+      logger.warn('Could not read a subscription before its lifecycle cancel', {
+        error,
+        tenantId,
+        subscriptionId: currentId,
+      })
+      if (isArchived) await didCancelForLifecycle(provider, tenantId, currentId, false)
+      else await alertOnce(tenantId, lifecycleCancelFailure(currentId))
+    }
+    if (current !== undefined && !ENDED_STATUSES.has(current.status)) {
       const hasCycle = current.status !== 'created' && current.status !== 'authenticated'
-      const isAtCycleEnd = row.lifecycleState === 'suspended' && hasCycle
+      const isAtCycleEnd = !isArchived && hasCycle
       const cancelled = await didCancelForLifecycle(provider, tenantId, currentId, isAtCycleEnd)
       if (cancelled && isAtCycleEnd) await markCancelling(tenantId, currentId)
     }
@@ -383,7 +411,8 @@ async function cancelLifecycleRow(
 
 /**
  * The lifecycle step: release the claims of workspaces that are active
- * again, then claim and cancel for each suspended or archived one. A claim
+ * again, and of workspaces archived after a suspension's claim (so the
+ * archive's immediate cancel runs), then claim and cancel for each suspended or archived one. A claim
  * is committed before any provider call, so two runs never cancel the same
  * workspace's subscriptions.
  * @param provider - The payment provider.
@@ -405,8 +434,7 @@ async function runLifecycleCancels(
     )
     for (const row of claimed) {
       try {
-        await cancelLifecycleRow(provider, row, now)
-        counts.acted += 1
+        counts[await cancelLifecycleRow(provider, row, now)] += 1
       } catch (error) {
         counts.failed += 1
         logger.warn('A lifecycle cancel failed for a workspace', {
@@ -534,20 +562,6 @@ const FREQUENT_STEPS: readonly BillingStep[] = [
     },
   },
 ]
-
-/**
- * Whether a row's subscriptions live with another provider or mode than the
- * running one, whose ids this provider cannot read.
- * @param row - The row.
- * @param scope - The running provider and mode.
- * @returns True when the row names a different provider or mode.
- */
-function isOtherProvider(row: TenantBillingRecord, scope: ProviderScope): boolean {
-  return (
-    (row.provider !== null && row.provider !== scope.kind) ||
-    (row.providerMode !== null && row.providerMode !== scope.mode)
-  )
-}
 
 /**
  * The reconcile's row pass: queue a sync for every row that holds a

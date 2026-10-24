@@ -48,3 +48,16 @@ export class ProviderError extends Error {
     this.description = details.description
   }
 }
+
+/**
+ * Whether a provider error says only that the id does not exist: a 404, or
+ * the 400 `BAD_REQUEST_ERROR` Razorpay (and the fake) answer for an unknown
+ * id. A 401, a 403 or an unexpected answer is not: it means the call itself
+ * failed, and must not read as "unknown".
+ * @param error - What the call threw.
+ * @returns True for an unknown-id answer.
+ */
+export function isUnknownIdError(error: unknown): boolean {
+  if (!(error instanceof ProviderError)) return false
+  return error.status === 404 || (error.status === 400 && error.code === 'BAD_REQUEST_ERROR')
+}

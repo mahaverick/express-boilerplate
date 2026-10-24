@@ -24,7 +24,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { getEnv } from '@/configs/env.config'
 import type { BillingAlertKind } from '@/constants/billing.constants'
-import { ProviderError } from '@/errors/billing-provider-errors'
+import { isUnknownIdError, ProviderError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { addBillingWebhookJob, type BillingWebhookJobData } from '@/jobs/billing.job'
@@ -305,19 +305,6 @@ async function alertOnce(
   } catch (error) {
     logger.error('Could not record a billing alert', { error, tenantId, kind })
   }
-}
-
-/**
- * Whether a provider error says only that the id does not exist: a 404, or
- * the 400 `BAD_REQUEST_ERROR` Razorpay (and the fake) answer for an unknown
- * id. A 401, a 403 or an unexpected answer is not: it means the call itself
- * failed, and must fail the job loudly rather than read as "unknown".
- * @param error - What the read threw.
- * @returns True for an unknown-id answer.
- */
-function isUnknownIdError(error: unknown): boolean {
-  if (!(error instanceof ProviderError)) return false
-  return error.status === 404 || (error.status === 400 && error.code === 'BAD_REQUEST_ERROR')
 }
 
 /**

@@ -779,56 +779,46 @@ export class BillingRepository {
 
   /**
    * Claim the records of suspended or archived workspaces that still have a
-   * subscription to cancel: a running current one not yet cancelling, a
-   * scheduled switch or a checkout. The workspace row is only read, so the
-   * claim takes no lock on it.
+   * subscription to cancel: a current one not yet cancelling (for an archived
+   * workspace, cancelling too, since an archive cancels now), a scheduled
+   * switch or a checkout. The workspace row is only read, so the claim takes
+   * no lock on it.
    * @param scope - The running provider and mode.
    * @param limit - The most rows to claim.
    * @param tx - The open transaction; the claim holds until it ends.
-   * @returns The claimed rows, with the workspace's lifecycle state.
+   * @returns The claimed rows.
    */
   async claimLifecycleCancels(
     scope: ProviderScope,
     limit: number,
     tx: DbTransaction
-  ): Promise<(TenantBillingRecord & { lifecycleState: 'suspended' | 'archived' })[]> {
+  ): Promise<TenantBillingRecord[]> {
     const isSuspendedOrArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} in ('suspended', 'archived'))`
+    const isArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} = 'archived')`
     const hasRunningCurrent = and(
       inArray(tenantBillingModel.state, ['active', 'past_due']),
       isNotNull(tenantBillingModel.providerSubscriptionId),
-      eq(tenantBillingModel.cancelAtPeriodEnd, false)
+      or(eq(tenantBillingModel.cancelAtPeriodEnd, false), isArchived)
     )
     const holdsSubscription = or(
       hasRunningCurrent,
       isNotNull(tenantBillingModel.nextSubscriptionId),
       isNotNull(tenantBillingModel.pendingSubscriptionId)
     )
-    const claimed = await this.claimDue(
+    return this.claimDue(
       tenantBillingModel.lifecycleCancelSentAt,
       and(isSuspendedOrArchived, holdsSubscription, ofProvider(scope)) ?? isSuspendedOrArchived,
       limit,
       tx
     )
-    if (claimed.length === 0) return []
-    const tenants = await tx
-      .select({ id: tenantModel.id, lifecycleState: tenantModel.lifecycleState })
-      .from(tenantModel)
-      .where(
-        inArray(
-          tenantModel.id,
-          claimed.map((row) => row.tenantId)
-        )
-      )
-    const stateById = new Map(tenants.map((tenant) => [tenant.id, tenant.lifecycleState]))
-    return claimed.map((row) => ({
-      ...row,
-      lifecycleState: stateById.get(row.tenantId) === 'archived' ? 'archived' : 'suspended',
-    }))
   }
 
   /**
-   * Clear the lifecycle cancel claim of workspaces that are active again, so
-   * a later suspension or archive cancels the subscription they hold then.
+   * Clear the lifecycle cancel claims that no longer stand: a workspace that
+   * is active again, so a later suspension or archive cancels the
+   * subscription it holds then; and a workspace archived after its claim was
+   * taken (a suspension's cycle-end cancel), so the archive cancels now.
+   * `deleted_at` is when the workspace was archived.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns How many claims were cleared.
    */
@@ -839,11 +829,23 @@ export class BillingRepository {
       .where(
         and(
           isNotNull(tenantBillingModel.lifecycleCancelSentAt),
-          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} = 'active')`
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and (${tenantModel.lifecycleState} = 'active' or (${tenantModel.lifecycleState} = 'archived' and ${tenantModel.deletedAt} > ${tenantBillingModel.lifecycleCancelSentAt})))`
         )
       )
       .returning({ tenantId: tenantBillingModel.tenantId })
     return released.length
+  }
+
+  /**
+   * Clear one workspace's lifecycle cancel claim.
+   * @param tenantId - The workspace.
+   * @param executor - Where to run the query. Defaults to the pool.
+   */
+  async releaseLifecycleCancelClaim(tenantId: string, executor: DbExecutor = db): Promise<void> {
+    await executor
+      .update(tenantBillingModel)
+      .set({ lifecycleCancelSentAt: null })
+      .where(eq(tenantBillingModel.tenantId, tenantId))
   }
 
   /**

@@ -233,8 +233,8 @@ async function setLifecycle(
   tenantId: string,
   state: 'active' | 'suspended' | 'archived'
 ): Promise<void> {
-  const deletedAt = state === 'archived' ? new Date().toISOString() : null
-  await sql`update tenants set lifecycle_state = ${state}, deleted_at = ${deletedAt}::timestamptz where id = ${tenantId}`
+  // The database's clock, as the archive itself stamps deleted_at.
+  await sql`update tenants set lifecycle_state = ${state}, deleted_at = case when ${state} = 'archived' then now() end where id = ${tenantId}`
 }
 
 /**
@@ -551,6 +551,162 @@ describe('runFrequentBilling', () => {
     expect(alerts[0]?.message).toContain(subscriptionId)
     expect(await lifecycleClaimOf(tenant.id)).not.toBeNull()
     expect(await statusOf(subscriptionId)).toBe('active')
+  })
+
+  it.each([
+    ['a 401', new ProviderError('GET /subscriptions/x', 401, { code: 'BAD_REQUEST_ERROR' })],
+    ['a 403', new ProviderError('GET /subscriptions/x', 403)],
+    [
+      'an unexpected answer',
+      new ProviderError('subscription answer', 200, { code: 'UNEXPECTED_ANSWER' }),
+    ],
+    ['a 502', new ProviderError('GET /subscriptions/x', 502)],
+  ])(
+    'keeps a lapsed trial whose subscription read fails with %s, and alerts staff once',
+    async (_label, failure) => {
+      const now = new Date()
+      const { tenantId } = await lapsedTrial(now)
+      const subscriptionId = await fakeSubscription({ tenantId, priceId: plans.monthPriceId })
+      await setBilling(tenantId, { pendingSubscriptionId: subscriptionId })
+
+      await withMutatedMethod(
+        FakeBillingProvider.prototype,
+        'fetchSubscription',
+        () => Promise.reject(failure),
+        async () => {
+          await runFrequentBilling(now)
+          await runFrequentBilling(now)
+        }
+      )
+
+      expect(await stateOf(tenantId)).toBe('trialing')
+      const alerts = await alertsOf(tenantId)
+      expect(alerts).toHaveLength(1)
+      expect(alerts[0]?.message).toContain('could not read')
+    }
+  )
+
+  it('moves a lapsed trial to Free when the provider does not know its subscription, and alerts staff once', async () => {
+    const now = new Date()
+    const { tenantId } = await lapsedTrial(now)
+    await setBilling(tenantId, { pendingSubscriptionId: 'sub_FAKEunknown0000' })
+
+    await runFrequentBilling(now)
+
+    expect(await stateOf(tenantId)).toBe('free')
+    const alerts = await alertsOf(tenantId)
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]?.message).toContain('does not know')
+  })
+
+  it('moves a lapsed trial that holds a subscription to Free with payments off', async () => {
+    const now = new Date()
+    const { tenantId } = await lapsedTrial(now)
+    const subscriptionId = await fakeSubscription({ tenantId, priceId: plans.monthPriceId })
+    await setBilling(tenantId, { pendingSubscriptionId: subscriptionId })
+    paymentsSwitch.on = false
+    try {
+      await runFrequentBilling(now)
+    } finally {
+      paymentsSwitch.on = true
+    }
+
+    expect(await stateOf(tenantId)).toBe('free')
+    expect(await alertsOf(tenantId)).toStrictEqual([])
+  })
+
+  it('cancels an archived workspace subscription now when it cannot be read first', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await setLifecycle(tenant.id, 'archived')
+
+    let cancels: [string, boolean][] = []
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'fetchSubscription',
+      () => Promise.reject(new ProviderError('GET /subscriptions/x', 502)),
+      async () => {
+        cancels = await recordingCancels(() => runFrequentBilling(now))
+      }
+    )
+
+    expect(cancels).toStrictEqual([[subscriptionId, false]])
+    expect(await statusOf(subscriptionId)).toBe('cancelled')
+    expect(await alertsOf(tenant.id)).toStrictEqual([])
+  })
+
+  it('alerts staff once when a suspended workspace subscription cannot be read before its cancel', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await setLifecycle(tenant.id, 'suspended')
+
+    let cancels: [string, boolean][] = []
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'fetchSubscription',
+      () => Promise.reject(new ProviderError('GET /subscriptions/x', 502)),
+      async () => {
+        cancels = await recordingCancels(async () => {
+          await runFrequentBilling(now)
+          await runFrequentBilling(now)
+        })
+      }
+    )
+
+    expect(cancels).toStrictEqual([])
+    const alerts = await alertsOf(tenant.id)
+    expect(alerts.map((alert) => alert.kind)).toStrictEqual(['reconcile_repair'])
+    expect(alerts[0]?.message).toContain(subscriptionId)
+    expect(await lifecycleClaimOf(tenant.id)).not.toBeNull()
+  })
+
+  it('releases the claim and cancels nothing when the workspace is active again before the cancel', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    await makePaying(tenant.id)
+    await setLifecycle(tenant.id, 'suspended')
+    const original = BillingRepository.prototype.claimLifecycleCancels
+
+    let cancels: [string, boolean][] = []
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'claimLifecycleCancels',
+      async function (this: BillingRepository, ...claimArguments: Parameters<typeof original>) {
+        const claimed = await original.apply(this, claimArguments)
+        // Staff reactivate the workspace between the claim and the cancel.
+        await setLifecycle(tenant.id, 'active')
+        return claimed
+      },
+      async () => {
+        cancels = await recordingCancels(() => runFrequentBilling(now))
+      }
+    )
+
+    expect(cancels).toStrictEqual([])
+    expect(await lifecycleClaimOf(tenant.id)).toBeNull()
+  })
+
+  it('cancels now when a suspended workspace is archived after its cycle-end cancel', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await setLifecycle(tenant.id, 'suspended')
+
+    const cancels = await recordingCancels(async () => {
+      await runFrequentBilling(now)
+      await setLifecycle(tenant.id, 'archived')
+      await runFrequentBilling(now)
+      await runFrequentBilling(now)
+    })
+
+    expect(cancels).toStrictEqual([
+      [subscriptionId, true],
+      [subscriptionId, false],
+    ])
+    expect(await statusOf(subscriptionId)).toBe('cancelled')
+    expect(await lifecycleClaimOf(tenant.id)).not.toBeNull()
   })
 
   it('releases the lifecycle claim of a workspace that is active again', async () => {
