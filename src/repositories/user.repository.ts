@@ -91,7 +91,10 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
    * rotation, or a write that makes the user a tenant owner or platform
    * staff (`lockUserForOwnership`), which wait for that write and let each other
    * through; a single-statement update of the row (last login, a profile
-   * edit, verification) waits for a `'share'` holder to commit.
+   * edit, verification) waits for a `'share'` holder to commit. `'key share'`
+   * is the lock a foreign-key check takes, taken first by a write that will
+   * reference the user from a row locked later in the lock order (the
+   * billing cancel marker).
    * @param id - The user's id.
    * @param mode - The lock strength.
    * @param tx - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
@@ -99,7 +102,7 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
    */
   async lockById(
     id: string,
-    mode: 'no key update' | 'share',
+    mode: 'no key update' | 'share' | 'key share',
     tx: DbTransaction
   ): Promise<User | undefined> {
     const [row] = await tx

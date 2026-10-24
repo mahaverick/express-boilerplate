@@ -8,12 +8,18 @@
  * Redis outage can't change a mail's cause.
  */
 import { BillingRepository } from '@/repositories/billing.repository'
+import { UserRepository } from '@/repositories/user.repository'
+import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 
 const billingRepository = new BillingRepository()
+const userRepository = new UserRepository()
 
 /**
- * Record who is cancelling a subscription, before the provider is asked.
+ * Record who is cancelling a subscription, before the provider is asked. An
+ * owner's user row is locked `FOR KEY SHARE` first, in the documented lock
+ * order, so the marker's foreign-key check never locks it after the
+ * billing row.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription being cancelled.
  * @param marker - Who is cancelling.
@@ -24,11 +30,15 @@ export async function markCancel(
   subscriptionId: string,
   marker: { by: 'owner'; userId: string } | { by: 'staff' }
 ): Promise<void> {
-  await billingRepository.setCancelMarker(tenantId, {
-    subscriptionId,
-    by: marker.by,
-    userId: marker.by === 'owner' ? marker.userId : null,
-    at: new Date(),
+  const userId = marker.by === 'owner' ? marker.userId : null
+  await withTransaction(async (tx) => {
+    // The user row before the billing row, as the lock order has it: the marker's foreign key would otherwise lock the user after the billing row.
+    if (userId !== null) await userRepository.lockById(userId, 'key share', tx)
+    await billingRepository.setCancelMarker(
+      tenantId,
+      { subscriptionId, by: marker.by, userId, at: new Date() },
+      tx
+    )
   })
 }
 

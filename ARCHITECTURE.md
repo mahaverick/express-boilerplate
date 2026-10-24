@@ -332,7 +332,11 @@ in this order:
    it after the user row, and a user's purge after the memberships and the
    platform-role row and before the user row's delete, to clear them as payer
    (`clearPayer`); a tenant purge takes it after the platform-role row to
-   check that no subscription arrived since its provider check;
+   check that no subscription arrived since its provider check. The cancel
+   marker (`markCancel`, `cancel-marker.service.ts`), written in its own
+   transaction before the provider call, takes the cancelling owner's user
+   row `FOR KEY SHARE` first, so its foreign key never locks that row after
+   the billing row;
 6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
 7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
@@ -369,6 +373,7 @@ membership rows in both a customer tenant and the platform tenant locks the
 customer tenant's first. Postgres cannot enforce an application lock order;
 the JSDoc of each lock method states its place, and deadlock regression tests
 (`tests/integration/services/tenant-membership.service.test.ts`,
+`tests/integration/services/billing/cancel-marker.service.test.ts`,
 `tests/integration/api/platform-user-race.test.ts`,
 `tests/integration/services/billing/seat-lock-order.test.ts`) hold it.
 
