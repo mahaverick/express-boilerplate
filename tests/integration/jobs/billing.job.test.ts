@@ -584,6 +584,57 @@ describe('billing webhook jobs', () => {
     expect(await alertsNaming('dispute', payment)).toEqual([{ tenant_id: null }])
   })
 
+  it('fails a dispute whose status read is refused for its key, alerting staff twice', async () => {
+    const { sub } = await payingWorkspace()
+    const payment = paymentId()
+    const dispute = disputeId()
+    servePayment(payment, sub)
+    api.reply('GET', `/disputes/${dispute}`, 401, { error: { code: 'BAD_REQUEST_ERROR' } })
+
+    const delivery = signedWebhook('webhook-payment.dispute.created-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
+    eventIds.push(delivery.eventId)
+    namedIds.push(delivery.eventId)
+    await request(app).post('/api/v1/webhooks/razorpay').set(delivery.headers).send(delivery.body)
+
+    const failing = await waitUntil(
+      async () => {
+        const found = await alertsNaming('webhook_failing', delivery.eventId)
+        return found.length > 0 ? found : null
+      },
+      { message: 'the failed dispute job raises a failure alert' }
+    )
+    expect(failing).toHaveLength(1)
+    expect(await alertsNaming('dispute', payment)).toEqual([{ tenant_id: null }])
+    const [row] = await sql<{ processed_at: string | null; error: string | null }[]>`
+      select processed_at, error from billing_events where provider_event_id = ${delivery.eventId}`
+    expect(row).toMatchObject({ processed_at: null, error: 'provider_error 401 BAD_REQUEST_ERROR' })
+  })
+
+  it('fails a refund whose payment lookup is refused for its key, with one failure alert', async () => {
+    const payment = paymentId()
+    api.reply('GET', `/payments/${payment}`, 401, { error: { code: 'BAD_REQUEST_ERROR' } })
+
+    const delivery = signedWebhook('webhook-refund.processed-synthetic', { paymentId: payment })
+    eventIds.push(delivery.eventId)
+    namedIds.push(delivery.eventId)
+    await request(app).post('/api/v1/webhooks/razorpay').set(delivery.headers).send(delivery.body)
+
+    const failing = await waitUntil(
+      async () => {
+        const found = await alertsNaming('webhook_failing', delivery.eventId)
+        return found.length > 0 ? found : null
+      },
+      { message: 'the failed refund job raises a failure alert' }
+    )
+    expect(failing).toEqual([{ tenant_id: null }])
+    const [row] = await sql<{ processed_at: string | null; error: string | null }[]>`
+      select processed_at, error from billing_events where provider_event_id = ${delivery.eventId}`
+    expect(row).toMatchObject({ processed_at: null, error: 'provider_error 401 BAD_REQUEST_ERROR' })
+  })
+
   it('ignores a dispute of another environment without an alert', async () => {
     const payment = paymentId()
     const sub = subscriptionId()

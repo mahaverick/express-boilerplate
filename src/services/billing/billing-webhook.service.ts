@@ -308,17 +308,62 @@ async function alertOnce(
 }
 
 /**
- * Run a provider read whose non-retryable refusal means the provider does
- * not know the id; a retryable failure throws for the job's retry.
+ * Whether a provider error says only that the id does not exist: a 404, or
+ * the 400 `BAD_REQUEST_ERROR` Razorpay (and the fake) answer for an unknown
+ * id. A 401, a 403 or an unexpected answer is not: it means the call itself
+ * failed, and must fail the job loudly rather than read as "unknown".
+ * @param error - What the read threw.
+ * @returns True for an unknown-id answer.
+ */
+function isUnknownIdError(error: unknown): boolean {
+  if (!(error instanceof ProviderError)) return false
+  return error.status === 404 || (error.status === 400 && error.code === 'BAD_REQUEST_ERROR')
+}
+
+/**
+ * Run a provider read whose unknown-id answer means the provider does not
+ * know the id. Every other failure throws: a retryable one for the job's
+ * retry, any other one to fail the job, mark the event and alert staff.
  * @param read - The provider read.
- * @returns What it answered, or undefined when the provider refused it.
- * @throws {ProviderError} When the provider could not answer; the job retries.
+ * @returns What it answered, or undefined when the provider does not know the id.
+ * @throws {ProviderError} For any failure but an unknown id.
  */
 async function unlessUnknown<T>(read: () => Promise<T>): Promise<T | undefined> {
   try {
     return await read()
   } catch (error) {
-    if (error instanceof ProviderError && !error.retryable) return undefined
+    if (isUnknownIdError(error)) return undefined
+    throw error
+  }
+}
+
+/**
+ * Read a dispute's status. When a new dispute's status cannot be read for any
+ * reason but an unknown id, staff are alerted once per payment with no
+ * workspace before the job fails, so a response deadline is never silent.
+ * @param provider - The payment provider.
+ * @param data - The job's payload.
+ * @param disputeId - The dispute.
+ * @returns The status, or undefined when the provider does not know the dispute.
+ * @throws {ProviderError} For any failure but an unknown id.
+ */
+async function readDisputeStatus(
+  provider: BillingProviderClient,
+  data: BillingWebhookJobData,
+  disputeId: string
+): Promise<string | undefined> {
+  try {
+    return await unlessUnknown(() => provider.fetchDisputeStatus(disputeId))
+  } catch (error) {
+    if (data.eventType === 'payment.dispute.created') {
+      const named = data.paymentId ?? disputeId
+      await alertOnce(
+        null,
+        'dispute',
+        named,
+        `Payment ${named} has a new dispute, and reading its status at the provider failed. Respond there before its deadline.`
+      )
+    }
     throw error
   }
 }
@@ -385,13 +430,11 @@ async function syncForSubscription(
     }
     tenantId = sub === undefined ? undefined : await notedTenant(sub)
     if (tenantId === undefined) {
-      await billingRepository.markEventProcessed(data.eventRowId, {
-        error: 'unknown_subscription',
-      })
       logger.warn('A billing webhook names a subscription no workspace holds', {
         providerEventId: data.providerEventId,
         subscriptionId,
       })
+      // The alert goes before the mark: a processed event has finished everything it does.
       if (sub !== undefined && sub.paidCount > 0) {
         await alertOnce(
           null,
@@ -400,6 +443,9 @@ async function syncForSubscription(
           `Subscription ${subscriptionId} is paid, and no workspace here holds it. Check its notes at the provider.`
         )
       }
+      await billingRepository.markEventProcessed(data.eventRowId, {
+        error: 'unknown_subscription',
+      })
       return
     }
     extraSubscriptionIds = [subscriptionId]
@@ -456,10 +502,7 @@ async function handleDispute(
   data: BillingWebhookJobData
 ): Promise<void> {
   const { paymentId, disputeId } = data
-  const status =
-    disputeId === null
-      ? undefined
-      : await unlessUnknown(() => provider.fetchDisputeStatus(disputeId))
+  const status = disputeId === null ? undefined : await readDisputeStatus(provider, data, disputeId)
   const isOpen = status !== undefined && OPEN_DISPUTE_STATUSES.has(status)
   if (status === undefined || (!isOpen && !ENDED_DISPUTE_STATUSES.has(status))) {
     await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_dispute' })
@@ -482,7 +525,6 @@ async function handleDispute(
       await markOtherEnvironment(data)
       return
     }
-    await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
     if (isOpen && paymentId !== null) {
       await alertOnce(
         null,
@@ -491,11 +533,11 @@ async function handleDispute(
         `Payment ${paymentId} has an open dispute, and no workspace here holds its subscription. Respond at the provider.`
       )
     }
+    await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
     return
   }
   await billingRepository.setEventTenant(data.eventRowId, row.tenantId)
   await setDisputeOpen(row.tenantId, isOpen)
-  await billingRepository.markEventProcessed(data.eventRowId, { tenantId: row.tenantId })
   if (isOpen && paymentId !== null) {
     await alertOnce(
       row.tenantId,
@@ -504,6 +546,7 @@ async function handleDispute(
       `Payment ${paymentId} has an open dispute. Respond at the provider before its deadline.`
     )
   }
+  await billingRepository.markEventProcessed(data.eventRowId, { tenantId: row.tenantId })
 }
 
 /**
