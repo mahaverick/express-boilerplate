@@ -125,7 +125,7 @@ function toSubscription(record: FakeSubscriptionRecord): ProviderSubscription {
     paidCount: record.paidCount,
     customerId: record.customerId,
     hasScheduledChanges: false,
-    latestInvoicePaid: record.latestInvoicePaid,
+    latestInvoicePaid: record.status === 'active' && record.latestInvoicePaid,
   }
 }
 

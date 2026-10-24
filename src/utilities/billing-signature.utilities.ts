@@ -39,21 +39,28 @@ function isSameHex(expected: string, received: string): boolean {
 /**
  * Whether a checkout was signed for the expected subscription. The posted
  * subscription id must equal the expected one, and the signature is computed
- * over the expected id, never the posted one.
+ * over the expected id, never the posted one. A field that is not a
+ * non-empty string answers false, never a throw.
  * @param input - What the browser posted.
  * @param expectedSubscriptionId - The subscription the checkout must be for.
  * @param keySecret - The key secret.
  * @returns True for a matching signature over the expected subscription.
  */
 export function isValidCheckoutSignature(
-  input: CheckoutConfirm,
+  input: { readonly [Key in keyof CheckoutConfirm]: unknown },
   expectedSubscriptionId: string,
   keySecret: string
 ): boolean {
-  if (input.razorpay_subscription_id !== expectedSubscriptionId) return false
-  if (input.razorpay_signature === '' || input.razorpay_payment_id === '') return false
-  const expected = checkoutSignature(input.razorpay_payment_id, expectedSubscriptionId, keySecret)
-  return isSameHex(expected, input.razorpay_signature)
+  const {
+    razorpay_payment_id: paymentId,
+    razorpay_subscription_id: subscriptionId,
+    razorpay_signature: signature,
+  } = input
+  if (typeof paymentId !== 'string' || typeof signature !== 'string') return false
+  if (subscriptionId !== expectedSubscriptionId) return false
+  if (signature === '' || paymentId === '' || expectedSubscriptionId === '') return false
+  const expected = checkoutSignature(paymentId, expectedSubscriptionId, keySecret)
+  return isSameHex(expected, signature)
 }
 
 /**

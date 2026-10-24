@@ -223,8 +223,11 @@ export interface ProviderSubscription {
    */
   hasScheduledChanges: boolean
   /**
-   * Whether the invoice of the current cycle (else the newest invoice) is
-   * paid; false when there is none yet, as for a deferred start.
+   * Whether the invoice of the current cycle, the one whose billing period
+   * starts at `currentStart`, is paid. It fails closed: false when no invoice
+   * matches the cycle, when there is no cycle yet (a deferred start), and for
+   * every status but `active`, which is read without asking for invoices,
+   * since the period end only counts while the subscription is active.
    */
   latestInvoicePaid: boolean
 }

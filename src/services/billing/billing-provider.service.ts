@@ -14,7 +14,9 @@ import type { BillingProviderClient } from '@/types/billing'
 let cached: BillingProviderClient | null | undefined
 
 /**
- * The configured payment provider.
+ * The configured payment provider, built once and memoised for the process,
+ * so a config change needs a restart. A test that varies the config calls
+ * `vi.resetModules()` and imports this module afresh for each case.
  * @returns The client, or null when payments are off (no keys and no fake).
  */
 export function getBillingProvider(): BillingProviderClient | null {

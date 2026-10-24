@@ -3,7 +3,8 @@
  * every request (method, path with query, headers, the exact body bytes) and
  * answers with what the test chose. It is a recorder, not an emulator: the
  * test decides each answer. `reply(method, path, …)` answers one pathname
- * (query ignored) until replaced; `respondWith` is the answer for every other
+ * (query ignored) until replaced; `replyInTurn` gives one pathname a list of
+ * answers, used in order, the last repeating; `respondWith` is the answer for every other
  * request (200 `{}` by default); `hang(ms)` holds every later request for
  * that long; `close()` ends held requests too, so a test never waits on one.
  * Serve it under `/v1` so the provider's base URL is `${fake.baseUrl}`.
@@ -57,6 +58,10 @@ export interface FakeRazorpay {
    */
   reply: (method: string, path: string, status: number, json: unknown) => void
   /**
+   * Answer `method` on `path` with each answer in turn; the last one repeats.
+   */
+  replyInTurn: (method: string, path: string, answers: FakeRazorpayAnswer[]) => void
+  /**
    * Hold every later request for `ms` before answering; 0 answers at once.
    */
   hang: (ms: number) => void
@@ -91,7 +96,7 @@ function parsed(body: Buffer): unknown {
 export async function startFakeRazorpay(): Promise<FakeRazorpay> {
   const state = {
     fallback: { status: 200, json: {} } as FakeRazorpayAnswer,
-    replies: new Map<string, FakeRazorpayAnswer>(),
+    replies: new Map<string, FakeRazorpayAnswer[]>(),
     hangMs: 0,
     isClosed: false,
   }
@@ -108,7 +113,9 @@ export async function startFakeRazorpay(): Promise<FakeRazorpay> {
       const method = request.method ?? 'GET'
       requests.push({ method, path, headers: request.headers, body, json: parsed(body) })
       const pathname = path.split('?')[0] ?? path
-      const answer = state.replies.get(`${method} ${pathname}`) ?? state.fallback
+      const queued = state.replies.get(`${method} ${pathname}`)
+      const answer =
+        (queued !== undefined && queued.length > 1 ? queued.shift() : queued?.[0]) ?? state.fallback
       /**
        * Write the answer, at once or when a `hang` delay ends.
        */
@@ -139,7 +146,10 @@ export async function startFakeRazorpay(): Promise<FakeRazorpay> {
       state.fallback = { status, json }
     },
     reply: (method, path, status, json) => {
-      state.replies.set(`${method} /v1${path}`, { status, json })
+      state.replies.set(`${method} /v1${path}`, [{ status, json }])
+    },
+    replyInTurn: (method, path, answers) => {
+      state.replies.set(`${method} /v1${path}`, [...answers])
     },
     hang: (ms) => {
       state.hangMs = ms

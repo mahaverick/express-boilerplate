@@ -214,21 +214,46 @@ describe('fetchSubscription', () => {
     expect(answer.latestInvoicePaid).toBe(true)
   })
 
-  it('reads a cycle whose invoice is only issued as unpaid', async () => {
-    const sub = fixture('api-subscription-pending').json
+  it('reads an active cycle whose invoice is only issued as unpaid', async () => {
+    const sub: Record<string, unknown> = {
+      ...fixture('api-subscription-active').json,
+      current_start: 1_795_458_600,
+    }
     const paid = (fixture('api-invoices-paid').json.items as Record<string, unknown>[])[0]
     const issued = {
       ...paid,
       id: 'inv_CURRENT',
       status: 'issued',
       paid_at: null,
-      billing_start: sub.current_start,
-      created_at: 1_805_826_600,
+      billing_start: 1_795_458_600,
+      created_at: 1_795_458_600,
     }
     serveSubscription(String(sub.id), sub, { entity: 'collection', items: [paid, issued] })
     const answer = await provider.fetchSubscription(String(sub.id))
     expect(answer.latestInvoicePaid).toBe(false)
   })
+
+  it('reads an active cycle with only the previous cycle paid as unpaid', async () => {
+    // The previous cycle's paid invoice starts at 1792812180; the current cycle has none yet.
+    const sub: Record<string, unknown> = {
+      ...fixture('api-subscription-active').json,
+      current_start: 1_795_458_600,
+    }
+    serveSubscription(String(sub.id), sub, fixture('api-invoices-paid').json)
+    const answer = await provider.fetchSubscription(String(sub.id))
+    expect(answer.latestInvoicePaid).toBe(false)
+  })
+
+  it.each(['api-subscription-pending', 'api-subscription-authenticated-deferred'])(
+    'reads %s as unpaid without asking for invoices',
+    async (name) => {
+      const sub = fixture(name).json
+      serveSubscription(String(sub.id), sub, fixture('api-invoices-paid').json)
+      const answer = await provider.fetchSubscription(String(sub.id))
+      expect(answer.latestInvoicePaid).toBe(false)
+      expect(fake.requests.filter((r) => r.path.startsWith('/v1/invoices'))).toHaveLength(0)
+    }
+  )
 
   it('maps notes that arrive as an empty array to an empty object', async () => {
     const sub: Record<string, unknown> = { ...fixture('api-subscription-active').json, notes: [] }
@@ -239,6 +264,15 @@ describe('fetchSubscription', () => {
 })
 
 describe('errors', () => {
+  it('throws a retryable ProviderError on a 429', async () => {
+    fake.respondWith(429, {
+      error: { code: 'BAD_REQUEST_ERROR', description: 'Too many requests' },
+    })
+    const error = await rejectionOf(provider.fetchSubscription('sub_X'))
+    expect(error).toBeInstanceOf(ProviderError)
+    expect(error).toMatchObject({ status: 429, retryable: true })
+  })
+
   it('throws a retryable ProviderError on a 502', async () => {
     fake.respondWith(502, { error: { code: 'SERVER_ERROR', description: 'down' } })
     const error = await rejectionOf(provider.fetchSubscription('sub_X'))
@@ -315,16 +349,22 @@ describe('cancelSubscription', () => {
     expect(fake.requests.filter((r) => r.method === 'POST')).toHaveLength(2)
   })
 
-  it('still sends the next cancel after one fails', async () => {
-    fake.reply('POST', '/subscriptions/sub_Y/cancel', 400, { error: { code: 'BAD_REQUEST_ERROR' } })
-    await expect(provider.cancelSubscription('sub_Y', true)).rejects.toBeInstanceOf(ProviderError)
-    fake.reply('POST', '/subscriptions/sub_Y/cancel', 200, {
-      ...fixture('api-subscription-cancelled').json,
-      id: 'sub_Y',
-    })
-    fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)
-    const answer = await provider.cancelSubscription('sub_Y', false)
+  it('runs a queued cancel after the one ahead of it fails', async () => {
+    fake.replyInTurn('POST', '/subscriptions/sub_Y/cancel', [
+      { status: 400, json: { error: { code: 'BAD_REQUEST_ERROR' } } },
+      { status: 200, json: { ...fixture('api-subscription-cancelled').json, id: 'sub_Y' } },
+    ])
+    fake.hang(50)
+    const first = rejectionOf(provider.cancelSubscription('sub_Y', true))
+    const second = provider.cancelSubscription('sub_Y', false)
+    expect(await first).toMatchObject({ name: 'ProviderError', status: 400 })
+    const answer = await second
     expect(answer.status).toBe('cancelled')
+    const cancels = fake.requests.filter((r) => r.method === 'POST')
+    expect(cancels.map((r) => r.json)).toStrictEqual([
+      { cancel_at_cycle_end: 1 },
+      { cancel_at_cycle_end: 0 },
+    ])
   })
 })
 
@@ -473,6 +513,13 @@ describe('verifyCheckout', () => {
     expect(provider.verifyCheckout({ ...confirm, razorpay_signature: '' }, subscriptionId)).toBe(
       false
     )
+  })
+
+  it('answers false, not a throw, for a field that is not a string', () => {
+    const posted = { ...confirm, razorpay_signature: 12_345 } as unknown as typeof confirm
+    expect(provider.verifyCheckout(posted, subscriptionId)).toBe(false)
+    const noPayment = { ...confirm, razorpay_payment_id: null } as unknown as typeof confirm
+    expect(provider.verifyCheckout(noPayment, subscriptionId)).toBe(false)
   })
 })
 

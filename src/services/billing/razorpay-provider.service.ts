@@ -137,26 +137,21 @@ function itemsOf(value: unknown): JsonRecord[] {
 }
 
 /**
- * The invoice that decides whether the current cycle is paid: the one whose
- * billing period starts at the cycle's start, else the newest. Razorpay moves
- * the cycle forward before it is paid, and a charge-now issues a newer
- * invoice at once, so matching the cycle beats taking the newest.
+ * The invoice that decides whether the current cycle is paid: only the one
+ * whose billing period starts at the cycle's start. Razorpay moves the cycle
+ * forward before it is paid, and a charge-now issues a newer invoice at once,
+ * so neither the newest nor an older paid invoice says anything about this
+ * cycle. With no match the answer is undefined, which reads as unpaid.
  * @param invoices - The subscription's invoices.
  * @param currentStart - The cycle start in unix seconds, if any.
- * @returns The invoice, or undefined when there is none.
+ * @returns The invoice, or undefined when no invoice belongs to the cycle.
  */
 function currentCycleInvoice(
   invoices: JsonRecord[],
   currentStart: unknown
 ): JsonRecord | undefined {
-  const newestFirst = invoices.toSorted(
-    (a, b) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0)
-  )
-  if (typeof currentStart === 'number') {
-    const match = newestFirst.find((invoice) => invoice.billing_start === currentStart)
-    if (match !== undefined) return match
-  }
-  return newestFirst[0]
+  if (typeof currentStart !== 'number') return undefined
+  return invoices.find((invoice) => invoice.billing_start === currentStart)
 }
 
 /**
@@ -380,13 +375,15 @@ export class RazorpayProvider implements BillingProviderClient {
   }
 
   /**
-   * Map a subscription after reading whether its current cycle is paid.
+   * Map a subscription, reading whether its current cycle is paid only while
+   * it is `active`: every other status reads unpaid without an invoice call.
    * @param raw - The parsed subscription.
    * @returns The subscription.
    */
   async #withInvoiceState(raw: unknown): Promise<ProviderSubscription> {
     const record = asRecord(raw)
     const unchecked = this.#toSubscription(raw, false)
+    if (unchecked.status !== 'active') return unchecked
     const invoice = currentCycleInvoice(
       await this.#recentInvoices(unchecked.id),
       record.current_start
