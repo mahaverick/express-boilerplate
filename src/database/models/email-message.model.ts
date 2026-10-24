@@ -24,15 +24,7 @@ import {
   type SenderClass,
 } from '@/constants/email.constants'
 import { FRONTEND_APPS, type FrontendApp } from '@/constants/frontend.constants'
-
-/**
- * Render a fixed, code-defined value list as SQL literals for a CHECK.
- * @param values - The allowed values.
- * @returns The values quoted and comma-separated.
- */
-function sqlValueList(values: readonly string[]): string {
-  return values.map((value) => `'${value}'`).join(', ')
-}
+import { sqlValueList } from '@/utilities/sql-value-list.utilities'
 
 /**
  * The width of `template_key`, equal to `email_logs.template_key`'s

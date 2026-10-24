@@ -35,7 +35,8 @@ export type AuditAccess = (typeof AUDIT_ACCESS_KINDS)[number]
 
 /**
  * The kinds of record an audit entry can point at. `platform` is the
- * platform as a whole (maintenance mode), its id the platform tenant's.
+ * platform as a whole (maintenance mode), its id the platform tenant's;
+ * `plan` is a plan row and `billing` a workspace's billing record.
  */
 export const AUDIT_TARGET_TYPES = [
   'tenant',
@@ -46,6 +47,8 @@ export const AUDIT_TARGET_TYPES = [
   'email_message',
   'email_suppression',
   'platform',
+  'plan',
+  'billing',
 ] as const
 
 /**

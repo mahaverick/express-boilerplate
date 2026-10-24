@@ -353,6 +353,8 @@ describe('audit value sets', () => {
       'email_message',
       'email_suppression',
       'platform',
+      'plan',
+      'billing',
     ])
   })
 

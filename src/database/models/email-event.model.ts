@@ -15,15 +15,7 @@ import {
   type EmailEventType,
 } from '@/constants/email.constants'
 import { emailMessageModel } from '@/database/models/email-message.model'
-
-/**
- * Render a fixed, code-defined value list as SQL literals for a CHECK.
- * @param values - The allowed values.
- * @returns The values quoted and comma-separated.
- */
-function sqlValueList(values: readonly string[]): string {
-  return values.map((value) => `'${value}'`).join(', ')
-}
+import { sqlValueList } from '@/utilities/sql-value-list.utilities'
 
 /**
  * `EMAIL_DETAIL_PATTERN` as a SQL string literal, outside the CHECK's
