@@ -12,7 +12,7 @@
  * of suspended (cycle end) and archived (now) workspaces are cancelled;
  * grants and upgrade requests lapse; the trial reminders go out (three days
  * before the end, except for a trial of three days or less; on the last day
- * in the workspace's time zone; halfway through a trial of six days or more).
+ * in the workspace's time zone; halfway through a trial longer than six days).
  * Daily: the reconcile queues a sync for every row that holds a subscription,
  * for each running subscription whose notes name a workspace whose row does
  * not hold it, and for each workspace whose webhook event failed in the last

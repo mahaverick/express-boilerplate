@@ -74,7 +74,7 @@ const TRIAL_ENDING_NOTICE_DAYS = 3
 const TRIAL_ENDING_NOTICE_MS = TRIAL_ENDING_NOTICE_DAYS * DAY_MS
 
 /**
- * The shortest trial that gets a halfway reminder, in days.
+ * The trial length, in days, that a trial must exceed to get a halfway reminder.
  */
 const MIDPOINT_MIN_TRIAL_DAYS = 6
 
@@ -870,8 +870,10 @@ export class BillingRepository {
 
   /**
    * Claim the halfway reminder of up to `limit` trials of active workspaces:
-   * trials of six days or more, at least half over at `now`, with three days
-   * or more left (the three-day reminder takes over from there).
+   * trials longer than six days, at least half over at `now`, with three
+   * days or more left (the three-day reminder takes over from there). A
+   * six-day trial's halfway point is its three-day point, so it gets only
+   * the three-day reminder.
    * @param now - The run's time.
    * @param limit - The most rows to claim.
    * @param tx - The open transaction; the claim holds until it ends.
@@ -890,7 +892,7 @@ export class BillingRepository {
         eq(tenantBillingModel.state, 'trialing'),
         isNotNull(trialStartedAt),
         gte(trialEndsAt, noticeFrom),
-        sql`${trialEndsAt} - ${trialStartedAt} >= make_interval(days => ${MIDPOINT_MIN_TRIAL_DAYS}::int)`,
+        sql`${trialEndsAt} - ${trialStartedAt} > make_interval(days => ${MIDPOINT_MIN_TRIAL_DAYS}::int)`,
         sql`${at(now)} >= ${trialStartedAt} + (${trialEndsAt} - ${trialStartedAt}) / 2`,
         isWorkspaceActive()
       ) ?? isWorkspaceActive(),

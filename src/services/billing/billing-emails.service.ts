@@ -680,17 +680,19 @@ function logSkipped(tenantId: string, templateKey: string): void {
  * @param row - The claimed row.
  * @param state - The state the reminder is for.
  * @param templateKey - The reminder, for the log.
+ * @param isStillDue - Any further check on the fresh row.
  * @returns The fresh row, or undefined when the reminder is no longer due.
  */
 async function stillDue(
   row: TenantBillingRecord,
   state: TenantBillingRecord['state'],
-  templateKey: EmailTemplateKey
+  templateKey: EmailTemplateKey,
+  isStillDue: (fresh: TenantBillingRecord) => Promise<boolean> = () => Promise.resolve(true)
 ): Promise<TenantBillingRecord | undefined> {
   const fresh = await billingRepository.findByTenantId(row.tenantId)
   const tenant = await tenantRepository.findByIdIncludingDeleted(row.tenantId)
   const isActive = tenant?.lifecycleState === 'active' && tenant.deletedAt === null
-  if (fresh?.state === state && isActive) return fresh
+  if (fresh?.state === state && isActive && (await isStillDue(fresh))) return fresh
   logger.warn('A claimed billing reminder is no longer due', {
     tenantId: row.tenantId,
     templateKey,
@@ -842,12 +844,19 @@ export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Pr
 
 /**
  * Tell the owners and the billing address that a yearly plan renews soon,
- * for how much. Once per period end. Never rejects.
+ * for how much: only while the row is still active, not cancelling and on a
+ * yearly price, on an active workspace. Once per period end. Never rejects.
  * @param row - The claimed row.
  */
 export async function sendRenewalUpcoming(row: TenantBillingRecord): Promise<void> {
   const { tenantId } = row
   try {
+    const due = await stillDue(row, 'active', 'renewal_upcoming', async (fresh) => {
+      if (fresh.cancelAtPeriodEnd || fresh.priceId === null) return false
+      const [price] = await planRepository.findPricesByIds([fresh.priceId])
+      return price?.interval === 'year'
+    })
+    if (due === undefined) return
     const context = await activeContext(tenantId, row.billingEmail)
     if (context === undefined) return
     const [price] = row.priceId === null ? [] : await planRepository.findPricesByIds([row.priceId])
@@ -999,7 +1008,7 @@ export async function sendPayerLeft(
     if (!isLive) return
     const context = await activeContext(tenantId, null)
     if (context === undefined) return
-    const deadline = await keepPaidDeadline(row)
+    const deadline = await keepPaidDeadline(row, leftAt)
     if (deadline === null) {
       logSkipped(tenantId, 'payer_left')
       return
@@ -1036,19 +1045,18 @@ export async function sendPayerLeft(
 }
 
 /**
- * The last day a workspace keeps Paid without a new card: the end of grace
- * when a payment failed or the subscription was paused, else the end of the
- * paid period (a past-due row whose provider still retries has no grace yet).
+ * The last day a workspace keeps Paid without a new card. Past due: the end
+ * of grace after a halt or pause, or, while the provider still retries and
+ * no grace has started, a full grace from `now` (the stored period end is
+ * the last paid one, already over). Otherwise the end of the paid period.
  * @param row - The workspace's billing row.
- * @returns The deadline, or null when the row has neither.
+ * @param now - When the payer left.
+ * @returns The deadline, or null when an active row has no period end.
  */
-async function keepPaidDeadline(row: TenantBillingRecord): Promise<Date | null> {
-  if (row.state === 'past_due') {
-    const settings = await planRepository.getSettings()
-    const graceEnd = graceEndsAt(row, settings.pastDueGraceDays)
-    if (graceEnd !== null) return graceEnd
-  }
-  return row.currentPeriodEnd
+async function keepPaidDeadline(row: TenantBillingRecord, now: Date): Promise<Date | null> {
+  if (row.state !== 'past_due') return row.currentPeriodEnd
+  const { pastDueGraceDays } = await planRepository.getSettings()
+  return graceEndsAt(row, pastDueGraceDays) ?? new Date(now.getTime() + pastDueGraceDays * DAY_MS)
 }
 
 /**

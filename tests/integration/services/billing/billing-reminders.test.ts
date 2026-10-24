@@ -10,6 +10,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import {
+  sendRenewalUpcoming,
   sendTrialEnding,
   sendTrialEndsToday,
   sendTrialMidpoint,
@@ -346,10 +347,23 @@ describe('trial reminders', () => {
     expect(await billingColumn(tenantId, 'trialMidpointSentAt')).toBeNull()
   })
 
-  it('sends the halfway reminder to a trial of exactly six days at its halfway point', async () => {
+  it('gives a trial of exactly six days the three-day reminder and no halfway one', async () => {
     const { tenantId } = await trial(
       new Date(NOW.getTime() - 3 * DAY),
       new Date(NOW.getTime() + 3 * DAY)
+    )
+
+    await runFrequentBilling(NOW)
+
+    expect(await mailsOf(tenantId, 'trial_midpoint')).toStrictEqual([])
+    expect(await billingColumn(tenantId, 'trialMidpointSentAt')).toBeNull()
+    expect(await noticesOf(tenantId)).toHaveLength(1)
+  })
+
+  it('sends the halfway reminder to a trial an hour longer than six days at its halfway point', async () => {
+    const { tenantId } = await trial(
+      new Date(NOW.getTime() - 3 * DAY - HOUR / 2),
+      new Date(NOW.getTime() + 3 * DAY + HOUR / 2)
     )
 
     await runFrequentBilling(NOW)
@@ -457,6 +471,34 @@ describe('the yearly renewal reminder', () => {
         .map((mail) => mail.variables['renewsOn'])
         .toSorted((a, b) => String(a).localeCompare(String(b)))
     ).toStrictEqual(['6 November 2030', '6 November 2030', '6 November 2031', '6 November 2031'])
+  })
+
+  it('sends nothing for a claimed renewal that is cancelling, monthly or no longer active, and logs it', async () => {
+    const warn = vi.spyOn(logger, 'warn')
+    const periodEnd = new Date(NOW.getTime() + 5 * DAY)
+    const cancelling = await paying('year', periodEnd)
+    const monthly = await paying('year', periodEnd)
+    const lapsed = await paying('year', periodEnd)
+    const suspended = await paying('year', periodEnd)
+    const claimed = await Promise.all(
+      [cancelling, monthly, lapsed, suspended].map(({ tenantId }) => readBilling(tenantId))
+    )
+    await setBilling(cancelling.tenantId, { cancelAtPeriodEnd: true })
+    await setBilling(monthly.tenantId, { priceId: plans.monthPriceId })
+    await setBilling(lapsed.tenantId, { state: 'free', planId: plans.freeId, priceId: null })
+    await setLifecycle(suspended.tenantId, 'suspended')
+
+    for (const row of claimed) await sendRenewalUpcoming(row)
+
+    const ids = [cancelling, monthly, lapsed, suspended].map(({ tenantId }) => tenantId)
+    for (const tenantId of ids) expect(await allMailOf(tenantId)).toStrictEqual([])
+    const skipped = warn.mock.calls.filter(
+      ([message]) => message === 'A claimed billing reminder is no longer due'
+    )
+    expect(skipped.map(([, meta]) => meta)).toStrictEqual(
+      ids.map((tenantId) => ({ tenantId, templateKey: 'renewal_upcoming' }))
+    )
+    warn.mockRestore()
   })
 
   it('sends no renewal reminder for a monthly plan, a cancelling plan, or a renewal further out', async () => {

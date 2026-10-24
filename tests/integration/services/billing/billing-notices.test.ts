@@ -14,6 +14,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import type { NotificationJobData } from '@/jobs/notification.job'
+import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { initialBillingFor } from '@/services/billing/trial.service'
@@ -32,6 +33,7 @@ import { hashToken } from '@/services/session.service'
 import { accept, confirmInvitation, verifyInvitation } from '@/services/tenant-invitation.service'
 import { leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import { createTenant } from '@/services/tenant.service'
+import { formatDateInZone } from '@/utilities/date-text.utilities'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { processNotificationJob } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
@@ -60,6 +62,7 @@ vi.mock('@/services/billing/billing-provider.service', async () => {
 
 const tenantRepository = new TenantRepository()
 const invitationRepository = new TenantInvitationRepository()
+const planRepository = new PlanRepository()
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -445,6 +448,33 @@ describe('the payer left notice', () => {
     // Seven days' grace after the halt.
     expect(job?.data.email?.variables).toMatchObject({ periodEndsOn: '8 January 2030' })
     expect(job?.data.body).toContain('Add your card by 8 January 2030 to keep Paid.')
+  })
+
+  it('gives grace from today as the deadline when the payment is past due but not yet halted', async () => {
+    const { tenant, owner } = await workspace({ firstName: 'Pat' })
+    await sql`update tenant_settings set timezone = 'Asia/Kolkata' where tenant_id = ${tenant.id}`
+    await addMembers(tenant.id, 'owner', 1)
+    await payingBy(tenant.id, owner)
+    // The last paid period ended yesterday; the provider is still retrying.
+    await setBilling(tenant.id, {
+      state: 'past_due',
+      pastDueSince: new Date(Date.now() - DAY_MS),
+      currentPeriodEnd: new Date(Date.now() - DAY_MS),
+    })
+
+    const before = new Date()
+    await leaveTenant({ userId: owner.id }, tenant.id)
+    const after = new Date()
+
+    const [job] = await noticeJobsOf(tenant.id)
+    const { pastDueGraceDays } = await planRepository.getSettings()
+    const deadline = pastDueGraceDays * DAY_MS
+    // Either side of the leave, in case it crossed midnight in Kolkata.
+    const expected = [before, after].map((at) =>
+      formatDateInZone(new Date(at.getTime() + deadline), 'Asia/Kolkata')
+    )
+    const variables = job?.data.email?.variables as Record<string, string> | undefined
+    expect(expected).toContain(variables?.['periodEndsOn'])
   })
 
   it('tells the owners once when a payer who already left is deleted', async () => {
