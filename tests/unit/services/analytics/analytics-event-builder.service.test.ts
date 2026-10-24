@@ -21,6 +21,7 @@ import {
   type AuditAccess,
   type AuditAction,
 } from '@/constants/audit.constants'
+import { BILLING_INTERVALS } from '@/constants/billing.constants'
 import { EMAIL_EVENT_TYPES } from '@/constants/email.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
@@ -583,6 +584,7 @@ const CANDIDATES: readonly unknown[] = [
   ...MEMBERSHIP_ROLES,
   ...MAINTENANCE_MODES,
   ...EMAIL_TEMPLATE_KEYS,
+  ...BILLING_INTERVALS,
   'react',
   'apex',
   true,

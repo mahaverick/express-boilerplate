@@ -283,6 +283,13 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   read('/api/v1/tenants/:slug/beta'),
   read('/api/v1/tenants/:slug/entitlements'),
   read('/api/v1/tenants/:slug/insights'),
+  read('/api/v1/tenants/:slug/billing'),
+  write('POST', '/api/v1/tenants/:slug/billing/checkout'),
+  write('POST', '/api/v1/tenants/:slug/billing/checkout/confirm'),
+  write('POST', '/api/v1/tenants/:slug/billing/interval'),
+  write('POST', '/api/v1/tenants/:slug/billing/payment-method'),
+  write('POST', '/api/v1/tenants/:slug/billing/cancel'),
+  read('/api/v1/tenants/:slug/billing/invoices'),
   // Token lookup sent as POST to keep the token out of the URL; it writes nothing.
   readOnlyWrite('POST', '/api/v1/invitations/preview'),
   write('POST', '/api/v1/invitations/accept'),

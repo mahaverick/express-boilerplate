@@ -199,7 +199,10 @@ export function createTenantRouter(): Router {
     requireFlag('example_beta_page'),
     flagsController.getExampleBeta
   )
-  addBillingRoutes(router)
+  addBillingRoutes(router, {
+    billingWrite: createRateLimiter(RATE_LIMITS.billingWrite),
+    billingRead: createRateLimiter(RATE_LIMITS.billingRead),
+  })
 
   return router
 }

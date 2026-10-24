@@ -113,3 +113,59 @@ export const RAZORPAY_API_BASE_URL = 'https://api.razorpay.com/v1'
  * retryable timeout.
  */
 export const RAZORPAY_API_TIMEOUT_MS = 10_000
+
+/**
+ * How many cycles a checkout's subscription bills before it completes, per
+ * interval: five years either way, below every cap the provider documents.
+ */
+export const CHECKOUT_TOTAL_COUNT = { month: 60, year: 5 } as const satisfies Record<
+  BillingInterval,
+  number
+>
+
+/**
+ * How long an unpaid checkout's subscription lives before the provider expires it.
+ */
+export const CHECKOUT_EXPIRY_MS = 60 * 60 * 1000
+
+/**
+ * How long a stored unpaid checkout must still have before it is handed to
+ * the browser again, so a payer is never sent to one that lapses mid-payment.
+ */
+export const CHECKOUT_REUSE_MIN_REMAINING_MS = 10 * 60 * 1000
+
+/**
+ * How many invoices one page of a workspace's invoice list holds.
+ */
+export const INVOICE_PAGE_SIZE = 20
+
+/**
+ * Error code: a checkout while the workspace already has a live subscription.
+ */
+export const SUBSCRIPTION_EXISTS_CODE = 'SUBSCRIPTION_EXISTS'
+
+/**
+ * Error code: a cancel, interval switch or card change with no subscription to act on.
+ */
+export const NO_SUBSCRIPTION_CODE = 'NO_SUBSCRIPTION'
+
+/**
+ * Error code: an interval switch to the interval already billed.
+ */
+export const SAME_INTERVAL_CODE = 'SAME_INTERVAL'
+
+/**
+ * Error code: a checkout confirm whose ids or signature do not match the
+ * workspace's stored checkout.
+ */
+export const CHECKOUT_MISMATCH_CODE = 'CHECKOUT_MISMATCH'
+
+/**
+ * Error code: the payment provider did not answer, so nothing changed.
+ */
+export const PAYMENT_PROVIDER_UNAVAILABLE_CODE = 'PAYMENT_PROVIDER_UNAVAILABLE'
+
+/**
+ * Error code: the billing record kept changing under a write, so nothing changed.
+ */
+export const BILLING_BUSY_CODE = 'BILLING_BUSY'

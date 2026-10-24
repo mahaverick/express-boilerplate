@@ -56,6 +56,7 @@ interface FakeSubscriptionRecord {
   notes: Record<string, string>
   paidCount: number
   customerId: string | null
+  expireBy: number | null
   latestInvoicePaid: boolean
   cancelAtCycleEnd: boolean
   createdAt: number
@@ -124,6 +125,7 @@ function toSubscription(record: FakeSubscriptionRecord): ProviderSubscription {
     notes: { ...record.notes },
     paidCount: record.paidCount,
     customerId: record.customerId,
+    expireBy: dateOrNull(record.expireBy),
     hasScheduledChanges: false,
     latestInvoicePaid: record.status === 'active' && record.latestInvoicePaid,
   }
@@ -232,6 +234,7 @@ export class FakeBillingProvider implements BillingProviderClient {
       notes: { ...input.notes },
       paidCount: 0,
       customerId: null,
+      expireBy: input.expireBy.getTime(),
       latestInvoicePaid: false,
       cancelAtCycleEnd: false,
       createdAt: Date.now(),

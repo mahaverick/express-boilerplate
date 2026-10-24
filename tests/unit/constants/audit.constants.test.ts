@@ -72,6 +72,10 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     emailDomains: ['example.test', 'acme.example'],
     messageIds: ['message-1', 'message-2'],
   },
+  'billing.checkout_started': { interval: 'month' },
+  'billing.cancel_scheduled': {},
+  'billing.interval_switch_scheduled': { interval: 'year' },
+  'billing.card_change_started': {},
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
     from: 'off',
@@ -94,6 +98,10 @@ describe('AUDIT_ACTIONS', () => {
     expect(ACTIONS.toSorted((a, b) => a.localeCompare(b))).toEqual([
       'auth.step_up_confirmed',
       'auth.step_up_refused',
+      'billing.cancel_scheduled',
+      'billing.card_change_started',
+      'billing.checkout_started',
+      'billing.interval_switch_scheduled',
       'email.resent',
       'email.suppression_lifted',
       'invitation.accepted',
@@ -137,6 +145,13 @@ describe('AUDIT_ACTIONS', () => {
     expect(action).toMatch(/^[a-z]+(\.[a-z_]+)+$/)
     expect(action.length).toBeLessThanOrEqual(64)
   })
+
+  it.each(['billing.checkout_started', 'billing.interval_switch_scheduled'] as const)(
+    '%s accepts only a billing interval',
+    (action) => {
+      expect(AUDIT_ACTIONS[action].metadata.safeParse({ interval: 'week' }).success).toBe(false)
+    }
+  )
 
   it.each(ACTIONS)('%s targets a known target type', (action) => {
     expect(AUDIT_TARGET_TYPES).toContain(AUDIT_ACTIONS[action].target)

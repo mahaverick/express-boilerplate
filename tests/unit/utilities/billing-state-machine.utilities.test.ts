@@ -96,6 +96,7 @@ function sub(
     notes: { tenantId: TENANT_ID, priceId: PRICE_MONTH },
     paidCount: isActive ? 1 : 0,
     customerId: status === 'created' ? null : 'cust_FAKE1',
+    expireBy: null,
     hasScheduledChanges: false,
     latestInvoicePaid: isActive,
     ...overrides,

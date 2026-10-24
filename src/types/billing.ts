@@ -219,6 +219,10 @@ export interface ProviderSubscription {
    */
   customerId: string | null
   /**
+   * When an unpaid checkout lapses, or null when it never does.
+   */
+  expireBy: Date | null
+  /**
    * Whether a plan or quantity change is scheduled.
    */
   hasScheduledChanges: boolean

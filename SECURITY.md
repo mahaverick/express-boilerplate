@@ -1079,7 +1079,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 27 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 29 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -1139,6 +1139,12 @@ The auth limiters each answer a specific threat:
 - **Refresh and logout** are volume protection (300 in 5 minutes per IP): a
   refresh token is 256 random bits. Logout's budget is generous because a 429
   leaves the cookie uncleared.
+
+The billing limiters count per user and guard the payment provider, whose own
+rate limit every workspace shares: one `billing-write` budget across a
+workspace owner's checkout, confirm, interval switch, card change and cancel
+(10 a minute), and `billing-read` on the invoice list, which reads the
+provider on every page (30 a minute). The billing read itself has none.
 
 There is no global limiter: most authenticated reads mount none. Notification
 streams are capped per process: `SSE_MAX_STREAMS_PER_USER` (default 5) answers
@@ -1209,7 +1215,7 @@ reload and the queue pause.
 | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                                                                                                  |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                                                                                         |
-| Global rate limiting                                  | **Partial**         | 27 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
+| Global rate limiting                                  | **Partial**         | 29 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`) and the passkeys a claim clears (`user.passkeys_cleared_on_claim`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                                                                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                                                                                         |

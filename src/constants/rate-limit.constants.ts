@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 27 limiters in `RATE_LIMITS`.
+ * The names of the 29 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -82,6 +82,8 @@ export type RateLimitName =
   | 'passkeySignInOptions'
   | 'passkeySignIn'
   | 'passkeyStepUp'
+  | 'billingWrite'
+  | 'billingRead'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -159,7 +161,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 27 rate-limit specs this API enforces, each commented with the reason
+ * The 29 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -521,5 +523,30 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 10,
     keyBy: 'user',
     unit: 'attempts',
+  },
+  /**
+   * Per owner, one budget across every billing write (checkout, its confirm,
+   * the interval switch, the card change and the cancel). Each can call the
+   * payment provider, whose own rate limit is shared by every workspace, so
+   * this is tighter than `authenticatedWrite`; 10 a minute covers a person
+   * retrying a checkout a few times.
+   */
+  billingWrite: {
+    name: 'billing-write',
+    windowMs: 60_000,
+    limit: 10,
+    keyBy: 'user',
+    unit: 'requests',
+  },
+  /**
+   * Per owner, the invoice list, which reads the payment provider on every
+   * page. 30 a minute covers paging through years of invoices.
+   */
+  billingRead: {
+    name: 'billing-read',
+    windowMs: 60_000,
+    limit: 30,
+    keyBy: 'user',
+    unit: 'requests',
   },
 }

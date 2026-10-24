@@ -3,6 +3,7 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
+import { BILLING_INTERVALS } from '@/constants/billing.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
@@ -250,6 +251,18 @@ export const AUDIT_ACTIONS = {
       messageIds: z.array(id).max(MAX_REMINDER_RECIPIENTS),
     }),
   },
+  // An owner started a checkout for Paid: a new subscription, or a resubscribe while cancelling.
+  'billing.checkout_started': {
+    target: 'billing',
+    metadata: z.strictObject({ interval: z.enum(BILLING_INTERVALS) }),
+  },
+  // An owner cancelled Paid: at the period end, or at once for a first charge still to come.
+  'billing.cancel_scheduled': { target: 'billing', metadata: z.strictObject({}) },
+  'billing.interval_switch_scheduled': {
+    target: 'billing',
+    metadata: z.strictObject({ interval: z.enum(BILLING_INTERVALS) }),
+  },
+  'billing.card_change_started': { target: 'billing', metadata: z.strictObject({}) },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {
     target: 'user',

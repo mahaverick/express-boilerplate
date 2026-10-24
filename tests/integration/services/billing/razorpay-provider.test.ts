@@ -166,6 +166,7 @@ describe('fetchSubscription', () => {
       notes: { tenantId: 'probe-t2', appEnv: 'local', priceId: 'probe-p1' },
       paidCount: 1,
       customerId: 'cust_FIXTURE',
+      expireBy: new Date(1_792_815_671_000),
       hasScheduledChanges: false,
       latestInvoicePaid: true,
     })

@@ -9,6 +9,7 @@
  */
 import type { BillingProviderConfig } from '@/configs/billing.config'
 import {
+  INVOICE_PAGE_SIZE,
   RAZORPAY_API_BASE_URL,
   RAZORPAY_API_TIMEOUT_MS,
   type BillingProviderMode,
@@ -67,11 +68,6 @@ const SUBSCRIPTION_PAGE_SIZE = 100
  * The most subscription pages one reconcile sweep reads.
  */
 const MAX_SUBSCRIPTION_PAGES = 100
-
-/**
- * How many invoices one owner page reads.
- */
-const INVOICE_PAGE_SIZE = 20
 
 /**
  * How many of a subscription's newest invoices the paid check reads.
@@ -369,6 +365,7 @@ export class RazorpayProvider implements BillingProviderClient {
       notes: notesFrom(record.notes),
       paidCount: typeof record.paid_count === 'number' ? record.paid_count : 0,
       customerId: stringOrNull(record.customer_id),
+      expireBy: dateFrom(record.expire_by),
       hasScheduledChanges: record.has_scheduled_changes === true,
       latestInvoicePaid: isLatestInvoicePaid,
     }
