@@ -945,9 +945,11 @@ claim again, since the sync released it when it adopted the checkout: when
 another job took the claim first, that job cancels and this one does
 nothing, so no cancel goes out twice. A sync that has an archived workspace
 adopt a paid checkout or a found subscription (it had no running one, or the
-checkout would be refunded as a duplicate) cancels it now and refunds it,
-with one staff alert naming it: nothing an archived workspace can use was
-paid for. The claim is released when the workspace is
+checkout would be refunded as a duplicate) cancels it now and refunds it:
+nothing an archived workspace can use was bought. One staff alert follows,
+raised once the refund's outcome is known and worded for it (refunded,
+nothing paid, refunded in part, or a cancel or refund that failed and what
+staff do at the provider). The claim is released when the workspace is
 reactivated, when a sync gives a suspended or archived workspace a new
 current subscription (an adoption or a handover) or an id it did not hold,
 which also queues the prompt cancel, and once a day for a cancel that failed and alerted
@@ -1252,7 +1254,7 @@ refused on.
 | `subscription_interval_change_scheduled`                              | `emitBillingDiff`: the next subscription is authenticated on the other interval                                                                                                                                                                       | the owner who started the switch                                                                   |
 | `downgraded_to_free { downgrade_cause }`                              | `emitBillingDiff`: the row becomes `free`; `trial_ended`, `payment_failed`, `cancelled` (an owner's own cancel too, of a past-due subscription included), `staff` or `lifecycle`                                                                      | the payer; for `trial_ended`, as `trial_ended`                                                     |
 | `payer_left`                                                          | `sendPayerLeft`, while a subscription runs                                                                                                                                                                                                            | the payer (system for a deleted account)                                                           |
-| `duplicate_subscription_refunded`                                     | the sync's refund of a duplicate subscription                                                                                                                                                                                                         | the payer                                                                                          |
+| `duplicate_subscription_refunded { refund_cause }`                    | the sync's refund of a duplicate subscription (`refund_cause: duplicate`), or of one an archived workspace adopted (`archived`); only when a payment was refunded                                                                                     | the payer                                                                                          |
 | `billing_reconciled { field }`                                        | `emitBillingDiff` from the reconcile: the first column it repaired                                                                                                                                                                                    | the payer                                                                                          |
 | `dispute_opened`                                                      | the dispute webhook, when the tenant's dispute flag turns on                                                                                                                                                                                          | the payer                                                                                          |
 

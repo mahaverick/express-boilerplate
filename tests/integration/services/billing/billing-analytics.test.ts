@@ -804,8 +804,12 @@ describe('event times fixed by stable data', () => {
     const sendAll = async (now: Date): Promise<void> => {
       await trackTrialReminder(trialRow, 'trial_ending', now)
       await trackCheckoutConfirmed(tenantId, owner.id, sub)
-      await trackProviderEvent(row, 'dispute_opened', 'disp_FAKEstable')
-      await trackProviderEvent(row, 'duplicate_subscription_refunded', 'sub_FAKEdup')
+      await trackProviderEvent(row, { type: 'dispute_opened' }, 'disp_FAKEstable')
+      await trackProviderEvent(
+        row,
+        { type: 'duplicate_subscription_refunded', refundCause: 'duplicate' },
+        'sub_FAKEdup'
+      )
     }
     await sendAll(new Date())
     const first = await stampsOf(tenantId)

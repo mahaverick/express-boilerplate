@@ -34,7 +34,15 @@ export type SyncAction =
   | { kind: 'cancel_now'; subscriptionId: string }
   | { kind: 'cancel_current_at_cycle_end'; subscriptionId: string }
   | { kind: 'promote_next' }
-  | { kind: 'refund_duplicate'; subscriptionId: string }
+  | {
+      kind: 'refund_duplicate'
+      subscriptionId: string
+      /**
+       * `archived` for a subscription an archived workspace adopted, which it
+       * can't use; a duplicate otherwise.
+       */
+      cause?: 'archived'
+    }
   | {
       kind: 'alert'
       alert: BillingAlertKind

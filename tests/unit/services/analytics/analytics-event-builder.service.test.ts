@@ -888,7 +888,7 @@ const BILLING_DETAILS: readonly BillingEventDetail[] = [
   { type: 'subscription_interval_change_scheduled' },
   { type: 'downgraded_to_free', downgradeCause: 'payment_failed' },
   { type: 'payer_left' },
-  { type: 'duplicate_subscription_refunded' },
+  { type: 'duplicate_subscription_refunded', refundCause: 'archived' },
   { type: 'billing_reconciled', field: 'state' },
   { type: 'dispute_opened' },
 ]
@@ -991,6 +991,12 @@ describe('buildProductEvent for a billing event', () => {
     expect(failure.properties).toMatchObject({ failure_code: 'paused' })
     expect(downgrade.properties).not.toHaveProperty('reason')
     expect(failure.properties).not.toHaveProperty('reason')
+    const refunded = buildProductEvent(
+      billingEvent({ type: 'duplicate_subscription_refunded', refundCause: 'archived' }),
+      {}
+    )
+    expect(refunded.properties).toMatchObject({ refund_cause: 'archived' })
+    expect(refunded.properties).not.toHaveProperty('reason')
   })
 
   it.each(BILLING_DETAILS.map((detail) => [detail.type, detail] as const))(

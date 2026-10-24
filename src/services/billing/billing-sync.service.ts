@@ -360,7 +360,7 @@ async function queueLifecycleCancel(tenantId: string): Promise<void> {
  * hold, the lifecycle cancel claim is released in the same write, so the
  * new subscription is cancelled too. An archived workspace that adopts a
  * paid checkout or a found subscription has it cancelled now and refunded
- * after the commit, with one staff alert naming it.
+ * after the commit, with one staff alert for the refund's outcome.
  * @param provider - The payment provider.
  * @param run - The sync call.
  * @param readVersion - The version the fetch was based on.
@@ -436,15 +436,8 @@ async function commitSync(
       adopted !== locked.providerSubscriptionId &&
       adopted !== locked.nextSubscriptionId
     ) {
-      actions.push(
-        { kind: 'refund_duplicate', subscriptionId: adopted },
-        {
-          kind: 'alert',
-          alert: 'reconcile_repair',
-          message: `Subscription ${adopted} was paid for an archived workspace, so it was cancelled now and refunded.`,
-          subscriptionId: adopted,
-        }
-      )
+      // One alert, raised once the refund's outcome is known (`refundDuplicate`).
+      actions.push({ kind: 'refund_duplicate', subscriptionId: adopted, cause: 'archived' })
     }
 
     const after = await billingRepository.updateVersioned(run.tenantId, locked.version, patch, tx)
@@ -593,73 +586,122 @@ async function cancelAtCycleEnd(
 }
 
 /**
- * Cancel a duplicate subscription now and refund its latest payment in full.
- * Safe to run twice at once: a cancel that fails because the subscription has
- * already ended is not an error, and the provider refunds a payment once, so
- * only the caller that refunded raises the refund alert. A payment refunded
- * only in part is alerted, so staff refund the rest. A refund is reported
- * to analytics, timed at the sync's write that found the duplicate.
+ * The staff alert for each outcome of cancelling and refunding a
+ * subscription, by why it is refunded: a duplicate, or one an archived
+ * workspace adopted.
+ */
+const REFUND_ALERTS = {
+  duplicate: {
+    cancelFailed: (id: string) =>
+      `Could not cancel duplicate subscription ${id}. Cancel and refund it at the provider.`,
+    refundFailed: (id: string) =>
+      `Cancelled duplicate subscription ${id}, but its refund did not go through. Refund it at the provider.`,
+    refunded: (id: string, amount: string, refundId: string) =>
+      `Cancelled duplicate subscription ${id} and refunded ${amount} paise in ${refundId}.`,
+    nothingPaid: (id: string) =>
+      `Cancelled duplicate subscription ${id}. It had no payment to refund.`,
+    partlyRefunded: (id: string) =>
+      `Duplicate subscription ${id} is only partly refunded. Refund the rest at the provider.`,
+  },
+  archived: {
+    cancelFailed: (id: string) =>
+      `Could not cancel subscription ${id}, which an archived workspace adopted. Cancel and refund it at the provider.`,
+    refundFailed: (id: string) =>
+      `Cancelled subscription ${id}, which an archived workspace adopted, but its refund did not go through. Refund it at the provider.`,
+    refunded: (id: string, amount: string, refundId: string) =>
+      `Cancelled subscription ${id}, which an archived workspace adopted, and refunded ${amount} paise in ${refundId}.`,
+    nothingPaid: (id: string) =>
+      `Cancelled subscription ${id}, which an archived workspace adopted. It had no payment to refund.`,
+    partlyRefunded: (id: string) =>
+      `Subscription ${id}, which an archived workspace adopted, is only partly refunded. Refund the rest at the provider.`,
+  },
+} as const
+
+/**
+ * Cancel a subscription now and refund its latest payment in full: a
+ * duplicate, or one an archived workspace adopted. Safe to run twice at
+ * once: a cancel that fails because the subscription has already ended is
+ * not an error, and the provider refunds a payment once, so only the caller
+ * that refunded raises the refund alert. Each outcome raises one alert,
+ * worded for it and for the cause: refunded, nothing paid, refunded in part
+ * (staff refund the rest), or a cancel or refund that failed (staff act at
+ * the provider). Only a refund is reported to analytics, with its cause,
+ * timed at the sync's write that found it.
  * @param provider - The payment provider.
  * @param reported - The workspace's row as the sync's write left it.
- * @param subscriptionId - The duplicate.
+ * @param subscriptionId - The subscription.
+ * @param cause - Why it is refunded.
  */
 async function refundDuplicate(
   provider: BillingProviderClient,
   reported: TenantBillingRecord,
-  subscriptionId: string
+  subscriptionId: string,
+  cause: 'duplicate' | 'archived'
 ): Promise<void> {
   const { tenantId } = reported
+  const alerts = REFUND_ALERTS[cause]
   try {
     await provider.cancelSubscription(subscriptionId, false)
   } catch (error) {
     if ((await endedSubscription(provider, subscriptionId)) === undefined) {
-      logger.error('Could not cancel a duplicate subscription', { error, tenantId, subscriptionId })
+      logger.error('Could not cancel a subscription to refund', {
+        error,
+        tenantId,
+        subscriptionId,
+        cause,
+      })
       await insertAlert(tenantId, {
         kind: 'reconcile_repair',
-        message: `Could not cancel duplicate subscription ${subscriptionId}. Cancel and refund it at the provider.`,
+        message: alerts.cancelFailed(subscriptionId),
         subscriptionId,
       })
       return
     }
-    logger.debug('A duplicate subscription had already ended', { tenantId, subscriptionId })
+    logger.debug('A subscription to refund had already ended', { tenantId, subscriptionId })
   }
   let outcome: ProviderRefundOutcome
   try {
     outcome = await provider.refundLatestPayment(subscriptionId)
   } catch (error) {
-    logger.error('Could not refund a duplicate subscription', { error, tenantId, subscriptionId })
+    logger.error('Could not refund a subscription', { error, tenantId, subscriptionId, cause })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
-      message: `Cancelled duplicate subscription ${subscriptionId}, but its refund did not go through. Refund it at the provider.`,
+      message: alerts.refundFailed(subscriptionId),
       subscriptionId,
     })
     return
   }
+  // A duplicate's outcome is a duplicate_refunded alert; an archived workspace's is a repair note.
+  const doneKind = cause === 'duplicate' ? 'duplicate_refunded' : 'reconcile_repair'
   switch (outcome.status) {
     case 'refunded': {
       await insertAlert(tenantId, {
-        kind: 'duplicate_refunded',
-        message: `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(outcome.amountMinor)} paise in ${outcome.refundId}.`,
+        kind: doneKind,
+        message: alerts.refunded(subscriptionId, String(outcome.amountMinor), outcome.refundId),
       })
-      await trackProviderEvent(reported, 'duplicate_subscription_refunded', subscriptionId)
+      await trackProviderEvent(
+        reported,
+        { type: 'duplicate_subscription_refunded', refundCause: cause },
+        subscriptionId
+      )
       return
     }
     case 'nothing_paid': {
       await insertAlert(tenantId, {
-        kind: 'duplicate_refunded',
-        message: `Cancelled duplicate subscription ${subscriptionId}. It had no payment to refund.`,
+        kind: doneKind,
+        message: alerts.nothingPaid(subscriptionId),
         subscriptionId,
       })
       return
     }
     case 'already_refunded': {
-      logger.debug('A duplicate subscription was refunded already', { tenantId, subscriptionId })
+      logger.debug('A subscription was refunded already', { tenantId, subscriptionId })
       return
     }
     case 'partly_refunded': {
       await insertAlert(tenantId, {
         kind: 'reconcile_repair',
-        message: `Duplicate subscription ${subscriptionId} is only partly refunded. Refund the rest at the provider.`,
+        message: alerts.partlyRefunded(subscriptionId),
         subscriptionId,
       })
       break
@@ -714,7 +756,12 @@ async function runFollowUps(
         break
       }
       case 'refund_duplicate': {
-        await refundDuplicate(provider, committed.after, action.subscriptionId)
+        await refundDuplicate(
+          provider,
+          committed.after,
+          action.subscriptionId,
+          action.cause ?? 'duplicate'
+        )
         break
       }
       case 'promote_next': {

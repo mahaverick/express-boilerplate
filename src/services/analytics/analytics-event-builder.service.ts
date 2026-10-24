@@ -406,6 +406,9 @@ function billingOwnProperties(event: BillingDomainEvent): Record<string, unknown
     case 'billing_reconciled': {
       return { field: event.field }
     }
+    case 'duplicate_subscription_refunded': {
+      return { refund_cause: event.refundCause }
+    }
     default: {
       return {}
     }

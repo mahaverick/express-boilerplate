@@ -767,16 +767,19 @@ export async function trackPayerLeft(
  * workspace's row, attributed to the payer (or the checkout's starter). Once
  * per stamp, timed at that write.
  * @param row - The row the write left.
- * @param type - The event.
+ * @param detail - The event and its fields.
  * @param stamp - What fixes it: the subscription or dispute id.
  */
 export async function trackProviderEvent(
   row: TenantBillingRecord,
-  type: 'duplicate_subscription_refunded' | 'dispute_opened',
+  detail:
+    | { type: 'duplicate_subscription_refunded'; refundCause: 'duplicate' | 'archived' }
+    | { type: 'dispute_opened' },
   stamp: string
 ): Promise<void> {
   if (!isAnalyticsEnabled()) return
   const { tenantId } = row
+  const { type } = detail
   try {
     await emit(
       {
@@ -787,7 +790,7 @@ export async function trackProviderEvent(
         dedupeKey: `${tenantId}:${type}:${stamp}`,
         at: row.updatedAt,
       },
-      { type }
+      detail
     )
   } catch (error) {
     logFailure(error, tenantId, type)

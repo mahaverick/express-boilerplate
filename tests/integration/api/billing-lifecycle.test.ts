@@ -482,10 +482,41 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(cancels).toStrictEqual([[pending, false]])
     expect(refund.mock.calls).toStrictEqual([[pending]])
     expect(await subscriptionStatus(pending)).toBe('cancelled')
-    const alerts = await sql<{ message: string }[]>`
-      select message from billing_alerts where tenant_id = ${tenant.id} and kind = 'reconcile_repair'`
-    expect(alerts.map((alert) => alert.message)).toStrictEqual([
-      `Subscription ${pending} was paid for an archived workspace, so it was cancelled now and refunded.`,
+    const alerts = await sql<{ kind: string; message: string }[]>`
+      select kind, message from billing_alerts where tenant_id = ${tenant.id}`
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]?.kind).toBe('reconcile_repair')
+    expect(alerts[0]?.message).toMatch(
+      new RegExp(
+        `^Cancelled subscription ${pending}, which an archived workspace adopted, and refunded \\d+ paise in rfnd_\\w+\\.$`
+      )
+    )
+  })
+
+  it('raises one alert telling staff to refund at the provider when the refund for an archived workspace fails', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    vi.spyOn(fake, 'refundLatestPayment').mockRejectedValue(
+      new ProviderError(`POST /payments/x/refund`, 502)
+    )
+
+    await archiveTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    await runLifecycleJobs()
+
+    expect(await subscriptionStatus(pending)).toBe('cancelled')
+    const alerts = await sql<{ kind: string; message: string }[]>`
+      select kind, message from billing_alerts where tenant_id = ${tenant.id}`
+    expect(alerts.map((alert) => ({ ...alert }))).toStrictEqual([
+      {
+        kind: 'reconcile_repair',
+        message: `Cancelled subscription ${pending}, which an archived workspace adopted, but its refund did not go through. Refund it at the provider.`,
+      },
     ])
   })
 

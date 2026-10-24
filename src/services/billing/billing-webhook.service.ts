@@ -545,7 +545,7 @@ async function handleDispute(
   const flagged = await setDisputeFlag(row.tenantId, isOpen)
   // After the commit: the workspace's first open dispute since its flag was clear, timed at that write.
   if (flagged !== undefined && isOpen && disputeId !== null) {
-    await trackProviderEvent(flagged, 'dispute_opened', disputeId)
+    await trackProviderEvent(flagged, { type: 'dispute_opened' }, disputeId)
   }
   if (isOpen && paymentId !== null) {
     await alertOnce(
