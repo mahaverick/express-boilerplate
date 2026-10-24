@@ -500,6 +500,36 @@ describe('nextBillingRow: a switch paid after the current subscription renewed',
     })
   })
 
+  it('does not read a started but unpaid cycle of the current one as a renewal: no refund', () => {
+    const unpaid = sub('sub_cur', 'active', {
+      currentStart: at(30),
+      currentEnd: at(60),
+      latestInvoicePaid: false,
+    })
+    const result = map(
+      switching(),
+      { current: unpaid, next: sub('sub_next', 'authenticated', { startAt: at(30) }) },
+      at(30)
+    )
+    expect(result.actions).not.toContainEqual({
+      kind: 'refund_duplicate',
+      subscriptionId: 'sub_next',
+    })
+    expect(result.actions).toContainEqual({
+      kind: 'cancel_current_at_cycle_end',
+      subscriptionId: 'sub_cur',
+    })
+    expect(result.patch).not.toHaveProperty('nextSubscriptionId')
+
+    const handover = map(
+      switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(29) }),
+      { current: unpaid, next: sub('sub_next', 'authenticated', { startAt: at(30) }) },
+      at(30)
+    )
+    expect(handover.patch).toMatchObject({ providerSubscriptionId: 'sub_next' })
+    expect(handover.actions).toStrictEqual([{ kind: 'promote_next' }])
+  })
+
   it('still hands over normally when the next one was authenticated before the renewal', () => {
     const before = map(switching(), {
       current: sub('sub_cur', 'active'),

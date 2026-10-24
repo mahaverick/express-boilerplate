@@ -1459,7 +1459,9 @@ map; the detail lives in the sections it links.
   checkout that starts at the period end (a switch or a resubscribe) lapses at
   least an hour before it, so it can't be paid after the renewal charged. A
   next subscription the sync still reads as paid after the current one renewed
-  is cancelled and refunded as a duplicate, and the current one kept.
+  (a new cycle whose invoice is paid; the provider moves the cycle start before
+  the money arrives) is cancelled and refunded as a duplicate, and the current
+  one kept.
 - **Mail recipients.** Billing mail goes to the workspace's active owners and
   to the billing address the payer gave, when it is no owner's
   (`src/services/billing/billing-emails.service.ts`). Once the payer is no

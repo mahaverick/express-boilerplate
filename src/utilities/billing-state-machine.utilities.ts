@@ -511,9 +511,9 @@ class BillingMapping {
 
   /**
    * Whether a running current subscription that is not cancelling has
-   * already started the cycle the next subscription was to take over: its
-   * new cycle began at or after the next one's start, or its paid cycle ends
-   * after the stored period end. The switch was paid too late, and handing
+   * already started and paid the cycle the next subscription was to take
+   * over: its new cycle began at or after the next one's start with its
+   * invoice paid, or its paid cycle ends after the stored period end. The switch was paid too late, and handing
    * over or cancelling the current one would waste a cycle already charged.
    * @param current - The current subscription.
    * @param next - The authenticated or active next subscription.
@@ -522,7 +522,9 @@ class BillingMapping {
   hasRenewedPast(current: ProviderSubscription, next: ProviderSubscription): boolean {
     const { draft } = this
     if (draft.cancelAtPeriodEnd || STATUS_CLASS[current.status] !== 'live') return false
+    // The provider moves the cycle start before the money arrives: only a paid one counts.
     if (
+      current.latestInvoicePaid &&
       next.startAt !== null &&
       current.currentStart !== null &&
       current.currentStart >= next.startAt
