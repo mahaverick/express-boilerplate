@@ -77,6 +77,15 @@ export class BillingRepository {
   }
 
   /**
+   * Insert a workspace's billing record unless it has one.
+   * @param row - The row's column values.
+   * @param tx - The open transaction.
+   */
+  async insertIfAbsent(row: NewTenantBilling, tx: DbTransaction): Promise<void> {
+    await tx.insert(tenantBillingModel).values(row).onConflictDoNothing()
+  }
+
+  /**
    * Find a workspace's billing record.
    * @param tenantId - The workspace.
    * @param executor - Where to run the query. Defaults to the pool.

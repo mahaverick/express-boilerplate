@@ -16,6 +16,7 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
+import { initialBillingFor } from '@/services/billing/trial.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
@@ -85,7 +86,11 @@ export async function createTenant(
   const { ownerEmail, ...columns } = input
   const { tenantId, createdAt, dispatch } = await withTransaction(async (tx) => {
     await assertStillPlatformRole(actor, 'admin', tx)
-    const tenant = await tenantRepository.createWithoutOwner(columns, tx)
+    const tenant = await tenantRepository.createWithoutOwner(
+      columns,
+      tx,
+      await initialBillingFor(null, tx)
+    )
     await record(
       {
         action: 'tenant.created',

@@ -233,6 +233,24 @@ describe('/api/v1/tenants', () => {
       expect(membership?.role).toBe('owner')
     })
 
+    it('gives the new tenant a billing row, trialing for a first workspace and Free for the next', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const states: unknown[] = []
+      for (const slug of [uniqueSlug(), uniqueSlug()]) {
+        const response = await request(app)
+          .post('/api/v1/tenants')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ name: 'Acme Inc', slug })
+        expect(response.status).toBe(201)
+        const id = envelopeOf<Tenant>(response).data?.id ?? ''
+        createdTenantIds.push(id)
+        const [row] = await sql`select state from tenant_billing where tenant_id = ${id}`
+        states.push(row?.state)
+      }
+      expect(states).toEqual(['trialing', 'free'])
+      expect(user.id).toBeTruthy()
+    })
+
     it('rejects a request with no token', async () => {
       const response = await request(app)
         .post('/api/v1/tenants')

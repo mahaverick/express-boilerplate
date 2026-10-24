@@ -45,6 +45,7 @@ import {
 } from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
+import { lockBilling, startDeferredTrial } from '@/services/billing/trial.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import {
@@ -986,10 +987,14 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     if (valid.invitation.role === 'owner' || valid.tenant.isPlatform) {
       await lockUserForOwnership(user.id, () => new HttpError('Sign in to continue.', 401), tx)
     }
+    if (valid.invitation.role === 'owner' && !valid.tenant.isPlatform) {
+      await lockBilling(valid.tenant.id, tx)
+    }
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
     if (!claimed) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
+    await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
 
     const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
     const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
@@ -1027,6 +1032,25 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
   })
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
   return outcome.accepted
+}
+
+/**
+ * Once an invitation is claimed: when it made `userId` an owner of a customer
+ * workspace, start the trial a staff-created workspace was waiting for. The
+ * caller took the billing lock (`lockBilling`) before the claim.
+ * @param claimed - The claimed invitation.
+ * @param userId - The accepting user.
+ * @param isPlatform - Whether the invitation's tenant is the platform tenant.
+ * @param tx - The accept's transaction.
+ */
+async function startTrialForOwner(
+  claimed: TenantInvitation,
+  userId: string,
+  isPlatform: boolean,
+  tx: DbTransaction
+): Promise<void> {
+  if (claimed.role !== 'owner' || isPlatform) return
+  await startDeferredTrial(claimed.tenantId, userId, tx)
 }
 
 /**
@@ -1379,9 +1403,13 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
   const sessionId = randomUUID()
   const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
     const user = await createInvitedAccount(valid.invitation.email, tx)
+    if (valid.invitation.role === 'owner' && !valid.tenant.isPlatform) {
+      await lockBilling(valid.tenant.id, tx)
+    }
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
     if (!claimed) throw invitationInvalid()
+    await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
     // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
     return joinAndIssueSession(user, claimed, sessionId, false, tx)
   })
@@ -1447,11 +1475,15 @@ export async function confirmInvitation(
     const user = account
       ? await lockActiveInvitee(account.id, tx)
       : await createInvitedAccount(email, tx, confirmInvalid)
+    if (valid.invitation.role === 'owner' && !valid.tenant.isPlatform) {
+      await lockBilling(valid.tenant.id, tx)
+    }
     const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
     if (link?.invitationId !== invitationId) throw confirmInvalid()
     const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)
     // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
     if (!claimed) throw confirmInvalid()
+    await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
     return joinAndIssueSession(user, claimed, sessionId, true, tx)
   })
   return finishJoin(outcome, sessionId, account === undefined, valid.tenant)

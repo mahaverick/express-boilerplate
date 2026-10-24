@@ -10,6 +10,7 @@ import {
   type MembershipRole,
   type TenantLifecycleState,
 } from '@/constants/tenant.constants'
+import { tenantBillingModel, type NewTenantBilling } from '@/database/models/billing.model'
 import {
   tenantModel,
   tenantSettingsModel,
@@ -24,6 +25,7 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
+import { PlanRepository } from '@/repositories/plan.repository'
 import type { RoleFilters } from '@/repositories/user-membership.repository'
 import {
   db,
@@ -56,6 +58,13 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
      */
     ownerId: string
   }
+
+/**
+ * A new tenant's billing row before the tenant has an id.
+ */
+export type TenantBillingInit = Omit<NewTenantBilling, 'tenantId'>
+
+const planRepository = new PlanRepository()
 
 /**
  * The tenants one user belongs to, searched by name. Its cursors are bound
@@ -125,12 +134,14 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * @param onboarding - Whether the onboarding clock starts at creation.
    * @param onboarding.isStarted - True when the tenant is created with its owner.
    * @param tx - The transaction.
+   * @param billing - The tenant's billing row; a Free row when omitted.
    * @returns The new tenant.
    */
   private async insertTenantAndSettings(
     input: Omit<CreateTenantInput, 'ownerId'>,
     onboarding: { isStarted: boolean },
-    tx: DbTransaction
+    tx: DbTransaction,
+    billing?: TenantBillingInit
   ): Promise<Tenant> {
     const [tenant] = await tx
       .insert(tenantModel)
@@ -147,7 +158,22 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .returning()
     if (!tenant) throw new HttpError('Insert returned no row', 500)
     await tx.insert(tenantSettingsModel).values({ tenantId: tenant.id })
+    await tx
+      .insert(tenantBillingModel)
+      .values({ ...(billing ?? (await this.freeBilling(tx))), tenantId: tenant.id })
     return tenant
+  }
+
+  /**
+   * The billing row a tenant gets when its creator names none: Free.
+   * @param tx - The transaction.
+   * @returns The row without its tenant id.
+   * @throws {HttpError} 500 when the seeded Free plan is missing.
+   */
+  private async freeBilling(tx: DbTransaction): Promise<TenantBillingInit> {
+    const free = await planRepository.findPlanByKey('free', tx)
+    if (free === undefined) throw new HttpError('The free plan is missing', 500)
+    return { state: 'free', planId: free.id }
   }
 
   /**
@@ -362,13 +388,18 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * stays one atomic unit.
    * @param input - The tenant's initial columns, plus `ownerId` — the user whose owner membership is created alongside it.
    * @param executor - An existing transaction to compose into, or the pool (default) to open a new transaction in.
+   * @param billing - The tenant's billing row; a Free row when omitted.
    * @returns The newly created tenant row (not the settings or membership rows — fetch those separately via `TenantSettingsRepository.findByTenantId`/`UserMembershipRepository.findByUserAndTenant` if needed).
    * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
    */
-  async create(input: CreateTenantInput, executor: DbExecutor = db): Promise<Tenant> {
+  async create(
+    input: CreateTenantInput,
+    executor: DbExecutor = db,
+    billing?: TenantBillingInit
+  ): Promise<Tenant> {
     return this.withSlugConflict(() =>
       withTransaction(async (tx) => {
-        const tenant = await this.insertTenantAndSettings(input, { isStarted: true }, tx)
+        const tenant = await this.insertTenantAndSettings(input, { isStarted: true }, tx, billing)
         await tx.insert(userMembershipModel).values({
           userId: input.ownerId,
           tenantId: tenant.id,
@@ -384,16 +415,18 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * a tenant whose owner is then invited (platform-tenant.service.ts).
    * @param input - The tenant's initial columns.
    * @param executor - An existing transaction to compose into, or the pool (default).
+   * @param billing - The tenant's billing row; a Free row when omitted.
    * @returns The new tenant.
    * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
    */
   async createWithoutOwner(
     input: Omit<CreateTenantInput, 'ownerId'>,
-    executor: DbExecutor = db
+    executor: DbExecutor = db,
+    billing?: TenantBillingInit
   ): Promise<Tenant> {
     return this.withSlugConflict(() =>
       withTransaction(
-        (tx) => this.insertTenantAndSettings(input, { isStarted: false }, tx),
+        (tx) => this.insertTenantAndSettings(input, { isStarted: false }, tx, billing),
         executor
       )
     )

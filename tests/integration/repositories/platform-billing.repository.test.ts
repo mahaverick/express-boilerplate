@@ -9,7 +9,7 @@ import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { PlatformBillingRepository } from '@/repositories/platform-billing.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
-import { sql, withTransaction } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
 import { listParamsSchema } from '@/validators/list.validators'
 
 const alertListSchema = listParamsSchema({
@@ -50,19 +50,14 @@ describe('PlatformBillingRepository', () => {
     priceId?: string
   ): Promise<string> {
     const suffix = randomUUID().slice(0, 8)
-    const tenant = await tenantRepository.createWithoutOwner({
-      name: `Platform billing ${suffix}`,
-      slug: `pb-${suffix}`,
-    })
-    tenantIds.push(tenant.id)
     const plan = await planRepository.findPlanByKey(planKey)
     if (plan === undefined) throw new Error('setup: the migration seeds the plans')
-    await withTransaction((tx) =>
-      billingRepository.insertForTenant(
-        { tenantId: tenant.id, state, planId: plan.id, ...(priceId && { priceId }) },
-        tx
-      )
+    const tenant = await tenantRepository.createWithoutOwner(
+      { name: `Platform billing ${suffix}`, slug: `pb-${suffix}` },
+      db,
+      { state, planId: plan.id, ...(priceId && { priceId }) }
     )
+    tenantIds.push(tenant.id)
     return tenant.id
   }
 

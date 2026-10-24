@@ -8,13 +8,11 @@ import { eq, inArray, sql as drizzleSql } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { tenantBillingModel } from '@/database/models/billing.model'
 import { BillingRepository } from '@/repositories/billing.repository'
-import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql, withTransaction } from '@/services/database.service'
 
 const repository = new BillingRepository()
-const planRepository = new PlanRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 
@@ -48,16 +46,12 @@ describe('BillingRepository', () => {
    */
   async function billedTenant(): Promise<string> {
     const suffix = randomUUID().slice(0, 8)
+    // The repository gives the new tenant its Free billing row.
     const tenant = await tenantRepository.createWithoutOwner({
       name: `Billing ${suffix}`,
       slug: `billing-${suffix}`,
     })
     tenantIds.push(tenant.id)
-    const free = await planRepository.findPlanByKey('free')
-    if (free === undefined) throw new Error('setup: the migration seeds the Free plan')
-    await withTransaction((tx) =>
-      repository.insertForTenant({ tenantId: tenant.id, state: 'free', planId: free.id }, tx)
-    )
     return tenant.id
   }
 
