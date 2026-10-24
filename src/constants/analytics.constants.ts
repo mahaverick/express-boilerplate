@@ -26,7 +26,9 @@ export const AUDIT_EVENT_RENAMES = {
 
 /**
  * The product events: things worth counting that the audit log does not
- * record, emitted as domain events after commit.
+ * record, emitted as domain events after commit. From `trial_started` on
+ * they are the billing events, each in its workspace's group with the
+ * workspace's `plan` and `billing_state` after the change.
  */
 export const PRODUCT_EVENTS = [
   'user_signed_up',
@@ -35,6 +37,29 @@ export const PRODUCT_EVENTS = [
   'other_sessions_revoked',
   'email_verified',
   'onboarding_step_completed',
+  'trial_started',
+  'trial_reminder_sent',
+  'trial_extended',
+  'trial_ended',
+  'plan_limit_approaching',
+  'plan_limit_reached',
+  'plan_feature_blocked',
+  'upgrade_requested',
+  'upgrade_request_fulfilled',
+  'checkout_started',
+  'checkout_confirmed',
+  'subscription_activated',
+  'subscription_renewed',
+  'payment_failed',
+  'subscription_recovered',
+  'subscription_halted',
+  'subscription_cancel_scheduled',
+  'subscription_interval_change_scheduled',
+  'downgraded_to_free',
+  'payer_left',
+  'duplicate_subscription_refunded',
+  'billing_reconciled',
+  'dispute_opened',
 ] as const
 
 /**

@@ -408,6 +408,8 @@ describe('GET /platform/flags/meta', () => {
       'app_env',
       'account_created_days',
       'tenant_created_days',
+      'plan',
+      'billing_state',
     ])
     expect(meta.snapshot).toEqual({
       enabled: true,
@@ -465,6 +467,8 @@ describe('GET /platform/flags/evaluate', () => {
       tenant_role: 'owner',
       account_created_days: 0,
       tenant_created_days: 0,
+      plan: expect.stringMatching(/^(free|paid)$/) as unknown,
+      billing_state: expect.any(String) as unknown,
     })
     expect(result.flags).toEqual([
       { key: 'example_beta_page', value: true, reason: 'condition_match', conditionIndex: 0 },

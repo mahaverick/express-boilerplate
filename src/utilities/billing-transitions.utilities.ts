@@ -71,7 +71,7 @@ const PAYING_STATES: ReadonlySet<BillingState> = new Set(['active', 'past_due'])
  * @param source - What made the change.
  * @returns The cause.
  */
-function downgradeCauseOf(
+export function downgradeCauseOf(
   before: TenantBillingRecord,
   source: BillingHistorySource
 ): DowngradeCause {
@@ -105,7 +105,7 @@ function inactiveTransitions(
  * @param after - The row after the change.
  * @returns True when an authenticated next subscription is scheduled.
  */
-function isContinued(after: TenantBillingRecord): boolean {
+export function isContinued(after: TenantBillingRecord): boolean {
   return after.nextSubscriptionId !== null && after.nextAuthenticatedAt !== null
 }
 

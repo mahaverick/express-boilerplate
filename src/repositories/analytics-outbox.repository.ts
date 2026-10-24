@@ -47,13 +47,15 @@ export class AnalyticsOutboxRepository {
   }
 
   /**
-   * Insert several rows in one statement; an empty list is a no-op.
+   * Insert several rows in one statement; an empty list is a no-op. A row
+   * whose id is already in the outbox is skipped: a deduplicated event
+   * (`dedupedRowId`) written twice is written once.
    * @param rows - The built events.
    * @param executor - Where to run the query. Defaults to the pool.
    */
   async insertMany(rows: NewAnalyticsOutboxRow[], executor: DbExecutor = db): Promise<void> {
     if (rows.length === 0) return
-    await executor.insert(outbox).values(rows)
+    await executor.insert(outbox).values(rows).onConflictDoNothing({ target: outbox.id })
   }
 
   /**

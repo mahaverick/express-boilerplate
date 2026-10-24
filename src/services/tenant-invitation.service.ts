@@ -46,6 +46,11 @@ import {
 } from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
+import {
+  emitPlanRefusal,
+  trackLimitApproaching,
+  trackTrialStarted,
+} from '@/services/billing/billing-analytics.service'
 import { sendTrialStarted, sendWorkspaceFull } from '@/services/billing/billing-emails.service'
 import { publishEntitlementsChanged } from '@/services/billing/billing-events.service'
 import { assertWithinLimit } from '@/services/billing/entitlements.service'
@@ -84,7 +89,7 @@ import {
 } from '@/services/tenant-membership.service'
 import { INVITATION_CONFIRM_TEMPLATE_KEY } from '@/templates/email/invitation-confirm.template'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
-import type { Actor, StaffReasonOption } from '@/types/actor'
+import type { Actor, StaffReasonOption, TenantAccess } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
@@ -542,69 +547,74 @@ export async function invite(
   const normalizedEmail = email.trim().toLowerCase()
   const rawToken = generateInvitationToken()
 
-  const { context, access } = await db.transaction(async (tx) => {
-    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
-    assertStaffReasonGiven(access, options)
-    if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
+  const seat: SeatOutcome = { access: 'member', tookSeat: false }
+  const { context, access } = await reportingPlanRefusal(actor, tenantId, seat, () =>
+    db.transaction(async (tx) => {
+      const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+      seat.access = access
+      assertStaffReasonGiven(access, options)
+      if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
-    const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
-    // Always run the lookup, so a registered and an unregistered address take the same queries.
-    const membership = await userMembershipRepository.findByUserAndTenant(
-      invitee?.id ?? NIL_UUID,
-      tenantId,
-      tx
-    )
-    if (invitee && membership) {
-      throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
-    }
-    const tenant = await tenantForMessages(tenantId, tx)
-    const inviter = await userRepository.findById(actor.userId, {}, tx)
-
-    // The seat lock: after the actor's role rows, before the invitation write. Re-inviting an address that holds a seat adds none.
-    if (
-      (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined &&
-      !(await hasInvitationSeat(tenantId, normalizedEmail, tx))
-    ) {
-      await assertWithinLimit(tenantId, 'members', 1, tx)
-    }
-
-    const invitation = await invitationRepository.createPending(
-      {
+      const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
+      // Always run the lookup, so a registered and an unregistered address take the same queries.
+      const membership = await userMembershipRepository.findByUserAndTenant(
+        invitee?.id ?? NIL_UUID,
         tenantId,
-        email: normalizedEmail,
-        role,
-        tokenHash: hashToken(rawToken),
-        invitedBy: actor.userId,
-        expiresAt: invitationExpiry(),
-      },
-      tx
-    )
-    // After the writes that can fail, so a 404 or a 409 spends nothing; a refusal rolls the insert back.
-    await assertRecipientBudget(normalizedEmail, tenantId)
-    await record(
-      {
-        action: 'invitation.created',
-        actor,
-        access,
-        tenantId,
-        targetId: invitation.id,
-        metadata: {
+        tx
+      )
+      if (invitee && membership) {
+        throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
+      }
+      const tenant = await tenantForMessages(tenantId, tx)
+      const inviter = await userRepository.findById(actor.userId, {}, tx)
+
+      // The seat lock: after the actor's role rows, before the invitation write. Re-inviting an address that holds a seat adds none.
+      if (
+        (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined &&
+        !(await hasInvitationSeat(tenantId, normalizedEmail, tx))
+      ) {
+        await assertWithinLimit(tenantId, 'members', 1, tx)
+        seat.tookSeat = true
+      }
+
+      const invitation = await invitationRepository.createPending(
+        {
+          tenantId,
+          email: normalizedEmail,
           role,
-          emailDomain: auditEmailDomain(normalizedEmail),
-          ...(options.reason !== undefined && { reason: options.reason }),
+          tokenHash: hashToken(rawToken),
+          invitedBy: actor.userId,
+          expiresAt: invitationExpiry(),
         },
-      },
-      tx
-    )
-    const written: InvitationMessageContext = {
-      invitation,
-      rawToken,
-      tenant,
-      inviterName: inviterDisplayName(inviter),
-      invitee,
-    }
-    return { context: written, access }
-  })
+        tx
+      )
+      // After the writes that can fail, so a 404 or a 409 spends nothing; a refusal rolls the insert back.
+      await assertRecipientBudget(normalizedEmail, tenantId)
+      await record(
+        {
+          action: 'invitation.created',
+          actor,
+          access,
+          tenantId,
+          targetId: invitation.id,
+          metadata: {
+            role,
+            emailDomain: auditEmailDomain(normalizedEmail),
+            ...(options.reason !== undefined && { reason: options.reason }),
+          },
+        },
+        tx
+      )
+      const written: InvitationMessageContext = {
+        invitation,
+        rawToken,
+        tenant,
+        inviterName: inviterDisplayName(inviter),
+        invitee,
+      }
+      return { context: written, access }
+    })
+  )
 
   const { invitee } = context
   // oxlint-disable-next-line promise/prefer-await-to-then -- fire-and-forget: the response must not wait on the queue
@@ -622,6 +632,62 @@ export async function invite(
     },
     { access }
   )
+  await afterSeatTaken(actor, tenantId, seat)
+}
+
+/**
+ * How a seat-adding write went, read after it: how the actor reached the
+ * workspace, and whether the write took a seat.
+ */
+interface SeatOutcome {
+  access: TenantAccess
+  tookSeat: boolean
+}
+
+/**
+ * Run a member's seat-adding write and, when the members limit refused it,
+ * report `plan_limit_reached` as the actor once the transaction has rolled
+ * back, then rethrow. A staff refusal reports nothing.
+ * @param actor - The member writing.
+ * @param tenantId - The workspace.
+ * @param seat - Filled by the write with the actor's access.
+ * @param write - Runs the write's transaction.
+ * @returns What the write returned.
+ * @throws {HttpError} Whatever the write threw, unchanged.
+ */
+async function reportingPlanRefusal<T>(
+  actor: Actor,
+  tenantId: string,
+  seat: SeatOutcome,
+  write: () => Promise<T>
+): Promise<T> {
+  try {
+    return await write()
+  } catch (error) {
+    if (error instanceof HttpError && error.code === PLAN_LIMIT_REACHED_CODE) {
+      await emitPlanRefusal({
+        tenantId,
+        kind: 'limit',
+        key: 'members',
+        userId: actor.userId,
+        access: seat.access,
+      })
+    }
+    throw error
+  }
+}
+
+/**
+ * After a member's seat-adding write commits: report when it took the
+ * workspace across the members limit's soft line. Staff writes report nothing.
+ * @param actor - The member who wrote.
+ * @param tenantId - The workspace.
+ * @param seat - How the write went.
+ */
+async function afterSeatTaken(actor: Actor, tenantId: string, seat: SeatOutcome): Promise<void> {
+  if (seat.tookSeat && seat.access === 'member') {
+    await trackLimitApproaching(tenantId, 'members', actor.userId)
+  }
 }
 
 /**
@@ -773,58 +839,64 @@ export async function resend(
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
-  const invitation = await db.transaction(async (tx) => {
-    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
-    assertStaffReasonGiven(access, options)
-    const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
-    if (!pending) throw invitationNotFound()
-    if (!canActorGrantRole(actorRole, pending.role)) {
-      throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
-    }
-    // A staff resend (audited, with a reason) skips the cooldown.
-    const hasCooldown = options.resentFromId === undefined
-    if (hasCooldown) assertResendCooldownOver(pending)
-    // An expired invitation holds no seat, so renewing it takes one, under the seat lock. Expiry is read by the database clock, as the seat count reads it.
-    if (
-      !(await hasInvitationSeat(tenantId, pending.email, tx)) &&
-      (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined
-    ) {
-      await assertWithinLimit(tenantId, 'members', 1, tx)
-    }
-    // The swap re-checks the cooldown: the read above took no row lock, so a concurrent resend may have landed since.
-    const updated = await invitationRepository.replaceToken(
-      pending.id,
-      hashToken(rawToken),
-      invitationExpiry(),
-      tx,
-      hasCooldown ? { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) } : {}
-    )
-    if (!updated) {
-      const stillPending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
-      if (hasCooldown && stillPending) {
-        throw resendCooldownError(stillPending.lastSentAt)
+  const seat: SeatOutcome = { access: 'member', tookSeat: false }
+  const invitation = await reportingPlanRefusal(actor, tenantId, seat, () =>
+    db.transaction(async (tx) => {
+      const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+      seat.access = access
+      assertStaffReasonGiven(access, options)
+      const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
+      if (!pending) throw invitationNotFound()
+      if (!canActorGrantRole(actorRole, pending.role)) {
+        throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
       }
-      throw invitationNotFound()
-    }
-    // After the token swap, so a refusal rolls it back and the mailed link keeps working.
-    await assertRecipientBudget(updated.email, tenantId)
-    await record(
-      {
-        action: 'invitation.resent',
-        actor,
-        access,
-        tenantId,
-        targetId: updated.id,
-        metadata: {
-          role: updated.role,
-          emailDomain: auditEmailDomain(updated.email),
-          ...(options.reason !== undefined && { reason: options.reason }),
+      // A staff resend (audited, with a reason) skips the cooldown.
+      const hasCooldown = options.resentFromId === undefined
+      if (hasCooldown) assertResendCooldownOver(pending)
+      // An expired invitation holds no seat, so renewing it takes one, under the seat lock. Expiry is read by the database clock, as the seat count reads it.
+      if (
+        !(await hasInvitationSeat(tenantId, pending.email, tx)) &&
+        (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined
+      ) {
+        await assertWithinLimit(tenantId, 'members', 1, tx)
+        seat.tookSeat = true
+      }
+      // The swap re-checks the cooldown: the read above took no row lock, so a concurrent resend may have landed since.
+      const updated = await invitationRepository.replaceToken(
+        pending.id,
+        hashToken(rawToken),
+        invitationExpiry(),
+        tx,
+        hasCooldown ? { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) } : {}
+      )
+      if (!updated) {
+        const stillPending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
+        if (hasCooldown && stillPending) {
+          throw resendCooldownError(stillPending.lastSentAt)
+        }
+        throw invitationNotFound()
+      }
+      // After the token swap, so a refusal rolls it back and the mailed link keeps working.
+      await assertRecipientBudget(updated.email, tenantId)
+      await record(
+        {
+          action: 'invitation.resent',
+          actor,
+          access,
+          tenantId,
+          targetId: updated.id,
+          metadata: {
+            role: updated.role,
+            emailDomain: auditEmailDomain(updated.email),
+            ...(options.reason !== undefined && { reason: options.reason }),
+          },
         },
-      },
-      tx
-    )
-    return updated
-  })
+        tx
+      )
+      return updated
+    })
+  )
+  await afterSeatTaken(actor, tenantId, seat)
   const inviter = await userRepository.findById(actor.userId)
   const invitee = await userRepository.findByEmail(invitation.email)
 
@@ -1014,7 +1086,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     db.transaction(async (tx): Promise<AcceptOutcome> => {
       const valid = await invitationRepository.findValidByTokenHash(tokenHash, tx)
       if (!valid) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
-      onFull(valid.tenant.id)
+      onFull(valid.tenant.id, user.id)
 
       assertInvitedAddress(user, valid.invitation.email)
       // Before the claim: a delete takes the user row, then the invitations the user sent, and this one may be among them. A platform invitation of any role makes the user staff, which the delete's rank rule must see.
@@ -1066,7 +1138,9 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     })
   )
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
-  if (outcome.trialStartedFor !== undefined) await afterTrialStarted(outcome.trialStartedFor)
+  if (outcome.trialStartedFor !== undefined) {
+    await afterTrialStarted(outcome.trialStartedFor, user.id)
+  }
   return outcome.accepted
 }
 
@@ -1129,39 +1203,54 @@ async function startTrialForOwner(
 
 /**
  * After a join that started a staff-made workspace's trial commits: tell its
- * members their entitlements changed, and mail the trial's start. Never
- * rejects.
+ * members their entitlements changed, mail the trial's start, and send
+ * `trial_started` as the owner who joined. Never rejects.
  * @param tenantId - The workspace.
+ * @param ownerUserId - The owner whose join started it.
  */
-async function afterTrialStarted(tenantId: string): Promise<void> {
+async function afterTrialStarted(tenantId: string, ownerUserId: string): Promise<void> {
   try {
     await publishEntitlementsChanged(tenantId)
   } catch (error) {
     logger.error('Could not push an entitlements change', { error, tenantId })
   }
   await sendTrialStarted(tenantId)
+  await trackTrialStarted(tenantId, ownerUserId)
 }
 
 /**
  * Run a join's transaction, and when the seat lock refused it for the
- * members limit, tell the workspace's owners once it has rolled back, then
- * rethrow. The transaction names the workspace through `onFull` once it
- * knows it.
+ * members limit, once it has rolled back tell the workspace's owners and
+ * report `plan_limit_reached` as the joining user (a system event when the
+ * join was creating their account), then rethrow. The transaction names the
+ * workspace, and the joining user when they already have an account,
+ * through `onFull` once it knows them.
  * @param join - Runs the join's transaction.
  * @returns What the join returned.
  * @throws {HttpError} Whatever the join threw, unchanged.
  */
 async function tellOwnersWhenFull<T>(
-  join: (onFull: (tenantId: string) => void) => Promise<T>
+  join: (onFull: (tenantId: string, userId?: string) => void) => Promise<T>
 ): Promise<T> {
   let tenantId: string | undefined
+  let joiningUserId: string | null = null
   try {
-    return await join((id) => {
+    return await join((id, userId) => {
       tenantId = id
+      joiningUserId = userId ?? null
     })
   } catch (error) {
     const isFull = error instanceof HttpError && error.code === PLAN_LIMIT_REACHED_CODE
-    if (isFull && tenantId !== undefined) await sendWorkspaceFull(tenantId)
+    if (isFull && tenantId !== undefined) {
+      await sendWorkspaceFull(tenantId)
+      await emitPlanRefusal({
+        tenantId,
+        kind: 'limit',
+        key: 'members',
+        userId: joiningUserId,
+        access: 'member',
+      })
+    }
     throw error
   }
 }
@@ -1345,7 +1434,9 @@ async function finishJoin(
   const accessToken = signAccessToken(user, sessionId, outcome.refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
-  if (outcome.trialStartedFor !== undefined) await afterTrialStarted(outcome.trialStartedFor)
+  if (outcome.trialStartedFor !== undefined) {
+    await afterTrialStarted(outcome.trialStartedFor, user.id)
+  }
   if (isNewUser) {
     await emitDomainEvent({ type: 'email_verified', userId: user.id, at: new Date() })
     await emitDomainEvent({
@@ -1590,7 +1681,7 @@ export async function confirmInvitation(
 
   const sessionId = randomUUID()
   const outcome = await tellOwnersWhenFull(async (onFull) => {
-    onFull(valid.tenant.id)
+    onFull(valid.tenant.id, account?.id)
     return db.transaction(async (tx): Promise<VerifyOutcome> => {
       // The user row first, then the link row: the order a deactivation takes.
       const user = account

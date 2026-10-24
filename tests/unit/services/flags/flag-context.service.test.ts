@@ -1,6 +1,6 @@
 /**
- * @file buildFlagContext: the trait values, day counts and the tenant group,
- * with and without a tenant.
+ * @file buildFlagContext: the trait values, day counts, the tenant group and
+ * its plan traits, with and without a tenant.
  */
 import { describe, expect, it } from 'vite-plus/test'
 import { buildFlagContext } from '@/services/flags/flag-context.service'
@@ -99,6 +99,42 @@ describe('buildFlagContext', () => {
     })
     expect(context.personProps.account_created_days).toBe(0)
     expect(context.groupProps.tenant).toEqual({ tenant_created_days: 0 })
+  })
+
+  it('adds the plan and billing state to the tenant group when the tenant has billing', () => {
+    const context = buildFlagContext({
+      userId: USER_ID,
+      tenantId: TENANT_ID,
+      platformRole: NONE,
+      tenantRole: 'owner',
+      userCreatedAt: NOW,
+      tenantCreatedAt: NOW,
+      tenantBilling: { plan: 'paid', billingState: 'past_due' },
+      sessionId: NONE,
+      now: NOW,
+      appEnv: 'local',
+    })
+    expect(context.groupProps.tenant).toEqual({
+      tenant_created_days: 0,
+      plan: 'paid',
+      billing_state: 'past_due',
+    })
+  })
+
+  it('leaves the billing traits off a tenantless context even when billing is passed', () => {
+    const context = buildFlagContext({
+      userId: USER_ID,
+      tenantId: NONE,
+      platformRole: NONE,
+      tenantRole: NONE,
+      userCreatedAt: NOW,
+      tenantCreatedAt: NONE,
+      tenantBilling: { plan: 'free', billingState: 'free' },
+      sessionId: NONE,
+      now: NOW,
+      appEnv: 'local',
+    })
+    expect(context.groupProps).toEqual({})
   })
 
   it('reads app_env from APP_ENV when none is passed', () => {

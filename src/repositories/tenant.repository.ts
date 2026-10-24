@@ -10,7 +10,14 @@ import {
   type MembershipRole,
   type TenantLifecycleState,
 } from '@/constants/tenant.constants'
-import { tenantBillingModel, type NewTenantBilling } from '@/database/models/billing.model'
+import {
+  billingStateHistoryModel,
+  planModel,
+  planPriceModel,
+  tenantBillingModel,
+  upgradeRequestModel,
+  type NewTenantBilling,
+} from '@/database/models/billing.model'
 import {
   tenantModel,
   tenantSettingsModel,
@@ -359,6 +366,10 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * archived and soft-deleted ones included. Cross-tenant on purpose: only
    * the analytics drainer calls it, to fill in `$groupidentify` markers at
    * send time. A purged tenant has no row, so it is missing from the result.
+   * Each carries its billing (null with no billing row): the state, the
+   * current price's interval while paying, the trial's dates and plan name,
+   * the open upgrade requests, and when it last started paying (the latest
+   * move to `active` from a state that does not pay).
    * @param ids - Tenant ids; an empty list runs no query.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One snapshot per tenant found, in no particular order.
@@ -368,16 +379,49 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
     executor: DbExecutor = db
   ): Promise<TenantGroupSnapshot[]> {
     if (ids.length === 0) return []
-    return executor
+    const billing = tenantBillingModel
+    const rows = await executor
       .select({
         id: tenantModel.id,
         name: tenantModel.name,
         status: tenantModel.lifecycleState,
         createdAt: tenantModel.createdAt,
         isPlatform: tenantModel.isPlatform,
+        state: billing.state,
+        interval: planPriceModel.interval,
+        trialStartedAt: billing.trialStartedAt,
+        trialEndsAt: billing.trialEndsAt,
+        trialPlanName: sql<
+          string | null
+        >`case when ${billing.trialStartedAt} is not null then (select ${planModel.name} from ${planModel} where ${planModel.key} = 'paid') end`,
+        openUpgradeRequests: sql<number>`(select count(*)::int from ${upgradeRequestModel} where ${upgradeRequestModel.tenantId} = ${tenantModel.id} and ${upgradeRequestModel.fulfilledAt} is null and ${upgradeRequestModel.expiresAt} > now())`,
+        paidSince: sql<
+          string | null
+        >`case when ${billing.state} in ('active', 'past_due') then (select max(${billingStateHistoryModel.at}) from ${billingStateHistoryModel} where ${billingStateHistoryModel.tenantId} = ${tenantModel.id} and ${billingStateHistoryModel.toState} = 'active' and (${billingStateHistoryModel.fromState} is null or ${billingStateHistoryModel.fromState} not in ('active', 'past_due'))) end`,
       })
       .from(tenantModel)
+      .leftJoin(billing, eq(billing.tenantId, tenantModel.id))
+      .leftJoin(planPriceModel, eq(planPriceModel.id, billing.priceId))
       .where(inArray(tenantModel.id, ids))
+    return rows.map(({ state, interval, trialStartedAt, trialEndsAt, ...row }) => ({
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      createdAt: row.createdAt,
+      isPlatform: row.isPlatform,
+      billing:
+        state === null
+          ? null
+          : {
+              state,
+              interval: state === 'active' || state === 'past_due' ? interval : null,
+              trialStartedAt,
+              trialEndsAt,
+              trialPlanName: row.trialPlanName,
+              openUpgradeRequests: row.openUpgradeRequests,
+              paidSince: row.paidSince === null ? null : new Date(row.paidSince),
+            },
+    }))
   }
 
   /**

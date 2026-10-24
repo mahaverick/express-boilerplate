@@ -51,6 +51,7 @@ import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { trackPayerLeft, trackTrialReminder } from '@/services/billing/billing-analytics.service'
 import { billingTimeZone } from '@/services/billing/billing-dates.service'
 import { buildBillingLink, buildTenantHomeLink } from '@/services/billing/billing-links.service'
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
@@ -86,6 +87,11 @@ export interface BillingDiffExtras {
    * The upgrade requests the change fulfilled: each requester is told.
    */
   fulfilledRequests?: readonly UpgradeRequest[]
+  /**
+   * The member whose own action made the change, such as the owner who
+   * cancelled; its analytics events are theirs.
+   */
+  actorUserId?: string
 }
 
 /**
@@ -746,6 +752,7 @@ export async function sendTrialEnding(row: TenantBillingRecord, now: Date): Prom
         }),
       },
     })
+    await trackTrialReminder(row, 'trial_ending', now)
   } catch (error) {
     logSendFailure(error, tenantId, 'trial_ending')
   }
@@ -783,6 +790,7 @@ export async function sendTrialEndsToday(row: TenantBillingRecord, now: Date): P
         billingLink: buildBillingLink(tenant.slug, 'trial_ends_today'),
       },
     }))
+    await trackTrialReminder(row, 'trial_ends_today', now)
   } catch (error) {
     logSendFailure(error, tenantId, 'trial_ends_today')
   }
@@ -837,6 +845,7 @@ export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Pr
         billingLink: buildBillingLink(tenant.slug, 'trial_midpoint'),
       },
     }))
+    await trackTrialReminder(row, 'trial_midpoint', now)
   } catch (error) {
     logSendFailure(error, tenantId, 'trial_midpoint')
   }
@@ -1039,6 +1048,12 @@ export async function sendPayerLeft(
         }),
       },
     })
+    await trackPayerLeft(
+      row,
+      payer !== undefined && payer.deletedAt === null ? payerUserId : null,
+      leftOn,
+      leftAt
+    )
   } catch (error) {
     logSendFailure(error, tenantId, 'payer_left')
   }

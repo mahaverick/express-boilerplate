@@ -2,15 +2,15 @@
  * @file What follows a committed billing change, read from the difference
  * between the row before and after it, never from the provider event that
  * caused it: an entitlements push to every member's open app, and the billing
- * emails and notifications (`sendBillingDiffEmails`). Analytics events for the
- * same change hang off `emitBillingDiff` too; it is the one place they read
- * the diff. Every write path that changes a billing row calls it after its
+ * emails and notifications (`sendBillingDiffEmails`), and the analytics events
+ * (`emitBillingDiffAnalytics`): it is the one place they read the diff. Every write path that changes a billing row calls it after its
  * commit, never inside the transaction.
  */
 import type { BillingHistorySource } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { emitBillingDiffAnalytics } from '@/services/billing/billing-analytics.service'
 import {
   sendBillingDiffEmails,
   type BillingDiffExtras,
@@ -69,14 +69,15 @@ export async function publishEntitlementsChanged(tenantId: string): Promise<void
 
 /**
  * Act on a committed billing change: push it to members' open apps when
- * anything they see changed, and send the emails and notifications it calls
- * for, each once however often the same change is passed in. Never rejects:
+ * anything they see changed, and send the emails, notifications and
+ * analytics events it calls for, each once however often the same change is
+ * passed in. Never rejects:
  * the change is committed, and a missed push only delays the app until its
  * next read; a failed send is logged with ids only.
  * @param before - The row before the change.
  * @param after - The row after it.
  * @param source - What made the change.
- * @param extras - What the change did besides the row: the upgrade requests it fulfilled.
+ * @param extras - What the change did besides the row: the upgrade requests it fulfilled, and the member whose own action it was.
  */
 export async function emitBillingDiff(
   before: TenantBillingRecord,
@@ -99,4 +100,5 @@ export async function emitBillingDiff(
     logger.error('Could not push an entitlements change', { error, tenantId: after.tenantId })
   }
   await sendBillingDiffEmails(before, after, source, extras)
+  await emitBillingDiffAnalytics(before, after, source, extras)
 }

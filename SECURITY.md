@@ -1022,7 +1022,9 @@ unread (`src/routes/analytics-proxy.routes.ts`).
   names, full addresses, staff reasons or email contents go into an event; an
   address's domain may. A tenant's name goes into the tenant group's properties
   (`$groupidentify`). A user id `distinct_id` and a `$session_id` are
-  pseudonymous, not anonymous.
+  pseudonymous, not anonymous. Billing events carry ids, plans, states and
+  amounts only, never a billing address, card, VPA or payer name, and name
+  their cause `downgrade_cause` or `failure_code`, since `reason` is dropped.
 - **The opt-out is the browser's.** `analyticsOptOut` tells the frontends to
   stop capturing; server events do not read it (`src/presenters/user.presenter.ts`).
 - **Server events are signed; browser events are client-reported.** The project

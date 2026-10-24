@@ -30,6 +30,7 @@ import { notFoundError } from '@/errors/not-found-errors'
 import { addBillingWebhookJob, type BillingWebhookJobData } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
+import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { withTransaction } from '@/services/database.service'
@@ -450,12 +451,19 @@ async function syncForSubscription(
  * other column alone.
  * @param tenantId - The workspace.
  * @param isOpen - The flag's new value.
+ * @returns True when the flag changed.
  */
-async function setDisputeOpen(tenantId: string, isOpen: boolean): Promise<void> {
-  await withTransaction(async (tx) => {
+async function didSetDisputeOpen(tenantId: string, isOpen: boolean): Promise<boolean> {
+  return withTransaction(async (tx) => {
     const locked = await billingRepository.lockByTenantId(tenantId, tx)
-    if (locked === undefined || locked.disputeOpen === isOpen) return
-    await billingRepository.updateVersioned(tenantId, locked.version, { disputeOpen: isOpen }, tx)
+    if (locked === undefined || locked.disputeOpen === isOpen) return false
+    const updated = await billingRepository.updateVersioned(
+      tenantId,
+      locked.version,
+      { disputeOpen: isOpen },
+      tx
+    )
+    return updated !== undefined
   })
 }
 
@@ -524,7 +532,11 @@ async function handleDispute(
     return
   }
   await billingRepository.setEventTenant(data.eventRowId, row.tenantId)
-  await setDisputeOpen(row.tenantId, isOpen)
+  const hasOpened = (await didSetDisputeOpen(row.tenantId, isOpen)) && isOpen
+  // After the commit: the workspace's first open dispute since its flag was clear.
+  if (hasOpened && disputeId !== null) {
+    await trackProviderEvent(row.tenantId, 'dispute_opened', disputeId)
+  }
   if (isOpen && paymentId !== null) {
     await alertOnce(
       row.tenantId,

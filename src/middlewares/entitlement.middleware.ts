@@ -2,7 +2,8 @@
  * @file `requireFeature`, the route gate for a plan feature. Unlike a flag
  * gate it does not hide the route: a refused workspace gets 402
  * `PLAN_FEATURE_REQUIRED` with the feature's key in `details`, so a client
- * can offer the upgrade. Also `requirePaymentsEnabled`, which hides the
+ * can offer the upgrade; the refusal is reported as `plan_feature_blocked`
+ * (`emitPlanRefusal`, throttled, nothing for staff). Also `requirePaymentsEnabled`, which hides the
  * routes that need a payment provider while none is configured.
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
@@ -10,6 +11,7 @@ import { PLAN_FEATURE_REQUIRED_CODE } from '@/constants/billing.constants'
 import { ENTITLEMENTS, type FeatureKey } from '@/constants/entitlements.constants'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
+import { emitPlanRefusal } from '@/services/billing/billing-analytics.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
 import { logger } from '@/services/logger.service'
@@ -46,6 +48,13 @@ export function requireFeature(key: FeatureKey): RequestHandler {
         next()
         return
       }
+      await emitPlanRefusal({
+        tenantId: principal.tenantId,
+        kind: 'feature',
+        key,
+        userId: request.user?.id ?? null,
+        access: principal.access,
+      })
       next(
         new HttpError(
           `${ENTITLEMENTS[key].label} is included in Paid. Upgrade to use it.`,

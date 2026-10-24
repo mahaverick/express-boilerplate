@@ -1,7 +1,8 @@
 /**
  * @file flagContextForUser against the real per-worker Postgres: the user's
  * creation, platform role, membership role and the tenant's creation are
- * read, and an unknown user is a 404.
+ * read, the tenant's effective plan and billing state too, and an unknown
+ * user is a 404.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
@@ -12,6 +13,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { sql } from '@/services/database.service'
 import { flagContextForUser } from '@/services/flags/flag-context.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
+import { putTenantOnPaid } from '../../../helpers/billing'
 import {
   createTrackedStaff,
   createTrackedUser,
@@ -59,10 +61,40 @@ describe('flagContextForUser', () => {
         app_env: 'local',
         account_created_days: 0,
       },
-      groupProps: { tenant: { tenant_created_days: 0 } },
+      groupProps: { tenant: { tenant_created_days: 0, plan: 'free', billing_state: 'free' } },
       tenantId: tenant.id,
       sessionId: 'session-1',
     })
+  })
+
+  it('reads the plan and billing state of a Paid tenant', async () => {
+    const owner = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Paid Flags Co',
+      slug: `paid-flags-${randomUUID().slice(0, 8)}`,
+      ownerId: owner.id,
+    })
+    createdTenantIds.push(tenant.id)
+    await putTenantOnPaid(tenant.id)
+
+    const context = await flagContextForUser(owner.id, tenant.id, NONE)
+
+    expect(context.groupProps.tenant).toMatchObject({ plan: 'paid', billing_state: 'active' })
+  })
+
+  it('reads a trial that has lapsed as Free before the job moves it', async () => {
+    const owner = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Lapsed Flags Co',
+      slug: `lapsed-flags-${randomUUID().slice(0, 8)}`,
+      ownerId: owner.id,
+    })
+    createdTenantIds.push(tenant.id)
+    await sql`update tenant_billing set state = 'trialing', trial_started_at = now() - interval '15 days', trial_ends_at = now() - interval '1 day' where tenant_id = ${tenant.id}`
+
+    const context = await flagContextForUser(owner.id, tenant.id, NONE)
+
+    expect(context.groupProps.tenant).toMatchObject({ plan: 'free', billing_state: 'free' })
   })
 
   it('reads a staff user with no tenant', async () => {

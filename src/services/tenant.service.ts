@@ -17,6 +17,7 @@ import {
   type MembershipWithUser,
 } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
+import { trackTrialStarted } from '@/services/billing/billing-analytics.service'
 import { sendTrialStarted } from '@/services/billing/billing-emails.service'
 import { initialBillingFor } from '@/services/billing/trial.service'
 import { withTransaction } from '@/services/database.service'
@@ -165,7 +166,10 @@ export async function createTenant(actor: Actor, input: CreateTenantInput): Prom
     },
     { access: 'member' }
   )
-  if (created.isTrialing) await sendTrialStarted(created.tenant.id)
+  if (created.isTrialing) {
+    await sendTrialStarted(created.tenant.id)
+    await trackTrialStarted(created.tenant.id, actor.userId)
+  }
   return created.tenant
 }
 

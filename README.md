@@ -394,7 +394,8 @@ sent it. The rules live in `analytics-event-builder.service.ts` and
    it the drain does not run there, so rows accumulate and retention prunes
    them with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
-   existed before carry their name, status and creation date. It queues one
+   existed before carry their name, status, creation date and plan
+   properties. It queues one
    `$groupidentify` marker per tenant and exits 1 if a batch could not be
    queued; a second run is harmless.
 4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`,

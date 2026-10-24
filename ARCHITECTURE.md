@@ -1068,7 +1068,17 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   so on one Worker whichever marker reaches PostHog last carries the latest
   committed state; two Worker replicas whose drains overlap can deliver an
   older one after a newer one, and the next marker for that tenant corrects
-  it. `pnpm analytics:backfill-groups` queues one marker per tenant.
+  it. `pnpm analytics:backfill-groups` queues one marker per tenant. A tenant
+  with a billing row also gets its plan properties: `plan`, `billing_state`,
+  `billing_interval` (while paying), `trial_start_date`, `trial_end_date`,
+  `trial_plan_name` (the plan a trial gives, once it had one),
+  `limit_hits_30d`, `open_upgrade_requests` and `paid_since` (the latest move
+  to `active` from a state that does not pay). `limit_hits_30d` counts the
+  `plan_limit_reached` and `plan_feature_blocked` events sent in 30 days, from
+  a Redis sorted set per tenant (`plan-limit-hits.service.ts`), since the
+  outbox drops a row once it is sent; when Redis cannot answer, the key is
+  left out rather than sent as 0. Every billing event queues its tenant's
+  marker, so the properties follow each change.
 - **Purges and what stays in PostHog.** `purgeUser` writes an
   `analytics_deletions` row due an hour later (PostHog deletes only events it
   ingested before the request) and deletes the user's undelivered outbox rows,
@@ -1087,6 +1097,64 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   streaming bodies untouched. It sits ahead of the body parsers and has no
   `on.error` handler, which would make http-proxy-middleware skip its own error
   response. Without `POSTHOG_PROJECT_KEY` it answers 503.
+
+### Billing events
+
+The billing events are product domain events
+(`src/services/billing/billing-analytics.service.ts`), emitted after the
+change commits, or after a refused write rolls back, and never inside a
+transaction. Every one joins its tenant's group and carries `plan` and
+`billing_state` as they are after the change. A change made by the provider,
+a job or the reconcile is sent as the person it is attributed to, with
+`access: 'system'`: the owner who started the checkout, the payer, or the
+user whose trial it is; only when nobody is known is it a system event. A
+staff member's own action in a customer tenant sends no product event, since
+its audit entry is forwarded already. The property `reason` is on the PII
+drop list, so a downgrade sends `downgrade_cause` and a failed payment
+`failure_code`. An event fixed by a stamp (the row version a change wrote, a
+subscription, a dispute, a trial's end) gets a row id derived from that
+stamp (`dedupedRowId`), so the same change passed in twice is written once.
+
+| Event                                                                 | Sent from                                                                                                                                                                                                                 | `distinct_id`                                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `trial_started`                                                       | `createTenant`, and the join that starts a staff-made tenant's trial                                                                                                                                                      | the creator, or the owner who joined                                               |
+| `trial_reminder_sent { days_left }`                                   | the three-day, last-day and midpoint trial reminders, once sent                                                                                                                                                           | the trial's user, else system                                                      |
+| `trial_extended { days }`                                             | not sent yet: the staff extension sends it                                                                                                                                                                                |                                                                                    |
+| `trial_ended`                                                         | `emitBillingDiff`: a trialing row moves to Free                                                                                                                                                                           | the trial's user, else system                                                      |
+| `plan_limit_approaching { key, used, limit }`                         | an invite or an expired invitation's resend that takes the tenant across `softAt` of a limit; once per tenant, key and hour                                                                                               | the member who wrote                                                               |
+| `plan_limit_reached { key, used, limit }`                             | an invite, resend or join the members limit refused, after its rollback                                                                                                                                                   | the inviter, or the joining user (system when the join was creating their account) |
+| `plan_feature_blocked { key }`                                        | `requireFeature`; once per tenant, key and hour                                                                                                                                                                           | the member refused                                                                 |
+| `upgrade_requested { key, surface }`                                  | not sent yet: the upgrade request route sends it                                                                                                                                                                          |                                                                                    |
+| `upgrade_request_fulfilled`                                           | `emitBillingDiff`, for each request a move to Paid fulfilled                                                                                                                                                              | the requester                                                                      |
+| `checkout_started { interval, amount_minor, currency, during_trial }` | `startCheckout`, for an upgrade (not an interval switch or a card change)                                                                                                                                                 | the owner                                                                          |
+| `checkout_confirmed`                                                  | `confirmCheckout`, for an upgrade checkout                                                                                                                                                                                | the owner                                                                          |
+| `subscription_activated { interval }`                                 | `emitBillingDiff`: the row becomes `active` with a new subscription                                                                                                                                                       | the owner who started the checkout                                                 |
+| `subscription_renewed`                                                | `emitBillingDiff`: an active row's paid period moves forward on the same subscription (the first charge after an upgrade during a trial included)                                                                         | the payer                                                                          |
+| `payment_failed { failure_code }`                                     | `emitBillingDiff`: `pastDueSince` is set; `retrying`, `halted` or `paused`                                                                                                                                                | the payer                                                                          |
+| `subscription_recovered`                                              | `emitBillingDiff`: a past-due row is active again                                                                                                                                                                         | the payer                                                                          |
+| `subscription_halted`                                                 | `emitBillingDiff`: `haltedAt` is set                                                                                                                                                                                      | the payer                                                                          |
+| `subscription_cancel_scheduled { by }`                                | `emitBillingDiff`: a cancel at period end (not a switch's), or an owner's cancel before the first charge; `by` is `owner`, `customer_bank` (the provider reported a cancel the app did not make), `staff` or `suspension` | the owner who cancelled, else the payer                                            |
+| `subscription_interval_change_scheduled`                              | `emitBillingDiff`: the next subscription is authenticated on the other interval                                                                                                                                           | the owner who started the switch                                                   |
+| `downgraded_to_free { downgrade_cause }`                              | `emitBillingDiff`: the row becomes `free`; `trial_ended`, `payment_failed`, `cancelled`, `staff` or `lifecycle`                                                                                                           | the payer, or the trial's user                                                     |
+| `payer_left`                                                          | `sendPayerLeft`, while a subscription runs                                                                                                                                                                                | the payer (system for a deleted account)                                           |
+| `duplicate_subscription_refunded`                                     | the sync's refund of a duplicate subscription                                                                                                                                                                             | the payer                                                                          |
+| `billing_reconciled { field }`                                        | `emitBillingDiff` from the reconcile: the first column it repaired                                                                                                                                                        | the payer                                                                          |
+| `dispute_opened`                                                      | the dispute webhook, when the tenant's dispute flag turns on                                                                                                                                                              | the payer                                                                          |
+
+The owner actions are audited too, as `billing_checkout_started`,
+`billing_cancel_scheduled`, `billing_interval_switch_scheduled` and
+`billing_card_change_started`. Those are the action log under other names;
+count the product events above in dashboards, never both.
+
+**Metric definitions** (from the billing design):
+
+- trial-to-paid at 30 and 90 days;
+- free-to-paid at 180 days;
+- time to upgrade;
+- paywall hit rate (tenants with ≥1 limit/feature block ÷ active tenants);
+- conversion per prompt surface;
+- payment recovery rate (`subscription_recovered` ÷ `payment_failed` tenants);
+- churn by `downgrade_cause`.
 
 ### Error tracking
 
@@ -1183,8 +1251,11 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   experiment is multivariate with `control` first. `FlagKey` makes an
   unregistered key a type error.
 - **Traits** are only `FLAG_TRAITS`: `platform_role`, `tenant_role`,
-  `app_env`, `account_created_days` and `tenant_created_days`, built from the
-  database at evaluation time and never stored in PostHog. There is no `app`
+  `app_env`, `account_created_days`, `tenant_created_days`, and the tenant's
+  `plan` and `billing_state`, built from the database at evaluation time.
+  `plan` and `billing_state` are read with the clock (a trial that ended
+  reads `free` before the job moves it) and are also the tenant group's
+  properties; the others are never stored in PostHog. There is no `app`
   trait, so a route gate and the UI always agree.
 - **Snapshot** (`flag-snapshot.service.ts`). Each process loads it at boot,
   reloads on a `reload` message and every 60 s, and keeps its copy when a

@@ -1228,6 +1228,22 @@ export class BillingRepository {
   }
 
   /**
+   * The user whose trial a workspace used: its creator, or the owner whose
+   * acceptance started a staff-made workspace's trial.
+   * @param tenantId - The workspace.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The user's id, or undefined when no trial names the workspace (or its user is gone).
+   */
+  async findTrialUserId(tenantId: string, executor: DbExecutor = db): Promise<string | undefined> {
+    const [row] = await executor
+      .select({ userId: userTrialModel.userId })
+      .from(userTrialModel)
+      .where(eq(userTrialModel.firstTrialTenantId, tenantId))
+      .limit(1)
+    return row?.userId
+  }
+
+  /**
    * Record which workspace used a user's trial.
    * @param userId - The user.
    * @param tenantId - The workspace.

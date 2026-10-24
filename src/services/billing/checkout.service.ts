@@ -55,6 +55,10 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import {
+  trackCheckoutConfirmed,
+  trackCheckoutStarted,
+} from '@/services/billing/billing-analytics.service'
 import { formatBillingDate } from '@/services/billing/billing-dates.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
@@ -770,7 +774,16 @@ async function checkoutAttempts(
       await discardCheckout(provider, tenantId, created)
     }
     delete state.created
-    await emitBillingDiff(stored.before, stored.after, 'owner')
+    await emitBillingDiff(stored.before, stored.after, 'owner', { actorUserId: actor.userId })
+    if (purpose === 'upgrade') {
+      await trackCheckoutStarted(stored.after, {
+        userId: actor.userId,
+        interval,
+        amountMinor: price.amountMinor,
+        currency: price.currency,
+        duringTrial: stored.before.state === 'trialing',
+      })
+    }
     return {
       purpose,
       keyId: provider.keyId,
@@ -965,6 +978,9 @@ export async function confirmCheckout(
   }
 
   await syncOrRetry(tenantId, 'confirm')
+  if (stored === row.pendingSubscriptionId) {
+    await trackCheckoutConfirmed(tenantId, actor.userId, stored)
+  }
 
   const user = await userRepository.findById(actor.userId)
   if (user !== undefined) {
@@ -990,7 +1006,9 @@ export async function confirmCheckout(
       const after = await billingRepository.updateVersioned(tenantId, locked.version, patch, tx)
       return after === undefined ? undefined : { before: locked, after }
     })
-    if (written !== undefined) await emitBillingDiff(written.before, written.after, 'owner')
+    if (written !== undefined) {
+      await emitBillingDiff(written.before, written.after, 'owner', { actorUserId: actor.userId })
+    }
   }
   return getTenantBilling(actor, tenantId)
 }
@@ -1132,7 +1150,7 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
     )
     return { before: locked, after }
   })
-  await emitBillingDiff(written.before, written.after, 'owner')
+  await emitBillingDiff(written.before, written.after, 'owner', { actorUserId: actor.userId })
   if (nextFailure !== undefined) throw nextFailure
   return getTenantBilling(actor, tenantId)
 }

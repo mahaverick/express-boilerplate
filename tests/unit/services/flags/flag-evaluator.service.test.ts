@@ -422,6 +422,33 @@ describe('isFlagPropertyMatch', () => {
     ).toBe(true)
   })
 
+  it('matches the plan and billing state group traits', () => {
+    const paid: FlagContext = {
+      ...CONTEXT,
+      groupProps: { tenant: { plan: 'paid', billing_state: 'trialing' } },
+    }
+    expect(
+      isFlagPropertyMatch(
+        { key: 'plan', type: 'group', group_type_index: 0, operator: 'exact', value: ['paid'] },
+        paid,
+        1
+      )
+    ).toBe(true)
+    expect(
+      isFlagPropertyMatch(
+        {
+          key: 'billing_state',
+          type: 'group',
+          group_type_index: 0,
+          operator: 'exact',
+          value: ['active'],
+        },
+        paid,
+        1
+      )
+    ).toBe(false)
+  })
+
   it('never lets a supplied $group_key override the real group key', () => {
     const forged: FlagContext = { ...CONTEXT, groupProps: { tenant: { $group_key: 'forged' } } }
     expect(

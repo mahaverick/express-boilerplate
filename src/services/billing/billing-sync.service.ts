@@ -28,6 +28,7 @@ import type {
 } from '@/database/models/billing.model'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { withTransaction } from '@/services/database.service'
@@ -514,6 +515,7 @@ async function refundDuplicate(
         kind: 'duplicate_refunded',
         message: `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(outcome.amountMinor)} paise in ${outcome.refundId}.`,
       })
+      await trackProviderEvent(tenantId, 'duplicate_subscription_refunded', subscriptionId)
       return
     }
     case 'nothing_paid': {
