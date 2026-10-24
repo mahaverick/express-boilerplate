@@ -87,7 +87,6 @@ type ReminderColumn =
   | typeof tenantBillingModel.trialMidpointSentAt
   | typeof tenantBillingModel.trialReminder3dSentAt
   | typeof tenantBillingModel.trialReminderLastDaySentAt
-  | typeof tenantBillingModel.trialEndedNotifiedAt
   | typeof tenantBillingModel.winback7dSentAt
   | typeof tenantBillingModel.winback30dSentAt
   | typeof tenantBillingModel.lifecycleCancelSentAt
@@ -277,6 +276,21 @@ export class BillingRepository {
    */
   async appendHistory(entry: NewBillingStateHistory, tx: DbTransaction): Promise<void> {
     await tx.insert(billingStateHistoryModel).values(entry)
+  }
+
+  /**
+   * Move every history row of one workspace back in time, for
+   * `pnpm billing:time-travel` on local only: the win-back emails count from
+   * the latest move to Free, so it moves with the row's dates.
+   * @param tenantId - The workspace.
+   * @param ms - How far back, in milliseconds.
+   * @param tx - The open transaction that moves the row's dates.
+   */
+  async shiftHistoryBack(tenantId: string, ms: number, tx: DbTransaction): Promise<void> {
+    await tx
+      .update(billingStateHistoryModel)
+      .set({ at: sql`${billingStateHistoryModel.at} - make_interval(secs => ${ms / 1000})` })
+      .where(eq(billingStateHistoryModel.tenantId, tenantId))
   }
 
   /**

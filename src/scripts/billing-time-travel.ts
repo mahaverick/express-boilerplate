@@ -3,13 +3,16 @@
  * only, move one workspace's billing clock back by whole days, so a walk
  * reaches a trial end, a grace end or a period end without waiting. It
  * shifts the row's trial start and end, period end, past-due, halt and
- * pause stamps, and every date of the workspace's fake subscriptions so a
- * sync agrees, then queues a sync of the workspace and one frequent billing
- * run. A worker must be running to take them (`pnpm dev` starts one).
+ * pause stamps, the period end a renewal reminder was sent for (so it still
+ * names the same period), the workspace's state history (so the win-back
+ * days count from the moved move to Free), and every date of the
+ * workspace's fake subscriptions so a sync agrees, then queues a sync of the
+ * workspace and one frequent billing run. A worker must be running to take
+ * them (`pnpm dev` starts one).
  *
  * It refuses a workspace whose row names a provider other than the fake, so
- * it never shifts a real subscription's dates. Reminder and notice stamps
- * are not shifted: a reminder already sent stays sent.
+ * it never shifts a real subscription's dates. The other reminder and notice
+ * stamps are not shifted: a reminder already sent stays sent.
  * Prints the slug and id only.
  */
 import { fileURLToPath } from 'node:url'
@@ -52,6 +55,7 @@ const SHIFTED_COLUMNS = [
   'pastDueSince',
   'haltedAt',
   'pausedAt',
+  'renewalReminderForPeriodEnd',
 ] as const satisfies readonly (keyof TenantBillingRecord)[]
 
 /**
@@ -143,8 +147,8 @@ async function shiftFake(
 }
 
 /**
- * Move the row's dates back under its lock, when it still holds the same
- * provider and subscriptions it was read with.
+ * Move the row's dates, and its workspace's history, back under its lock,
+ * when it still holds the same provider and subscriptions it was read with.
  * @param tenantId - The workspace.
  * @param read - The row as read before the fake moved.
  * @param ms - How far back, in milliseconds.
@@ -172,7 +176,9 @@ async function shiftRow(
       const value = locked[column]
       patch[column] = value === null ? null : new Date(value.getTime() - ms)
     }
-    return billingRepository.updateVersioned(tenantId, locked.version, patch, tx)
+    const shifted = await billingRepository.updateVersioned(tenantId, locked.version, patch, tx)
+    if (shifted !== undefined) await billingRepository.shiftHistoryBack(tenantId, ms, tx)
+    return shifted
   })
 }
 

@@ -333,6 +333,18 @@ describe('runBillingSeed', () => {
   })
 })
 
+/**
+ * A workspace's history row times, oldest first.
+ * @param id - The workspace.
+ * @returns Each row's time in milliseconds.
+ */
+async function historyTimes(id: string): Promise<number[]> {
+  const rows = await sql<{ ms: string }[]>`
+    select (extract(epoch from at) * 1000)::bigint::text as ms
+    from billing_state_history where tenant_id = ${id} order by at, id`
+  return rows.map((row) => Number(row.ms))
+}
+
 describe('runBillingTimeTravel', () => {
   it('moves a trial past its end, queues a sync and a run, and the run moves it to Free', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
@@ -381,6 +393,27 @@ describe('runBillingTimeTravel', () => {
       (before.currentPeriodEnd?.getTime() ?? 0) - DAY_MS
     )
     expect(subAfter.currentEnd?.getTime()).toBe((subBefore.currentEnd?.getTime() ?? 0) - DAY_MS)
+  })
+
+  it("shifts the renewal reminder's period end and the workspace's history with the dates", async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const id = await tenantId('billing-past-due-halted')
+    await sql`update tenant_billing set renewal_reminder_for_period_end = current_period_end where tenant_id = ${id}`
+    const before = await readBilling(id)
+    const historyBefore = await historyTimes(id)
+    expect(historyBefore.length).toBeGreaterThan(0)
+
+    expect(
+      await runBillingTimeTravel(['--tenant', 'billing-past-due-halted', '--days', '1'], SEED_ENV)
+    ).toBe(0)
+
+    const after = await readBilling(id)
+    expect(after.renewalReminderForPeriodEnd?.getTime()).toBe(
+      (before.renewalReminderForPeriodEnd?.getTime() ?? 0) - DAY_MS
+    )
+    // Still the same period end, so a reminder already sent stays sent.
+    expect(after.renewalReminderForPeriodEnd).toStrictEqual(after.currentPeriodEnd)
+    expect(await historyTimes(id)).toStrictEqual(historyBefore.map((at) => at - DAY_MS))
   })
 
   it('changes no row when the fake subscriptions cannot be moved', async () => {

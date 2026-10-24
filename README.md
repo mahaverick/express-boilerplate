@@ -243,19 +243,22 @@ Mailpit), with members `billing-member-1@example.test` to
 Paid workspaces get subscriptions on the fake provider in the matching
 status, so a sync keeps each one where the seed put it. The seed writes rows
 directly and sends no email, notification or analytics event. Run it again to
-put every workspace back: it keeps their ids, resets their billing, members,
-grants, requests, alerts and history, and ends the fake subscriptions it
-replaces. It prints each slug, id and state.
+put every workspace back: it keeps their ids, restores each one's name and
+makes a suspended one active again, resets their billing, members, grants,
+requests, alerts and history, and ends the fake subscriptions it replaces. It
+prints each slug, id and state.
 
 `pnpm billing:time-travel -- --tenant <slug> --days <n>` (local only) moves
 one workspace's trial start and end, period end, past-due, halt and pause
-dates back `n` days, with its fake subscriptions' dates, then queues a sync of
-it and one billing run, which a running worker (`pnpm dev`) takes within
-seconds: a trial moved past its end goes to Free. The fake never charges a
-subscription by itself, so after a scheduled switch hands over, the new
-subscription stays unpaid on the fake. Reminder and notice stamps do not move: one
-already sent stays sent, and one not yet sent goes out on the next run once
-its time has come.
+dates back `n` days, with the period end its renewal reminder was sent for,
+its state history (so the win-back emails count from the moved move to Free)
+and its fake subscriptions' dates, then queues a sync of it and one billing
+run, which a running worker (`pnpm dev`) takes within seconds: a trial moved
+past its end goes to Free. The fake never charges a subscription by itself,
+so after a scheduled switch hands over, the new subscription stays unpaid on
+the fake. The other reminder and notice stamps do not move: one already sent
+stays sent, and one not yet sent goes out on the next run once its time has
+come.
 It refuses a workspace on a real provider, so a real subscription's dates
 never move.
 
