@@ -10,10 +10,14 @@
  * Frequent: lapsed trials move to Free; grace endings, cancelling periods
  * past their buffer and due interval switches are synced; the subscriptions
  * of suspended (cycle end) and archived (now) workspaces are cancelled;
- * grants and upgrade requests lapse. Daily: the reconcile queues a sync for
- * every row that holds a subscription, for each running subscription whose
- * notes name a workspace whose row does not hold it, and for each workspace
- * whose webhook event failed in the last three days.
+ * grants and upgrade requests lapse; the trial reminders go out (three days
+ * before the end, on the last day in the workspace's time zone, halfway).
+ * Daily: the reconcile queues a sync for every row that holds a subscription,
+ * for each running subscription whose notes name a workspace whose row does
+ * not hold it, and for each workspace whose webhook event failed in the last
+ * three days; the yearly renewal reminder and the day-7 and day-30 win-back
+ * emails go out. A reminder is claimed before it is sent, and a suspended or
+ * archived workspace is never claimed.
  *
  * The lifecycle transactions (suspend, archive) never touch the billing row:
  * an invite locks the billing row before invitation rows, and an archive
@@ -29,17 +33,26 @@ import { BillingRepository, type ProviderScope } from '@/repositories/billing.re
 import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { record } from '@/services/audit.service'
+import { billingTimeZone } from '@/services/billing/billing-dates.service'
+import {
+  sendRenewalUpcoming,
+  sendTrialEnding,
+  sendTrialEndsToday,
+  sendTrialMidpoint,
+  sendWinback,
+} from '@/services/billing/billing-emails.service'
 import {
   emitBillingDiff,
   publishEntitlementsChanged,
 } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
-import { withTransaction } from '@/services/database.service'
+import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
 import { isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { isRunning } from '@/utilities/billing-state-machine.utilities'
+import { formatDateInZone } from '@/utilities/date-text.utilities'
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
@@ -56,6 +69,26 @@ const PAGE_SIZE = 100
  * How many lifecycle cancels one claim takes.
  */
 const LIFECYCLE_CLAIM_SIZE = 25
+
+/**
+ * How many reminders one claim takes.
+ */
+const REMINDER_CLAIM_SIZE = 25
+
+/**
+ * How many days before a yearly plan renews its reminder goes out.
+ */
+const RENEWAL_REMINDER_DAYS = 7
+
+/**
+ * When each win-back email goes out: from its day after the workspace fell
+ * to Free, for a week, so a missed daily run still sends it and a workspace
+ * long on Free gets none.
+ */
+const WINBACK_WINDOWS = {
+  '7d': { fromDays: 7, toDays: 14 },
+  '30d': { fromDays: 30, toDays: 37 },
+} as const
 
 /**
  * How far back the reconcile looks for new subscriptions and failed events.
@@ -482,6 +515,70 @@ async function expireGrants(now: Date, counts: StepCounts): Promise<void> {
 }
 
 /**
+ * Claim reminders in batches and send each claimed one. A claim commits
+ * before its send, so two runs never send the same reminder; a send that
+ * fails is logged by the sender and its claim stands, since its once-only
+ * key would stop a second send anyway.
+ * @param counts - The step's counts, added to.
+ * @param claim - Claims up to `REMINDER_CLAIM_SIZE` rows in the transaction.
+ * @param send - Sends one claimed row's reminder; never rejects.
+ */
+async function claimAndSend(
+  counts: StepCounts,
+  claim: (tx: DbTransaction) => Promise<TenantBillingRecord[]>,
+  send: (row: TenantBillingRecord) => Promise<void>
+): Promise<void> {
+  for (;;) {
+    const claimed = await withTransaction(claim)
+    for (const row of claimed) {
+      await send(row)
+      counts.acted += 1
+    }
+    if (claimed.length < REMINDER_CLAIM_SIZE) return
+  }
+}
+
+/**
+ * Send one trial's last-day reminder when its trial ends today in the
+ * workspace's time zone, claiming it first.
+ * @param row - A candidate trial, read without a lock.
+ * @param now - The run's time.
+ * @returns `acted` when this call sent it.
+ */
+async function remindLastDay(row: TenantBillingRecord, now: Date): Promise<'acted' | 'skipped'> {
+  if (row.trialEndsAt === null) return 'skipped'
+  const timeZone = await billingTimeZone(row.tenantId)
+  if (formatDateInZone(row.trialEndsAt, timeZone) !== formatDateInZone(now, timeZone)) {
+    return 'skipped'
+  }
+  const claimed = await withTransaction((tx) =>
+    billingRepository.claimTrialLastDayReminder(row.tenantId, now, tx)
+  )
+  if (claimed === undefined) return 'skipped'
+  await sendTrialEndsToday(claimed, now)
+  return 'acted'
+}
+
+/**
+ * The win-back step for one of the two emails.
+ * @param day - Which email.
+ * @returns The step.
+ */
+function winbackStep(day: keyof typeof WINBACK_WINDOWS): BillingStep {
+  const { fromDays, toDays } = WINBACK_WINDOWS[day]
+  return {
+    name: `winback_${day}`,
+    run: (now, counts) =>
+      claimAndSend(
+        counts,
+        (tx) =>
+          billingRepository.claimWinbacks(day, now, fromDays, toDays, REMINDER_CLAIM_SIZE, tx),
+        (row) => sendWinback(row, day, now)
+      ),
+  }
+}
+
+/**
  * The frequent run's steps, in order. Each is independent of the others.
  */
 const FREQUENT_STEPS: readonly BillingStep[] = [
@@ -560,6 +657,34 @@ const FREQUENT_STEPS: readonly BillingStep[] = [
     run: async (now, counts) => {
       counts.acted += await billingRepository.deleteExpiredUpgradeRequests(now)
     },
+  },
+  {
+    name: 'trial_ending_reminders',
+    run: (now, counts) =>
+      claimAndSend(
+        counts,
+        (tx) => billingRepository.claimTrialEndingReminders(now, REMINDER_CLAIM_SIZE, tx),
+        (row) => sendTrialEnding(row, now)
+      ),
+  },
+  {
+    name: 'trial_last_day_reminders',
+    run: (now, counts) =>
+      eachRow(
+        'trial_last_day_reminders',
+        counts,
+        (after) => billingRepository.listTrialLastDayCandidates(now, after, PAGE_SIZE),
+        (row) => remindLastDay(row, now)
+      ),
+  },
+  {
+    name: 'trial_midpoint_reminders',
+    run: (now, counts) =>
+      claimAndSend(
+        counts,
+        (tx) => billingRepository.claimTrialMidpointReminders(now, REMINDER_CLAIM_SIZE, tx),
+        (row) => sendTrialMidpoint(row, now)
+      ),
   },
 ]
 
@@ -674,12 +799,30 @@ const DAILY_STEPS: readonly BillingStep[] = [
       }
     },
   },
+  {
+    name: 'renewal_reminders',
+    run: (now, counts) =>
+      claimAndSend(
+        counts,
+        (tx) =>
+          billingRepository.claimRenewalReminders(
+            now,
+            RENEWAL_REMINDER_DAYS,
+            REMINDER_CLAIM_SIZE,
+            tx
+          ),
+        sendRenewalUpcoming
+      ),
+  },
+  winbackStep('7d'),
+  winbackStep('30d'),
 ]
 
 /**
  * The frequent run, every 15 minutes: lapsed trials, grace endings,
  * cancelling periods past their buffer, due interval switches, lifecycle
- * cancels, lapsed grants and expired upgrade requests. Never rejects.
+ * cancels, lapsed grants, expired upgrade requests and the trial reminders.
+ * Never rejects.
  * @param now - The run's time; defaults to now.
  * @returns Each step's outcome.
  */
@@ -689,9 +832,9 @@ export async function runFrequentBilling(now = new Date()): Promise<BillingRunRe
 
 /**
  * The daily run, at 03:30 UTC: the reconcile's row pass, its sweep of recent
- * subscriptions, and a resync for each recently failed webhook event. Each
- * queues `sync-tenant` jobs, so the syncs spread over the billing Worker.
- * Never rejects.
+ * subscriptions, and a resync for each recently failed webhook event, which
+ * queue `sync-tenant` jobs so the syncs spread over the billing Worker; then
+ * the yearly renewal reminders and the win-back emails. Never rejects.
  * @param now - The run's time; defaults to now.
  * @returns Each step's outcome.
  */

@@ -92,7 +92,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof MovedToFreeVariables> = [
 
 /**
  * Render the moved to free email: plain-text and HTML parts with one
- * button (none for the lifecycle cause, which asks for no action), every value escaped in the HTML part.
+ * button (none for the lifecycle cause, whose next step is support, not Billing), every value escaped in the HTML part.
  * @param variables - See `MovedToFreeVariables`.
  * @returns The rendered subject, text and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
@@ -109,7 +109,10 @@ export function renderMovedToFreeTemplate(variables: MovedToFreeVariables): Rend
     subject: `Your ${appName} workspace moved to Free`,
     appName,
     paragraphs: isLifecycle
-      ? [`${tenantName} moved to Free. ${causeSentence(downgradeCause)}`]
+      ? [
+          `${tenantName} moved to Free. ${causeSentence(downgradeCause)}`,
+          'To restore it, contact support.',
+        ]
       : [
           `${tenantName} moved to Free. ${causeSentence(downgradeCause)}`.trimEnd(),
           'Nothing is deleted. To get Paid back, upgrade from Billing.',

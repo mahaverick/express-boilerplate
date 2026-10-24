@@ -882,13 +882,19 @@ lists of independent named steps; a step that fails is logged and the rest
 still run. `scheduler-frequent` moves lapsed trials to Free, syncs workspaces
 whose grace, cancelling period (plus the 3-day buffer) or interval switch is
 due, cancels the subscriptions of suspended (at cycle end) and archived (now)
-workspaces, and lapses grants and upgrade requests; it runs with payments off
-too, skipping the provider steps. `scheduler-daily` is the reconcile: it queues
+workspaces, lapses grants and upgrade requests, and sends the trial
+reminders: three days before the end, on the last day in the workspace's time
+zone, and halfway through a trial of six days or more. It runs with payments
+off too, skipping the provider steps. `scheduler-daily` is the reconcile: it queues
 a `sync-tenant` job for every row that holds a subscription (rows of another
 provider or mode, and Free rows whose only subscription has ended, are skipped
 and counted), for each running subscription of the last three days whose
 notes name a workspace whose row does not hold it, and for each workspace
-whose webhook event failed in the last three days. Two overlapping runs act
+whose webhook event failed in the last three days. It also sends the yearly
+renewal reminder a week before the period ends and the win-back emails on days
+7 and 30 after a trial or paid plan fell to Free. A reminder is claimed in its
+`tenant_billing` column before it is sent, and a suspended or archived
+workspace is never claimed. Two overlapping runs act
 once: each step claims its rows, re-checks them under the row lock, or leaves
 them to the sync's versioned write. A run occupies one of the billing
 Worker's two slots while it lasts, so webhook and sync jobs share the other;

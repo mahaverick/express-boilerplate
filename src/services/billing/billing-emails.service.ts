@@ -19,6 +19,12 @@
  * `job_key`, which outlives the job, so a re-run of the same change, before
  * or after the mail went out, enqueues nothing new (`addEmailJobOnce`).
  *
+ * The same helpers send the mail no billing change carries: the schedulers'
+ * trial, renewal and win-back reminders, each claimed first; the trial's
+ * start, after the commit that started it; a join refused for the members
+ * limit (an in-app notice alone, once a day); and the payer's leaving while a
+ * subscription runs, to the remaining owners only.
+ *
  * A failed send is logged with ids only and never fails the billing change.
  */
 import { createHash } from 'node:crypto'
@@ -39,6 +45,8 @@ import type { Tenant } from '@/database/models/tenant.model'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJobOnce } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
+import { displayName } from '@/presenters/billing.presenter'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -48,7 +56,7 @@ import { buildBillingLink, buildTenantHomeLink } from '@/services/billing/billin
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
-import { graceEndsAt } from '@/utilities/billing-rules.utilities'
+import { graceEndsAt, mergeEntitlements } from '@/utilities/billing-rules.utilities'
 import {
   billingTransitions,
   type BillingTransition,
@@ -61,6 +69,14 @@ const tenantRepository = new TenantRepository()
 const membershipRepository = new UserMembershipRepository()
 const planRepository = new PlanRepository()
 const userRepository = new UserRepository()
+const billingRepository = new BillingRepository()
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How a payer who gave no name is named.
+ */
+const UNNAMED_PAYER = 'A teammate'
 
 /**
  * What a committed change carries besides its rows.
@@ -229,29 +245,36 @@ async function mailOwners(
 }
 
 /**
- * Notify each owner, the notification carrying the email, and mail the
- * billing address directly.
+ * The email a notification carries.
+ */
+interface NoticeEmail {
+  templateKey: EmailTemplateKey
+  messageFor: MessageFor
+}
+
+/**
+ * Notify each owner, the notification carrying the email when it has one,
+ * and mail the billing address directly.
  * @param context - The workspace.
  * @param notice - The notification and its email.
  * @param notice.type - The notification type.
- * @param notice.templateKey - The email's template.
  * @param notice.stamp - What fixes this transition.
  * @param notice.title - The in-app title.
  * @param notice.body - The in-app body.
- * @param notice.messageFor - The email for one address.
+ * @param notice.email - The email it carries, or null for an in-app notice alone.
  */
 async function notifyOwners(
   context: MailContext,
   notice: {
     type: NotificationType
-    templateKey: EmailTemplateKey
     stamp: string
     title: string
     body: string
-    messageFor: MessageFor
+    email: NoticeEmail | null
   }
 ): Promise<void> {
   const tenantId = context.tenant.id
+  const { email } = notice
   for (const owner of context.owners) {
     const dedupeKey = `billing-${notice.type}-${sendKey(tenantId, notice.stamp, owner.userId)}`
     try {
@@ -262,8 +285,10 @@ async function notifyOwners(
           title: notice.title,
           body: notice.body,
           metadata: { tenantId, slug: context.tenant.slug },
-          email: notice.messageFor(owner.email),
-          emailContext: { tenantId, linkApp: 'web' },
+          ...(email !== null && {
+            email: email.messageFor(owner.email),
+            emailContext: { tenantId, linkApp: 'web' as const },
+          }),
           dedupeKey,
         },
         { jobId: dedupeKey }
@@ -277,13 +302,13 @@ async function notifyOwners(
       })
     }
   }
-  if (context.billingAddress !== null) {
+  if (email !== null && context.billingAddress !== null) {
     await mailOnce(
       context,
-      notice.templateKey,
+      email.templateKey,
       notice.stamp,
       { userId: '', email: context.billingAddress },
-      notice.messageFor
+      email.messageFor
     )
   }
 }
@@ -373,27 +398,27 @@ async function sendTransition(
       if (price === undefined || graceEnd === null || stoppedAt === null) break
       const amount = formatRupees(price.amountMinor)
       const graceEndsOn = dateOf(graceEnd)
+      const isPaused = stoppedBy === 'paused'
       await notifyOwners(context, {
         type: 'billing_payment_failed',
-        templateKey: 'payment_failed',
         stamp: `${stoppedBy}-${String(stoppedAt.getTime())}`,
-        title:
-          stoppedBy === 'paused'
-            ? 'Your Paid subscription is paused'
-            : `Your payment of ₹${amount} failed`,
-        body: `Update your card by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
-        messageFor: (to) => ({
-          to,
+        title: isPaused ? 'Your Paid subscription is paused' : `Your payment of ₹${amount} failed`,
+        body: `Update your ${isPaused ? 'payment method' : 'card'} by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
+        email: {
           templateKey: 'payment_failed',
-          variables: {
-            appName,
-            tenantName,
-            amount,
-            stoppedBy,
-            graceEndsOn,
-            billingLink: buildBillingLink(tenant.slug, 'payment_failed'),
-          },
-        }),
+          messageFor: (to) => ({
+            to,
+            templateKey: 'payment_failed',
+            variables: {
+              appName,
+              tenantName,
+              amount,
+              stoppedBy,
+              graceEndsOn,
+              billingLink: buildBillingLink(tenant.slug, 'payment_failed'),
+            },
+          }),
+        },
       })
       return
     }
@@ -560,6 +585,441 @@ export async function sendBillingDiffEmails(
     logger.error('Could not send the billing emails for a change', {
       error: redactedForLog(error),
       tenantId,
+    })
+  }
+}
+
+/**
+ * Read what a scheduled or member-action mail needs for one workspace: none
+ * for a missing, platform, suspended or archived workspace, whose owners are
+ * never asked to act in Billing.
+ * @param tenantId - The workspace.
+ * @param billingEmail - The address the payer gave, or null to mail owners alone.
+ * @returns The context, or undefined when the workspace gets no such mail.
+ */
+async function activeContext(
+  tenantId: string,
+  billingEmail: string | null
+): Promise<MailContext | undefined> {
+  const tenant = await tenantRepository.findByIdIncludingDeleted(tenantId)
+  if (tenant === undefined || tenant.isPlatform) return undefined
+  if (tenant.lifecycleState !== 'active' || tenant.deletedAt !== null) return undefined
+  return loadContext(tenant, billingEmail)
+}
+
+/**
+ * Paid's monthly and yearly prices, formatted.
+ * @returns The prices, or undefined when Paid has no active INR price for either.
+ */
+async function paidPrices(): Promise<{ monthly: string; yearly: string } | undefined> {
+  const paid = await planRepository.findPlanByKey('paid')
+  if (paid === undefined) return undefined
+  const monthly = await planRepository.activePrice(paid.id, 'INR', 'month')
+  const yearly = await planRepository.activePrice(paid.id, 'INR', 'year')
+  if (monthly === undefined || yearly === undefined) return undefined
+  return { monthly: formatRupees(monthly.amountMinor), yearly: formatRupees(yearly.amountMinor) }
+}
+
+/**
+ * The members limit a workspace will have on Free, its grants included, and
+ * the seats it uses now.
+ * @param tenantId - The workspace.
+ * @param now - The time the grants are read at.
+ * @returns The limit and the seats, or undefined when Free has no members limit.
+ */
+async function freeMembers(
+  tenantId: string,
+  now: Date
+): Promise<{ limit: number; used: number } | undefined> {
+  const free = await planRepository.findPlanByKey('free')
+  if (free === undefined) return undefined
+  const grants = await planRepository.listActiveGrants(tenantId)
+  const limit = mergeEntitlements('free', free.entitlements, grants, now).values.members
+  if (typeof limit !== 'number') return undefined
+  const entitlements = await getEffectiveEntitlements(tenantId)
+  return { limit, used: entitlements.limits.members?.used ?? 0 }
+}
+
+/**
+ * A number of members, with the noun in the right form.
+ * @param count - How many.
+ * @returns For example "1 member" or "3 members".
+ */
+function membersCount(count: number): string {
+  const { unit } = ENTITLEMENTS.members
+  return `${String(count)} ${count === 1 ? unit.one : unit.other}`
+}
+
+/**
+ * Log a scheduled or member-action mail that could not be sent, by ids.
+ * @param error - What went wrong.
+ * @param tenantId - The workspace.
+ * @param templateKey - The mail.
+ */
+function logSendFailure(error: unknown, tenantId: string, templateKey: string): void {
+  logger.error('Could not send a billing email', {
+    error: redactedForLog(error),
+    tenantId,
+    templateKey,
+  })
+}
+
+/**
+ * Log a mail skipped because a value it states is missing, by ids.
+ * @param tenantId - The workspace.
+ * @param templateKey - The mail.
+ */
+function logSkipped(tenantId: string, templateKey: string): void {
+  logger.warn('A billing email had no date or price to send with', { tenantId, templateKey })
+}
+
+/**
+ * Remind the owners that the trial ends within three days: a notification
+ * carrying the email, and the email to the billing address. Once per trial
+ * end. Never rejects.
+ * @param row - The claimed trial.
+ * @param now - The run's time.
+ */
+export async function sendTrialEnding(row: TenantBillingRecord, now: Date): Promise<void> {
+  const { tenantId } = row
+  try {
+    const context = await activeContext(tenantId, row.billingEmail)
+    if (context === undefined) return
+    const prices = await paidPrices()
+    const members = await freeMembers(tenantId, now)
+    if (row.trialEndsAt === null || prices === undefined || members === undefined) {
+      logSkipped(tenantId, 'trial_ending')
+      return
+    }
+    const { tenant, appName } = context
+    const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
+    const memberLimit = String(members.limit)
+    const membersUsed = String(members.used)
+    await notifyOwners(context, {
+      type: 'billing_trial_ending',
+      stamp: String(row.trialEndsAt.getTime()),
+      title: `Your Paid trial ends on ${trialEndsOn}`,
+      body: `After ${trialEndsOn}, ${tenant.name} moves to Free. Free allows ${membersCount(members.limit)}, and it has ${membersUsed}. To keep Paid, upgrade from Billing.`,
+      email: {
+        templateKey: 'trial_ending',
+        messageFor: (to) => ({
+          to,
+          templateKey: 'trial_ending',
+          variables: {
+            appName,
+            tenantName: tenant.name,
+            trialEndsOn,
+            memberLimit,
+            membersUsed,
+            monthlyPrice: prices.monthly,
+            yearlyPrice: prices.yearly,
+            billingLink: buildBillingLink(tenant.slug, 'trial_ending'),
+          },
+        }),
+      },
+    })
+  } catch (error) {
+    logSendFailure(error, tenantId, 'trial_ending')
+  }
+}
+
+/**
+ * Tell the owners and the billing address that the trial ends today. Once
+ * per trial end. Never rejects.
+ * @param row - The claimed trial.
+ * @param now - The run's time.
+ */
+export async function sendTrialEndsToday(row: TenantBillingRecord, now: Date): Promise<void> {
+  const { tenantId } = row
+  try {
+    const context = await activeContext(tenantId, row.billingEmail)
+    if (context === undefined) return
+    const prices = await paidPrices()
+    const members = await freeMembers(tenantId, now)
+    if (row.trialEndsAt === null || prices === undefined || members === undefined) {
+      logSkipped(tenantId, 'trial_ends_today')
+      return
+    }
+    const { tenant, appName } = context
+    await mailOwners(context, 'trial_ends_today', String(row.trialEndsAt.getTime()), (to) => ({
+      to,
+      templateKey: 'trial_ends_today',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        memberLimit: String(members.limit),
+        membersUsed: String(members.used),
+        monthlyPrice: prices.monthly,
+        yearlyPrice: prices.yearly,
+        billingLink: buildBillingLink(tenant.slug, 'trial_ends_today'),
+      },
+    }))
+  } catch (error) {
+    logSendFailure(error, tenantId, 'trial_ends_today')
+  }
+}
+
+/**
+ * Up to three facts about what a workspace uses, one per line, such as
+ * "2 members".
+ * @param tenantId - The workspace.
+ * @returns The lines, joined by newlines.
+ */
+async function usageSummary(tenantId: string): Promise<string> {
+  const entitlements = await getEffectiveEntitlements(tenantId)
+  const lines: string[] = []
+  for (const [key, usage] of Object.entries(entitlements.limits)) {
+    const definition: EntitlementDefinition = ENTITLEMENTS[key as EntitlementKey]
+    const unit = definition.unit ?? { one: key, other: key }
+    lines.push(`${String(usage.used)} ${usage.used === 1 ? unit.one : unit.other}`)
+  }
+  return lines.slice(0, 3).join('\n')
+}
+
+/**
+ * Tell the owners and the billing address that half the trial has passed,
+ * with what the workspace uses. Once per trial end. Never rejects.
+ * @param row - The claimed trial.
+ * @param now - The run's time.
+ */
+export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Promise<void> {
+  const { tenantId } = row
+  try {
+    const context = await activeContext(tenantId, row.billingEmail)
+    if (context === undefined) return
+    if (row.trialEndsAt === null) {
+      logSkipped(tenantId, 'trial_midpoint')
+      return
+    }
+    const { tenant, appName } = context
+    const daysLeft = String(Math.ceil((row.trialEndsAt.getTime() - now.getTime()) / DAY_MS))
+    const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
+    const summary = await usageSummary(tenantId)
+    await mailOwners(context, 'trial_midpoint', String(row.trialEndsAt.getTime()), (to) => ({
+      to,
+      templateKey: 'trial_midpoint',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        daysLeft,
+        trialEndsOn,
+        usageSummary: summary,
+        billingLink: buildBillingLink(tenant.slug, 'trial_midpoint'),
+      },
+    }))
+  } catch (error) {
+    logSendFailure(error, tenantId, 'trial_midpoint')
+  }
+}
+
+/**
+ * Tell the owners and the billing address that a yearly plan renews soon,
+ * for how much. Once per period end. Never rejects.
+ * @param row - The claimed row.
+ */
+export async function sendRenewalUpcoming(row: TenantBillingRecord): Promise<void> {
+  const { tenantId } = row
+  try {
+    const context = await activeContext(tenantId, row.billingEmail)
+    if (context === undefined) return
+    const [price] = row.priceId === null ? [] : await planRepository.findPricesByIds([row.priceId])
+    if (row.currentPeriodEnd === null || price === undefined) {
+      logSkipped(tenantId, 'renewal_upcoming')
+      return
+    }
+    const { tenant, appName } = context
+    const renewsOn = formatDateInZone(row.currentPeriodEnd, context.timeZone)
+    await mailOwners(context, 'renewal_upcoming', String(row.currentPeriodEnd.getTime()), (to) => ({
+      to,
+      templateKey: 'renewal_upcoming',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        renewsOn,
+        amount: formatRupees(price.amountMinor),
+        billingLink: buildBillingLink(tenant.slug, 'renewal_upcoming'),
+      },
+    }))
+  } catch (error) {
+    logSendFailure(error, tenantId, 'renewal_upcoming')
+  }
+}
+
+/**
+ * Remind the owners and the billing address of a Free workspace what Paid
+ * adds. Once per claim, so once per Free period and day. Never rejects.
+ * @param row - The claimed row.
+ * @param day - Which of the two win-back emails.
+ * @param now - The run's time.
+ */
+export async function sendWinback(
+  row: TenantBillingRecord,
+  day: '7d' | '30d',
+  now: Date
+): Promise<void> {
+  const { tenantId } = row
+  try {
+    const context = await activeContext(tenantId, row.billingEmail)
+    if (context === undefined) return
+    const prices = await paidPrices()
+    const members = await freeMembers(tenantId, now)
+    const claimedAt = day === '7d' ? row.winback7dSentAt : row.winback30dSentAt
+    if (prices === undefined || members === undefined || claimedAt === null) {
+      logSkipped(tenantId, 'winback')
+      return
+    }
+    const { tenant, appName } = context
+    await mailOwners(context, 'winback', `${day}-${String(claimedAt.getTime())}`, (to) => ({
+      to,
+      templateKey: 'winback',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        memberLimit: String(members.limit),
+        monthlyPrice: prices.monthly,
+        billingLink: buildBillingLink(tenant.slug, 'winback'),
+      },
+    }))
+  } catch (error) {
+    logSendFailure(error, tenantId, 'winback')
+  }
+}
+
+/**
+ * Tell the owners and the billing address that the workspace's trial
+ * started, and when it ends. Sent after the commit that started it; once per
+ * trial start. A workspace not trialing is skipped. Never rejects.
+ * @param tenantId - The workspace.
+ */
+export async function sendTrialStarted(tenantId: string): Promise<void> {
+  try {
+    const row = await billingRepository.findByTenantId(tenantId)
+    if (row?.state !== 'trialing' || row.trialStartedAt === null || row.trialEndsAt === null) {
+      return
+    }
+    const context = await activeContext(tenantId, row.billingEmail)
+    if (context === undefined) return
+    const { tenant, appName } = context
+    const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
+    await mailOwners(context, 'trial_started', String(row.trialStartedAt.getTime()), (to) => ({
+      to,
+      templateKey: 'trial_started',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        trialEndsOn,
+        billingLink: buildBillingLink(tenant.slug, 'trial_started'),
+      },
+    }))
+  } catch (error) {
+    logSendFailure(error, tenantId, 'trial_started')
+  }
+}
+
+/**
+ * Tell the owners in the app that the workspace refused a join for its
+ * members limit: the limit, the seats used and the next step, never who
+ * tried to join. Once per owner and day in the workspace's time zone. Sent
+ * after the refused join rolled back. Never rejects.
+ * @param tenantId - The workspace.
+ * @param now - The refusal's time.
+ */
+export async function sendWorkspaceFull(tenantId: string, now = new Date()): Promise<void> {
+  try {
+    const context = await activeContext(tenantId, null)
+    if (context === undefined) return
+    const entitlements = await getEffectiveEntitlements(tenantId)
+    const usage = entitlements.limits.members
+    if (usage === undefined || usage.limit === null) return
+    const planName = entitlements.plan.name
+    await notifyOwners(context, {
+      type: 'workspace_full',
+      stamp: formatDateInZone(now, context.timeZone),
+      title: 'Your workspace is full',
+      body: `Someone couldn't join ${context.tenant.name}. ${planName} allows ${membersCount(usage.limit)}, and it has ${String(usage.used)}. To add members, upgrade from Billing.`,
+      email: null,
+    })
+  } catch (error) {
+    logSendFailure(error, tenantId, 'workspace_full')
+  }
+}
+
+/**
+ * Tell the remaining owners that the person who paid left while the
+ * subscription runs: a notification carrying the email. The billing address
+ * is the payer's, so it is not mailed, and the payer's name stays out of the
+ * stored notification. Nothing is sent unless `payerUserId` is still the
+ * workspace's payer and a paid subscription is live (active or past due, not
+ * cancelling). Once per workspace, payer and day. Never rejects.
+ * @param tenantId - The workspace.
+ * @param payerUserId - The person who left, deleted accounts included.
+ * @param leftAt - When they left.
+ */
+export async function sendPayerLeft(
+  tenantId: string,
+  payerUserId: string,
+  leftAt: Date
+): Promise<void> {
+  try {
+    const row = await billingRepository.findByTenantId(tenantId)
+    if (row === undefined || row.payerUserId !== payerUserId) return
+    const isLive =
+      (row.state === 'active' || row.state === 'past_due') &&
+      row.providerSubscriptionId !== null &&
+      !row.cancelAtPeriodEnd
+    if (!isLive) return
+    const context = await activeContext(tenantId, null)
+    if (context === undefined) return
+    if (row.currentPeriodEnd === null) {
+      logSkipped(tenantId, 'payer_left')
+      return
+    }
+    const payer = await userRepository.findById(payerUserId, { includeDeleted: true })
+    const payerName = payer === undefined ? '' : displayName(payer)
+    const { tenant, appName } = context
+    const leftOn = formatDateInZone(leftAt, context.timeZone)
+    const periodEndsOn = formatDateInZone(row.currentPeriodEnd, context.timeZone)
+    await notifyOwners(context, {
+      type: 'billing_payer_left',
+      stamp: `${payerUserId}-${leftOn}`,
+      title: 'Your workspace needs a new card',
+      body: `The person who paid for ${tenant.name} left on ${leftOn}. Add your card by ${periodEndsOn} to keep Paid.`,
+      email: {
+        templateKey: 'payer_left',
+        messageFor: (to) => ({
+          to,
+          templateKey: 'payer_left',
+          variables: {
+            appName,
+            tenantName: tenant.name,
+            payerName: payerName === '' ? UNNAMED_PAYER : payerName,
+            leftOn,
+            periodEndsOn,
+            billingLink: buildBillingLink(tenant.slug, 'payer_left'),
+          },
+        }),
+      },
+    })
+  } catch (error) {
+    logSendFailure(error, tenantId, 'payer_left')
+  }
+}
+
+/**
+ * Tell the remaining owners of every workspace a deleted user paid for with
+ * a live subscription (`sendPayerLeft`). Never rejects.
+ * @param payerUserId - The deleted user.
+ * @param leftAt - When they were deleted.
+ */
+export async function sendPayerLeftEverywhere(payerUserId: string, leftAt: Date): Promise<void> {
+  try {
+    for (const tenantId of await billingRepository.listTenantIdsPaidBy(payerUserId)) {
+      await sendPayerLeft(tenantId, payerUserId, leftAt)
+    }
+  } catch (error) {
+    logger.error('Could not send the payer left emails', {
+      error: redactedForLog(error),
+      userId: payerUserId,
     })
   }
 }

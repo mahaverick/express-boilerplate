@@ -247,6 +247,20 @@ marked by a comment in its file (0024's has none):
   read authenticated), and `card_change_started_at` with
   `card_change_started_by` (who opened a card change, and when), with its
   foreign key to `users`.
+- The reminder columns `0033` added to `tenant_billing` are claims the
+  billing schedulers take before they send
+  (`src/services/billing/billing-scheduler.service.ts`). Each is null until
+  its mail goes out, and a claim is never released, so a send that fails is
+  not retried. `trial_reminder_3d_sent_at`, `trial_reminder_last_day_sent_at`
+  and `trial_midpoint_sent_at` are the three trial reminders.
+  `renewal_reminder_for_period_end` holds the period end the yearly renewal
+  reminder was sent for, so each period gets its own. `winback_7d_sent_at` and
+  `winback_30d_sent_at` hold when each win-back email was claimed; a claim
+  older than the workspace's latest move to Free (its newest
+  `billing_state_history` row into `free`) counts as unclaimed, so each Free
+  period gets its own two with no reset write. `trial_ended_notified_at` is
+  reserved and unused: the trial-ended email goes out with the move to Free
+  itself.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)

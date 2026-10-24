@@ -457,7 +457,7 @@ describe('billing email templates', () => {
 })
 
 describe('billing email variants', () => {
-  it('tells a paused subscription apart from a failed payment, with the same next step', () => {
+  it('tells a paused subscription apart from a failed payment, and asks for a payment method', () => {
     const rendered = renderPaymentFailedTemplate({
       appName: 'Acme',
       tenantName: 'Rocket Co',
@@ -472,9 +472,26 @@ describe('billing email variants', () => {
     )
     expect(rendered.text).not.toContain('failed')
     expect(rendered.text).toContain(
-      'Update your card by 7 November 2026 to keep Paid. After that, Rocket Co moves to Free.'
+      'Update your payment method by 7 November 2026 to keep Paid. After that, Rocket Co moves to Free.'
     )
-    expect(rendered.html).toContain(`<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">`)
+    expect(rendered.text).not.toContain('card')
+    expect(rendered.html).toContain(
+      `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Update payment method</a>`
+    )
+  })
+
+  it('asks for a card after a failed payment', () => {
+    const rendered = renderPaymentFailedTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      amount: '999',
+      stoppedBy: 'halted',
+      graceEndsOn: '7 November 2026',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.html).toContain(
+      `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Update your card</a>`
+    )
   })
 
   it('gives a suspended or archived workspace no button and no upgrade ask', () => {
@@ -488,5 +505,6 @@ describe('billing email variants', () => {
     expect(rendered.text).not.toContain(BILLING_LINK)
     expect(rendered.text).not.toContain('upgrade')
     expect(rendered.text).toContain('Rocket Co moved to Free.')
+    expect(rendered.text).toContain('To restore it, contact support.')
   })
 })

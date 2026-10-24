@@ -29,6 +29,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import { sendPayerLeftEverywhere } from '@/services/billing/billing-emails.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
@@ -608,7 +609,9 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
 /**
  * Soft-delete a user and end their sessions; remove their federated provider
  * links and revoke the invitations they sent, so the address can be reused
- * fully, Google included (Deactivate is the way to ban). Refused while they
+ * fully, Google included (Deactivate is the way to ban). After the commit,
+ * the remaining owners of each workspace they paid for with a live
+ * subscription are told (`sendPayerLeftEverywhere`). Refused while they
  * are the last live owner of any customer tenant or the last active platform
  * owner: those tenants' owner rows are locked first, in tenant-id order, then
  * the platform's (see `lockStaffPair`), and the owners re-counted under the
@@ -686,4 +689,5 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
     return sessionIds
   })
   await denySessionsAfterCommit(userId, revoked)
+  await sendPayerLeftEverywhere(userId, new Date())
 }

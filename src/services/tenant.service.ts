@@ -17,6 +17,7 @@ import {
   type MembershipWithUser,
 } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
+import { sendTrialStarted } from '@/services/billing/billing-emails.service'
 import { initialBillingFor } from '@/services/billing/trial.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
@@ -122,7 +123,8 @@ function changedFields<TValues extends object>(
 /**
  * Create a tenant with its settings row and the actor as sole owner, and
  * audit it, in one transaction; then emit `tenant_created`. The tenant gets a
- * billing row, with the actor's one trial when they have not had it. The actor's user
+ * billing row, with the actor's one trial when they have not had it; a
+ * trial's start is mailed after the commit. The actor's user
  * row is locked `FOR SHARE` first (`lockUserForOwnership`), so a concurrent
  * staff delete of the actor either sees the new tenant or wins and this
  * answers 401.
@@ -152,18 +154,19 @@ export async function createTenant(actor: Actor, input: CreateTenantInput): Prom
       },
       tx
     )
-    return tenant
+    return { tenant, isTrialing: billing.state === 'trialing' }
   })
   await emitDomainEvent(
     {
       type: 'tenant_created',
-      tenantId: created.id,
+      tenantId: created.tenant.id,
       ownerId: actor.userId,
-      at: created.createdAt,
+      at: created.tenant.createdAt,
     },
     { access: 'member' }
   )
-  return created
+  if (created.isTrialing) await sendTrialStarted(created.tenant.id)
+  return created.tenant
 }
 
 /**

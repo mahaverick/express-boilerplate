@@ -451,6 +451,7 @@ describe('billing emails', () => {
       [owner.id, coOwner.id].toSorted()
     )
     expect(notices[0]?.data.title).toBe('Your Paid subscription is paused')
+    expect(notices[0]?.data.body).toContain('Update your payment method by')
   })
 
   it('warns again for a second halt with its own time', async () => {

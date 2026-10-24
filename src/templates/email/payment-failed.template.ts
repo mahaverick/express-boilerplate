@@ -1,6 +1,6 @@
 /**
  * @file The "your payment failed" message, sent once, when the provider halts
- * the subscription: the amount and the last day to update the card. Its one
+ * the subscription: the amount and the last day to update the card (the payment method, for a pause). Its one
  * link opens a page in the customer app and carries no token, so it mails from
  * the general sender.
  */
@@ -44,7 +44,7 @@ export interface PaymentFailedVariables {
    */
   stoppedBy: string
   /**
-   * The last day to update the card, as a date in the workspace's time zone.
+   * The last day to update the card or payment method, as a date in the workspace's time zone.
    */
   graceEndsOn: string
   /**
@@ -93,8 +93,9 @@ export function renderPaymentFailedTemplate(variables: PaymentFailedVariables): 
       isPaused
         ? `Your subscription for ${tenantName} was paused from your bank or UPI app.`
         : `Your payment of ₹${amount} for ${tenantName} failed.`,
-      `Update your card by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
+      `Update your ${isPaused ? 'payment method' : 'card'} by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
     ],
-    button: { label: 'Update your card', link: billingLink },
+    // A pause comes from the bank or UPI app, so the payment method, not a card, needs updating.
+    button: { label: isPaused ? 'Update payment method' : 'Update your card', link: billingLink },
   })
 }

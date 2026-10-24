@@ -30,6 +30,7 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import { sendPayerLeft } from '@/services/billing/billing-emails.service'
 import { db, type DbTransaction } from '@/services/database.service'
 import {
   lockTenantAccess,
@@ -455,7 +456,9 @@ export async function changeRole(
  * removal of an owner. The member's pending invitations in this tenant are
  * revoked in the same transaction, including ones the remover could not
  * revoke directly; on the platform tenant, so are those they sent in
- * customer tenants that a membership there cannot grant.
+ * customer tenants that a membership there cannot grant. When the member
+ * was the payer of a live subscription, the remaining owners are told after
+ * the commit (`sendPayerLeft`).
  * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
@@ -515,6 +518,7 @@ export async function removeMember(
       tx
     )
   })
+  await sendPayerLeft(tenantId, targetUserId, new Date())
 }
 
 /**
@@ -525,7 +529,9 @@ export async function removeMember(
  * platform role, or a member removed since `resolveTenant`) has nothing to
  * leave. The leaver's pending invitations there are revoked in the same
  * transaction; on the platform tenant, so are those they sent in customer
- * tenants that a membership there cannot grant, as for a removal.
+ * tenants that a membership there cannot grant, as for a removal. A payer
+ * leaving a live subscription is told to the remaining owners after the
+ * commit, as for a removal.
  * @param actor - The signed-in member leaving.
  * @param tenantId - The tenant.
  * @param options - Pass isPlatformTenant for the platform tenant: the active-owner guard and the customer-tenant revoke.
@@ -575,4 +581,5 @@ export async function leaveTenant(
       tx
     )
   })
+  await sendPayerLeft(tenantId, actor.userId, new Date())
 }

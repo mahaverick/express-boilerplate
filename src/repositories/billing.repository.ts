@@ -30,6 +30,7 @@ import {
   billingAlertModel,
   billingEventModel,
   billingStateHistoryModel,
+  planPriceModel,
   tenantBillingModel,
   upgradeRequestModel,
   userBannerDismissalModel,
@@ -59,6 +60,18 @@ const EVENT_ERROR_MAX_LENGTH = 500
  * conflicting is fulfilled before it can be read.
  */
 const OPEN_REQUEST_ATTEMPTS = 3
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How long before a trial ends its ending reminder goes out: three days.
+ */
+const TRIAL_ENDING_NOTICE_MS = 3 * DAY_MS
+
+/**
+ * The shortest trial that gets a halfway reminder, in days.
+ */
+const MIDPOINT_MIN_TRIAL_DAYS = 6
 
 /**
  * The reminder and notice timestamps `claimDue` can claim. Each is null until
@@ -102,6 +115,26 @@ function ofProvider(scope: ProviderScope): SQL | undefined {
  */
 function at(date: Date): SQL {
   return sql`${date.toISOString()}::timestamptz`
+}
+
+/**
+ * The condition that the row's workspace is an active customer workspace:
+ * not suspended, archived or deleted. Its row is only read, so a claim
+ * takes no lock on it.
+ * @returns The condition over `tenant_billing`.
+ */
+function isWorkspaceActive(): SQL {
+  return sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} = 'active' and ${tenantModel.deletedAt} is null and not ${tenantModel.isPlatform})`
+}
+
+/**
+ * One field of a workspace's newest history row into `free`, as a scalar
+ * subquery. It rides `billing_state_history_tenant_at_idx` backwards.
+ * @param field - The field to read.
+ * @returns The subquery over `tenant_billing`.
+ */
+function latestFree(field: SQL): SQL {
+  return sql`(select ${field} from ${billingStateHistoryModel} where ${billingStateHistoryModel.tenantId} = ${tenantBillingModel.tenantId} and ${billingStateHistoryModel.toState} = 'free' order by ${billingStateHistoryModel.at} desc, ${billingStateHistoryModel.id} desc limit 1)`
 }
 
 /**
@@ -461,19 +494,43 @@ export class BillingRepository {
       ([, candidate]) => candidate === column
     )?.[0]
     if (property === undefined) throw new HttpError('Unknown reminder column', 500)
+    return this.#claim({ [property]: sql`now()` }, isNull(column), where, limit, tx)
+  }
+
+  /**
+   * Claim up to `limit` records: apply `set` to rows where `unclaimed` and
+   * `where` hold, and return those rows. A row another transaction holds
+   * locked is skipped, so each row is claimed once; both conditions are
+   * checked again by the update, so a row claimed by a transaction that
+   * committed meanwhile is not claimed twice.
+   *
+   * The ids are collected with `= any(array(...))`, which runs the locking
+   * subquery once, so the update takes at most `limit` rows.
+   * @param set - What the claim writes.
+   * @param unclaimed - The condition that the row is not yet claimed.
+   * @param where - The condition a row must meet, over `tenant_billing`.
+   * @param limit - The most rows to claim.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed rows.
+   */
+  async #claim(
+    set: Record<string, SQL>,
+    unclaimed: SQL,
+    where: SQL,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<TenantBillingRecord[]> {
     const claimable = tx
       .select({ tenantId: tenantBillingModel.tenantId })
       .from(tenantBillingModel)
-      .where(and(isNull(column), where))
+      .where(and(unclaimed, where))
       .orderBy(asc(tenantBillingModel.tenantId))
       .limit(limit)
       .for('update', { skipLocked: true })
     return tx
       .update(tenantBillingModel)
-      .set({ [property]: sql`now()` })
-      .where(
-        and(isNull(column), where, sql`${tenantBillingModel.tenantId} = any(array(${claimable}))`)
-      )
+      .set(set)
+      .where(and(unclaimed, where, sql`${tenantBillingModel.tenantId} = any(array(${claimable}))`))
       .returning()
   }
 
@@ -775,6 +832,215 @@ export class BillingRepository {
       afterTenantId,
       limit
     )
+  }
+
+  /**
+   * Claim the three-day trial reminder of up to `limit` trials of active
+   * workspaces that end after `now` and within three days of it.
+   * @param now - The run's time.
+   * @param limit - The most rows to claim.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed rows.
+   */
+  async claimTrialEndingReminders(
+    now: Date,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<TenantBillingRecord[]> {
+    const noticeFrom = new Date(now.getTime() + TRIAL_ENDING_NOTICE_MS)
+    return this.claimDue(
+      tenantBillingModel.trialReminder3dSentAt,
+      and(
+        eq(tenantBillingModel.state, 'trialing'),
+        gt(tenantBillingModel.trialEndsAt, now),
+        lte(tenantBillingModel.trialEndsAt, noticeFrom),
+        isWorkspaceActive()
+      ) ?? isWorkspaceActive(),
+      limit,
+      tx
+    )
+  }
+
+  /**
+   * Claim the halfway reminder of up to `limit` trials of active workspaces:
+   * trials of six days or more, at least half over at `now`, with more than
+   * three days left (the three-day reminder takes over from there).
+   * @param now - The run's time.
+   * @param limit - The most rows to claim.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed rows.
+   */
+  async claimTrialMidpointReminders(
+    now: Date,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<TenantBillingRecord[]> {
+    const { trialStartedAt, trialEndsAt } = tenantBillingModel
+    const noticeFrom = new Date(now.getTime() + TRIAL_ENDING_NOTICE_MS)
+    return this.claimDue(
+      tenantBillingModel.trialMidpointSentAt,
+      and(
+        eq(tenantBillingModel.state, 'trialing'),
+        isNotNull(trialStartedAt),
+        gt(trialEndsAt, noticeFrom),
+        sql`${trialEndsAt} - ${trialStartedAt} >= make_interval(days => ${MIDPOINT_MIN_TRIAL_DAYS}::int)`,
+        sql`${at(now)} >= ${trialStartedAt} + (${trialEndsAt} - ${trialStartedAt}) / 2`,
+        isWorkspaceActive()
+      ) ?? isWorkspaceActive(),
+      limit,
+      tx
+    )
+  }
+
+  /**
+   * Trials of active workspaces that end after `now` and within a day of it,
+   * whose last-day reminder is not yet claimed: the candidates for the
+   * reminder, which the caller judges in each workspace's time zone.
+   * @param now - The run's time.
+   * @param afterTenantId - The previous page's last workspace id, or null.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async listTrialLastDayCandidates(
+    now: Date,
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    const dayAhead = new Date(now.getTime() + DAY_MS)
+    return this.#listPage(
+      and(
+        eq(tenantBillingModel.state, 'trialing'),
+        isNull(tenantBillingModel.trialReminderLastDaySentAt),
+        gt(tenantBillingModel.trialEndsAt, now),
+        lte(tenantBillingModel.trialEndsAt, dayAhead),
+        isWorkspaceActive()
+      ),
+      afterTenantId,
+      limit
+    )
+  }
+
+  /**
+   * Claim one workspace's last-day trial reminder, while its trial still
+   * runs at `now` and the workspace is active.
+   * @param tenantId - The workspace.
+   * @param now - The run's time.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed row, or undefined when it is claimed or no longer due.
+   */
+  async claimTrialLastDayReminder(
+    tenantId: string,
+    now: Date,
+    tx: DbTransaction
+  ): Promise<TenantBillingRecord | undefined> {
+    const [claimed] = await this.claimDue(
+      tenantBillingModel.trialReminderLastDaySentAt,
+      and(
+        eq(tenantBillingModel.tenantId, tenantId),
+        eq(tenantBillingModel.state, 'trialing'),
+        gt(tenantBillingModel.trialEndsAt, now),
+        isWorkspaceActive()
+      ) ?? isWorkspaceActive(),
+      1,
+      tx
+    )
+    return claimed
+  }
+
+  /**
+   * Claim the renewal reminder of up to `limit` active workspaces on a yearly
+   * price, not cancelling, whose paid period ends after `now` and within
+   * `days` of it. The claim records the period end it is for, so the next
+   * period gets its own reminder.
+   * @param now - The run's time.
+   * @param days - How many days ahead to remind.
+   * @param limit - The most rows to claim.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed rows.
+   */
+  async claimRenewalReminders(
+    now: Date,
+    days: number,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<TenantBillingRecord[]> {
+    const { currentPeriodEnd, renewalReminderForPeriodEnd, priceId } = tenantBillingModel
+    const remindFrom = new Date(now.getTime() + days * DAY_MS)
+    const isYearly = sql`exists (select 1 from ${planPriceModel} where ${planPriceModel.id} = ${priceId} and ${planPriceModel.interval} = 'year')`
+    return this.#claim(
+      { renewalReminderForPeriodEnd: sql`${currentPeriodEnd}` },
+      sql`${renewalReminderForPeriodEnd} is distinct from ${currentPeriodEnd}`,
+      and(
+        eq(tenantBillingModel.state, 'active'),
+        eq(tenantBillingModel.cancelAtPeriodEnd, false),
+        gt(currentPeriodEnd, now),
+        lte(currentPeriodEnd, remindFrom),
+        isYearly,
+        isWorkspaceActive()
+      ) ?? isYearly,
+      limit,
+      tx
+    )
+  }
+
+  /**
+   * Claim one win-back email of up to `limit` active Free workspaces: those
+   * whose latest move to Free came from a trial or a paid state between
+   * `fromDays` and `toDays` days before `now`. A claim older than that move
+   * belongs to an earlier Free period and counts as unclaimed, so each Free
+   * period gets its own emails without a reset. The claim is stamped `now`.
+   * @param day - Which win-back email.
+   * @param now - The run's time.
+   * @param fromDays - The fewest days on Free.
+   * @param toDays - The most days on Free, exclusive.
+   * @param limit - The most rows to claim.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed rows.
+   */
+  async claimWinbacks(
+    day: '7d' | '30d',
+    now: Date,
+    fromDays: number,
+    toDays: number,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<TenantBillingRecord[]> {
+    const column =
+      day === '7d' ? tenantBillingModel.winback7dSentAt : tenantBillingModel.winback30dSentAt
+    const property = day === '7d' ? 'winback7dSentAt' : 'winback30dSentAt'
+    const freeSince = latestFree(sql`${billingStateHistoryModel.at}`)
+    const freeFrom = latestFree(sql`${billingStateHistoryModel.fromState}`)
+    const latest = at(new Date(now.getTime() - fromDays * DAY_MS))
+    const earliest = at(new Date(now.getTime() - toDays * DAY_MS))
+    const where =
+      and(
+        eq(tenantBillingModel.state, 'free'),
+        sql`${freeFrom} in ('trialing', 'active', 'past_due')`,
+        sql`${freeSince} <= ${latest}`,
+        sql`${freeSince} > ${earliest}`,
+        isWorkspaceActive()
+      ) ?? isWorkspaceActive()
+    return this.#claim(
+      { [property]: at(now) },
+      sql`(${column} is null or ${column} < ${freeSince})`,
+      where,
+      limit,
+      tx
+    )
+  }
+
+  /**
+   * The workspaces whose payer is a user.
+   * @param userId - The user.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The workspace ids.
+   */
+  async listTenantIdsPaidBy(userId: string, executor: DbExecutor = db): Promise<string[]> {
+    const rows = await executor
+      .select({ tenantId: tenantBillingModel.tenantId })
+      .from(tenantBillingModel)
+      .where(eq(tenantBillingModel.payerUserId, userId))
+    return rows.map((row) => row.tenantId)
   }
 
   /**

@@ -12,6 +12,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import { PLAN_LIMIT_REACHED_CODE } from '@/constants/billing.constants'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import { RATE_LIMITED_CODE } from '@/constants/rate-limit.constants'
 import {
@@ -45,6 +46,8 @@ import {
 } from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
+import { sendTrialStarted, sendWorkspaceFull } from '@/services/billing/billing-emails.service'
+import { publishEntitlementsChanged } from '@/services/billing/billing-events.service'
 import { assertWithinLimit } from '@/services/billing/entitlements.service'
 import { hasInvitationSeat, lockSeats } from '@/services/billing/seats.service'
 import { startDeferredTrial } from '@/services/billing/trial.service'
@@ -224,6 +227,10 @@ export interface AcceptedInvitation {
 interface AcceptOutcome {
   accepted: AcceptedInvitation
   joined?: DomainEventOf<'invitation_accepted'>
+  /**
+   * The workspace whose trial this join started, if any.
+   */
+  trialStartedFor?: string
 }
 
 /**
@@ -250,6 +257,10 @@ interface VerifyOutcome {
   refreshToken: IssuedRefreshToken
   role: MembershipRole
   joined?: DomainEventOf<'invitation_accepted'>
+  /**
+   * The workspace whose trial this join started, if any.
+   */
+  trialStartedFor?: string
 }
 
 /**
@@ -999,57 +1010,63 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
   const user = await userRepository.findById(userId)
   if (!user?.active) throw new HttpError('Sign in to continue.', 401)
 
-  const outcome = await db.transaction(async (tx): Promise<AcceptOutcome> => {
-    const valid = await invitationRepository.findValidByTokenHash(tokenHash, tx)
-    if (!valid) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
+  const outcome = await tellOwnersWhenFull(async (onFull) =>
+    db.transaction(async (tx): Promise<AcceptOutcome> => {
+      const valid = await invitationRepository.findValidByTokenHash(tokenHash, tx)
+      if (!valid) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
+      onFull(valid.tenant.id)
 
-    assertInvitedAddress(user, valid.invitation.email)
-    // Before the claim: a delete takes the user row, then the invitations the user sent, and this one may be among them. A platform invitation of any role makes the user staff, which the delete's rank rule must see.
-    if (valid.invitation.role === 'owner' || valid.tenant.isPlatform) {
-      await lockUserForOwnership(user.id, () => new HttpError('Sign in to continue.', 401), tx)
-    }
-    await lockSeatForJoin(valid, user.id, tx)
+      assertInvitedAddress(user, valid.invitation.email)
+      // Before the claim: a delete takes the user row, then the invitations the user sent, and this one may be among them. A platform invitation of any role makes the user staff, which the delete's rank rule must see.
+      if (valid.invitation.role === 'owner' || valid.tenant.isPlatform) {
+        await lockUserForOwnership(user.id, () => new HttpError('Sign in to continue.', 401), tx)
+      }
+      await lockSeatForJoin(valid, user.id, tx)
 
-    const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-    // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
-    if (!claimed) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
-    await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
+      const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
+      // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
+      if (!claimed) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
+      const trialStarted = await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
+      const started = trialStarted ? { trialStartedFor: claimed.tenantId } : {}
 
-    const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
-    const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
-    // An existing membership keeps its role; createIfAbsent reads it back.
-    const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
-    await record(
-      {
-        action: 'invitation.accepted',
-        actor: { userId: user.id },
-        access: 'member',
-        tenantId: claimed.tenantId,
-        targetId: membership.id,
-        metadata: { role: membership.role, invitationId: claimed.id },
-      },
-      tx
-    )
-    const accepted = {
-      tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
-      role: membership.role,
-      alreadyMember: !inserted,
-    }
-    if (!inserted) return { accepted }
-    const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
-    return {
-      accepted,
-      joined: {
-        type: 'invitation_accepted',
-        tenantId: claimed.tenantId,
-        userId: user.id,
-        role: inserted.role,
-        wasFirstMember: memberCount === 1,
-        at: inserted.createdAt,
-      },
-    }
-  })
+      const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
+      const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
+      // An existing membership keeps its role; createIfAbsent reads it back.
+      const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
+      await record(
+        {
+          action: 'invitation.accepted',
+          actor: { userId: user.id },
+          access: 'member',
+          tenantId: claimed.tenantId,
+          targetId: membership.id,
+          metadata: { role: membership.role, invitationId: claimed.id },
+        },
+        tx
+      )
+      const accepted = {
+        tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
+        role: membership.role,
+        alreadyMember: !inserted,
+      }
+      if (!inserted) return { accepted, ...started }
+      const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
+      return {
+        accepted,
+        ...started,
+        joined: {
+          type: 'invitation_accepted',
+          tenantId: claimed.tenantId,
+          userId: user.id,
+          role: inserted.role,
+          wasFirstMember: memberCount === 1,
+          at: inserted.createdAt,
+        },
+      }
+    })
+  )
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
+  if (outcome.trialStartedFor !== undefined) await afterTrialStarted(outcome.trialStartedFor)
   return outcome.accepted
 }
 
@@ -1096,15 +1113,57 @@ async function lockSeatForJoin(
  * @param userId - The accepting user.
  * @param isPlatform - Whether the invitation's tenant is the platform tenant.
  * @param tx - The accept's transaction.
+ * @returns True when the trial started; the caller mails it after the commit (`afterTrialStarted`).
  */
+// A command that reports whether it acted; an `is` name would read as a query.
+// eslint-disable-next-line unicorn/consistent-boolean-name
 async function startTrialForOwner(
   claimed: TenantInvitation,
   userId: string,
   isPlatform: boolean,
   tx: DbTransaction
-): Promise<void> {
-  if (claimed.role !== 'owner' || isPlatform) return
-  await startDeferredTrial(claimed.tenantId, userId, tx)
+): Promise<boolean> {
+  if (claimed.role !== 'owner' || isPlatform) return false
+  return startDeferredTrial(claimed.tenantId, userId, tx)
+}
+
+/**
+ * After a join that started a staff-made workspace's trial commits: tell its
+ * members their entitlements changed, and mail the trial's start. Never
+ * rejects.
+ * @param tenantId - The workspace.
+ */
+async function afterTrialStarted(tenantId: string): Promise<void> {
+  try {
+    await publishEntitlementsChanged(tenantId)
+  } catch (error) {
+    logger.error('Could not push an entitlements change', { error, tenantId })
+  }
+  await sendTrialStarted(tenantId)
+}
+
+/**
+ * Run a join's transaction, and when the seat lock refused it for the
+ * members limit, tell the workspace's owners once it has rolled back, then
+ * rethrow. The transaction names the workspace through `onFull` once it
+ * knows it.
+ * @param join - Runs the join's transaction.
+ * @returns What the join returned.
+ * @throws {HttpError} Whatever the join threw, unchanged.
+ */
+async function tellOwnersWhenFull<T>(
+  join: (onFull: (tenantId: string) => void) => Promise<T>
+): Promise<T> {
+  let tenantId: string | undefined
+  try {
+    return await join((id) => {
+      tenantId = id
+    })
+  } catch (error) {
+    const isFull = error instanceof HttpError && error.code === PLAN_LIMIT_REACHED_CODE
+    if (isFull && tenantId !== undefined) await sendWorkspaceFull(tenantId)
+    throw error
+  }
 }
 
 /**
@@ -1286,6 +1345,7 @@ async function finishJoin(
   const accessToken = signAccessToken(user, sessionId, outcome.refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
+  if (outcome.trialStartedFor !== undefined) await afterTrialStarted(outcome.trialStartedFor)
   if (isNewUser) {
     await emitDomainEvent({ type: 'email_verified', userId: user.id, at: new Date() })
     await emitDomainEvent({
@@ -1456,15 +1516,19 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
   assertJoinAllowedByMode()
 
   const sessionId = randomUUID()
-  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
-    const user = await createInvitedAccount(valid.invitation.email, tx)
-    await lockSeatForJoin(valid, user.id, tx)
-    const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-    // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
-    if (!claimed) throw invitationInvalid()
-    await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
-    // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
-    return joinAndIssueSession(user, claimed, sessionId, false, tx)
+  const outcome = await tellOwnersWhenFull(async (onFull) => {
+    onFull(valid.tenant.id)
+    return db.transaction(async (tx): Promise<VerifyOutcome> => {
+      const user = await createInvitedAccount(valid.invitation.email, tx)
+      await lockSeatForJoin(valid, user.id, tx)
+      const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
+      // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
+      if (!claimed) throw invitationInvalid()
+      const trialStarted = await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
+      // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
+      const joined = await joinAndIssueSession(user, claimed, sessionId, false, tx)
+      return trialStarted ? { ...joined, trialStartedFor: claimed.tenantId } : joined
+    })
   })
   const session = await finishJoin(outcome, sessionId, true, valid.tenant)
   return { kind: 'session', session }
@@ -1525,19 +1589,23 @@ export async function confirmInvitation(
   assertJoinAllowedByMode()
 
   const sessionId = randomUUID()
-  const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
-    // The user row first, then the link row: the order a deactivation takes.
-    const user = account
-      ? await lockActiveInvitee(account.id, tx)
-      : await createInvitedAccount(email, tx, confirmInvalid)
-    await lockSeatForJoin(valid, user.id, tx)
-    const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
-    if (link?.invitationId !== invitationId) throw confirmInvalid()
-    const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)
-    // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
-    if (!claimed) throw confirmInvalid()
-    await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
-    return joinAndIssueSession(user, claimed, sessionId, true, tx)
+  const outcome = await tellOwnersWhenFull(async (onFull) => {
+    onFull(valid.tenant.id)
+    return db.transaction(async (tx): Promise<VerifyOutcome> => {
+      // The user row first, then the link row: the order a deactivation takes.
+      const user = account
+        ? await lockActiveInvitee(account.id, tx)
+        : await createInvitedAccount(email, tx, confirmInvalid)
+      await lockSeatForJoin(valid, user.id, tx)
+      const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
+      if (link?.invitationId !== invitationId) throw confirmInvalid()
+      const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)
+      // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
+      if (!claimed) throw confirmInvalid()
+      const trialStarted = await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
+      const joined = await joinAndIssueSession(user, claimed, sessionId, true, tx)
+      return trialStarted ? { ...joined, trialStartedFor: claimed.tenantId } : joined
+    })
   })
   return finishJoin(outcome, sessionId, account === undefined, valid.tenant)
 }
