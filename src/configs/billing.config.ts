@@ -4,16 +4,7 @@
  * default is the validated `getEnv()`.
  */
 import { getEnv, type Env } from '@/configs/env.config'
-
-/**
- * The provider behind billing: the real Razorpay API, or the in-process fake.
- */
-type BillingProviderKind = 'razorpay' | 'fake'
-
-/**
- * The Razorpay mode a key belongs to.
- */
-type ProviderMode = 'test' | 'live'
+import type { BillingProvider, BillingProviderMode } from '@/constants/billing.constants'
 
 /**
  * Credentials and mode of the configured payment provider.
@@ -22,11 +13,11 @@ export interface BillingProviderConfig {
   /**
    * Which provider answers.
    */
-  kind: BillingProviderKind
+  kind: BillingProvider
   /**
    * Test or live, from the key id's prefix.
    */
-  mode: ProviderMode
+  mode: BillingProviderMode
   /**
    * The Razorpay key id.
    */

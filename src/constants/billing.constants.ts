@@ -102,3 +102,14 @@ export const PLAN_LIMIT_REACHED_CODE = 'PLAN_LIMIT_REACHED'
  * Error code: the workspace's plan does not include the feature a route needs.
  */
 export const PLAN_FEATURE_REQUIRED_CODE = 'PLAN_FEATURE_REQUIRED'
+
+/**
+ * The Razorpay API every real provider call goes to.
+ */
+export const RAZORPAY_API_BASE_URL = 'https://api.razorpay.com/v1'
+
+/**
+ * How long one Razorpay call, body included, may take before it fails as a
+ * retryable timeout.
+ */
+export const RAZORPAY_API_TIMEOUT_MS = 10_000

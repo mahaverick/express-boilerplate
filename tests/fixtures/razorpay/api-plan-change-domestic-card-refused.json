@@ -1,0 +1,12 @@
+{
+  "method": "PATCH",
+  "path": "/subscriptions/sub_FIXTURE",
+  "status": 400,
+  "json": {
+    "error": {
+      "code": "BAD_REQUEST_ERROR",
+      "description": "Only offers can be updated for subscriptions when payment mode is domestic card.",
+      "field": "offer_id"
+    }
+  }
+}

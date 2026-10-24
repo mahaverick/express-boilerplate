@@ -1,0 +1,41 @@
+{
+  "method": "GET",
+  "path": "/subscriptions/sub_FIXTURE",
+  "status": 200,
+  "json": {
+    "id": "sub_Trb43UbblkcQCh",
+    "entity": "subscription",
+    "plan_id": "plan_TralqajqAn8poP",
+    "customer_id": "cust_FIXTURE",
+    "customer_email": "user@example.com",
+    "customer_contact": "+919999999999",
+    "status": "cancelled",
+    "current_start": 1792812621,
+    "current_end": 1795458600,
+    "ended_at": 1792812796,
+    "quantity": 1,
+    "notes": {
+      "tenantId": "probe-t4",
+      "appEnv": "local",
+      "priceId": "probe-p1"
+    },
+    "charge_at": null,
+    "start_at": 1792812621,
+    "end_at": 1947954600,
+    "auth_attempts": 0,
+    "total_count": 60,
+    "paid_count": 1,
+    "customer_notify": true,
+    "created_at": 1792812465,
+    "expire_by": 1792823265,
+    "short_url": "https://rzp.io/rzp/qdlWOn1",
+    "has_scheduled_changes": false,
+    "change_scheduled_at": null,
+    "source": "api",
+    "payment_method": "card",
+    "offer_id": null,
+    "halted_at": null,
+    "remaining_count": 59,
+    "card_mandate_id": "Trb6nwiiXmYyTy"
+  }
+}

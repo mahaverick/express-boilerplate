@@ -1,0 +1,21 @@
+{
+  "method": "POST",
+  "path": "/payments/pay_FIXTURE/refund",
+  "status": 200,
+  "json": {
+    "acquirer_data": {},
+    "amount": 99900,
+    "base_amount": 99900,
+    "batch_id": null,
+    "created_at": 1792812799,
+    "currency": "INR",
+    "entity": "refund",
+    "id": "rfnd_Trb9vbIbmrD1wK",
+    "notes": {},
+    "payment_id": "pay_Trb81VXuK03iPb",
+    "receipt": null,
+    "speed_processed": "normal",
+    "speed_requested": "normal",
+    "status": "pending"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "method": "POST",
+  "path": "/subscriptions/sub_FIXTURE/cancel",
+  "status": 400,
+  "json": {
+    "error": {
+      "code": "BAD_REQUEST_ERROR",
+      "description": "Subscription cannot be cancelled since no billing cycle is going on"
+    }
+  }
+}

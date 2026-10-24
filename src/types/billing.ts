@@ -1,9 +1,16 @@
 /**
- * @file Structural inputs for the pure billing rules. A billing record
- * satisfies each of these, so the rules take only the fields they read.
+ * @file Billing types: the structural inputs of the pure billing rules (a
+ * billing record satisfies each, so the rules take only the fields they
+ * read), and the payment provider's contract with its answers.
  */
-import type { BillingState, PlanKey } from '@/constants/billing.constants'
+import type {
+  BillingProvider,
+  BillingProviderMode,
+  BillingState,
+  PlanKey,
+} from '@/constants/billing.constants'
 import type { EntitlementKey, EntitlementValue } from '@/constants/entitlements.constants'
+import type { PlanPrice } from '@/database/models/billing.model'
 
 /**
  * The fields that decide a workspace's effective state.
@@ -146,4 +153,242 @@ export type SourcedEntitlements = TenantEntitlements & {
    * Each registry key and whether the plan or a grant set its value.
    */
   sources: Record<EntitlementKey, 'plan' | 'grant'>
+}
+
+/**
+ * Every status a provider subscription can report.
+ */
+export type ProviderSubscriptionStatus =
+  | 'created'
+  | 'authenticated'
+  | 'active'
+  | 'pending'
+  | 'halted'
+  | 'paused'
+  | 'cancelled'
+  | 'completed'
+  | 'expired'
+
+/**
+ * A subscription as the payment provider reports it.
+ */
+export interface ProviderSubscription {
+  /**
+   * The provider's subscription id.
+   */
+  id: string
+  /**
+   * The provider's status.
+   */
+  status: ProviderSubscriptionStatus
+  /**
+   * The provider plan it bills.
+   */
+  planId: string
+  /**
+   * When the current cycle started, or null before the first charge.
+   */
+  currentStart: Date | null
+  /**
+   * When the current cycle ends. It moves forward before the cycle is paid,
+   * so it is not "paid through" on its own: read it with `latestInvoicePaid`.
+   */
+  currentEnd: Date | null
+  /**
+   * When the first charge is (or was) due.
+   */
+  startAt: Date | null
+  /**
+   * When the subscription ended, or null while it runs.
+   */
+  endedAt: Date | null
+  /**
+   * When the next charge is due, or null when none is scheduled.
+   */
+  chargeAt: Date | null
+  /**
+   * The notes the subscription was created with.
+   */
+  notes: Record<string, string>
+  /**
+   * How many cycles have been paid.
+   */
+  paidCount: number
+  /**
+   * The provider's customer id, once the payer authenticated.
+   */
+  customerId: string | null
+  /**
+   * Whether a plan or quantity change is scheduled.
+   */
+  hasScheduledChanges: boolean
+  /**
+   * Whether the invoice of the current cycle (else the newest invoice) is
+   * paid; false when there is none yet, as for a deferred start.
+   */
+  latestInvoicePaid: boolean
+}
+
+/**
+ * What a new subscription is created with.
+ */
+export interface CreateSubscriptionInput {
+  /**
+   * The provider plan, from `ensurePlan`.
+   */
+  providerPlanId: string
+  /**
+   * How many cycles it bills before it completes.
+   */
+  totalCount: number
+  /**
+   * When an unpaid checkout lapses.
+   */
+  expireBy: Date
+  /**
+   * When the first charge is due, or null to charge at checkout.
+   */
+  startAt: Date | null
+  /**
+   * Ids that tie the subscription back to the workspace and price.
+   */
+  notes: Record<string, string>
+}
+
+/**
+ * The ids the provider's checkout hands the browser after a payment.
+ */
+export interface CheckoutConfirm {
+  razorpay_payment_id: string
+  razorpay_subscription_id: string
+  razorpay_signature: string
+}
+
+/**
+ * One invoice as an owner sees it.
+ */
+export interface InvoiceView {
+  id: string
+  amountMinor: number
+  currency: 'INR'
+  status: 'issued' | 'paid' | 'cancelled' | 'expired'
+  issuedAt: string
+  paidAt: string | null
+  url: string | null
+}
+
+/**
+ * The price fields `ensurePlan` reads.
+ */
+export type ProviderPlanPrice = Pick<
+  PlanPrice,
+  'id' | 'interval' | 'amountMinor' | 'currency' | 'provider' | 'providerMode' | 'providerPlanId'
+>
+
+/**
+ * A refund the provider accepted.
+ */
+export interface ProviderRefund {
+  /**
+   * The provider's refund id.
+   */
+  refundId: string
+  /**
+   * The amount refunded, in the currency's minor unit.
+   */
+  amountMinor: number
+}
+
+/**
+ * One page of invoices.
+ */
+export interface ProviderInvoicePage {
+  /**
+   * The invoices on this page.
+   */
+  items: InvoiceView[]
+  /**
+   * The cursor for the next page, or null on the last one.
+   */
+  nextCursor: string | null
+}
+
+/**
+ * The calls billing makes to its payment provider. Each failed call throws
+ * `ProviderError`; none reads a failure as a subscription state.
+ */
+export interface BillingProviderClient {
+  /**
+   * Which provider answers.
+   */
+  readonly kind: BillingProvider
+  /**
+   * The provider account's mode.
+   */
+  readonly mode: BillingProviderMode
+  /**
+   * The public key id the browser checkout opens with.
+   */
+  readonly keyId: string
+  /**
+   * The provider plan for a price: the stored id when it belongs to this
+   * provider and mode, else a new plan. The caller stores a new id.
+   * @param price - The price.
+   * @param planName - The name the plan's item carries.
+   * @returns The provider plan id.
+   */
+  ensurePlan(price: ProviderPlanPrice, planName: string): Promise<string>
+  /**
+   * Create a subscription for checkout.
+   * @param input - The plan, cycle count, checkout expiry, deferred start and notes.
+   * @returns The new subscription.
+   */
+  createSubscription(input: CreateSubscriptionInput): Promise<ProviderSubscription>
+  /**
+   * Read one subscription.
+   * @param id - The provider's subscription id.
+   * @returns The subscription.
+   */
+  fetchSubscription(id: string): Promise<ProviderSubscription>
+  /**
+   * Every subscription created since a time, all pages read.
+   * @param since - The earliest creation time.
+   * @returns The subscriptions.
+   */
+  listRecentSubscriptions(since: Date): Promise<ProviderSubscription[]>
+  /**
+   * Cancel a subscription now or at the end of its cycle.
+   * @param id - The provider's subscription id.
+   * @param isAtCycleEnd - True to keep it until the cycle ends.
+   * @returns The subscription after the cancel.
+   */
+  cancelSubscription(id: string, isAtCycleEnd: boolean): Promise<ProviderSubscription>
+  /**
+   * Refund the subscription's latest paid payment in full.
+   * @param subscriptionId - The provider's subscription id.
+   * @returns The refund, or null when nothing has been paid.
+   */
+  refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null>
+  /**
+   * One page of the invoices of some subscriptions, in the order given.
+   * @param subscriptionIds - The subscriptions, newest first.
+   * @param cursor - The previous page's `nextCursor`, or null for the first page.
+   * @returns The page.
+   */
+  listInvoices(subscriptionIds: string[], cursor: string | null): Promise<ProviderInvoicePage>
+  /**
+   * Whether a checkout's signature was made by the provider for the expected
+   * subscription.
+   * @param input - What the browser posted.
+   * @param expectedSubscriptionId - The subscription this checkout must be for.
+   * @returns True only for a matching signature over the expected subscription.
+   */
+  verifyCheckout(input: CheckoutConfirm, expectedSubscriptionId: string): boolean
+  /**
+   * Whether a webhook body was signed with a current or previous webhook secret.
+   * @param rawBody - The exact request bytes.
+   * @param signature - The signature header, if any.
+   * @returns True for a matching signature.
+   */
+  verifyWebhook(rawBody: Buffer, signature: string | undefined): boolean
 }

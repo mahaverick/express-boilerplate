@@ -1,0 +1,7 @@
+{
+  "headers": {
+    "x-razorpay-event-id": "evt_fixture_payment_authorized_034227",
+    "x-razorpay-signature": "9dcd6da656f38b01fa62757df820f7e62fd92087f0c4a8d4588bdaecbe9342eb"
+  },
+  "rawBody": "{\"entity\":\"event\",\"account_id\":\"acc_FIXTURE\",\"event\":\"payment.authorized\",\"contains\":[\"payment\"],\"payload\":{\"payment\":{\"entity\":{\"id\":\"pay_TrbDlriMc3KtS0\",\"entity\":\"payment\",\"amount\":99900,\"currency\":\"INR\",\"status\":\"authorized\",\"order_id\":\"order_TrbDkws1TdZ3mE\",\"invoice_id\":\"inv_TrbDkkUitwACl0\",\"international\":false,\"method\":\"card\",\"amount_refunded\":0,\"amount_transferred\":0,\"refund_status\":null,\"captured\":false,\"description\":\"Failed Recurring Payment via Subscription\",\"card_id\":\"card_FIXTURE\",\"card\":{\"id\":\"card_FIXTURE\",\"entity\":\"card\",\"name\":\"\",\"last4\":\"0000\",\"network\":\"Visa\",\"type\":\"credit\",\"issuer\":null,\"international\":false,\"emi\":false,\"sub_type\":\"consumer\"},\"bank\":null,\"wallet\":null,\"vpa\":null,\"email\":\"user@example.com\",\"contact\":\"+919999999999\",\"customer_id\":\"cust_FIXTURE\",\"token_id\":\"token_FIXTURE\",\"notes\":[],\"fee\":null,\"tax\":null,\"error_code\":null,\"error_description\":null,\"error_source\":null,\"error_step\":null,\"error_reason\":null,\"acquirer_data\":{},\"created_at\":1792813018,\"reward\":null}}},\"created_at\":1792813346}"
+}
