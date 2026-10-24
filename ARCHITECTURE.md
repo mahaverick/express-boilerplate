@@ -934,9 +934,9 @@ suspended workspace that pays, else now; a checkout and a switch now. A
 checkout or switch that reads as paid is brought in by a sync first, so a
 paid checkout is adopted (and cancelled as the current one) or refunded as a
 duplicate, never discarded. The claim is released when the workspace is
-reactivated, when a sync gives a suspended or archived workspace a
-subscription id it did not hold (an adoption or a handover, which also queues
-the prompt cancel), and once a day for a cancel that failed and alerted
+reactivated, when a sync gives a suspended or archived workspace a new
+current subscription (an adoption or a handover) or an id it did not hold,
+which also queues the prompt cancel, and once a day for a cancel that failed and alerted
 staff more than a day ago. A suspend followed by an
 archive replaces the suspension's cycle-end cancel with an immediate one: the
 claim taken before the archive is released, since the archive stamps

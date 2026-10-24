@@ -10,8 +10,8 @@
  *    and fulfilling upgrade requests when it becomes active. A row that changed
  *    between the read and the lock was mapped from stale ids, so the whole sync
  *    runs again once, then gives up for the caller to retry. A write that gives
- *    a suspended or archived workspace a subscription id it did not hold also
- *    releases its lifecycle cancel claim;
+ *    a suspended or archived workspace a new current subscription, or an id it
+ *    did not hold, also releases its lifecycle cancel claim;
  * 4. after the commit, inserts alerts, runs the follow-up provider calls
  *    (cancel, refund, the switch's cycle-end cancel), pushes the change to
  *    members and sends its emails (`emitBillingDiff`, which also tells each
@@ -154,9 +154,9 @@ interface CommittedSync {
    */
   fulfilledRequests: UpgradeRequest[]
   /**
-   * The write gave a suspended or archived workspace a subscription id it
-   * did not hold and released its lifecycle cancel claim, so the prompt
-   * cancel job is queued after the commit.
+   * The write gave a suspended or archived workspace a new current
+   * subscription or an id it did not hold, and released its lifecycle cancel
+   * claim, so the prompt cancel job is queued after the commit.
    */
   needsLifecycleCancel: boolean
 }
@@ -307,16 +307,24 @@ async function fetchState(
 }
 
 /**
- * Whether a write gives the row a subscription id it did not hold: an
- * adoption, a handover or a new checkout.
+ * Whether a write changes the subscriptions the row holds in a way a spent
+ * lifecycle cancel did not cover: a new current one (an adoption of the
+ * held checkout, a promotion of the held switch, or one the sweep found), or
+ * any id the row did not hold.
  * @param before - The row before the write.
  * @param after - The row's held ids after it.
- * @returns True when any id after the write is new.
+ * @returns True when the write needs a new lifecycle cancel.
  */
 function hasNewHeldId(
   before: TenantBillingRecord,
   after: Parameters<typeof heldSubscriptionIds>[0]
 ): boolean {
+  if (
+    after.providerSubscriptionId !== null &&
+    after.providerSubscriptionId !== before.providerSubscriptionId
+  ) {
+    return true
+  }
   const held = new Set(heldSubscriptionIds(before))
   return heldSubscriptionIds(after).some((id) => !held.has(id))
 }
@@ -341,9 +349,10 @@ async function queueLifecycleCancel(tenantId: string): Promise<void> {
 /**
  * Lock the row, map it and write it, unless it changed since it was read. A
  * subscription that becomes current records the running provider and mode.
- * When the workspace is suspended or archived and the write gives it a
- * subscription id it did not hold, the lifecycle cancel claim is released
- * in the same write, so the new subscription is cancelled too.
+ * When the workspace is suspended or archived and the write gives it a new
+ * current subscription (an adoption or a promotion) or an id it did not
+ * hold, the lifecycle cancel claim is released in the same write, so the
+ * new subscription is cancelled too.
  * @param provider - The payment provider.
  * @param run - The sync call.
  * @param readVersion - The version the fetch was based on.

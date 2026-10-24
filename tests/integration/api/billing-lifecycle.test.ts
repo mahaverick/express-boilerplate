@@ -360,6 +360,32 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(await subscriptionStatus(stale)).toBe('cancelled')
   })
 
+  it('releases a spent claim and queues the cancel when a sync adopts a checkout the row already held', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+      lifecycleCancelSentAt: new Date(),
+    })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+    // The checkout's lifecycle cancel failed; the customer pays it anyway.
+    await fake.fakeAdvance(pending, 'active')
+
+    await syncTenantBilling(tenant.id, 'webhook')
+
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: pending,
+      pendingSubscriptionId: null,
+      lifecycleCancelSentAt: null,
+    })
+    const queued = await lifecycleJobs()
+    expect(queued.map((job) => job.data)).toStrictEqual([{ tenantId: tenant.id }])
+    const cancels = await recordingCancels(runLifecycleJobs)
+    expect(cancels).toStrictEqual([[pending, false]])
+  })
+
   it('queues no cancel when a sync changes no subscription id of a suspended workspace', async () => {
     const { tenant } = await workspace()
     await makePaying(tenant.id)
