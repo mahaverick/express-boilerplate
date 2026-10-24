@@ -1,6 +1,7 @@
 /**
  * @file The Worker for the "billing" queue: handles each stored Razorpay
- * webhook event, syncs a workspace on request, and runs the frequent and
+ * webhook event, syncs a workspace on request, cancels for a workspace just
+ * suspended or archived, and runs the frequent and
  * daily scheduler runs, two jobs at a time.
  * A retryable provider error or a sync that kept meeting a concurrent write
  * throws for BullMQ's backoff; a provider refusal that a retry cannot change
@@ -10,10 +11,12 @@
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
+  BILLING_LIFECYCLE_CANCEL_JOB,
   BILLING_SCHEDULER_DAILY_JOB,
   BILLING_SCHEDULER_FREQUENT_JOB,
   BILLING_SYNC_TENANT_JOB,
   BILLING_WEBHOOK_JOB,
+  type BillingLifecycleCancelJobData,
   type BillingSyncTenantJobData,
   type BillingWebhookJobData,
 } from '@/jobs/billing.job'
@@ -22,7 +25,11 @@ import {
   recordPermanentFailure,
   reportFinalJobFailure,
 } from '@/jobs/job-failure.job'
-import { runDailyBilling, runFrequentBilling } from '@/services/billing/billing-scheduler.service'
+import {
+  runDailyBilling,
+  runFrequentBilling,
+  runLifecycleCancelFor,
+} from '@/services/billing/billing-scheduler.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import {
   processBillingWebhookEvent,
@@ -55,7 +62,7 @@ async function withRetryPolicy(work: () => Promise<unknown>): Promise<void> {
 
 /**
  * Process one billing job. Exported for testing.
- * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant` job a workspace, a scheduler job nothing.
+ * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant` or `lifecycle-cancel` job a workspace, a scheduler job nothing.
  * @returns Resolves once the job's work is done.
  * @throws {UnrecoverableError} For a job name this worker has no handler for, or a provider refusal.
  * @throws {Error} A retryable failure, so BullMQ retries.
@@ -74,6 +81,11 @@ export async function processBillingJob(job: Job): Promise<void> {
           extraSubscriptionIds: data.extraSubscriptionIds ?? [],
         })
       )
+      return
+    }
+    case BILLING_LIFECYCLE_CANCEL_JOB: {
+      const data = job.data as BillingLifecycleCancelJobData
+      await withRetryPolicy(() => runLifecycleCancelFor(data.tenantId))
       return
     }
     case BILLING_SCHEDULER_FREQUENT_JOB: {

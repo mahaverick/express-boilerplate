@@ -7,6 +7,7 @@ import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
+import { addBillingLifecycleCancelJob } from '@/jobs/billing.job'
 import {
   PlatformTenantRepository,
   type PlatformTenantDetailRow,
@@ -16,9 +17,12 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
+import { sendHeldBackWarnings } from '@/services/billing/billing-emails.service'
+import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { initialBillingFor } from '@/services/billing/trial.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { logger } from '@/services/logger.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import {
   createOwnerInvitation,
@@ -207,7 +211,34 @@ export const TENANT_STATE_CONFLICT_CODE = 'tenant_state_conflict'
 type LifecycleAction = 'tenant.suspended' | 'tenant.reactivated' | 'tenant.archived'
 
 /**
- * Apply one lifecycle transition, audit it, and return the tenant after the transition.
+ * The billing follow-up of a committed lifecycle change. A suspend or
+ * archive queues the prompt cancel job, so the subscription is cancelled
+ * now rather than on the next frequent run, which stays the fallback when
+ * the queue can't be reached. A reactivation sends the billing warnings the
+ * suspension held back. Never rejects: the change has committed.
+ * @param tenantId - The tenant.
+ * @param to - The state it moved to.
+ */
+async function afterLifecycleChange(tenantId: string, to: TenantLifecycleState): Promise<void> {
+  if (to === 'active') {
+    await sendHeldBackWarnings(tenantId)
+    return
+  }
+  if (getBillingProvider() === null) return
+  try {
+    await addBillingLifecycleCancelJob({ tenantId })
+  } catch (error) {
+    logger.warn('Could not queue the billing cancel of a suspended or archived tenant', {
+      error,
+      tenantId,
+    })
+  }
+}
+
+/**
+ * Apply one lifecycle transition, audit it, and return the tenant after the
+ * transition. The transaction never touches the billing row (lock order):
+ * the billing follow-up runs after the commit (`afterLifecycleChange`).
  * @param actor - The staff user.
  * @param tenantId - The tenant.
  * @param from - The states the transition starts from.
@@ -242,6 +273,7 @@ async function transition(
       tx
     )
   })
+  await afterLifecycleChange(tenantId, to)
   return getTenantDetail(tenantId)
 }
 

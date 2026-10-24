@@ -22,6 +22,12 @@ export const BILLING_WEBHOOK_JOB = 'webhook'
 export const BILLING_SYNC_TENANT_JOB = 'sync-tenant'
 
 /**
+ * The job that cancels one suspended or archived workspace's subscriptions
+ * now, instead of on the next frequent run.
+ */
+export const BILLING_LIFECYCLE_CANCEL_JOB = 'lifecycle-cancel'
+
+/**
  * The frequent billing run's job name, and the id of its scheduler.
  */
 export const BILLING_SCHEDULER_FREQUENT_JOB = 'scheduler-frequent'
@@ -82,6 +88,16 @@ export interface BillingSyncTenantJobData {
 }
 
 /**
+ * A prompt cancel job's payload.
+ */
+export interface BillingLifecycleCancelJobData {
+  /**
+   * The workspace just suspended or archived.
+   */
+  tenantId: string
+}
+
+/**
  * Options for every billing job. A failed sync changes nothing, so a retry
  * is always safe: eight attempts with backoff doubling from 30 s span about
  * an hour of a provider outage (30 s × 127). Failed jobs are kept a week.
@@ -114,6 +130,19 @@ export async function addBillingWebhookJob(data: BillingWebhookJobData): Promise
  */
 export async function addBillingSyncJob(data: BillingSyncTenantJobData): Promise<void> {
   await addJob(getBillingQueue(), BILLING_SYNC_TENANT_JOB, data, BILLING_JOB_OPTIONS)
+}
+
+/**
+ * Queue the prompt cancel of a workspace just suspended or archived. It
+ * carries no job id, for the reason a sync carries none: a suspend's failed
+ * job, kept a week, would refuse the archive that follows it.
+ * @param data - The workspace.
+ * @returns Resolves once the job is in Redis.
+ */
+export async function addBillingLifecycleCancelJob(
+  data: BillingLifecycleCancelJobData
+): Promise<void> {
+  await addJob(getBillingQueue(), BILLING_LIFECYCLE_CANCEL_JOB, data, BILLING_JOB_OPTIONS)
 }
 
 /**

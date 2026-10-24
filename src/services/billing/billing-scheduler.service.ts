@@ -23,7 +23,9 @@
  * The lifecycle transactions (suspend, archive) never touch the billing row:
  * an invite locks the billing row before invitation rows, and an archive
  * locks the tenant row and then invitation rows, so a billing write there
- * would invert the order. This job cancels for them instead.
+ * would invert the order. This job cancels for them instead, and so does the
+ * prompt cancel job each one queues after its commit (`runLifecycleCancelFor`),
+ * which takes the same claim.
  */
 import { getEnv } from '@/configs/env.config'
 import { CANCEL_BUFFER_DAYS } from '@/constants/billing.constants'
@@ -479,6 +481,33 @@ async function runLifecycleCancels(
     }
     if (claimed.length < LIFECYCLE_CLAIM_SIZE) return
   }
+}
+
+/**
+ * The prompt cancel a suspend or archive queues after its commit: the
+ * lifecycle step for one workspace, run now instead of on the next frequent
+ * run. It releases the workspace's claim if that no longer stands (active
+ * again, or archived after a suspension's cycle-end cancel), then claims and
+ * cancels through the same claim as the step, so the step and the job cancel
+ * once between them. Does nothing when payments are off or nothing is left
+ * to cancel.
+ * @param tenantId - The workspace.
+ * @param now - The run's time; defaults to now.
+ * @returns `acted` when it cancelled, else `skipped`.
+ * @throws {Error} When the sync after the cancel fails; the claim is kept, as in the step.
+ */
+export async function runLifecycleCancelFor(
+  tenantId: string,
+  now = new Date()
+): Promise<'acted' | 'skipped'> {
+  const running = runningProvider()
+  if (running === undefined) return 'skipped'
+  await billingRepository.releaseLifecycleCancelClaims(undefined, tenantId)
+  const [row] = await withTransaction((tx) =>
+    billingRepository.claimLifecycleCancels(running.scope, 1, tx, tenantId)
+  )
+  if (row === undefined) return 'skipped'
+  return cancelLifecycleRow(running.provider, row, now)
 }
 
 /**

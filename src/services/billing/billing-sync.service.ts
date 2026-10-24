@@ -331,6 +331,8 @@ async function commitSync(
         locked.checkoutStartedBy !== null
       ) {
         patch.payerUserId = locked.checkoutStartedBy
+        // The address belongs to an earlier payer; the confirm sets the new one's.
+        patch.billingEmail = null
       }
     }
 

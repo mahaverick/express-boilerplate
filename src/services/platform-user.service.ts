@@ -609,8 +609,10 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
 /**
  * Soft-delete a user and end their sessions; remove their federated provider
  * links and revoke the invitations they sent, so the address can be reused
- * fully, Google included (Deactivate is the way to ban). After the commit,
- * the remaining owners of each workspace they paid for with a live
+ * fully, Google included (Deactivate is the way to ban). Every workspace
+ * they paid for forgets them as payer, with the billing address they gave
+ * (`clearPayer`); the subscription keeps running. After the commit, the
+ * remaining owners of each workspace they paid for with a live
  * subscription, and were still a member of, are told
  * (`sendPayerLeftEverywhere`). Refused while they
  * are the last live owner of any customer tenant or the last active platform
@@ -674,6 +676,8 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
     // Read before the delete: a workspace the user already left was told then.
     const memberOf = await userMembershipRepository.listTenantIdsForUser(target.id, tx)
     await userRepository.softDelete(target.id, tx)
+    // After the user row, before the invitation writes: the billing row's place in the lock order.
+    const paidFor = await billingRepository.clearPayer(target.id, tx)
     await billingRepository.closeAllOpenUpgradeRequestsOf(target.id, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
     await authProviderRepository.deleteFederatedForUser(target.id, tx)
@@ -689,8 +693,8 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       },
       tx
     )
-    return { sessionIds, memberOf }
+    return { sessionIds, memberOf, paidFor: paidFor.map((row) => row.tenantId) }
   })
   await denySessionsAfterCommit(userId, deleted.sessionIds)
-  await sendPayerLeftEverywhere(userId, deleted.memberOf, new Date())
+  await sendPayerLeftEverywhere(userId, deleted.paidFor, deleted.memberOf, new Date())
 }

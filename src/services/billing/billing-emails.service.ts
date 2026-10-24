@@ -608,6 +608,36 @@ export async function sendBillingDiffEmails(
 }
 
 /**
+ * Send the warnings a suspension held back, after a reactivation commits: a
+ * suspended workspace is told nothing that asks its owners to act in
+ * Billing, so a payment that stopped, or a Paid that ends at the cycle end
+ * (an owner's cancel, or the suspension's own cycle-end cancel, which the
+ * provider cannot undo), is told now. The rows are compared as if those
+ * columns had just been set, and each mail keeps the stamp it had then, so a
+ * warning already sent before the suspension, or by an earlier
+ * reactivation, is not sent again. Never rejects.
+ * @param tenantId - The workspace, active again.
+ */
+export async function sendHeldBackWarnings(tenantId: string): Promise<void> {
+  try {
+    const row = await billingRepository.findByTenantId(tenantId)
+    if (row === undefined) return
+    const before: TenantBillingRecord = {
+      ...row,
+      haltedAt: null,
+      pausedAt: null,
+      cancelAtPeriodEnd: false,
+    }
+    await sendBillingDiffEmails(before, row, 'staff')
+  } catch (error) {
+    logger.error('Could not send the held back billing warnings', {
+      error: redactedForLog(error),
+      tenantId,
+    })
+  }
+}
+
+/**
  * Read what a scheduled or member-action mail needs for one workspace: none
  * for a missing, platform, suspended or archived workspace, whose owners are
  * never asked to act in Billing.
@@ -1070,53 +1100,68 @@ export async function sendPayerLeft(
   try {
     const row = await billingRepository.findByTenantId(tenantId)
     if (row === undefined || row.payerUserId !== payerUserId) return
-    const isLive =
-      (row.state === 'active' || row.state === 'past_due') &&
-      row.providerSubscriptionId !== null &&
-      !row.cancelAtPeriodEnd
-    if (!isLive) return
-    const context = await activeContext(tenantId, null)
-    if (context === undefined) return
-    const deadline = await keepPaidDeadline(row, leftAt)
-    if (deadline === null) {
-      logSkipped(tenantId, 'payer_left')
-      return
-    }
-    const payer = await userRepository.findById(payerUserId, { includeDeleted: true })
-    const payerName = payer === undefined ? '' : displayName(payer)
-    const { tenant, appName } = context
-    const leftOn = formatDateInZone(leftAt, context.timeZone)
-    const keepPaidBy = formatDateInZone(deadline, context.timeZone)
-    await notifyOwners(context, {
-      type: 'billing_payer_left',
-      stamp: `${payerUserId}-${leftOn}`,
-      title: 'Your workspace needs a new card',
-      body: `The person who paid for ${tenant.name} left on ${leftOn}. Add your card by ${keepPaidBy} to keep Paid.`,
-      email: {
-        templateKey: 'payer_left',
-        messageFor: (to) => ({
-          to,
-          templateKey: 'payer_left',
-          variables: {
-            appName,
-            tenantName: tenant.name,
-            payerName: payerName === '' ? UNNAMED_PAYER : payerName,
-            leftOn,
-            periodEndsOn: keepPaidBy,
-            billingLink: buildBillingLink(tenant.slug, 'payer_left'),
-          },
-        }),
-      },
-    })
-    await trackPayerLeft(
-      row,
-      payer !== undefined && payer.deletedAt === null ? payerUserId : null,
-      leftOn,
-      leftAt
-    )
+    await tellPayerLeft(row, payerUserId, leftAt)
   } catch (error) {
     logSendFailure(error, tenantId, 'payer_left')
   }
+}
+
+/**
+ * Tell the remaining owners the payer left, when the subscription is live.
+ * @param row - The workspace's billing row as read now.
+ * @param payerUserId - The person who left; the row may no longer name them, as after an account delete.
+ * @param leftAt - When they left.
+ */
+async function tellPayerLeft(
+  row: TenantBillingRecord,
+  payerUserId: string,
+  leftAt: Date
+): Promise<void> {
+  const { tenantId } = row
+  const isLive =
+    (row.state === 'active' || row.state === 'past_due') &&
+    row.providerSubscriptionId !== null &&
+    !row.cancelAtPeriodEnd
+  if (!isLive) return
+  const context = await activeContext(tenantId, null)
+  if (context === undefined) return
+  const deadline = await keepPaidDeadline(row, leftAt)
+  if (deadline === null) {
+    logSkipped(tenantId, 'payer_left')
+    return
+  }
+  const payer = await userRepository.findById(payerUserId, { includeDeleted: true })
+  const payerName = payer === undefined ? '' : displayName(payer)
+  const { tenant, appName } = context
+  const leftOn = formatDateInZone(leftAt, context.timeZone)
+  const keepPaidBy = formatDateInZone(deadline, context.timeZone)
+  await notifyOwners(context, {
+    type: 'billing_payer_left',
+    stamp: `${payerUserId}-${leftOn}`,
+    title: 'Your workspace needs a new card',
+    body: `The person who paid for ${tenant.name} left on ${leftOn}. Add your card by ${keepPaidBy} to keep Paid.`,
+    email: {
+      templateKey: 'payer_left',
+      messageFor: (to) => ({
+        to,
+        templateKey: 'payer_left',
+        variables: {
+          appName,
+          tenantName: tenant.name,
+          payerName: payerName === '' ? UNNAMED_PAYER : payerName,
+          leftOn,
+          periodEndsOn: keepPaidBy,
+          billingLink: buildBillingLink(tenant.slug, 'payer_left'),
+        },
+      }),
+    },
+  })
+  await trackPayerLeft(
+    { ...row, payerUserId },
+    payer !== undefined && payer.deletedAt === null ? payerUserId : null,
+    leftOn,
+    leftAt
+  )
 }
 
 /**
@@ -1136,26 +1181,27 @@ async function keepPaidDeadline(row: TenantBillingRecord, now: Date): Promise<Da
 
 /**
  * Tell the remaining owners of every workspace a deleted user paid for with
- * a live subscription and was still a member of (`sendPayerLeft`): a
- * workspace they had already left was told then. Never rejects.
+ * a live subscription and was still a member of: a workspace they had
+ * already left was told then. The delete cleared them as payer, so the
+ * workspaces come from its transaction and each row is read again here for
+ * its current state. Never rejects.
  * @param payerUserId - The deleted user.
+ * @param paidFor - The workspaces they paid for when deleted.
  * @param memberOf - The workspaces they were a member of when deleted.
  * @param leftAt - When they were deleted.
  */
 export async function sendPayerLeftEverywhere(
   payerUserId: string,
+  paidFor: readonly string[],
   memberOf: readonly string[],
   leftAt: Date
 ): Promise<void> {
-  try {
-    const paidFor = await billingRepository.listTenantIdsPaidBy(payerUserId)
-    for (const tenantId of paidFor.filter((id) => memberOf.includes(id))) {
-      await sendPayerLeft(tenantId, payerUserId, leftAt)
+  for (const tenantId of paidFor.filter((id) => memberOf.includes(id))) {
+    try {
+      const row = await billingRepository.findByTenantId(tenantId)
+      if (row !== undefined) await tellPayerLeft(row, payerUserId, leftAt)
+    } catch (error) {
+      logSendFailure(error, tenantId, 'payer_left')
     }
-  } catch (error) {
-    logger.error('Could not send the payer left emails', {
-      error: redactedForLog(error),
-      userId: payerUserId,
-    })
   }
 }

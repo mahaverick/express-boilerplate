@@ -381,6 +381,8 @@ async function assertOwnerRemainsFor(
  * A promotion to owner also locks the target's user row `FOR SHARE`
  * (`lockUserForOwnership`) after the membership locks, so a concurrent staff
  * delete of the target either sees the new ownership or wins first.
+ * A payer demoted from owner stays the payer and no one is told they left:
+ * the mandate is theirs, and they are still a member.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.

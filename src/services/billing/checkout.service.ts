@@ -192,8 +192,9 @@ function providerFailure(error: unknown): Error {
  * Run a provider call, mapping its failure to the HTTP answer.
  * @param call - The call.
  * @returns What the call returns.
+ * @throws {HttpError} 503 when the provider may answer later, 502 when it refused the call.
  */
-async function callProvider<T>(call: () => Promise<T>): Promise<T> {
+export async function callProvider<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call()
   } catch (error) {

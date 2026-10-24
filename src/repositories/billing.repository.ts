@@ -1039,17 +1039,41 @@ export class BillingRepository {
   }
 
   /**
-   * The workspaces whose payer is a user.
+   * Forget a user as the payer of every workspace they pay for, with the
+   * billing address they gave, when their account is deleted or purged: the
+   * address is theirs. Each row's version moves on, so a sync that read it
+   * before writes again from the new row. A payer's own rows only: a
+   * workspace another person pays for is untouched.
+   *
+   * Lock order: the billing rows, after the user row and before any
+   * invitation or membership-row write.
    * @param userId - The user.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The workspace ids.
+   * @param tx - The delete's or purge's transaction.
+   * @returns The rows as they were before the clear, in workspace order.
    */
-  async listTenantIdsPaidBy(userId: string, executor: DbExecutor = db): Promise<string[]> {
-    const rows = await executor
-      .select({ tenantId: tenantBillingModel.tenantId })
+  async clearPayer(userId: string, tx: DbTransaction): Promise<TenantBillingRecord[]> {
+    const paidFor = await tx
+      .select()
       .from(tenantBillingModel)
       .where(eq(tenantBillingModel.payerUserId, userId))
-    return rows.map((row) => row.tenantId)
+      .orderBy(tenantBillingModel.tenantId)
+      .for('no key update')
+    if (paidFor.length === 0) return []
+    await tx
+      .update(tenantBillingModel)
+      .set({
+        payerUserId: null,
+        billingEmail: null,
+        version: sql`${tenantBillingModel.version} + 1`,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        inArray(
+          tenantBillingModel.tenantId,
+          paidFor.map((row) => row.tenantId)
+        )
+      )
+    return paidFor
   }
 
   /**
@@ -1061,12 +1085,14 @@ export class BillingRepository {
    * @param scope - The running provider and mode.
    * @param limit - The most rows to claim.
    * @param tx - The open transaction; the claim holds until it ends.
+   * @param tenantId - Claim only this workspace's record, for the prompt cancel job.
    * @returns The claimed rows.
    */
   async claimLifecycleCancels(
     scope: ProviderScope,
     limit: number,
-    tx: DbTransaction
+    tx: DbTransaction,
+    tenantId?: string
   ): Promise<TenantBillingRecord[]> {
     const isSuspendedOrArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} in ('suspended', 'archived'))`
     const isArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} = 'archived')`
@@ -1080,9 +1106,11 @@ export class BillingRepository {
       isNotNull(tenantBillingModel.nextSubscriptionId),
       isNotNull(tenantBillingModel.pendingSubscriptionId)
     )
+    const ofTenant = tenantId === undefined ? undefined : eq(tenantBillingModel.tenantId, tenantId)
     return this.claimDue(
       tenantBillingModel.lifecycleCancelSentAt,
-      and(isSuspendedOrArchived, holdsSubscription, ofProvider(scope)) ?? isSuspendedOrArchived,
+      and(isSuspendedOrArchived, holdsSubscription, ofProvider(scope), ofTenant) ??
+        isSuspendedOrArchived,
       limit,
       tx
     )
@@ -1095,15 +1123,20 @@ export class BillingRepository {
    * taken (a suspension's cycle-end cancel), so the archive cancels now.
    * `deleted_at` is when the workspace was archived.
    * @param executor - Where to run the query. Defaults to the pool.
+   * @param tenantId - Clear only this workspace's claim, for the prompt cancel job.
    * @returns How many claims were cleared.
    */
-  async releaseLifecycleCancelClaims(executor: DbExecutor = db): Promise<number> {
+  async releaseLifecycleCancelClaims(
+    executor: DbExecutor = db,
+    tenantId?: string
+  ): Promise<number> {
     const released = await executor
       .update(tenantBillingModel)
       .set({ lifecycleCancelSentAt: null })
       .where(
         and(
           isNotNull(tenantBillingModel.lifecycleCancelSentAt),
+          tenantId === undefined ? undefined : eq(tenantBillingModel.tenantId, tenantId),
           sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and (${tenantModel.lifecycleState} = 'active' or (${tenantModel.lifecycleState} = 'archived' and ${tenantModel.deletedAt} > ${tenantBillingModel.lifecycleCancelSentAt})))`
         )
       )

@@ -326,8 +326,12 @@ in this order:
    takes no seat lock. The billing sync (`syncTenantBilling`,
    `src/services/billing/billing-sync.service.ts`) locks only this row, and
    calls the payment provider only before or after its transaction; so do the
-   billing scheduler's writes. A suspend or archive never touches it: the
-   scheduler cancels for them;
+   billing scheduler's writes. A suspend or archive never touches it: after
+   its commit it queues a prompt cancel job, and the scheduler's lifecycle
+   step, which takes the same claim, is the fallback. A user's delete or
+   purge takes it after the user row to clear them as payer (`clearPayer`),
+   and a tenant purge takes it after the platform-role row to check that no
+   subscription arrived since its provider check;
 6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
 7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
@@ -846,14 +850,14 @@ missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                                         | Worker concurrency   | Job options                                                           |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------- |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                       | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                       | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                     | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                          |
-| `maintenance`  | The retention purge                                                                                                                                                             | 1                    | 3 attempts, backoff from 60 s                                         |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                      | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept    |
-| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days; a run: 1 attempt |
+| Queue          | Carries                                                                                                                                                                                                                       | Worker concurrency   | Job options                                                           |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------- |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                          |
+| `maintenance`  | The retention purge                                                                                                                                                                                                           | 1                    | 3 attempts, backoff from 60 s                                         |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept    |
+| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days; a run: 1 attempt |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
@@ -922,7 +926,17 @@ them to the sync's versioned write. A run occupies one of the billing
 Worker's two slots while it lasts, so webhook and sync jobs share the other;
 the daily run only queues jobs and ends quickly. A suspend followed by an
 archive replaces the suspension's cycle-end cancel with an immediate one: the
-claim taken before the archive is released.
+claim taken before the archive is released. Each suspend and archive also
+queues a `lifecycle-cancel` job after its commit, which runs the same step
+for that workspace alone (`runLifecycleCancelFor`) through the same claim,
+so the cancel goes out at once and the frequent run is only the fallback. A
+reactivation sends the warnings the suspension held back: a payment that
+stopped and a Paid that ends at the cycle end (an owner's cancel or the
+suspension's own, which the provider can't undo), each under the stamp it had,
+so none goes twice (`sendHeldBackWarnings`). A tenant purge is refused with
+409 while the provider shows any subscription the row may still be charged
+through as running, and with 503 or 502 when it can't be read; the billing row
+then goes with the tenant.
 
 The analytics Worker runs one job at a time, so this process never has two of
 its jobs talking to PostHog at once. Two replicas may; the drain and the
@@ -1131,7 +1145,11 @@ user whose trial it is, skipping a soft-deleted account; only when nobody is
 left is it a system event. Storing a new checkout clears the payer and the billing address, and when
 the new subscription becomes current with no payer on record the sync sets
 the owner who started the checkout; a payer the confirm recorded is never
-replaced, so an earlier payer is never named for it. Staff are never named: a staff member's own
+replaced, so an earlier payer is never named for it; that fill clears the
+billing address too, since it was the earlier payer's. Deleting or purging an
+account clears it as payer, with its billing address, wherever it paid; the
+subscription keeps running. A payer demoted from owner stays the payer, since
+the mandate is theirs, and no one is told they left. Staff are never named: a staff member's own
 action in a customer tenant sends no product event, since its audit entry is
 forwarded already, and a staff-made change goes to the person the rules name.
 An invitee refused at the door is not a member, so that refusal is a system
