@@ -565,6 +565,26 @@ describe('POST /api/v1/tenants/:slug/billing/checkout/confirm', () => {
     expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
   })
 
+  it('tells the owner a checkout that was replaced to open Billing, with 400 CHECKOUT_MISMATCH', async () => {
+    const { tenant, owner } = await workspace()
+    const first = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const replacedId = String(dataOf(first.body).subscriptionId)
+    const second = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'year' })
+    expect(String(dataOf(second.body).subscriptionId)).not.toBe(replacedId)
+
+    const response = await postAs(
+      owner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(replacedId)
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      code: 'CHECKOUT_MISMATCH',
+      message: 'This checkout was replaced. Open Billing to see the current one.',
+    })
+  })
+
   it('refuses a confirm when the workspace has no checkout', async () => {
     const { tenant, owner } = await workspace()
 

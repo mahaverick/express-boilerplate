@@ -614,6 +614,24 @@ describe('billing webhook jobs', () => {
     expect(row).toMatchObject({ processed_at: null, error: 'provider_error 401 BAD_REQUEST_ERROR' })
   })
 
+  it('raises no dispute alert while the status read can still be retried', async () => {
+    const { sub } = await payingWorkspace()
+    const payment = paymentId()
+    const dispute = disputeId()
+    servePayment(payment, sub)
+    api.reply('GET', `/disputes/${dispute}`, 503, { error: { code: 'SERVER_ERROR' } })
+
+    const id = await deliver('webhook-payment.dispute.created-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
+
+    const job = await retrying(id)
+    expect(job.attemptsMade).toBe(1)
+    expect(await alertsNaming('dispute', payment)).toEqual([])
+    await job.remove()
+  })
+
   it('fails a refund whose payment lookup is refused for its key, with one failure alert', async () => {
     const payment = paymentId()
     api.reply('GET', `/payments/${payment}`, 401, { error: { code: 'BAD_REQUEST_ERROR' } })

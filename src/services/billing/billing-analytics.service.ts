@@ -357,7 +357,8 @@ export async function emitBillingDiffAnalytics(
       // A sync an owner's request ran names no actor: it brings in what the provider did.
       isOwnerAct: actor !== null,
       isOwnerCancel: cancellingOwner !== null,
-      isStaffCancel: extras.isStaffCancel === true || marker?.by === 'staff',
+      isStaffCancel: extras.isStaffCancel === true,
+      hasStaffCancelMarker: marker?.by === 'staff',
     })
     let trialUser: string | null | undefined
     /**

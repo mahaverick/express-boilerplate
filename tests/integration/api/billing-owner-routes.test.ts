@@ -478,6 +478,38 @@ describe('POST /api/v1/tenants/:slug/billing/checkout/confirm for a card change'
   })
 })
 
+describe('POST /api/v1/tenants/:slug/billing/checkout/confirm by another owner', () => {
+  it("keeps another owner's open card change when an owner confirms a new checkout", async () => {
+    const { tenant, owner } = await workspace()
+    const starter = await createTrackedUser()
+    await membershipRepository.create({ userId: starter.id, tenantId: tenant.id, role: 'owner' })
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    const startedAt = new Date()
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+      cardChangeStartedAt: startedAt,
+      cardChangeStartedBy: starter.id,
+    })
+
+    const response = await postAs(
+      owner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(pending)
+    )
+
+    expect(response.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: pending,
+      payerUserId: owner.id,
+      cardChangeStartedBy: starter.id,
+      cardChangeStartedAt: startedAt,
+    })
+  })
+})
+
 describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
   it('cancels at the cycle end: the workspace reads cancelling and keeps Paid', async () => {
     const { tenant, owner } = await workspace()
@@ -499,6 +531,31 @@ describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
 
     await syncTenantBilling(tenant.id, 'webhook')
     expect(await billingColumn(tenant.id, 'cancelAtPeriodEnd')).toBe(true)
+  })
+
+  it('cancels a past-due subscription now: its paid time is over, so the workspace moves to Free', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, {
+      state: 'past_due',
+      pastDueSince: new Date(Date.now() - DAY_MS),
+      haltedAt: new Date(Date.now() - DAY_MS),
+    })
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+
+    const response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+
+    expect(response.status).toBe(200)
+    expect(cancel.mock.calls).toStrictEqual([[subscriptionId, false]])
+    cancel.mockRestore()
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'free',
+      planId: plans.freeId,
+      cancelAtPeriodEnd: false,
+      pastDueSince: null,
+    })
   })
 
   it('refuses a second cancel with 409 NO_SUBSCRIPTION', async () => {

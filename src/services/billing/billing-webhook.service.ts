@@ -327,9 +327,21 @@ async function unlessUnknown<T>(read: () => Promise<T>): Promise<T | undefined> 
 }
 
 /**
- * Read a dispute's status. When a new dispute's status cannot be read for any
- * reason but an unknown id, staff are alerted once per payment with no
- * workspace before the job fails, so a response deadline is never silent.
+ * Whether a failed provider call is one a retry cannot change: a provider
+ * error that is not retryable. The job retries anything else.
+ * @param error - What the call threw.
+ * @returns True for a refusal.
+ */
+function isRefusal(error: unknown): boolean {
+  return error instanceof ProviderError && !error.retryable
+}
+
+/**
+ * Read a dispute's status. When a new dispute's status read is refused (a
+ * provider error a retry cannot change), staff are alerted once per payment
+ * with no workspace before the job fails, so a response deadline is never
+ * silent. A read that can still succeed on a retry raises nothing: the job
+ * retries, and its final failure raises the failing-webhook alert.
  * @param provider - The payment provider.
  * @param data - The job's payload.
  * @param disputeId - The dispute.
@@ -344,7 +356,7 @@ async function readDisputeStatus(
   try {
     return await unlessUnknown(() => provider.fetchDisputeStatus(disputeId))
   } catch (error) {
-    if (data.eventType === 'payment.dispute.created') {
+    if (data.eventType === 'payment.dispute.created' && isRefusal(error)) {
       const named = data.paymentId ?? disputeId
       await alertOnce(
         null,

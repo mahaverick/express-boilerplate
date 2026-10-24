@@ -168,21 +168,27 @@ describe('nextBillingRow: the pending checkout', () => {
     expect(result.cause).toBe('subscription_activated')
   })
 
-  it('does not take the period end of an active checkout whose cycle is not paid yet', () => {
+  it('stamps the period end now for an active checkout whose cycle is not paid yet, so buffer and grace bound it', () => {
     const result = map(row({ pendingSubscriptionId: 'sub_new' }), {
       pending: sub('sub_new', 'active', { latestInvoicePaid: false }),
     })
-    expect(result.patch).not.toHaveProperty('currentPeriodEnd')
-    expect(result.patch.state).toBe('active')
-    expect(result.actions).toStrictEqual([
+    expect(result.patch).toMatchObject({ state: 'active', currentPeriodEnd: at(1) })
+    expect(result.actions).toStrictEqual([])
+  })
+
+  it('stamps the period end now when a found subscription with an unpaid cycle replaces a lapsed one', () => {
+    const result = map(
+      paying({ cancelAtPeriodEnd: true }),
       {
-        kind: 'alert',
-        alert: 'reconcile_repair',
-        message:
-          'Workspace is active on subscription sub_new with no paid period end. Check its invoices.',
-        subscriptionId: 'sub_new',
+        current: sub('sub_cur', 'cancelled'),
+        swept: [sub('sub_new', 'active', { latestInvoicePaid: false })],
       },
-    ])
+      at(40)
+    )
+    expect(result.patch).toMatchObject({
+      providerSubscriptionId: 'sub_new',
+      currentPeriodEnd: at(40),
+    })
   })
 
   it('resets a scheduled cancel when a new checkout becomes current', () => {
@@ -835,6 +841,16 @@ describe('nextBillingRow: the current subscription', () => {
       cause: null,
       actions: [{ kind: 'cancel_now', subscriptionId: 'sub_cur' }],
     })
+  })
+
+  it('cancels the lapsed live subscription of a trialing workspace rather than mark it past due', () => {
+    const extended = paying({ state: 'trialing', trialEndsAt: at(10), currentPeriodEnd: null })
+    const result = map(extended, {
+      current: sub('sub_cur', 'halted', { paidCount: 1 }),
+    })
+    expect(result.patch).toStrictEqual({})
+    expect(result.cause).toBeNull()
+    expect(result.actions).toStrictEqual([{ kind: 'cancel_now', subscriptionId: 'sub_cur' }])
   })
 
   it('leaves a never-authenticated pending subscription of a workspace on Free alone', () => {

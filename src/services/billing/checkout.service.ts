@@ -134,6 +134,49 @@ function checkoutMismatch(): HttpError {
 }
 
 /**
+ * The 400 for a confirm of this workspace's own checkout that a newer one
+ * replaced.
+ * @returns The error.
+ */
+function checkoutReplaced(): HttpError {
+  return new HttpError(
+    'This checkout was replaced. Open Billing to see the current one.',
+    400,
+    CHECKOUT_MISMATCH_CODE
+  )
+}
+
+/**
+ * The refusal of a confirm whose subscription the row does not hold: the
+ * replaced one when the provider signed it and its notes name this
+ * workspace (a checkout a newer one replaced), else the mismatch. A failed
+ * read answers the mismatch.
+ * @param provider - The running provider.
+ * @param tenantId - The workspace.
+ * @param body - What the provider's checkout handed the browser.
+ * @returns The error.
+ */
+async function unheldConfirmRefusal(
+  provider: BillingProviderClient,
+  tenantId: string,
+  body: CheckoutConfirm
+): Promise<HttpError> {
+  const posted = body.razorpay_subscription_id
+  if (!provider.verifyCheckout(body, posted)) return checkoutMismatch()
+  try {
+    const sub = await provider.fetchSubscription(posted)
+    return sub.notes.tenantId === tenantId ? checkoutReplaced() : checkoutMismatch()
+  } catch (error) {
+    logger.warn('Could not read a confirmed checkout the workspace does not hold', {
+      error,
+      tenantId,
+      subscriptionId: posted,
+    })
+    return checkoutMismatch()
+  }
+}
+
+/**
  * The 409 for a checkout while a live subscription runs.
  * @param message - What the owner reads.
  * @returns The error.
@@ -984,7 +1027,8 @@ export async function confirmCheckout(
     row.nextSubscriptionId,
     isCardChangeOpen(row, actor, new Date()) ? row.providerSubscriptionId : null,
   ].find((id): id is string => id !== null && id === posted)
-  if (stored === undefined || isOtherProvider(row, provider)) throw checkoutMismatch()
+  if (isOtherProvider(row, provider)) throw checkoutMismatch()
+  if (stored === undefined) throw await unheldConfirmRefusal(provider, tenantId, body)
   if (!provider.verifyCheckout(body, stored)) throw checkoutMismatch()
   const sub = await callProvider(() => provider.fetchSubscription(stored))
   if (sub.notes.tenantId !== tenantId) {
@@ -1009,8 +1053,9 @@ export async function confirmCheckout(
         locked.pendingSubscriptionId,
         locked.nextSubscriptionId,
       ].includes(stored)
+      // Only the owner who opened the card change closes it; another owner's confirm leaves it open.
       const isCardChange =
-        locked.providerSubscriptionId === stored && locked.cardChangeStartedAt !== null
+        locked.providerSubscriptionId === stored && locked.cardChangeStartedBy === user.id
       const patch: Partial<NewTenantBilling> = {
         ...(isHeld &&
           (locked.payerUserId !== user.id || locked.billingEmail !== user.email) && {
@@ -1069,10 +1114,11 @@ export interface CancelRequest {
    */
   source: 'owner' | 'staff'
   /**
-   * When the current subscription ends. A deferred start that has not
-   * charged yet cannot be cancelled at its cycle end, so it ends now either way.
+   * When the current subscription ends, or how to decide it from the row as
+   * read. A deferred start that has not charged yet cannot be cancelled at
+   * its cycle end, so it ends now either way.
    */
-  when: StaffCancelWhen
+  when: StaffCancelWhen | ((row: TenantBillingRecord) => StaffCancelWhen)
   /**
    * The owner who cancels: their cancel is marked before the provider call,
    * and the change is sent as theirs. Absent for staff.
@@ -1124,8 +1170,9 @@ export async function cancelSubscriptions(
   const { tenantId, source, ownerUserId } = request
   const row = await withTransaction((tx) => request.lock(tx))
   assertOwnProviderWhenLive(row, provider, NO_SUBSCRIPTION_CODE, request.otherProviderMessage)
+  const when = typeof request.when === 'function' ? request.when(row) : request.when
   const currentId =
-    hasCurrentSubscription(row) && (!row.cancelAtPeriodEnd || request.when === 'now')
+    hasCurrentSubscription(row) && (!row.cancelAtPeriodEnd || when === 'now')
       ? row.providerSubscriptionId
       : null
   const nextId = row.nextSubscriptionId
@@ -1153,7 +1200,7 @@ export async function cancelSubscriptions(
         currentId,
         ownerUserId === undefined ? { by: 'staff' } : { by: 'owner', userId: ownerUserId }
       )
-      currentCancel = request.when
+      currentCancel = when
       try {
         if (current.status === 'authenticated') {
           // Read again just before cancelling now: a first charge that landed meanwhile makes it a charged subscription.
@@ -1236,8 +1283,9 @@ export async function cancelSubscriptions(
 
 /**
  * Cancel Paid, as an owner by membership: at the cycle end, or now for a
- * deferred start that has not charged yet (`cancelSubscriptions`). A
- * scheduled switch or resubscribe is cancelled too.
+ * deferred start that has not charged yet (`cancelSubscriptions`) and for a
+ * past-due subscription, whose paid time is over, so the workspace moves to
+ * Free at once. A scheduled switch or resubscribe is cancelled too.
  * @param actor - The signed-in owner.
  * @param tenantId - The workspace.
  * @returns The workspace's billing after the cancel.
@@ -1249,7 +1297,8 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
   await cancelSubscriptions(provider, {
     tenantId,
     source: 'owner',
-    when: 'cycle_end',
+    // A cycle-end cancel of a past-due subscription would leave a failed charge retrying until its cycle ends.
+    when: (row) => (row.state === 'past_due' ? 'now' : 'cycle_end'),
     ownerUserId: actor.userId,
     lock: (tx) => lockOwnerAndBilling(actor, tenantId, tx),
     audit: async (tx) => {

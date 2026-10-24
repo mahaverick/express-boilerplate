@@ -1048,6 +1048,18 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(await billingAudit(tenant.id)).toEqual([])
   })
 
+  it('answers 502, not 409, with payments off when the tenant holds only a checkout', async () => {
+    const { tenant } = await workspace()
+    await setBilling(tenant.id, { pendingSubscriptionId: 'sub_FAKEpending00001' })
+    const { token } = await staff('admin')
+    paymentsSwitch.on = false
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(502)
+    expect(response.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+  })
+
   it('refuses a bad when with a field error', async () => {
     const { tenant } = await payingWorkspace()
     const { token } = await staff('admin')

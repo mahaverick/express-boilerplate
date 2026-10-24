@@ -593,6 +593,33 @@ describe('runFrequentBilling', () => {
     }
   )
 
+  it('keeps a lapsed trial whose row kept changing during its sync, and says so in the alert', async () => {
+    const now = new Date()
+    const { tenantId } = await lapsedTrial(now)
+    const subscriptionId = await fakeSubscription({ tenantId, priceId: plans.monthPriceId })
+    await setBilling(tenantId, { pendingSubscriptionId: subscriptionId })
+    const original = BillingRepository.prototype.findByTenantId
+
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'findByTenantId',
+      async function (this: BillingRepository, ...readArguments: Parameters<typeof original>) {
+        const row = await original.apply(this, readArguments)
+        // Every sync read looks stale under the lock, as when another write keeps landing.
+        return row === undefined ? row : { ...row, version: row.version - 1 }
+      },
+      async () => {
+        await runFrequentBilling(now)
+      }
+    )
+
+    expect(await stateOf(tenantId)).toBe('trialing')
+    const alerts = await alertsOf(tenantId)
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]?.message).toContain('kept changing')
+    expect(alerts[0]?.message).not.toContain('could not read')
+  })
+
   it('moves a lapsed trial to Free when the provider does not know its subscription, and alerts staff once', async () => {
     const now = new Date()
     const { tenantId } = await lapsedTrial(now)
@@ -1002,6 +1029,38 @@ describe('runDailyBilling', () => {
     })
     const alerts = await alertsOf(tenant.id)
     expect(alerts.map((alert) => alert.kind)).toContain('duplicate_refunded')
+  })
+
+  it('offers swept subscriptions oldest first, so the sync keeps the first paid one and refunds the later', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    const older = await notedSubscription(tenant.id, getEnv().APP_ENV)
+    const newer = await notedSubscription(tenant.id, getEnv().APP_ENV)
+    await fake.fakeAdvance(older, 'active')
+    await fake.fakeAdvance(newer, 'active')
+    await fake.fakeShiftBack(older, 60 * 60 * 1000)
+    const original = FakeBillingProvider.prototype.listRecentSubscriptions
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'listRecentSubscriptions',
+      async function (this: FakeBillingProvider, since: Date) {
+        const found = await original.call(this, since)
+        // The provider's list, newest first.
+        return found.toSorted(
+          (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
+        )
+      },
+      async () => {
+        await runDailyBilling(now)
+      }
+    )
+    const jobs = await syncJobsFor(tenant.id)
+    expect(jobs.map((job) => job.data.extraSubscriptionIds)).toStrictEqual([[older, newer]])
+    await runSyncJobsFor(tenant.id)
+
+    expect(await readBilling(tenant.id)).toMatchObject({ providerSubscriptionId: older })
+    expect(await statusOf(newer)).toBe('cancelled')
   })
 
   it('ignores a swept subscription whose notes name another environment', async () => {

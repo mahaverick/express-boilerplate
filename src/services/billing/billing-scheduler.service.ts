@@ -49,7 +49,10 @@ import {
   publishEntitlementsChanged,
 } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
-import { syncTenantBilling } from '@/services/billing/billing-sync.service'
+import {
+  BillingSyncConflictError,
+  syncTenantBilling,
+} from '@/services/billing/billing-sync.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
@@ -270,6 +273,13 @@ async function endTrial(
     try {
       await syncTenantBilling(row.tenantId, 'job', { now })
     } catch (error) {
+      if (error instanceof BillingSyncConflictError) {
+        await alertOnce(
+          row.tenantId,
+          'The trial ended, but its billing record kept changing during the sync, so it is not on Free yet. The next run tries again.'
+        )
+        throw error
+      }
       if (!isUnknownIdError(error)) {
         await alertOnce(
           row.tenantId,
@@ -825,8 +835,9 @@ async function reconcileRows(scope: ProviderScope, counts: StepCounts): Promise<
 /**
  * The reconcile's sweep: every running subscription created in the lookback
  * window whose notes name a customer workspace of this environment, and that
- * no row holds, is offered to that workspace's sync, which adopts it or
- * cancels and refunds it as a duplicate. A failed list alerts staff once a
+ * no row holds, is offered to that workspace's sync, oldest first by the
+ * provider's creation time, which adopts the first when the workspace has no
+ * running one and cancels and refunds the rest as duplicates. A failed list alerts staff once a
  * day and fails the step.
  * @param provider - The payment provider.
  * @param now - The run's time.
@@ -852,7 +863,11 @@ async function sweepSubscriptions(
   }
   const { APP_ENV } = getEnv()
   const extrasByTenant = new Map<string, string[]>()
-  for (const sub of subs) {
+  // Oldest first: the sync keeps the first running one it is offered and refunds the rest.
+  const oldestFirst = subs.toSorted(
+    (a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0)
+  )
+  for (const sub of oldestFirst) {
     const { tenantId, appEnv } = sub.notes
     if (tenantId === undefined || appEnv !== APP_ENV || !isRunning(sub)) {
       counts.skipped += 1

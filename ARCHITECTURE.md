@@ -1190,7 +1190,10 @@ key is released when the write fails, so a failure never silences them for the
 hour. An owner's cancel sets a 15-minute Redis marker before it calls the
 provider, so a cancel its webhook brings in first is still `by: owner`; a
 cancel that fails clears the marker, and a suspended or archived
-workspace's cancel reads `by: suspension` whatever the marker says. A sync an
+workspace's cancel reads `by: suspension` whatever the marker says. A staff
+cancel sets the same marker, which reads `by: staff`, also behind the
+suspension; only the staff cancel's own write reads `by: staff` on a
+suspended workspace. A sync an
 owner's or a staff member's request runs only brings in what the provider did,
 so it reads the provider's cause: a subscription already cancelled at the
 provider when an owner asks to cancel reads `by: customer_bank`.
@@ -1431,6 +1434,10 @@ map; the detail lives in the sections it links.
   daily reconcile all call it; the mapping itself is pure
   (`src/utilities/billing-state-machine.utilities.ts`). A failed provider read
   writes nothing, and the job retries.
+- **Owner cancel.** An owner's cancel keeps Paid until the cycle end. A
+  deferred start (not charged yet) and a past-due subscription (its paid
+  time is over) are cancelled now, and the workspace returns to its trial or
+  moves to Free at once (`cancelPaid`, `src/services/billing/checkout.service.ts`).
 - **Interval switch.** A switch starts a next subscription at the period end,
   and the sync cancels the current one at its cycle end once the next one is
   authenticated. A switch inside the checkout's hour plus an hour's margin

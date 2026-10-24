@@ -80,7 +80,9 @@ export interface BillingSubscriptions {
    */
   next?: ProviderSubscription
   /**
-   * Subscriptions for this workspace that the row does not hold, oldest first.
+   * Subscriptions for this workspace that the row does not hold, in the
+   * order offered: the reconcile's sweep offers them oldest first by the
+   * provider's creation time, so the first running one is adopted.
    */
   swept?: readonly ProviderSubscription[]
 }
@@ -312,23 +314,26 @@ class BillingMapping {
   }
 
   /**
-   * A workspace already on Free whose subscription still reads as a failed
-   * or stopped charge: its paid time is over, so it never goes back to past
-   * due (that would start a fresh grace window). The subscription is
-   * cancelled now instead, when the payer ever authenticated it; the state
-   * and the failed-payment stamps stay as they are.
+   * A workspace already on Free, or back on a trial staff extended, whose
+   * subscription still reads as a failed or stopped charge: its paid time is
+   * over, so it never goes (back) to past due (that would start a fresh
+   * grace window). The subscription is cancelled now instead, when the payer
+   * ever authenticated it; the state and the failed-payment stamps stay as
+   * they are.
    * @param sub - The current subscription, reading `pending`, `halted` or `paused`.
-   * @returns True when the workspace is on Free and nothing else applies.
+   * @returns True when the workspace is on Free or trialing and nothing else applies.
    */
   isCancelledWhileFree(sub: ProviderSubscription): boolean {
-    if (this.draft.state !== 'free') return false
+    if (this.draft.state !== 'free' && this.draft.state !== 'trialing') return false
     if (wasAuthenticated(sub)) this.actions.push({ kind: 'cancel_now', subscriptionId: sub.id })
     this.hasLapsedCurrent = true
     return true
   }
 
   /**
-   * Make a subscription the current one and map its status.
+   * Make a subscription the current one and map its status. An active one
+   * whose paid-through time is unknown gets a period end of now, never the
+   * last one's.
    * @param sub - The subscription taking over.
    * @param priceId - Its price.
    */
@@ -337,6 +342,8 @@ class BillingMapping {
     this.draft.priceId = priceId
     this.draft.cancelAtPeriodEnd = false
     if (sub.status === 'authenticated') this.draft.currentPeriodEnd = sub.startAt
+    // An active one whose cycle is not paid yet: from now, so the buffer and grace bound it until its invoice is.
+    if (sub.status === 'active' && paidThrough(sub) === null) this.draft.currentPeriodEnd = this.now
     this.mapCurrent(sub)
   }
 

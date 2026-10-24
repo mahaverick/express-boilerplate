@@ -24,6 +24,7 @@ import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-b
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { resolveGroupMarkers } from '@/services/analytics/analytics-group-marker.service'
 import {
+  markCancel,
   trackCheckoutConfirmed,
   trackProviderEvent,
   trackTrialReminder,
@@ -632,6 +633,21 @@ describe('a failed owner cancel', () => {
     await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
     await fake.fakeAdvance(subscriptionId, 'cancelled')
     await syncTenantBilling(tenantId, 'job')
+
+    expect(await propertiesOf(tenantId, 'subscription_cancel_scheduled')).toMatchObject({
+      by: 'suspension',
+    })
+  })
+})
+
+describe('a staff cancel marker on a suspended workspace', () => {
+  it('reads a cancel the webhook brings in as by suspension, since the marker may outlive a failed staff cancel', async () => {
+    const { tenantId, subscriptionId } = await payingWorkspace()
+    await markCancel(tenantId, subscriptionId, { by: 'staff' })
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+
+    await syncTenantBilling(tenantId, 'webhook')
 
     expect(await propertiesOf(tenantId, 'subscription_cancel_scheduled')).toMatchObject({
       by: 'suspension',

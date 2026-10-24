@@ -105,6 +105,7 @@ import type { Actor } from '@/types/actor'
 import {
   effectiveBillingState,
   extendTrialEnd,
+  heldSubscriptionIds,
   mergeEntitlements,
   planKeyForState,
 } from '@/utilities/billing-rules.utilities'
@@ -518,10 +519,8 @@ export async function cancelByStaff(
   const provider = getBillingProvider()
   if (provider === null) {
     const row = await billingRepository.findByTenantId(tenantId)
-    const held = [row?.providerSubscriptionId, row?.nextSubscriptionId].filter(
-      (id) => id !== null && id !== undefined
-    )
-    if (held.length === 0) throw nothingToCancel
+    // Every id, a checkout too: this server can't tell whether any of them still charges.
+    if (row === undefined || heldSubscriptionIds(row).length === 0) throw nothingToCancel
     throw new HttpError(
       "Payments are off on this server, so we can't reach the subscription. Cancel it in the provider's dashboard.",
       502,

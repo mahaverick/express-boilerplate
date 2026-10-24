@@ -354,13 +354,13 @@ describe('billingDiffEvents', () => {
       { type: 'subscription_cancel_scheduled', by: 'staff' },
       { type: 'downgraded_to_free', downgradeCause: 'staff' },
     ])
-    // A webhook that lands a staff cancel first carries the flag from the marker.
+    // A webhook that lands a staff cancel first carries the staff marker.
     expect(
       billingDiffEvents(
         paying(),
         paying({ cancelAtPeriodEnd: true }),
         'webhook',
-        context({ isStaffCancel: true })
+        context({ hasStaffCancelMarker: true })
       ).map((event) => event.detail)
     ).toContainEqual({ type: 'subscription_cancel_scheduled', by: 'staff' })
     const resync = billingDiffEvents(
@@ -384,6 +384,29 @@ describe('billingDiffEvents', () => {
     expect(events.map((event) => event.detail)).toContainEqual({
       type: 'subscription_cancel_scheduled',
       by: 'suspension',
+    })
+  })
+
+  it("reads a suspended workspace's cancel as by suspension over a staff marker, but staff's own cancel as staff", () => {
+    const byMarker = billingDiffEvents(
+      paying(),
+      paying({ cancelAtPeriodEnd: true }),
+      'webhook',
+      context({ isWorkspaceActive: false, hasStaffCancelMarker: true })
+    )
+    expect(byMarker.map((event) => event.detail)).toContainEqual({
+      type: 'subscription_cancel_scheduled',
+      by: 'suspension',
+    })
+    const byWrite = billingDiffEvents(
+      paying(),
+      paying({ cancelAtPeriodEnd: true }),
+      'staff',
+      context({ isWorkspaceActive: false, isStaffCancel: true })
+    )
+    expect(byWrite.map((event) => event.detail)).toContainEqual({
+      type: 'subscription_cancel_scheduled',
+      by: 'staff',
     })
   })
 

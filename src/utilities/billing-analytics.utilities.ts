@@ -82,12 +82,19 @@ export interface BillingAnalyticsContext {
    */
   isOwnerCancel?: boolean
   /**
-   * Whether the change is a staff member's own cancel: the staff cancel
-   * passes it, and a cancel the provider's webhook brings in first carries
-   * it from the staff cancel marker. A staff resync without it reads the
-   * provider's real cause.
+   * Whether the change is a staff member's own cancel write: the staff
+   * cancel passes it. A staff resync without it reads the provider's real
+   * cause.
    */
   isStaffCancel?: boolean
+  /**
+   * Whether a staff cancel of the current subscription is on record (the
+   * short-lived marker the staff cancel sets before it calls the provider),
+   * so a cancel the provider's webhook brings in first is still staff's. On
+   * a suspended or archived workspace the suspension's cancel wins over it,
+   * since the marker may outlive a cancel that failed.
+   */
+  hasStaffCancelMarker?: boolean
 }
 
 /**
@@ -133,18 +140,25 @@ function isSameValue(a: unknown, b: unknown): boolean {
  * @param marker - Whether an owner's or a staff member's own cancel is on record.
  * @param marker.isOwnerAct - The change is an owner's own write.
  * @param marker.isOwnerCancel - An owner's cancel is on record.
- * @param marker.isStaffCancel - The change is a staff member's own cancel.
+ * @param marker.isStaffCancel - The change is a staff member's own cancel write.
+ * @param marker.hasStaffCancelMarker - A staff member's cancel is on record.
  * @returns The `by` value.
  */
 function cancelledBy(
   isWorkspaceActive: boolean,
-  marker: { isOwnerAct: boolean; isOwnerCancel: boolean; isStaffCancel: boolean }
+  marker: {
+    isOwnerAct: boolean
+    isOwnerCancel: boolean
+    isStaffCancel: boolean
+    hasStaffCancelMarker: boolean
+  }
 ): CancelScheduledBy {
-  const { isOwnerAct, isOwnerCancel, isStaffCancel } = marker
+  const { isOwnerAct, isOwnerCancel, isStaffCancel, hasStaffCancelMarker } = marker
   if (isOwnerAct) return 'owner'
   if (isStaffCancel) return 'staff'
-  // A suspension's cancel wins over an owner's marker: the marker may outlive a cancel that failed.
+  // A suspension's cancel wins over an owner's or staff marker: the marker may outlive a cancel that failed.
   if (!isWorkspaceActive) return 'suspension'
+  if (hasStaffCancelMarker) return 'staff'
   return isOwnerCancel ? 'owner' : 'customer_bank'
 }
 
@@ -261,7 +275,9 @@ export function billingDiffEvents(
   if (before.haltedAt === null && after.haltedAt !== null) {
     add({ type: 'subscription_halted' }, chargeAttribution)
   }
-  const isStaffCancel = context.isStaffCancel === true
+  const hasStaffCancelMarker = context.hasStaffCancelMarker === true
+  // Whether staff ended it, by their own write or by the marker of one.
+  const isStaffCancel = context.isStaffCancel === true || hasStaffCancelMarker
   const isOwnerAct = source === 'owner' && context.isOwnerAct === true
   if (isCancelScheduled(before, after, isOwnerAct, isStaffCancel)) {
     add({
@@ -269,7 +285,8 @@ export function billingDiffEvents(
       by: cancelledBy(context.isWorkspaceActive, {
         isOwnerAct,
         isOwnerCancel: context.isOwnerCancel === true,
-        isStaffCancel,
+        isStaffCancel: context.isStaffCancel === true,
+        hasStaffCancelMarker,
       }),
     })
   }
