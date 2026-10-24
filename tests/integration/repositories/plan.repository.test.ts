@@ -5,10 +5,12 @@
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
+import { HttpError } from '@/errors/http-error'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql, withTransaction } from '@/services/database.service'
+import { backendPid, deferred, waitForWaiter } from '../../helpers/lock-probe'
 
 const repository = new PlanRepository()
 const tenantRepository = new TenantRepository()
@@ -110,6 +112,48 @@ describe('PlanRepository', () => {
     const retired = monthly.find((price) => price.id === before?.id)
     expect(retired?.active).toBe(false)
     expect(retired?.retiredAt).toBeInstanceOf(Date)
+  })
+
+  it('answers 409 to the loser of two concurrent price changes and keeps one active price', async () => {
+    const paid = await paidPlan()
+    const before = await repository.activePrice(paid.id, 'INR', 'month')
+    if (before) restoreIds.push(before.id)
+    const gate = deferred()
+    const holderPid = deferred<number>()
+    const winner = withTransaction(async (tx) => {
+      const created = await repository.insertPriceRetiringActive(
+        { planId: paid.id, currency: 'INR', interval: 'month', amountMinor: 159_900 },
+        tx
+      )
+      priceIds.push(created.id)
+      holderPid.resolve(await backendPid(tx))
+      await gate.promise
+      return created
+    })
+    const pid = await holderPid.promise
+    const loser = (async (): Promise<unknown> => {
+      try {
+        await withTransaction((tx) =>
+          repository.insertPriceRetiringActive(
+            { planId: paid.id, currency: 'INR', interval: 'month', amountMinor: 169_900 },
+            tx
+          )
+        )
+        return undefined
+      } catch (error) {
+        return error
+      }
+    })()
+    await waitForWaiter(pid, loser)
+    gate.resolve()
+    const created = await winner
+    const error = await loser
+    expect(error).toBeInstanceOf(HttpError)
+    expect((error as HttpError).statusCode).toBe(409)
+    const prices = await repository.listPrices(paid.id)
+    const active = prices.filter((price) => price.interval === 'month' && price.active)
+    expect(active.map((price) => price.id)).toEqual([created.id])
+    expect(prices.some((price) => price.amountMinor === 169_900)).toBe(false)
   })
 
   it('stores and locks a provider plan id', async () => {

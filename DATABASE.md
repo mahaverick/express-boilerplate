@@ -239,7 +239,9 @@ marked by a comment in its file (0024's has none):
   (trial on, 14 days, 7 days' grace), and a `free` `tenant_billing` row on the
   Free plan for every tenant that is not the platform tenant, archived and
   soft-deleted ones included. It moves the `audit_logs` target-type CHECK swap
-  after that backfill, to the end of the file.
+  after that backfill, to the end of the file. The `billing_alerts` and
+  `billing_state_history` time indexes are ascending and end in `id`, so a
+  backward scan serves the newest-first order with its id tiebreak and no Sort.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)

@@ -416,7 +416,8 @@ export const billingStateHistoryModel = pgTable(
       'billing_state_history_source_check',
       sql`${table.source} in (${sql.raw(sqlValueList(BILLING_HISTORY_SOURCES))})`
     ),
-    index('billing_state_history_tenant_at_idx').on(table.tenantId, table.at.desc()),
+    // Ascending: a backward scan serves ORDER BY at DESC, id DESC; DESC NULLS LAST would not.
+    index('billing_state_history_tenant_at_idx').on(table.tenantId, table.at, table.id),
   ]
 )
 
@@ -498,7 +499,8 @@ export const billingAlertModel = pgTable(
       'billing_alerts_kind_check',
       sql`${table.kind} in (${sql.raw(sqlValueList(BILLING_ALERT_KINDS))})`
     ),
-    index('billing_alerts_at_idx').on(table.at.desc()),
+    // Ascending: a backward scan serves ORDER BY at DESC, id DESC; DESC NULLS LAST would not.
+    index('billing_alerts_at_idx').on(table.at, table.id),
   ]
 )
 

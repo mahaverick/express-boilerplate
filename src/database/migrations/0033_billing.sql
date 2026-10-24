@@ -184,9 +184,9 @@ ALTER TABLE "user_banner_dismissals" ADD CONSTRAINT "user_banner_dismissals_user
 ALTER TABLE "user_banner_dismissals" ADD CONSTRAINT "user_banner_dismissals_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_trials" ADD CONSTRAINT "user_trials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_trials" ADD CONSTRAINT "user_trials_first_trial_tenant_id_tenants_id_fk" FOREIGN KEY ("first_trial_tenant_id") REFERENCES "public"."tenants"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "billing_alerts_at_idx" ON "billing_alerts" USING btree ("at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "billing_alerts_at_idx" ON "billing_alerts" USING btree ("at","id");--> statement-breakpoint
 CREATE INDEX "billing_events_tenant_received_idx" ON "billing_events" USING btree ("tenant_id","received_at");--> statement-breakpoint
-CREATE INDEX "billing_state_history_tenant_at_idx" ON "billing_state_history" USING btree ("tenant_id","at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "billing_state_history_tenant_at_idx" ON "billing_state_history" USING btree ("tenant_id","at","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "plan_prices_active_unique" ON "plan_prices" USING btree ("plan_id","currency",coalesce("country", ''),"interval") WHERE "plan_prices"."active";--> statement-breakpoint
 CREATE INDEX "tenant_billing_state_idx" ON "tenant_billing" USING btree ("state");--> statement-breakpoint
 CREATE INDEX "tenant_billing_trial_ends_idx" ON "tenant_billing" USING btree ("trial_ends_at") WHERE "tenant_billing"."state" = 'trialing';--> statement-breakpoint

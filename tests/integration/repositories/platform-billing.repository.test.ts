@@ -123,4 +123,50 @@ describe('PlatformBillingRepository', () => {
     expect(page.items[0]?.tenant).toBeNull()
     expect(page.items[1]?.tenant?.id).toBe(tenantId)
   })
+
+  it('walks every alert once in either order, ties on the time broken by id', async () => {
+    const tag = randomUUID()
+    const at = ['2001-03-01T00:00:00Z', '2001-03-01T00:00:00Z', '2001-03-02T00:00:00Z']
+    const rows = Array.from({ length: 5 }, (_unused, index) => ({
+      kind: 'dispute',
+      message: `walk-${tag} ${index}`,
+      at: at[index % 3],
+    }))
+    const inserted = await sql<{ id: string }[]>`
+      insert into billing_alerts ${sql(rows, 'kind', 'message', 'at')} returning id
+    `
+    alertIds.push(...inserted.map((row) => row.id))
+    for (const sort of ['-at', 'at']) {
+      const seen: string[] = []
+      let cursor: string | null = null
+      for (let pages = 0; pages < 6; pages += 1) {
+        const query: Record<string, string> = { search: `walk-${tag}`, sort, limit: '2' }
+        if (cursor !== null) query['cursor'] = cursor
+        const page = await repository.listAlerts(paramsOf(query))
+        seen.push(...page.items.map((item) => item.alert.id))
+        cursor = page.page.nextCursor
+        if (!page.page.hasNext) break
+      }
+      expect(new Set(seen).size).toBe(5)
+      const stamps = seen.map((id) =>
+        Date.parse(rows[inserted.findIndex((row) => row.id === id)]?.at ?? '')
+      )
+      const sorted = stamps.toSorted((a, b) => (sort === '-at' ? b - a : a - b))
+      expect(stamps).toEqual(sorted)
+    }
+  })
+
+  it('does not show the name of a deleted workspace', async () => {
+    const tenantId = await billedTenant('free', 'free')
+    const alert = await billingRepository.insertAlert({
+      kind: 'dispute',
+      tenantId,
+      message: `gone-${tenantId}`,
+    })
+    alertIds.push(alert.id)
+    await sql`update tenants set deleted_at = now() where id = ${tenantId}`
+    const page = await repository.listAlerts(paramsOf({ search: `gone-${tenantId}` }))
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]?.tenant).toBeNull()
+  })
 })

@@ -553,7 +553,13 @@
             {
               "expression": "at",
               "isExpression": false,
-              "asc": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
               "nulls": "last"
             }
           ],
@@ -873,7 +879,13 @@
             {
               "expression": "at",
               "isExpression": false,
-              "asc": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
               "nulls": "last"
             }
           ],

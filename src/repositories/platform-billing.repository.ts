@@ -32,7 +32,7 @@ import {
 
 /**
  * One alert with the workspace it names, or null when it names none or the
- * workspace is gone.
+ * workspace is archived or deleted (its name is not shown then).
  */
 export interface BillingAlertListRow {
   alert: BillingAlertRecord
@@ -60,7 +60,7 @@ export interface TenantBillingSummary {
  * @param search - The parsed search, or undefined.
  * @returns The list definition.
  */
-function billingAlertList(search: string | undefined) {
+export function billingAlertList(search: string | undefined) {
   return defineList({
     name: 'platform-billing-alerts',
     base: (executor, seek) =>
@@ -72,7 +72,10 @@ function billingAlertList(search: string | undefined) {
           sortAt: timestampKey(billingAlertModel.at),
         })
         .from(billingAlertModel)
-        .leftJoin(tenantModel, eq(billingAlertModel.tenantId, tenantModel.id))
+        .leftJoin(
+          tenantModel,
+          and(eq(billingAlertModel.tenantId, tenantModel.id), isNull(tenantModel.deletedAt))
+        )
         .where(and(searchCondition(search, [sql`lower(${billingAlertModel.message})`]), seek))
         .$dynamic(),
     id: billingAlertModel.id,
@@ -92,7 +95,9 @@ function billingAlertList(search: string | undefined) {
  */
 export class PlatformBillingRepository {
   /**
-   * Live customer workspaces by stored plan and state, zero-filled.
+   * Live customer workspaces by stored plan and state, zero-filled. The plan
+   * is the one the record stores, not the effective plan: a trialing record
+   * stores Paid, so it counts under Paid.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns A count for every plan key and state.
    */

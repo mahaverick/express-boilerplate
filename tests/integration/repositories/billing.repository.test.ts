@@ -32,8 +32,11 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 describe('BillingRepository', () => {
   const tenantIds: string[] = []
   const userIds: string[] = []
+  const alertIds: string[] = []
 
   afterEach(async () => {
+    if (alertIds.length > 0) await sql`delete from billing_alerts where id = any(${alertIds})`
+    alertIds.length = 0
     if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
     if (userIds.length > 0) await sql`delete from users where id = any(${userIds})`
     tenantIds.length = 0
@@ -167,8 +170,8 @@ describe('BillingRepository', () => {
       tenantId,
       message: 'A customer opened a dispute.',
     })
+    alertIds.push(alert.id)
     expect(alert.kind).toBe('dispute')
-    await sql`delete from billing_alerts where id = ${alert.id}`
   })
 
   it('claims each due row once across two concurrent transactions', async () => {
