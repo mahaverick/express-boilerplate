@@ -19,9 +19,13 @@ import { createTrackedUser, deleteTrackedUsers, tokenFor } from '../../helpers/p
 import { request } from '../../helpers/request'
 import { clearRateLimiter } from '../../helpers/sign-in'
 
-vi.mock('@/services/billing/billing-provider.service', async () => {
+vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
   const { fakeProviderModule } = await import('../../helpers/billing-api')
-  return fakeProviderModule()
+  // The real failure mapping, with the fake as the provider.
+  return {
+    ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
+    ...fakeProviderModule(),
+  }
 })
 
 const app = createApp()

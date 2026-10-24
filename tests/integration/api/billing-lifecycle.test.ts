@@ -18,6 +18,7 @@ import {
   type BillingLifecycleCancelJobData,
 } from '@/jobs/billing.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { runFrequentBilling } from '@/services/billing/billing-scheduler.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { cancelPaid } from '@/services/billing/checkout.service'
@@ -60,9 +61,13 @@ import {
 import { queuedJobs } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
-vi.mock('@/services/billing/billing-provider.service', async () => {
+vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
   const { fakeProviderModule } = await import('../../helpers/billing-api')
-  return fakeProviderModule()
+  // The real failure mapping, with the fake as the provider.
+  return {
+    ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
+    ...fakeProviderModule(),
+  }
 })
 
 const app = createApp()
@@ -80,6 +85,9 @@ afterEach(async () => {
   await getEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await truncateAuditLogs()
+  // A user purge queues a PostHog deletion and a tenant purge a group marker; the worker's database is shared by its files.
+  await sql`delete from analytics_deletions`
+  await sql`delete from analytics_outbox`
   await deleteTrackedTenants()
   await deleteTrackedUsers()
   const redis = await getRedis()
@@ -375,6 +383,87 @@ describe('the purge of a workspace that pays', () => {
     await expect(purgeTenant(staff, tenant.id, 'Ticket 42')).rejects.toMatchObject({
       statusCode: 502,
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message:
+        "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in a few minutes. If it fails again, check the provider keys.",
+    })
+    expect(await rowsOf(tenant.id)).toStrictEqual({ tenant: true, billing: true })
+  })
+
+  it('refuses 502 when the provider does not know a subscription the row holds', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.cancelSubscription(subscriptionId, false)
+    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+    // As keys of another account in the same mode answer for every id.
+    vi.spyOn(fake, 'fetchSubscription').mockRejectedValue(
+      new ProviderError(`GET /subscriptions/${subscriptionId}`, 400, {
+        code: 'BAD_REQUEST_ERROR',
+      })
+    )
+
+    await expect(purgeTenant(await staffOwner(), tenant.id, 'Ticket 42')).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message:
+        "The payment provider doesn't know this tenant's subscription, so nothing was purged. Check that this server uses the account that created it.",
+    })
+    expect(await rowsOf(tenant.id)).toStrictEqual({ tenant: true, billing: true })
+  })
+
+  it('refuses 409 for a Free row whose current subscription a failed cancel left halted', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+
+    await expect(purgeTenant(await staffOwner(), tenant.id, 'Ticket 42')).rejects.toMatchObject({
+      statusCode: 409,
+      message: PURGE_REFUSAL,
+    })
+  })
+
+  it('refuses 409 while a scheduled switch is live at the provider', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.cancelSubscription(subscriptionId, false)
+    const next = await fakeSubscription({ tenantId: tenant.id, priceId: plans.yearPriceId }, 'year')
+    await fake.fakeAdvance(next, 'authenticated')
+    await setBilling(tenant.id, {
+      state: 'free',
+      planId: plans.freeId,
+      priceId: null,
+      nextSubscriptionId: next,
+    })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+
+    await expect(purgeTenant(await staffOwner(), tenant.id, 'Ticket 42')).rejects.toMatchObject({
+      statusCode: 409,
+      message: PURGE_REFUSAL,
+    })
+  })
+
+  it('refuses 409 when a subscription arrives between the provider check and the lock', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+    const original = BillingRepository.prototype.findByTenantId
+    const read = vi.spyOn(BillingRepository.prototype, 'findByTenantId')
+    read.mockImplementationOnce(async function (this: BillingRepository, tenantId: string) {
+      const row = await original.call(this, tenantId)
+      // The check reads the row before a webhook's sync stores the checkout.
+      await setBilling(tenantId, {
+        pendingSubscriptionId: pending,
+        provider: 'fake',
+        providerMode: 'test',
+      })
+      return row
+    })
+
+    await expect(purgeTenant(await staffOwner(), tenant.id, 'Ticket 42')).rejects.toMatchObject({
+      statusCode: 409,
+      message: PURGE_REFUSAL,
     })
     expect(await rowsOf(tenant.id)).toStrictEqual({ tenant: true, billing: true })
   })
@@ -545,6 +634,74 @@ describe('the payer', () => {
     await purgeUser(await staffOwner(), payer.id, 'Ticket 42')
 
     expect(await readBilling(tenant.id)).toMatchObject({ payerUserId: null, billingEmail: null })
+  })
+
+  it('is deleted: the checkouts they started forget them, so no sync makes them payer again', async () => {
+    const { tenant } = await workspace()
+    const starter = await addMember(tenant.id, 'owner')
+    const subscriptionId = await fakeSubscription({
+      tenantId: tenant.id,
+      priceId: plans.monthPriceId,
+    })
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: subscriptionId,
+      checkoutStartedBy: starter.id,
+    })
+
+    await deleteUser(await staffAdmin(), starter.id, 'Asked to be deleted')
+    expect(await readBilling(tenant.id)).toMatchObject({ checkoutStartedBy: null })
+    await fake.fakeAdvance(subscriptionId, 'active')
+    await syncTenantBilling(tenant.id, 'job')
+
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: subscriptionId,
+      payerUserId: null,
+    })
+  })
+
+  it('is not filled from a checkout starter whose account was deleted', async () => {
+    const { tenant } = await workspace()
+    const starter = await createTrackedUser()
+    const subscriptionId = await fakeSubscription({
+      tenantId: tenant.id,
+      priceId: plans.monthPriceId,
+    })
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: subscriptionId,
+      checkoutStartedBy: starter.id,
+    })
+    // Deleted without the delete's clear, as a row written before it may be.
+    await sql`update users set deleted_at = now() where id = ${starter.id}`
+    await fake.fakeAdvance(subscriptionId, 'active')
+
+    await syncTenantBilling(tenant.id, 'job')
+
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: subscriptionId,
+      payerUserId: null,
+    })
+  })
+
+  it('is deleted after another owner took over as payer: no one is told the payer left', async () => {
+    const { tenant, owner } = await workspace()
+    const payer = await addMember(tenant.id, 'owner')
+    await makePaying(tenant.id)
+    await setBilling(tenant.id, { payerUserId: payer.id, billingEmail: payer.email })
+    const original = BillingRepository.prototype.findByTenantId
+    vi.spyOn(BillingRepository.prototype, 'findByTenantId').mockImplementation(async function (
+      this: BillingRepository,
+      tenantId: string
+    ) {
+      // The other owner confirms a card change between the delete's commit and the notice.
+      if (tenantId === tenant.id) {
+        await setBilling(tenantId, { payerUserId: owner.id, billingEmail: owner.email })
+      }
+      return original.call(this, tenantId)
+    })
+
+    await deleteUser(await staffAdmin(), payer.id, 'Asked to be deleted')
+
+    expect(await noticeJobsOf(tenant.id, 'billing_payer_left')).toStrictEqual([])
   })
 
   it('is filled from the checkout starter by the sync, with no billing address left behind', async () => {

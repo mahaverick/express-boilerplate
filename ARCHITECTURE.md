@@ -934,10 +934,14 @@ so the cancel goes out at once and the frequent run is only the fallback. A
 reactivation sends the warnings the suspension held back: a payment that
 stopped and a Paid that ends at the cycle end (an owner's cancel or the
 suspension's own, which the provider can't undo), each under the stamp it had,
-so none goes twice (`sendHeldBackWarnings`). A tenant purge is refused with
-409 while the provider shows any subscription the row may still be charged
-through as running, and with 503 or 502 when it can't be read; the billing row
-then goes with the tenant.
+so none goes twice (`sendHeldBackWarnings`). The stamps live in the email and
+notification rows, which the retention purge deletes, so a suspension longer
+than their retention can send a warning again on reactivation. A tenant purge reads every
+subscription id the row holds, whatever its state, and is refused with 409
+while the provider shows any as running, with 502 when the provider doesn't
+know one (keys of another account), and with 503 or 502 when it can't be read;
+with payments off it is refused while the row's state may still charge. The
+billing row then goes with the tenant.
 
 The analytics Worker runs one job at a time, so this process never has two of
 its jobs talking to PostHog at once. Two replicas may; the drain and the

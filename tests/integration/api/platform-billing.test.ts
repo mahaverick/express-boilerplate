@@ -53,9 +53,13 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
   return { ...actual, isAnalyticsEnabled: () => true }
 })
 
-vi.mock('@/services/billing/billing-provider.service', async () => {
+vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
   const { fakeProviderModule } = await import('../../helpers/billing-api')
-  return fakeProviderModule()
+  // The real failure mapping, with the fake as the provider.
+  return {
+    ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
+    ...fakeProviderModule(),
+  }
 })
 
 vi.mock('@/services/notification-emitter.service', async (importOriginal) => {

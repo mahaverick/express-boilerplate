@@ -28,7 +28,6 @@ import {
   INVOICE_PAGE_SIZE,
   INVOICES_OWNER_ONLY_MESSAGE,
   NO_SUBSCRIPTION_CODE,
-  PAYMENT_PROVIDER_UNAVAILABLE_CODE,
   SAME_INTERVAL_CODE,
   SUBSCRIPTION_EXISTS_CODE,
   SWITCH_BEFORE_FIRST_CHARGE_CODE,
@@ -40,7 +39,6 @@ import type {
   PlanPrice,
   TenantBillingRecord,
 } from '@/database/models/billing.model'
-import { ProviderError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import {
@@ -64,7 +62,12 @@ import {
 } from '@/services/billing/billing-analytics.service'
 import { formatBillingDate } from '@/services/billing/billing-dates.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
-import { getBillingProvider } from '@/services/billing/billing-provider.service'
+import {
+  callProvider,
+  getBillingProvider,
+  providerFailure,
+  RETRY_AFTER_SECONDS,
+} from '@/services/billing/billing-provider.service'
 import {
   BillingSyncConflictError,
   syncTenantBilling,
@@ -96,12 +99,6 @@ const userRepository = new UserRepository()
  * gives up on a row that keeps moving.
  */
 const WRITE_ATTEMPTS = 3
-
-/**
- * How long a client waits before retrying a write that found the provider
- * down or the row busy.
- */
-const RETRY_AFTER_SECONDS = 30
 
 /**
  * The sort and list name the invoice cursor is bound to.
@@ -164,42 +161,6 @@ function billingBusy(): HttpError {
     undefined,
     { retryAfterSeconds: RETRY_AFTER_SECONDS }
   )
-}
-
-/**
- * A provider failure as the HTTP answer: 503 with a retry wait when the
- * provider may answer later, 502 when it refused the call. Either reports
- * the failure as its cause; nothing was written.
- * @param error - What the provider call threw.
- * @returns The error to throw.
- */
-function providerFailure(error: unknown): Error {
-  if (!(error instanceof ProviderError)) {
-    return error instanceof Error ? error : new Error('A billing step failed', { cause: error })
-  }
-  return new HttpError(
-    error.retryable
-      ? 'Our payment provider did not answer. Try again in 30 seconds.'
-      : 'Our payment provider declined this change. Contact support if it happens again.',
-    error.retryable ? 503 : 502,
-    PAYMENT_PROVIDER_UNAVAILABLE_CODE,
-    undefined,
-    { cause: error, ...(error.retryable && { retryAfterSeconds: RETRY_AFTER_SECONDS }) }
-  )
-}
-
-/**
- * Run a provider call, mapping its failure to the HTTP answer.
- * @param call - The call.
- * @returns What the call returns.
- * @throws {HttpError} 503 when the provider may answer later, 502 when it refused the call.
- */
-export async function callProvider<T>(call: () => Promise<T>): Promise<T> {
-  try {
-    return await call()
-  } catch (error) {
-    throw providerFailure(error)
-  }
 }
 
 /**

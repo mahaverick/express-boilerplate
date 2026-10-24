@@ -28,6 +28,7 @@ import type {
 } from '@/database/models/billing.model'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
@@ -48,6 +49,7 @@ import {
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
+const userRepository = new UserRepository()
 
 /**
  * How many times a sync reads and fetches before it gives up on a row that
@@ -328,7 +330,9 @@ async function commitSync(
       if (
         patch.providerSubscriptionId !== locked.providerSubscriptionId &&
         locked.payerUserId === null &&
-        locked.checkoutStartedBy !== null
+        locked.checkoutStartedBy !== null &&
+        // A starter whose account was deleted since is never made the payer.
+        (await userRepository.findById(locked.checkoutStartedBy, {}, tx)) !== undefined
       ) {
         patch.payerUserId = locked.checkoutStartedBy
         // The address belongs to an earlier payer; the confirm sets the new one's.

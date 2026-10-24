@@ -64,10 +64,13 @@ import { waitUntil } from '../../../helpers/timing'
  */
 const override = vi.hoisted(() => ({ provider: undefined as BillingProviderClient | undefined }))
 
-vi.mock('@/services/billing/billing-provider.service', async () => {
+vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
   const { fakeProviderModule } = await import('../../../helpers/billing-api')
   const base = fakeProviderModule()
-  return { getBillingProvider: () => override.provider ?? base.getBillingProvider() }
+  return {
+    ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
+    getBillingProvider: () => override.provider ?? base.getBillingProvider(),
+  }
 })
 
 const DAY = 24 * 60 * 60 * 1000

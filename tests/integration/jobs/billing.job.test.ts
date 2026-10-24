@@ -50,7 +50,8 @@ const providerState = vi.hoisted(() => ({
   current: undefined as BillingProviderClient | null | undefined,
 }))
 
-vi.mock('@/services/billing/billing-provider.service', () => ({
+vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
   getBillingProvider: () => providerState.current ?? null,
 }))
 

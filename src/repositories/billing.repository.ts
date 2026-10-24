@@ -1040,41 +1040,47 @@ export class BillingRepository {
 
   /**
    * Forget a user as the payer of every workspace they pay for, with the
-   * billing address they gave, when their account is deleted or purged: the
-   * address is theirs. Each row's version moves on, so a sync that read it
-   * before writes again from the new row. A payer's own rows only: a
-   * workspace another person pays for is untouched.
+   * billing address they gave, and as the starter of any checkout, when
+   * their account is deleted or purged: the address is theirs, and a sync
+   * must not make a deleted starter the payer again. Each row's version
+   * moves on, so a sync that read it before writes again from the new row.
+   * A workspace another person pays for keeps its payer.
    *
    * Lock order: the billing rows, before any invitation or membership-row
    * write. A delete takes them after the user row; a purge, after the
    * memberships and the platform-role row and before it deletes the user row.
    * @param userId - The user.
    * @param tx - The delete's or purge's transaction.
-   * @returns The rows as they were before the clear, in workspace order.
+   * @returns The rows they paid for, as they were before the clear, in workspace order.
    */
   async clearPayer(userId: string, tx: DbTransaction): Promise<TenantBillingRecord[]> {
-    const paidFor = await tx
+    const named = or(
+      eq(tenantBillingModel.payerUserId, userId),
+      eq(tenantBillingModel.checkoutStartedBy, userId)
+    )
+    const rows = await tx
       .select()
       .from(tenantBillingModel)
-      .where(eq(tenantBillingModel.payerUserId, userId))
+      .where(named)
       .orderBy(tenantBillingModel.tenantId)
       .for('no key update')
-    if (paidFor.length === 0) return []
+    if (rows.length === 0) return []
     await tx
       .update(tenantBillingModel)
       .set({
-        payerUserId: null,
-        billingEmail: null,
+        payerUserId: sql`case when ${tenantBillingModel.payerUserId} = ${userId} then null else ${tenantBillingModel.payerUserId} end`,
+        billingEmail: sql`case when ${tenantBillingModel.payerUserId} = ${userId} then null else ${tenantBillingModel.billingEmail} end`,
+        checkoutStartedBy: sql`case when ${tenantBillingModel.checkoutStartedBy} = ${userId} then null else ${tenantBillingModel.checkoutStartedBy} end`,
         version: sql`${tenantBillingModel.version} + 1`,
         updatedAt: sql`now()`,
       })
       .where(
         inArray(
           tenantBillingModel.tenantId,
-          paidFor.map((row) => row.tenantId)
+          rows.map((row) => row.tenantId)
         )
       )
-    return paidFor
+    return rows.filter((row) => row.payerUserId === userId)
   }
 
   /**

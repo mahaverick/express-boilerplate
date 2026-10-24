@@ -1186,7 +1186,8 @@ async function keepPaidDeadline(row: TenantBillingRecord, now: Date): Promise<Da
  * a live subscription and was still a member of: a workspace they had
  * already left was told then. The delete cleared them as payer, so the
  * workspaces come from its transaction and each row is read again here for
- * its current state. Never rejects.
+ * its current state; one that names a payer again (another owner changed
+ * the card meanwhile) is skipped. Never rejects.
  * @param payerUserId - The deleted user.
  * @param paidFor - The workspaces they paid for when deleted.
  * @param memberOf - The workspaces they were a member of when deleted.
@@ -1201,7 +1202,10 @@ export async function sendPayerLeftEverywhere(
   for (const tenantId of paidFor.filter((id) => memberOf.includes(id))) {
     try {
       const row = await billingRepository.findByTenantId(tenantId)
-      if (row !== undefined) await tellPayerLeft(row, payerUserId, leftAt)
+      // A payer on record now is another owner who took over since the delete: no one is told.
+      if (row !== undefined && row.payerUserId === null) {
+        await tellPayerLeft(row, payerUserId, leftAt)
+      }
     } catch (error) {
       logSendFailure(error, tenantId, 'payer_left')
     }
