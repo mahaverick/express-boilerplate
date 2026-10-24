@@ -883,8 +883,11 @@ still run. `scheduler-frequent` moves lapsed trials to Free, syncs workspaces
 whose grace, cancelling period (plus the 3-day buffer) or interval switch is
 due, cancels the subscriptions of suspended (at cycle end) and archived (now)
 workspaces, lapses grants and upgrade requests, and sends the trial
-reminders: three days before the end, on the last day in the workspace's time
-zone, and halfway through a trial of six days or more. It runs with payments
+reminders: three days before the end (not for a trial of three days or
+less), on the last day in the workspace's time zone, and halfway through a
+trial of six days or more. A reminder re-reads its row before it sends, and a
+workspace that left the trial or Free, or was suspended, since the claim gets
+nothing. It runs with payments
 off too, skipping the provider steps. `scheduler-daily` is the reconcile: it queues
 a `sync-tenant` job for every row that holds a subscription (rows of another
 provider or mode, and Free rows whose only subscription has ended, are skipped

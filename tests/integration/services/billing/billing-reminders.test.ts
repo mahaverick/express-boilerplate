@@ -9,8 +9,19 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import type { NotificationJobData } from '@/jobs/notification.job'
-import { runDailyBilling, runFrequentBilling } from '@/services/billing/billing-scheduler.service'
+import {
+  sendTrialEnding,
+  sendTrialEndsToday,
+  sendTrialMidpoint,
+  sendWinback,
+} from '@/services/billing/billing-emails.service'
+import {
+  runDailyBilling,
+  runFrequentBilling,
+  type BillingRunReport,
+} from '@/services/billing/billing-scheduler.service'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import {
   closeQueue,
@@ -205,6 +216,16 @@ async function noticesOf(tenantId: string): Promise<NotificationJobData[]> {
     .filter((data) => (data.metadata as { tenantId?: string } | undefined)?.tenantId === tenantId)
 }
 
+/**
+ * How many rows one step acted on across overlapping runs.
+ * @param reports - Each run's report.
+ * @param step - The step's name.
+ * @returns The sum of its `acted` counts.
+ */
+function actedIn(reports: readonly BillingRunReport[], step: string): number {
+  return reports.reduce((sum, report) => sum + (report[step]?.acted ?? 0), 0)
+}
+
 describe('trial reminders', () => {
   it('reminds owners three days before the trial ends, once, by notification carrying the email', async () => {
     const { tenantId, ownerId } = await trial(
@@ -325,6 +346,64 @@ describe('trial reminders', () => {
     expect(await billingColumn(tenantId, 'trialMidpointSentAt')).toBeNull()
   })
 
+  it('sends the halfway reminder to a trial of exactly six days at its halfway point', async () => {
+    const { tenantId } = await trial(
+      new Date(NOW.getTime() - 3 * DAY),
+      new Date(NOW.getTime() + 3 * DAY)
+    )
+
+    await runFrequentBilling(NOW)
+
+    expect(await mailsOf(tenantId, 'trial_midpoint')).toHaveLength(2)
+  })
+
+  it('sends no three-day reminder for a trial of three days or less', async () => {
+    const threeDayTrial = await trial(
+      new Date(NOW.getTime() - DAY),
+      new Date(NOW.getTime() + 2 * DAY)
+    )
+    const longer = await trial(
+      new Date(NOW.getTime() - DAY - HOUR),
+      new Date(NOW.getTime() + 2 * DAY)
+    )
+
+    await runFrequentBilling(NOW)
+
+    expect(await noticesOf(threeDayTrial.tenantId)).toStrictEqual([])
+    expect(await mailsOf(threeDayTrial.tenantId, 'trial_ending')).toStrictEqual([])
+    expect(await billingColumn(threeDayTrial.tenantId, 'trialReminder3dSentAt')).toBeNull()
+    expect(await noticesOf(longer.tenantId)).toHaveLength(1)
+  })
+
+  it('sends nothing for a claimed reminder whose workspace changed before the send, and logs it', async () => {
+    const warn = vi.spyOn(logger, 'warn')
+    const ended = await trial(new Date(NOW.getTime() - 7 * DAY), new Date(NOW.getTime() + 7 * DAY))
+    const claimed = await readBilling(ended.tenantId)
+    await setBilling(ended.tenantId, { state: 'free', planId: plans.freeId })
+    const suspended = await fellToFree('trialing', new Date(NOW.getTime() - 8 * DAY))
+    const free = await readBilling(suspended.tenantId)
+    await setLifecycle(suspended.tenantId, 'suspended')
+
+    await sendTrialEnding(claimed, NOW)
+    await sendTrialEndsToday(claimed, NOW)
+    await sendTrialMidpoint(claimed, NOW)
+    await sendWinback({ ...free, winback7dSentAt: NOW }, '7d', NOW)
+
+    expect(await allMailOf(ended.tenantId)).toStrictEqual([])
+    expect(await noticesOf(ended.tenantId)).toStrictEqual([])
+    expect(await allMailOf(suspended.tenantId)).toStrictEqual([])
+    const skipped = warn.mock.calls.filter(
+      ([message]) => message === 'A claimed billing reminder is no longer due'
+    )
+    expect(skipped.map(([, meta]) => meta)).toStrictEqual([
+      { tenantId: ended.tenantId, templateKey: 'trial_ending' },
+      { tenantId: ended.tenantId, templateKey: 'trial_ends_today' },
+      { tenantId: ended.tenantId, templateKey: 'trial_midpoint' },
+      { tenantId: suspended.tenantId, templateKey: 'winback' },
+    ])
+    warn.mockRestore()
+  })
+
   it('sends each reminder once when two runs overlap', async () => {
     const threeDays = await trial(
       new Date(NOW.getTime() - 12 * DAY),
@@ -339,8 +418,12 @@ describe('trial reminders', () => {
       new Date(NOW.getTime() + 7 * DAY)
     )
 
-    await Promise.all([runFrequentBilling(NOW), runFrequentBilling(NOW)])
+    const reports = await Promise.all([runFrequentBilling(NOW), runFrequentBilling(NOW)])
 
+    // Each claim went to exactly one of the two runs; the last-day trial is within three days too.
+    expect(actedIn(reports, 'trial_ending_reminders')).toBe(2)
+    expect(actedIn(reports, 'trial_last_day_reminders')).toBe(1)
+    expect(actedIn(reports, 'trial_midpoint_reminders')).toBe(1)
     expect(await noticesOf(threeDays.tenantId)).toHaveLength(1)
     expect(await mailsOf(threeDays.tenantId, 'trial_ending')).toHaveLength(1)
     expect(await mailsOf(lastDay.tenantId, 'trial_ends_today')).toHaveLength(2)
@@ -393,8 +476,9 @@ describe('the yearly renewal reminder', () => {
   it('reminds once when two daily runs overlap', async () => {
     const { tenantId } = await paying('year', new Date(NOW.getTime() + 5 * DAY))
 
-    await Promise.all([runDailyBilling(NOW), runDailyBilling(NOW)])
+    const reports = await Promise.all([runDailyBilling(NOW), runDailyBilling(NOW)])
 
+    expect(actedIn(reports, 'renewal_reminders')).toBe(1)
     expect(await mailsOf(tenantId, 'renewal_upcoming')).toHaveLength(2)
   })
 })
@@ -468,8 +552,9 @@ describe('win-back emails', () => {
   it('sends each once when two daily runs overlap', async () => {
     const { tenantId } = await fellToFree('trialing', new Date(NOW.getTime() - 8 * DAY))
 
-    await Promise.all([runDailyBilling(NOW), runDailyBilling(NOW)])
+    const reports = await Promise.all([runDailyBilling(NOW), runDailyBilling(NOW)])
 
+    expect(actedIn(reports, 'winback_7d')).toBe(1)
     expect(await mailsOf(tenantId, 'winback')).toHaveLength(2)
   })
 })

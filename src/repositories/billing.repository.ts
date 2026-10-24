@@ -64,9 +64,14 @@ const OPEN_REQUEST_ATTEMPTS = 3
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
- * How long before a trial ends its ending reminder goes out: three days.
+ * How many days before a trial ends its ending reminder goes out.
  */
-const TRIAL_ENDING_NOTICE_MS = 3 * DAY_MS
+const TRIAL_ENDING_NOTICE_DAYS = 3
+
+/**
+ * The same, in milliseconds.
+ */
+const TRIAL_ENDING_NOTICE_MS = TRIAL_ENDING_NOTICE_DAYS * DAY_MS
 
 /**
  * The shortest trial that gets a halfway reminder, in days.
@@ -836,7 +841,8 @@ export class BillingRepository {
 
   /**
    * Claim the three-day trial reminder of up to `limit` trials of active
-   * workspaces that end after `now` and within three days of it.
+   * workspaces that end after `now` and within three days of it. A trial of
+   * three days or less gets none: the whole trial is that window.
    * @param now - The run's time.
    * @param limit - The most rows to claim.
    * @param tx - The open transaction; the claim holds until it ends.
@@ -854,6 +860,7 @@ export class BillingRepository {
         eq(tenantBillingModel.state, 'trialing'),
         gt(tenantBillingModel.trialEndsAt, now),
         lte(tenantBillingModel.trialEndsAt, noticeFrom),
+        sql`(${tenantBillingModel.trialStartedAt} is null or ${tenantBillingModel.trialEndsAt} - ${tenantBillingModel.trialStartedAt} > make_interval(days => ${TRIAL_ENDING_NOTICE_DAYS}::int))`,
         isWorkspaceActive()
       ) ?? isWorkspaceActive(),
       limit,
@@ -863,8 +870,8 @@ export class BillingRepository {
 
   /**
    * Claim the halfway reminder of up to `limit` trials of active workspaces:
-   * trials of six days or more, at least half over at `now`, with more than
-   * three days left (the three-day reminder takes over from there).
+   * trials of six days or more, at least half over at `now`, with three days
+   * or more left (the three-day reminder takes over from there).
    * @param now - The run's time.
    * @param limit - The most rows to claim.
    * @param tx - The open transaction; the claim holds until it ends.
@@ -882,7 +889,7 @@ export class BillingRepository {
       and(
         eq(tenantBillingModel.state, 'trialing'),
         isNotNull(trialStartedAt),
-        gt(trialEndsAt, noticeFrom),
+        gte(trialEndsAt, noticeFrom),
         sql`${trialEndsAt} - ${trialStartedAt} >= make_interval(days => ${MIDPOINT_MIN_TRIAL_DAYS}::int)`,
         sql`${at(now)} >= ${trialStartedAt} + (${trialEndsAt} - ${trialStartedAt}) / 2`,
         isWorkspaceActive()

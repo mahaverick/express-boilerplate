@@ -674,6 +674,31 @@ function logSkipped(tenantId: string, templateKey: string): void {
 }
 
 /**
+ * Re-read a claimed reminder's row and say whether it is still due: still in
+ * `state`, on an active workspace. A workspace that changed between the
+ * claim and the send loses the reminder, logged with ids.
+ * @param row - The claimed row.
+ * @param state - The state the reminder is for.
+ * @param templateKey - The reminder, for the log.
+ * @returns The fresh row, or undefined when the reminder is no longer due.
+ */
+async function stillDue(
+  row: TenantBillingRecord,
+  state: TenantBillingRecord['state'],
+  templateKey: EmailTemplateKey
+): Promise<TenantBillingRecord | undefined> {
+  const fresh = await billingRepository.findByTenantId(row.tenantId)
+  const tenant = await tenantRepository.findByIdIncludingDeleted(row.tenantId)
+  const isActive = tenant?.lifecycleState === 'active' && tenant.deletedAt === null
+  if (fresh?.state === state && isActive) return fresh
+  logger.warn('A claimed billing reminder is no longer due', {
+    tenantId: row.tenantId,
+    templateKey,
+  })
+  return undefined
+}
+
+/**
  * Remind the owners that the trial ends within three days: a notification
  * carrying the email, and the email to the billing address. Once per trial
  * end. Never rejects.
@@ -683,6 +708,7 @@ function logSkipped(tenantId: string, templateKey: string): void {
 export async function sendTrialEnding(row: TenantBillingRecord, now: Date): Promise<void> {
   const { tenantId } = row
   try {
+    if ((await stillDue(row, 'trialing', 'trial_ending')) === undefined) return
     const context = await activeContext(tenantId, row.billingEmail)
     if (context === undefined) return
     const prices = await paidPrices()
@@ -732,6 +758,7 @@ export async function sendTrialEnding(row: TenantBillingRecord, now: Date): Prom
 export async function sendTrialEndsToday(row: TenantBillingRecord, now: Date): Promise<void> {
   const { tenantId } = row
   try {
+    if ((await stillDue(row, 'trialing', 'trial_ends_today')) === undefined) return
     const context = await activeContext(tenantId, row.billingEmail)
     if (context === undefined) return
     const prices = await paidPrices()
@@ -785,6 +812,7 @@ async function usageSummary(tenantId: string): Promise<string> {
 export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Promise<void> {
   const { tenantId } = row
   try {
+    if ((await stillDue(row, 'trialing', 'trial_midpoint')) === undefined) return
     const context = await activeContext(tenantId, row.billingEmail)
     if (context === undefined) return
     if (row.trialEndsAt === null) {
@@ -859,6 +887,7 @@ export async function sendWinback(
 ): Promise<void> {
   const { tenantId } = row
   try {
+    if ((await stillDue(row, 'free', 'winback')) === undefined) return
     const context = await activeContext(tenantId, row.billingEmail)
     if (context === undefined) return
     const prices = await paidPrices()
