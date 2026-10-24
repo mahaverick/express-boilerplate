@@ -943,7 +943,11 @@ duplicate, never discarded. After that sync the cancel reads the lifecycle
 state again (a reactivated workspace is skipped and released) and holds the
 claim again, since the sync released it when it adopted the checkout: when
 another job took the claim first, that job cancels and this one does
-nothing, so no cancel goes out twice. The claim is released when the workspace is
+nothing, so no cancel goes out twice. A sync that has an archived workspace
+adopt a paid checkout or a found subscription (it had no running one, or the
+checkout would be refunded as a duplicate) cancels it now and refunds it,
+with one staff alert naming it: nothing an archived workspace can use was
+paid for. The claim is released when the workspace is
 reactivated, when a sync gives a suspended or archived workspace a new
 current subscription (an adoption or a handover) or an id it did not hold,
 which also queues the prompt cancel, and once a day for a cancel that failed and alerted

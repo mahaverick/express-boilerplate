@@ -358,7 +358,9 @@ async function queueLifecycleCancel(tenantId: string): Promise<void> {
  * When the workspace is suspended or archived and the write gives it a new
  * current subscription (an adoption or a promotion) or an id it did not
  * hold, the lifecycle cancel claim is released in the same write, so the
- * new subscription is cancelled too.
+ * new subscription is cancelled too. An archived workspace that adopts a
+ * paid checkout or a found subscription has it cancelled now and refunded
+ * after the commit, with one staff alert naming it.
  * @param provider - The payment provider.
  * @param run - The sync call.
  * @param readVersion - The version the fetch was based on.
@@ -425,6 +427,25 @@ async function commitSync(
     if (isNeedsLifecycleCancel && locked.lifecycleCancelSentAt !== null) {
       patch.lifecycleCancelSentAt = null
     }
+    const actions = [...mapped.actions]
+    const adopted = patch.providerSubscriptionId
+    // An archived workspace adopting a paid checkout (not a switch's handover) had no running subscription: nothing it can use was paid for.
+    if (
+      tenant?.lifecycleState === 'archived' &&
+      typeof adopted === 'string' &&
+      adopted !== locked.providerSubscriptionId &&
+      adopted !== locked.nextSubscriptionId
+    ) {
+      actions.push(
+        { kind: 'refund_duplicate', subscriptionId: adopted },
+        {
+          kind: 'alert',
+          alert: 'reconcile_repair',
+          message: `Subscription ${adopted} was paid for an archived workspace, so it was cancelled now and refunded.`,
+          subscriptionId: adopted,
+        }
+      )
+    }
 
     const after = await billingRepository.updateVersioned(run.tenantId, locked.version, patch, tx)
     if (after === undefined) return
@@ -449,7 +470,7 @@ async function commitSync(
       after,
       // Read against the locked row: a stand-in period end it stored at an adoption.
       isFirstPaidCycle: isFirstPaidCycle(locked, fetched.subs.current),
-      actions: mapped.actions,
+      actions,
       changed: Object.keys(patch).some((key) => key !== 'syncedAt'),
       fulfilledRequests,
       needsLifecycleCancel: isNeedsLifecycleCancel,

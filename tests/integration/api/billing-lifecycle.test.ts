@@ -372,7 +372,7 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(await subscriptionStatus(nextId)).toBe('cancelled')
   })
 
-  it('cancels now a paid checkout the sweep brings to an archived workspace whose claim was spent', async () => {
+  it('cancels now and refunds, once, a paid checkout the sweep brings to an archived workspace whose claim was spent', async () => {
     const { tenant } = await workspace()
     const { subscriptionId } = await makePaying(tenant.id)
     await archiveTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
@@ -380,17 +380,21 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
     const stale = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
     await fake.fakeAdvance(stale, 'active')
+    const refund = vi.spyOn(fake, 'refundLatestPayment')
 
-    await syncTenantBilling(tenant.id, 'reconcile', { extraSubscriptionIds: [stale] })
-    expect(await readBilling(tenant.id)).toMatchObject({
-      providerSubscriptionId: stale,
-      lifecycleCancelSentAt: null,
+    const cancels = await recordingCancels(async () => {
+      await syncTenantBilling(tenant.id, 'reconcile', { extraSubscriptionIds: [stale] })
+      expect(await readBilling(tenant.id)).toMatchObject({
+        providerSubscriptionId: stale,
+        lifecycleCancelSentAt: null,
+      })
+      const queued = await lifecycleJobs()
+      expect(queued.map((job) => job.data)).toStrictEqual([{ tenantId: tenant.id }])
+      await runLifecycleJobs()
     })
-    const queued = await lifecycleJobs()
-    expect(queued.map((job) => job.data)).toStrictEqual([{ tenantId: tenant.id }])
-    const cancels = await recordingCancels(runLifecycleJobs)
 
     expect(cancels).toStrictEqual([[stale, false]])
+    expect(refund.mock.calls).toStrictEqual([[stale]])
     expect(await subscriptionStatus(stale)).toBe('cancelled')
   })
 
@@ -403,7 +407,7 @@ describe('a subscription that reaches a suspended or archived workspace later', 
       providerMode: 'test',
       lifecycleCancelSentAt: new Date(),
     })
-    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenant.id}`
     // The checkout's lifecycle cancel failed; the customer pays it anyway.
     await fake.fakeAdvance(pending, 'active')
 
@@ -417,7 +421,7 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     const queued = await lifecycleJobs()
     expect(queued.map((job) => job.data)).toStrictEqual([{ tenantId: tenant.id }])
     const cancels = await recordingCancels(runLifecycleJobs)
-    expect(cancels).toStrictEqual([[pending, false]])
+    expect(cancels).toStrictEqual([[pending, true]])
   })
 
   it('queues no cancel when a sync changes no subscription id of a suspended workspace', async () => {
@@ -455,6 +459,34 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     const cancels = await recordingCancels(runLifecycleJobs)
 
     expect(cancels).toStrictEqual([[subscriptionId, false]])
+  })
+
+  it('cancels now and refunds a paid checkout an archived workspace adopts with no running subscription, and alerts staff once', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    const refund = vi.spyOn(fake, 'refundLatestPayment')
+
+    await archiveTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    const cancels = await recordingCancels(async () => {
+      await runLifecycleJobs()
+      await runLifecycleJobs()
+      await syncTenantBilling(tenant.id, 'reconcile')
+    })
+
+    expect(cancels).toStrictEqual([[pending, false]])
+    expect(refund.mock.calls).toStrictEqual([[pending]])
+    expect(await subscriptionStatus(pending)).toBe('cancelled')
+    const alerts = await sql<{ message: string }[]>`
+      select message from billing_alerts where tenant_id = ${tenant.id} and kind = 'reconcile_repair'`
+    expect(alerts.map((alert) => alert.message)).toStrictEqual([
+      `Subscription ${pending} was paid for an archived workspace, so it was cancelled now and refunded.`,
+    ])
   })
 
   it('leaves the cancel to the job that took the claim after the sync of a paid checkout released it', async () => {
