@@ -38,6 +38,7 @@ import type { BillingHistorySource, BillingInterval } from '@/constants/billing.
 import type { TenantBillingRecord } from '@/database/models/billing.model'
 import type { ProviderSubscription } from '@/types/billing'
 import type { BillingEventDetail, CancelScheduledBy } from '@/types/domain-event'
+import { isPeriodEndAtOrBeforeSync } from '@/utilities/billing-rules.utilities'
 import {
   downgradeCauseOf,
   isContinued,
@@ -109,7 +110,8 @@ export interface BillingAnalyticsContext {
  * adoption: the sync took over an active subscription whose cycle was not
  * paid yet and stored a stand-in period end of that moment, which lies
  * inside the cycle. A renewal's cycle starts where the stored paid period
- * ended, or later.
+ * ended, or later. When the provider gives no cycle start, a stored end no
+ * later than the last sync (`isPeriodEndAtOrBeforeSync`) stands in for it.
  * @param before - The row before the change.
  * @param current - The row's current subscription as the provider read it.
  * @returns True when the stored period end lies inside the current cycle.
@@ -118,13 +120,16 @@ export function isFirstPaidCycle(
   before: TenantBillingRecord,
   current: ProviderSubscription | undefined
 ): boolean {
-  return (
-    current !== undefined &&
-    current.id === before.providerSubscriptionId &&
-    current.currentStart !== null &&
-    before.currentPeriodEnd !== null &&
-    before.currentPeriodEnd > current.currentStart
-  )
+  if (
+    current === undefined ||
+    current.id !== before.providerSubscriptionId ||
+    before.currentPeriodEnd === null
+  ) {
+    return false
+  }
+  // With no cycle start to compare, a stored end no later than the sync that stored it is the stand-in.
+  if (current.currentStart === null) return isPeriodEndAtOrBeforeSync(before)
+  return before.currentPeriodEnd > current.currentStart
 }
 
 /**

@@ -516,7 +516,18 @@ describe('isFirstPaidCycle', () => {
     expect(isFirstPaidCycle(paying({ currentPeriodEnd: NOW }), current())).toBe(false)
   })
 
-  it('reads nothing without a cycle start, a stored period end or the same subscription', () => {
+  it('falls back to the stored end being no later than the last sync when the cycle start is unknown', () => {
+    const standIn = new Date('2026-12-03T00:00:00.000Z')
+    const adopted = paying({ currentPeriodEnd: standIn, syncedAt: standIn })
+    expect(isFirstPaidCycle(adopted, current({ currentStart: null }))).toBe(true)
+    const paid = paying({
+      currentPeriodEnd: standIn,
+      syncedAt: new Date('2026-11-03T00:00:00.000Z'),
+    })
+    expect(isFirstPaidCycle(paid, current({ currentStart: null }))).toBe(false)
+  })
+
+  it('reads nothing without a stored period end or the same subscription', () => {
     const adopted = paying({ currentPeriodEnd: new Date('2026-12-03T00:00:00.000Z') })
     expect(isFirstPaidCycle(adopted, current({ currentStart: null }))).toBe(false)
     expect(isFirstPaidCycle(adopted, current({ id: 'sub_2' }))).toBe(false)
