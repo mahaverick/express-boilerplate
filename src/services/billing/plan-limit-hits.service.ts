@@ -1,7 +1,7 @@
 /**
  * @file How often the plan refused a workspace in the last 30 days, for the
- * tenant group's `limit_hits_30d`. Each `plan_limit_reached` or
- * `plan_feature_blocked` event sent adds one entry to a Redis sorted set per
+ * tenant group's `limit_hits_30d`. Each `plan_limit_reached` event sent,
+ * and each feature refusal (throttled or not), adds one entry to a Redis sorted set per
  * workspace, scored by its time; the drain counts the entries of the window
  * when it resolves a group marker. The outbox cannot answer it, since a row
  * leaves it once PostHog has it. Analytics only: a lost entry or a failed

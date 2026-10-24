@@ -34,6 +34,7 @@ import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { processBillingWebhookEvent } from '@/services/billing/billing-webhook.service'
 import { cancelPaid, confirmCheckout, startCheckout } from '@/services/billing/checkout.service'
+import { countLimitHits } from '@/services/billing/plan-limit-hits.service'
 import { db, sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
@@ -916,6 +917,7 @@ describe('plan refusals', () => {
 
   it('reports a feature refusal once an hour per workspace and key, and none for staff', async () => {
     const { tenant, owner } = await workspace()
+    await clearLimitHits(tenant.id)
     const gate = requireFeature('advanced_example')
     /**
      * Run the gate for one caller.
@@ -955,6 +957,9 @@ describe('plan refusals', () => {
       distinctId: owner.id,
       properties: { key: 'advanced_example', plan: 'free', billing_state: 'free' },
     })
+    // The group's count takes every member refusal, the hour's quiet ones too; staff's none.
+    const hits = await countLimitHits([tenant.id])
+    expect(hits.get(tenant.id)).toBe(2)
   })
 })
 

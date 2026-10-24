@@ -805,6 +805,45 @@ describe('adversarial attribution', () => {
     await expectAudited(tenant.id, 'subscription_activated', confirmer.id)
   })
 
+  it('a starter whose account is gone before the confirm: checkout_confirmed names the owner who confirmed', async () => {
+    const { tenant, owner: starter } = await workspace()
+    const confirmer = await addMember(tenant.id, 'owner')
+    const session = await startCheckout({ userId: starter.id }, tenant.id, 'month')
+    await drainOutboxOf(tenant.id)
+    await sql`update users set deleted_at = now() where id = ${starter.id}`
+    await fake.fakeAdvance(session.subscriptionId, 'active')
+
+    await confirmCheckout({ userId: confirmer.id }, tenant.id, confirmBody(session.subscriptionId))
+
+    await expectAudited(tenant.id, 'checkout_confirmed', confirmer.id)
+  })
+
+  it('a staff-given trial with no claimant: its reminder, end and downgrade go to the payer, as its extension does', async () => {
+    const { tenant } = await workspace()
+    const payer = await addMember(tenant.id, 'owner')
+    const now = new Date()
+    // A workspace that paid before, put on a trial by staff; no one claimed it as their own trial.
+    await setBilling(tenant.id, {
+      state: 'trialing',
+      planId: plans.paidId,
+      payerUserId: payer.id,
+      trialStartedAt: new Date(now.getTime() - 12 * DAY_MS),
+      trialEndsAt: new Date(now.getTime() + 2 * DAY_MS - 60_000),
+    })
+
+    await runFrequentBilling(now)
+    const reminders = await eventsOf(tenant.id, 'trial_reminder_sent')
+    expect(reminders.length).toBeGreaterThan(0)
+    for (const row of reminders) expect(row.distinctId).toBe(payer.id)
+
+    await setBilling(tenant.id, { trialEndsAt: new Date(Date.now() - 60_000) })
+    await runFrequentBilling(new Date())
+
+    await expectAudited(tenant.id, 'trial_ended', payer.id)
+    const downgraded = await expectAudited(tenant.id, 'downgraded_to_free', payer.id)
+    expect(downgraded.properties).toMatchObject({ downgrade_cause: 'trial_ended' })
+  })
+
   it('a starter deleted by staff before the activation: the sync never names them, and no person is left', async () => {
     const staff = await staffAdmin()
     const { tenant, owner: starter } = await workspace()

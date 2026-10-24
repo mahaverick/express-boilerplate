@@ -8,7 +8,8 @@
  * invite) is that member's. A change the provider, a job or the reconcile
  * made is attributed to a person when one is known: the owner who started
  * the checkout for an activation, an interval change or a first charge, the
- * payer for the rest, the trial's owner for a trial's events. A soft-deleted
+ * payer for the rest, the trial's owner for a trial's events (then the payer
+ * and the checkout's starter, for a trial staff gave). A soft-deleted
  * account is never named; the next person is, and only an event with no such
  * person left is a system event. Staff are never named: a staff member's own
  * action sends no product event (its audit entry is forwarded already), and
@@ -157,7 +158,8 @@ async function attributedOf(
       return found ?? firstLiveUser([await trialUserId()])
     }
     case 'trial': {
-      return firstLiveUser([await trialUserId()])
+      // A trial staff gave a workspace that paid before has no claimant: its payer, else its starter, as for `trial_extended`.
+      return firstLiveUser([await trialUserId(), row.payerUserId, row.checkoutStartedBy])
     }
   }
 }
@@ -467,8 +469,9 @@ function reminderTime(row: TenantBillingRecord, trialEndsAt: Date, reminder: Tri
 
 /**
  * Send `trial_reminder_sent` for a trial reminder that went out, with the
- * whole days left, attributed to the trial's owner. Once per reminder and
- * trial end.
+ * whole days left, attributed to the trial's owner, else the payer or the
+ * owner who started a checkout (as `trial_extended`), else it is a system
+ * event. Once per reminder and trial end.
  * @param row - The trial's row.
  * @param reminder - Which reminder.
  * @param now - When it went out, for the days left.
@@ -488,6 +491,8 @@ export async function trackTrialReminder(
         userId: null,
         attributedUserId: await firstLiveUser([
           (await billingRepository.findTrialUserId(tenantId)) ?? null,
+          row.payerUserId,
+          row.checkoutStartedBy,
         ]),
         ...traitsOf(row),
         dedupeKey: `${tenantId}:trial_reminder_sent:${reminder}:${String(trialEndsAt.getTime())}`,
@@ -751,8 +756,9 @@ export interface PlanRefusal {
  * Report a plan refusal after its transaction rolled back, with the
  * workspace's plan, state and use as they are now: `plan_limit_reached`
  * every time, `plan_feature_blocked` at most once per workspace, key and
- * hour. Each one sent counts toward the group's `limit_hits_30d`. A staff
- * refusal sends nothing.
+ * hour. Every member or outsider refusal counts toward the group's
+ * `limit_hits_30d`, a feature refusal the hour's throttle kept quiet too. A
+ * staff refusal sends and counts nothing.
  * @param refusal - What was refused, and for whom.
  */
 export async function emitPlanRefusal(refusal: PlanRefusal): Promise<void> {
@@ -771,17 +777,19 @@ export async function emitPlanRefusal(refusal: PlanRefusal): Promise<void> {
       at: new Date(),
     }
     if (refusal.kind === 'feature') {
+      // Counted before the throttle: the group's count takes the hour's quiet refusals too.
+      await recordLimitHit(tenantId)
       const event: BillingDomainEvent = { ...source, type: 'plan_feature_blocked', key }
-      if (!(await didSendThrottled(event, [type, tenantId, key]))) return
-    } else {
-      const usage = entitlements.limits[key]
-      if (usage === undefined || usage.limit === null) return
-      await emit(source, {
-        type: 'plan_limit_reached',
-        key,
-        ...(!isOutsider && { usage: { used: usage.used, limit: usage.limit } }),
-      })
+      await didSendThrottled(event, [type, tenantId, key])
+      return
     }
+    const usage = entitlements.limits[key]
+    if (usage === undefined || usage.limit === null) return
+    await emit(source, {
+      type: 'plan_limit_reached',
+      key,
+      ...(!isOutsider && { usage: { used: usage.used, limit: usage.limit } }),
+    })
     await recordLimitHit(tenantId)
   } catch (error) {
     logFailure(error, tenantId, type)
