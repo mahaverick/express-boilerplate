@@ -41,7 +41,9 @@ export interface PayerLeftVariables {
    */
   leftOn: string
   /**
-   * When the paid period ends, as a date in the workspace's time zone.
+   * The last day the workspace keeps Paid without a new card, as a date in
+   * the workspace's time zone: the end of the paid period, or the end of
+   * grace after a failed payment.
    */
   periodEndsOn: string
   /**

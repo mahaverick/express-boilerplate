@@ -9,6 +9,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
+import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
@@ -17,6 +18,7 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { initialBillingFor } from '@/services/billing/trial.service'
 import { db, sql, withTransaction } from '@/services/database.service'
+import { issueLinkToken } from '@/services/link-token.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { deleteUser } from '@/services/platform-user.service'
 import {
@@ -27,9 +29,10 @@ import {
 } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
-import { accept, verifyInvitation } from '@/services/tenant-invitation.service'
+import { accept, confirmInvitation, verifyInvitation } from '@/services/tenant-invitation.service'
 import { leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import { createTenant } from '@/services/tenant.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { processNotificationJob } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import {
@@ -270,6 +273,29 @@ describe('the trial started email', () => {
   })
 })
 
+describe('the trial started email by confirm link', () => {
+  it('mails the first owner of a staff-made workspace when they confirm, once', async () => {
+    const tenant = await ownerlessWorkspace()
+    const { user: staff } = await createTrackedStaff('admin')
+    const invitee = await createTrackedUser()
+    const { invitationId } = await seedInvitation(tenant, {
+      email: invitee.email,
+      role: 'owner',
+      invitedBy: staff.id,
+    })
+    const { raw } = await issueLinkToken(
+      { intent: 'invitation', email: invitee.email, app: 'web', invitationId },
+      requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+    )
+
+    await confirmInvitation(raw)
+
+    expect(await billingColumn(tenant.id, 'state')).toBe('trialing')
+    const mails = await mailsOf(tenant.id, 'trial_started')
+    expect(mails.map((mail) => mail.recipient)).toStrictEqual([invitee.email])
+  })
+})
+
 describe('the workspace full notice', () => {
   it('tells each owner once a day however many joins are refused, and writes nothing for the join', async () => {
     const { tenant, owner } = await workspace()
@@ -402,6 +428,39 @@ describe('the payer left notice', () => {
 
     await expectPayerLeftTold(first.tenant.id, [firstCoOwner?.id ?? ''])
     await expectPayerLeftTold(second.tenant.id, [second.owner.id])
+  })
+
+  it('gives the end of grace as the deadline when the payment has failed', async () => {
+    const { tenant, owner } = await workspace({ firstName: 'Pat' })
+    await sql`update users set last_name = 'Payer' where id = ${owner.id}`
+    const [coOwner] = await addMembers(tenant.id, 'owner', 1)
+    await payingBy(tenant.id, owner)
+    const haltedAt = new Date('2030-01-01T10:00:00.000Z')
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: haltedAt, haltedAt })
+
+    await leaveTenant({ userId: owner.id }, tenant.id)
+
+    const [job] = await noticeJobsOf(tenant.id)
+    expect(job?.data.userId).toBe(coOwner?.id)
+    // Seven days' grace after the halt.
+    expect(job?.data.email?.variables).toMatchObject({ periodEndsOn: '8 January 2030' })
+    expect(job?.data.body).toContain('Add your card by 8 January 2030 to keep Paid.')
+  })
+
+  it('tells the owners once when a payer who already left is deleted', async () => {
+    const { tenant, owner } = await workspace({ firstName: 'Pat' })
+    await sql`update users set last_name = 'Payer' where id = ${owner.id}`
+    const [coOwner] = await addMembers(tenant.id, 'owner', 1)
+    await payingBy(tenant.id, owner)
+    await leaveTenant({ userId: owner.id }, tenant.id)
+    await expectPayerLeftTold(tenant.id, [coOwner?.id ?? ''])
+    // Emptied, so a second notice would show as a new job whatever its key.
+    await getNotificationQueue().obliterate({ force: true })
+    const { user: staff } = await createTrackedStaff('admin')
+
+    await deleteUser({ userId: staff.id }, owner.id, 'Asked to be deleted')
+
+    expect(await noticeJobsOf(tenant.id)).toStrictEqual([])
   })
 
   it('tells no one when the workspace has no live subscription', async () => {

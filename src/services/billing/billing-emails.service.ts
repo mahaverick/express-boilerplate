@@ -970,7 +970,8 @@ export async function sendPayerLeft(
     if (!isLive) return
     const context = await activeContext(tenantId, null)
     if (context === undefined) return
-    if (row.currentPeriodEnd === null) {
+    const deadline = await keepPaidDeadline(row)
+    if (deadline === null) {
       logSkipped(tenantId, 'payer_left')
       return
     }
@@ -978,12 +979,12 @@ export async function sendPayerLeft(
     const payerName = payer === undefined ? '' : displayName(payer)
     const { tenant, appName } = context
     const leftOn = formatDateInZone(leftAt, context.timeZone)
-    const periodEndsOn = formatDateInZone(row.currentPeriodEnd, context.timeZone)
+    const keepPaidBy = formatDateInZone(deadline, context.timeZone)
     await notifyOwners(context, {
       type: 'billing_payer_left',
       stamp: `${payerUserId}-${leftOn}`,
       title: 'Your workspace needs a new card',
-      body: `The person who paid for ${tenant.name} left on ${leftOn}. Add your card by ${periodEndsOn} to keep Paid.`,
+      body: `The person who paid for ${tenant.name} left on ${leftOn}. Add your card by ${keepPaidBy} to keep Paid.`,
       email: {
         templateKey: 'payer_left',
         messageFor: (to) => ({
@@ -994,7 +995,7 @@ export async function sendPayerLeft(
             tenantName: tenant.name,
             payerName: payerName === '' ? UNNAMED_PAYER : payerName,
             leftOn,
-            periodEndsOn,
+            periodEndsOn: keepPaidBy,
             billingLink: buildBillingLink(tenant.slug, 'payer_left'),
           },
         }),
@@ -1006,14 +1007,37 @@ export async function sendPayerLeft(
 }
 
 /**
+ * The last day a workspace keeps Paid without a new card: the end of grace
+ * when a payment failed or the subscription was paused, else the end of the
+ * paid period (a past-due row whose provider still retries has no grace yet).
+ * @param row - The workspace's billing row.
+ * @returns The deadline, or null when the row has neither.
+ */
+async function keepPaidDeadline(row: TenantBillingRecord): Promise<Date | null> {
+  if (row.state === 'past_due') {
+    const settings = await planRepository.getSettings()
+    const graceEnd = graceEndsAt(row, settings.pastDueGraceDays)
+    if (graceEnd !== null) return graceEnd
+  }
+  return row.currentPeriodEnd
+}
+
+/**
  * Tell the remaining owners of every workspace a deleted user paid for with
- * a live subscription (`sendPayerLeft`). Never rejects.
+ * a live subscription and was still a member of (`sendPayerLeft`): a
+ * workspace they had already left was told then. Never rejects.
  * @param payerUserId - The deleted user.
+ * @param memberOf - The workspaces they were a member of when deleted.
  * @param leftAt - When they were deleted.
  */
-export async function sendPayerLeftEverywhere(payerUserId: string, leftAt: Date): Promise<void> {
+export async function sendPayerLeftEverywhere(
+  payerUserId: string,
+  memberOf: readonly string[],
+  leftAt: Date
+): Promise<void> {
   try {
-    for (const tenantId of await billingRepository.listTenantIdsPaidBy(payerUserId)) {
+    const paidFor = await billingRepository.listTenantIdsPaidBy(payerUserId)
+    for (const tenantId of paidFor.filter((id) => memberOf.includes(id))) {
       await sendPayerLeft(tenantId, payerUserId, leftAt)
     }
   } catch (error) {

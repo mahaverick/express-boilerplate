@@ -611,7 +611,8 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * links and revoke the invitations they sent, so the address can be reused
  * fully, Google included (Deactivate is the way to ban). After the commit,
  * the remaining owners of each workspace they paid for with a live
- * subscription are told (`sendPayerLeftEverywhere`). Refused while they
+ * subscription, and were still a member of, are told
+ * (`sendPayerLeftEverywhere`). Refused while they
  * are the last live owner of any customer tenant or the last active platform
  * owner: those tenants' owner rows are locked first, in tenant-id order, then
  * the platform's (see `lockStaffPair`), and the owners re-counted under the
@@ -635,7 +636,7 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
   const owned = await platformUserRepository.listOwnedTenants(userId)
   const customerTenants = owned.filter((tenant) => !tenant.isPlatform)
 
-  const revoked = await withTransaction(async (tx) => {
+  const deleted = await withTransaction(async (tx) => {
     const { target, targetRole, platform } = await lockStaffPair(
       actor,
       userId,
@@ -670,6 +671,8 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       )
     }
 
+    // Read before the delete: a workspace the user already left was told then.
+    const memberOf = await userMembershipRepository.listTenantIdsForUser(target.id, tx)
     await userRepository.softDelete(target.id, tx)
     await billingRepository.closeAllOpenUpgradeRequestsOf(target.id, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
@@ -686,8 +689,8 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       },
       tx
     )
-    return sessionIds
+    return { sessionIds, memberOf }
   })
-  await denySessionsAfterCommit(userId, revoked)
-  await sendPayerLeftEverywhere(userId, new Date())
+  await denySessionsAfterCommit(userId, deleted.sessionIds)
+  await sendPayerLeftEverywhere(userId, deleted.memberOf, new Date())
 }
