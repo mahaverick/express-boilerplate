@@ -35,6 +35,7 @@ const state: {
   notificationQueue: Queue | undefined
   maintenanceQueue: Queue | undefined
   analyticsQueue: Queue | undefined
+  billingQueue: Queue | undefined
   closed: boolean
   workerConnectionLost: Set<(dead: IORedis) => void>
   haveWorkersFailed: boolean
@@ -46,6 +47,7 @@ const state: {
   notificationQueue: undefined,
   maintenanceQueue: undefined,
   analyticsQueue: undefined,
+  billingQueue: undefined,
   closed: false,
   workerConnectionLost: new Set(),
   haveWorkersFailed: false,
@@ -176,12 +178,14 @@ function getProducerConnection(): IORedis {
         state.notificationQueue,
         state.maintenanceQueue,
         state.analyticsQueue,
+        state.billingQueue,
       ]
       state.emailQueue = undefined
       state.authEmailQueue = undefined
       state.notificationQueue = undefined
       state.maintenanceQueue = undefined
       state.analyticsQueue = undefined
+      state.billingQueue = undefined
       for (const orphan of orphans) void discardQueue(orphan)
     }
   )
@@ -280,11 +284,31 @@ export function getAnalyticsQueue(): Queue {
 }
 
 /**
+ * Get the shared "billing" queue, creating it on first use. It carries the
+ * Razorpay webhook events and the billing syncs, over the same producer
+ * connection as the others. Full maintenance pauses it; the webhook route
+ * still records and queues each delivery, so nothing is lost while it waits.
+ * @returns The billing queue.
+ */
+export function getBillingQueue(): Queue {
+  if (!state.billingQueue) {
+    state.billingQueue = new Queue('billing', {
+      connection: getProducerConnection(),
+      prefix: redisKey('bull'),
+    })
+    state.billingQueue.on('error', (error: unknown) => {
+      logger.error('Billing queue error', { error })
+    })
+  }
+  return state.billingQueue
+}
+
+/**
  * Every queue this module creates, creating any not yet created: what the
  * staff status lists. A queue added to this module must be added here;
  * `tests/integration/services/queue-registry.test.ts` compares this list with
  * every `new Queue(` in this file.
- * @returns The email, auth-email, notification, maintenance and analytics queues.
+ * @returns The email, auth-email, notification, maintenance, analytics and billing queues.
  */
 export function getAllQueues(): Queue[] {
   return [
@@ -293,6 +317,7 @@ export function getAllQueues(): Queue[] {
     getNotificationQueue(),
     getMaintenanceQueue(),
     getAnalyticsQueue(),
+    getBillingQueue(),
   ]
 }
 
@@ -309,7 +334,7 @@ export function isPausableQueueName(name: string): boolean {
 /**
  * Every queue full maintenance pauses and leaving it resumes: `getAllQueues()`
  * without auth-email (`isPausableQueueName`).
- * @returns The email, notification, maintenance and analytics queues.
+ * @returns The email, notification, maintenance, analytics and billing queues.
  */
 export function getPausableQueues(): Queue[] {
   return getAllQueues().filter((queue) => isPausableQueueName(queue.name))
@@ -438,6 +463,11 @@ export async function closeQueue(): Promise<void> {
     const analyticsQueue = state.analyticsQueue
     state.analyticsQueue = undefined
     await analyticsQueue.close()
+  }
+  if (state.billingQueue) {
+    const billingQueue = state.billingQueue
+    state.billingQueue = undefined
+    await billingQueue.close()
   }
   const connections = [state.worker?.connection, state.producer?.connection]
   state.worker = undefined

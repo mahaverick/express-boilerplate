@@ -393,6 +393,13 @@ export interface BillingProviderClient {
    */
   listInvoices(subscriptionIds: string[], cursor: string | null): Promise<ProviderInvoicePage>
   /**
+   * The subscription a payment was taken for, through the payment's invoice:
+   * a dispute or a refund names only the payment.
+   * @param paymentId - The provider's payment id.
+   * @returns The subscription id, or null when the payment belongs to no subscription.
+   */
+  findSubscriptionIdForPayment(paymentId: string): Promise<string | null>
+  /**
    * Whether a checkout's signature was made by the provider for the expected
    * subscription.
    * @param input - What the browser posted.

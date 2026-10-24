@@ -217,6 +217,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('GET', '/health'),
   letThrough('GET', '/health/ready'),
   letThrough('*', '/api/v1/webhooks/email', 'prefix'),
+  letThrough('*', '/api/v1/webhooks/razorpay', 'prefix'),
   letThrough('*', '/api/v1/collect', 'prefix'),
   letThrough('GET', '/api/v1/status/maintenance'),
   letThrough('*', '/api/v1/platform', 'prefix'),

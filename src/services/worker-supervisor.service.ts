@@ -1,5 +1,5 @@
 /**
- * @file Starts the email, notification and maintenance Workers, and the
+ * @file Starts the email, notification, maintenance and billing Workers, and the
  * analytics Worker when analytics or PostHog's private API is enabled, and
  * keeps them on a live connection, replacing them whenever their connection
  * gives up before its first 'ready' (see `startWorkers`).
@@ -19,6 +19,7 @@ import {
   setWorkersFailed,
 } from '@/services/queue.service'
 import { startAnalyticsWorker } from '@/workers/analytics.worker'
+import { startBillingWorker } from '@/workers/billing.worker'
 import { startEmailWorker } from '@/workers/email.worker'
 import { startMaintenanceWorker } from '@/workers/maintenance.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
@@ -74,7 +75,7 @@ async function registerInBackground(
 }
 
 /**
- * Start the email, auth-email, notification and maintenance Workers, and the
+ * Start the email, auth-email, notification, maintenance and billing Workers, and the
  * analytics Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`
  * (feature flags need the project key, so `isFlagsEnabled()` implies the
  * first), replacing
@@ -135,6 +136,7 @@ export function startWorkers(): SupervisedWorkers {
         () => startEmailWorker('auth-email'),
         startNotificationWorker,
         startMaintenanceWorker,
+        startBillingWorker,
       ]
       if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
         starters.push(startAnalyticsWorker)

@@ -572,6 +572,21 @@ export class RazorpayProvider implements BillingProviderClient {
   }
 
   /**
+   * The subscription a payment was taken for: the payment's invoice, then
+   * the invoice's subscription. Reads ids only; the payment's contact and
+   * card details are never kept.
+   * @param paymentId - The payment id.
+   * @returns The subscription id, or null when the payment has no invoice or the invoice no subscription.
+   */
+  async findSubscriptionIdForPayment(paymentId: string): Promise<string | null> {
+    const payment = asRecord(await this.#call('GET', `/payments/${encodeURIComponent(paymentId)}`))
+    const invoiceId = stringOrNull(payment.invoice_id)
+    if (invoiceId === null) return null
+    const invoice = asRecord(await this.#call('GET', `/invoices/${encodeURIComponent(invoiceId)}`))
+    return stringOrNull(invoice.subscription_id)
+  }
+
+  /**
    * Whether a checkout was signed with the key secret for the expected subscription.
    * @param input - What the browser posted.
    * @param expectedSubscriptionId - The subscription the checkout must be for.

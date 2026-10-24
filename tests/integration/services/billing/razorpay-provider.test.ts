@@ -415,6 +415,51 @@ describe('refundLatestPayment', () => {
   })
 })
 
+describe('findSubscriptionIdForPayment', () => {
+  it('reads the payment, then its invoice, and answers the invoice’s subscription', async () => {
+    fake.reply('GET', '/payments/pay_TESTdispute1', 200, {
+      id: 'pay_TESTdispute1',
+      invoice_id: 'inv_TESTdispute1',
+    })
+    fake.reply('GET', '/invoices/inv_TESTdispute1', 200, {
+      id: 'inv_TESTdispute1',
+      subscription_id: 'sub_TESTdispute1',
+    })
+
+    expect(await provider.findSubscriptionIdForPayment('pay_TESTdispute1')).toBe('sub_TESTdispute1')
+    expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toStrictEqual([
+      'GET /v1/payments/pay_TESTdispute1',
+      'GET /v1/invoices/inv_TESTdispute1',
+    ])
+  })
+
+  it('answers null for a payment with no invoice, without a second call', async () => {
+    fake.reply('GET', '/payments/pay_TESTnoinvoice', 200, {
+      id: 'pay_TESTnoinvoice',
+      invoice_id: null,
+    })
+
+    expect(await provider.findSubscriptionIdForPayment('pay_TESTnoinvoice')).toBeNull()
+    expect(fake.requests).toHaveLength(1)
+  })
+
+  it('answers null for an invoice with no subscription', async () => {
+    fake.reply('GET', '/payments/pay_TESTplain', 200, { id: 'pay_TESTplain', invoice_id: 'inv_X' })
+    fake.reply('GET', '/invoices/inv_X', 200, { id: 'inv_X', subscription_id: null })
+
+    expect(await provider.findSubscriptionIdForPayment('pay_TESTplain')).toBeNull()
+  })
+
+  it('throws a non-retryable ProviderError for an unknown payment', async () => {
+    fake.reply('GET', '/payments/pay_TESTunknown', 400, { error: { code: 'BAD_REQUEST_ERROR' } })
+
+    const error = await rejectionOf(provider.findSubscriptionIdForPayment('pay_TESTunknown'))
+
+    expect(error).toBeInstanceOf(ProviderError)
+    expect((error as ProviderError).retryable).toBe(false)
+  })
+})
+
 describe('listInvoices', () => {
   it('maps invoices for owners', async () => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)

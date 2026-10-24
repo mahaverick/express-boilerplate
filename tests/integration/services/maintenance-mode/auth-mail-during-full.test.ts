@@ -156,7 +156,7 @@ describe('auth mail during full maintenance', () => {
   it('pauses every queue but auth-email in full', async () => {
     const pausable = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
 
-    expect(pausable).toEqual([true, true, true, true])
+    expect(pausable).toEqual([true, true, true, true, true])
     expect(await getAuthEmailQueue().isPaused()).toBe(false)
   })
 

@@ -39,6 +39,8 @@ const MACHINE_FACING = new Set([
   'src/routes/analytics-proxy.routes.ts',
   'src/services/email-webhook.service.ts',
   'src/controllers/email-webhook.controller.ts',
+  'src/services/billing/billing-webhook.service.ts',
+  'src/controllers/billing-webhook.controller.ts',
 ])
 
 /**

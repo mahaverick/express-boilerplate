@@ -32,12 +32,14 @@ describe('queue registry', () => {
     expect(registered.toSorted(byText)).toEqual(created.toSorted(byText))
   })
 
-  it('holds the five queues, and pauses all of them but auth-email', () => {
+  it('holds the six queues, and pauses all of them but auth-email', () => {
     const registered = getAllQueues().map((queue) => queue.name)
     const pausable = getPausableQueues().map((queue) => queue.name)
 
     expect(registered.toSorted(byText)).toEqual(
-      ['analytics', 'auth-email', 'email', 'maintenance', 'notification'].toSorted(byText)
+      ['analytics', 'auth-email', 'billing', 'email', 'maintenance', 'notification'].toSorted(
+        byText
+      )
     )
     expect(pausable.toSorted(byText)).toEqual(
       registered.filter((name) => name !== 'auth-email').toSorted(byText)

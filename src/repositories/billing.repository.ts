@@ -256,17 +256,26 @@ export class BillingRepository {
   }
 
   /**
-   * Mark an event handled. Counts the attempt and clears any earlier error.
+   * Mark an event handled. Counts the attempt and replaces any earlier error
+   * with the outcome's, or clears it.
    * @param id - The stored event's id.
+   * @param outcome - What handling it found.
+   * @param outcome.tenantId - The workspace it resolved to; left unchanged when absent.
+   * @param outcome.error - Why it changed nothing, such as `unknown_subscription`; cut to the column's length.
    * @param executor - Where to run the query. Defaults to the pool.
    */
-  async markEventProcessed(id: string, executor: DbExecutor = db): Promise<void> {
+  async markEventProcessed(
+    id: string,
+    outcome: { tenantId?: string; error?: string } = {},
+    executor: DbExecutor = db
+  ): Promise<void> {
     await executor
       .update(billingEventModel)
       .set({
         processedAt: sql`now()`,
         attempts: sql`${billingEventModel.attempts} + 1`,
-        error: null,
+        error: outcome.error?.slice(0, EVENT_ERROR_MAX_LENGTH) ?? null,
+        ...(outcome.tenantId !== undefined && { tenantId: outcome.tenantId }),
       })
       .where(eq(billingEventModel.id, id))
   }
@@ -322,14 +331,14 @@ export class BillingRepository {
   /**
    * Whether a workspace already has an alert of a kind whose message names a
    * text, such as a subscription id, so a repeated sync does not raise it again.
-   * @param tenantId - The workspace.
+   * @param tenantId - The workspace, or null for the alerts that name none.
    * @param kind - The alert kind.
    * @param text - The text the message must contain, matched literally.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when such an alert exists.
    */
   async hasAlertNaming(
-    tenantId: string,
+    tenantId: string | null,
     kind: BillingAlertRecord['kind'],
     text: string,
     executor: DbExecutor = db
@@ -339,7 +348,9 @@ export class BillingRepository {
       .from(billingAlertModel)
       .where(
         and(
-          eq(billingAlertModel.tenantId, tenantId),
+          tenantId === null
+            ? isNull(billingAlertModel.tenantId)
+            : eq(billingAlertModel.tenantId, tenantId),
           eq(billingAlertModel.kind, kind),
           sql`strpos(${billingAlertModel.message}, ${text}) > 0`
         )

@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 29 limiters in `RATE_LIMITS`.
+ * The names of the 31 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -84,6 +84,8 @@ export type RateLimitName =
   | 'passkeyStepUp'
   | 'billingWrite'
   | 'billingRead'
+  | 'billingWebhook'
+  | 'billingWebhookRejected'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -161,7 +163,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 29 rate-limit specs this API enforces, each commented with the reason
+ * The 31 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -548,5 +550,33 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 30,
     keyBy: 'user',
     unit: 'requests',
+  },
+  /**
+   * 3000 a minute per IP on the Razorpay webhook, counting only accepted
+   * deliveries (status below 400). Razorpay sends from a few addresses, so
+   * the budget is per IP and sized for a renewal storm; the route only
+   * verifies, records and queues, so a delivery costs little. Unsigned
+   * traffic never spends it; `billingWebhookRejected` bounds that.
+   */
+  billingWebhook: {
+    name: 'billing-webhook',
+    windowMs: 60_000,
+    limit: 3000,
+    keyBy: 'ip',
+    counts: 'accepted',
+    unit: 'attempts',
+  },
+  /**
+   * 30 a minute per IP on the Razorpay webhook, counting only responses of
+   * 400 or above: the cap on forged or malformed deliveries from one
+   * address. Mounted before `billingWebhook`; a signed delivery never spends it.
+   */
+  billingWebhookRejected: {
+    name: 'billing-webhook-rejected',
+    windowMs: 60_000,
+    limit: 30,
+    keyBy: 'ip',
+    counts: 'rejected',
+    unit: 'attempts',
   },
 }

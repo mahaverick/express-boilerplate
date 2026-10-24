@@ -338,6 +338,24 @@ export class FakeBillingProvider implements BillingProviderClient {
   }
 
   /**
+   * The subscription that took a payment, from the stored subscriptions.
+   * @param paymentId - The payment id.
+   * @returns The subscription id, or null when no subscription took it.
+   */
+  async findSubscriptionIdForPayment(paymentId: string): Promise<string | null> {
+    const all = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.hGetAll(redisKey('billing-fake'))
+    }, 'fake billing payment lookup')
+    for (const [field, value] of Object.entries(all)) {
+      if (!field.startsWith('sub:')) continue
+      const record = JSON.parse(value) as FakeSubscriptionRecord
+      if (record.payments.some((payment) => payment.paymentId === paymentId)) return record.id
+    }
+    return null
+  }
+
+  /**
    * Whether a checkout was signed with the fake key secret for the expected subscription.
    * @param input - What the browser posted.
    * @param expectedSubscriptionId - The subscription the checkout must be for.

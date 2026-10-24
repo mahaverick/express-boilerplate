@@ -191,6 +191,18 @@ describe('FakeBillingProvider', () => {
     expect(await provider.refundLatestPayment(id)).toStrictEqual({ status: 'already_refunded' })
   })
 
+  it('finds the subscription a payment it took belongs to, or null for an unknown payment', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const redis = await getRedis()
+    const stored = await redis.hGet(redisKey('billing-fake'), `sub:${id}`)
+    const { payments } = JSON.parse(stored ?? '{}') as { payments: { paymentId: string }[] }
+    const paymentId = payments[0]?.paymentId ?? ''
+
+    expect(await provider.findSubscriptionIdForPayment(paymentId)).toBe(id)
+    expect(await provider.findSubscriptionIdForPayment('pay_FAKEunknown')).toBeNull()
+  })
+
   it('lists subscriptions created since a time', async () => {
     const before = new Date(Date.now() - 1000)
     const id = await createOne()

@@ -18,6 +18,7 @@ import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { recordRouteTemplate } from '@/middlewares/route-template.middleware'
 import { ANALYTICS_PROXY_PATH, createAnalyticsProxyRouter } from '@/routes/analytics-proxy.routes'
+import { createBillingWebhookRouter } from '@/routes/billing-webhook.routes'
 import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 import { createApiRouter } from '@/routes/index.routes'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
@@ -69,6 +70,7 @@ export function createApp(): Express {
   app.use(posthogSession)
   // Before the body parsers: a webhook signature covers the exact bytes, which express.json would consume.
   app.use('/api/v1/webhooks/email', createEmailWebhookRouter())
+  app.use('/api/v1/webhooks/razorpay', createBillingWebhookRouter())
   // Before the body parsers too: replay bodies stream to PostHog unread, and express.json would consume or refuse them.
   app.use(
     ANALYTICS_PROXY_PATH,

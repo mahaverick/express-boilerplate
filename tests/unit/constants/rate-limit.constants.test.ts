@@ -2,7 +2,7 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 29 literal strings, in order; (2) every entry's
+ * stays exactly the 31 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
  * (3) the four key-derivation functions produce byte-identical output
@@ -52,6 +52,8 @@ const EXPECTED_NAMES_IN_ORDER = [
   'passkey-step-up',
   'billing-write',
   'billing-read',
+  'billing-webhook',
+  'billing-webhook-rejected',
 ]
 
 /**
@@ -187,6 +189,20 @@ const EXPECTED_RATE_LIMITS: {
   { key: 'passkeyStepUp', name: 'passkey-step-up', windowMs: 900_000, limit: 10, keyBy: 'user' },
   { key: 'billingWrite', name: 'billing-write', windowMs: 60_000, limit: 10, keyBy: 'user' },
   { key: 'billingRead', name: 'billing-read', windowMs: 60_000, limit: 30, keyBy: 'user' },
+  {
+    key: 'billingWebhook',
+    name: 'billing-webhook',
+    windowMs: 60_000,
+    limit: 3000,
+    keyBy: 'ip',
+  },
+  {
+    key: 'billingWebhookRejected',
+    name: 'billing-webhook-rejected',
+    windowMs: 60_000,
+    limit: 30,
+    keyBy: 'ip',
+  },
 ]
 
 describe('RATE_LIMITS key stability', () => {
@@ -209,6 +225,11 @@ describe('RATE_LIMITS key stability', () => {
       expect(typeof actual.keyBy === 'function' ? 'function' : actual.keyBy).toBe(keyBy)
     }
   )
+
+  it('counts only accepted Razorpay deliveries on one budget and only refused ones on the other', () => {
+    expect(RATE_LIMITS.billingWebhook.counts).toBe('accepted')
+    expect(RATE_LIMITS.billingWebhookRejected.counts).toBe('rejected')
+  })
 
   it('derives the email-only key from the normalised submitted email, hashed, ip ignored', () => {
     const request = { body: { email: 'Victim@Example.com' } } as unknown as Request

@@ -78,7 +78,7 @@ describe('a change that waits for its notices', () => {
 
     expect(response.status).toBe(200)
     const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
-    expect(flags).toEqual([false, false, false, false])
+    expect(flags).toEqual([false, false, false, false, false])
   })
 
   it('still pauses the queues when another owner only edited the message during the wait', async () => {
@@ -113,7 +113,7 @@ describe('a change that waits for its notices', () => {
 
     expect(response.status).toBe(200)
     const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
-    expect(flags).toEqual([true, true, true, true])
+    expect(flags).toEqual([true, true, true, true, true])
   })
 
   it('still pauses the queues when this replica’s reload failed and its store is behind', async () => {
@@ -134,7 +134,7 @@ describe('a change that waits for its notices', () => {
     expect(response.status).toBe(200)
     expect(getMaintenanceMode().version).toBeLessThan(version + 1)
     const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
-    expect(flags).toEqual([true, true, true, true])
+    expect(flags).toEqual([true, true, true, true, true])
   })
 
   it('is given what is left of the notice wait after the commit, never more than all of it', async () => {

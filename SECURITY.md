@@ -1146,6 +1146,20 @@ workspace owner's checkout, confirm, interval switch, card change and cancel
 (10 a minute), and `billing-read` on the invoice list, which reads the
 provider on every page (30 a minute). The billing read itself has none.
 
+The Razorpay webhook (`POST /webhooks/razorpay`) is public, so it verifies
+Razorpay's HMAC-SHA256 signature over the raw body against the current and
+then the previous webhook secret before it reads anything
+(`src/services/billing/billing-webhook.service.ts`). Two limiters guard it,
+both per IP: `billing-webhook-rejected` counts only failed responses (30 a
+minute), which caps forged traffic from one address, and `billing-webhook`
+counts only accepted ones (3000 a minute), so unsigned traffic cannot spend
+the budget Razorpay's deliveries need. A bad signature answers 401 with no
+detail and writes nothing. The route stores the event's ids, type and
+outcome, never its body, which carries the payer's address, phone and card
+ids. An event whose subscription notes name another environment is
+acknowledged and not stored. With payments off, or on the fake provider, the
+route answers the unknown-route 404 before either limiter runs.
+
 There is no global limiter: most authenticated reads mount none. Notification
 streams are capped per process: `SSE_MAX_STREAMS_PER_USER` (default 5) answers
 `429 too_many_streams`, and `SSE_MAX_STREAMS_TOTAL` (default 2000) answers
@@ -1158,7 +1172,7 @@ Maintenance mode is an availability control, not an access control. Its gate
 in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 `src/constants/maintenance-mode.constants.ts`), before any router runs. In
 `read_only` it refuses writes outside a short allowlist; in `full` it refuses
-everything but health, the email webhook, the collect proxy, the public status,
+everything but health, the email and Razorpay webhooks, the collect proxy, the public status,
 `/platform`, the sign-in link routes, Google sign-in, the step-up routes
 (link and passkey), the passkey sign-in routes, refresh, logout,
 `GET /auth/providers`, `GET /auth/passkeys/config` and `GET /profile`. Listing,
@@ -1215,7 +1229,7 @@ reload and the queue pause.
 | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                                                                                                  |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                                                                                         |
-| Global rate limiting                                  | **Partial**         | 29 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
+| Global rate limiting                                  | **Partial**         | 31 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`) and the passkeys a claim clears (`user.passkeys_cleared_on_claim`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                                                                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                                                                                         |

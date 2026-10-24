@@ -68,6 +68,7 @@ const ALL_PAUSED = {
   notification: true,
   maintenance: true,
   analytics: true,
+  billing: true,
 }
 const NONE_PAUSED = {
   email: false,
@@ -75,6 +76,7 @@ const NONE_PAUSED = {
   notification: false,
   maintenance: false,
   analytics: false,
+  billing: false,
 }
 
 beforeEach(async () => {
@@ -280,6 +282,7 @@ describe('queue pause states', () => {
       { name: 'notification', paused: true, active: 0 },
       { name: 'maintenance', paused: true, active: 0 },
       { name: 'analytics', paused: true, active: 0 },
+      { name: 'billing', paused: true, active: 0 },
     ])
   })
 
@@ -309,7 +312,7 @@ describe('queue pause states', () => {
       noticesPending: false,
       lastReloadError: NONE,
     })
-    expect(status.queues).toHaveLength(5)
+    expect(status.queues).toHaveLength(6)
     expect(status.queues.find((queue) => queue.name === 'auth-email')).toEqual({
       name: 'auth-email',
       paused: false,

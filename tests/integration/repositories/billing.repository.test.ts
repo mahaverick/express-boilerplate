@@ -157,6 +157,47 @@ describe('BillingRepository', () => {
     expect(events.map((event) => event.id)).toEqual([stored.id])
   })
 
+  it('marks an event processed with an outcome and the workspace it resolved to', async () => {
+    const tenantId = await billedTenant()
+    const providerEventId = `evt_${randomUUID()}`
+    await repository.recordEvent({
+      provider: 'razorpay',
+      mode: 'test',
+      providerEventId,
+      type: 'subscription.halted',
+    })
+    const stored = await repository.findEvent('razorpay', 'test', providerEventId)
+    if (stored === undefined) throw new Error('event missing')
+
+    await repository.markEventProcessed(stored.id, { tenantId, error: 'provider_mismatch' })
+
+    const done = await repository.findEvent('razorpay', 'test', providerEventId)
+    expect(done).toMatchObject({ tenantId, error: 'provider_mismatch', attempts: 1 })
+    expect(done?.processedAt).toBeInstanceOf(Date)
+  })
+
+  it('finds an alert naming a text among the alerts with no workspace', async () => {
+    const text = `sub_${randomUUID()}`
+    const tenantId = await billedTenant()
+    expect(await repository.hasAlertNaming(null, 'reconcile_repair', text)).toBe(false)
+    const scoped = await repository.insertAlert({
+      kind: 'reconcile_repair',
+      tenantId,
+      message: `Subscription ${text} is scoped.`,
+    })
+    alertIds.push(scoped.id)
+    expect(await repository.hasAlertNaming(null, 'reconcile_repair', text)).toBe(false)
+
+    const unscoped = await repository.insertAlert({
+      kind: 'reconcile_repair',
+      tenantId: null,
+      message: `Subscription ${text} has no workspace.`,
+    })
+    alertIds.push(unscoped.id)
+
+    expect(await repository.hasAlertNaming(null, 'reconcile_repair', text)).toBe(true)
+  })
+
   it('stores an alert for a workspace', async () => {
     const tenantId = await billedTenant()
     const alert = await repository.insertAlert({

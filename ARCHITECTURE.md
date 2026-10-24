@@ -473,6 +473,7 @@ order:
 | `maintenanceModeGate`                        | After `cors`, so a refusal carries the grant; before every router, the webhooks, the proxy and the body parsers ([Maintenance mode](#maintenance-mode)).        |
 | `posthogSession`                             | Copies `X-POSTHOG-SESSION-ID` into the request context, for server events.                                                                                      |
 | `/api/v1/webhooks/email`                     | Before the body parsers: a provider's signature covers the exact bytes, so the route reads them with its own `express.raw` ([Email tracking](#email-tracking)). |
+| `/api/v1/webhooks/razorpay`                  | Before the body parsers for the same reason: Razorpay signs the exact bytes. It verifies, records and queues on the `billing` queue.                            |
 | `/api/v1/collect`                            | Before the body parsers too: replay bodies stream to PostHog unread ([Analytics](#analytics)).                                                                  |
 | `express.json` (1 MB), `urlencoded` (100 KB) | The body parsers.                                                                                                                                               |
 | `GET /health`, `GET /health/ready`           | [Health checks](#health-checks).                                                                                                                                |
@@ -817,7 +818,7 @@ are under "Two senders" in [README.md](README.md#email-tracking).
 
 ### Queues and Workers
 
-Five BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
+Six BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
 returns every one, and is what the staff status lists;
 `tests/integration/services/queue-registry.test.ts` fails when a queue is
 missing from it. `getPausableQueues()` is that list without `auth-email`, and
@@ -831,20 +832,23 @@ picks an email's queue from its template, so no caller chooses it.
 | `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                               | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
 | `maintenance`  | The retention purge                                                                                                                                       | 1                    | 3 attempts, backoff from 60 s                                      |
 | `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
+| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, and a sync of one workspace (`src/jobs/billing.job.ts`)        | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days                |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
-`UnrecoverableError`) to error tracking. The email, auth-email, notification
-and maintenance handlers then log a retryable attempt at `warn`; on the final
+`UnrecoverableError`) to error tracking. The email, auth-email, notification,
+maintenance and billing handlers then log a retryable attempt at `warn`; on the final
 one `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
 payload, marks an email's message `failed`, and logs `job failed permanently`
-once. What a job payload may hold, and for how long, is in
+once. A billing webhook job's final failure also marks its `billing_events`
+row failed and raises one `webhook_failing` staff alert per event; a provider
+refusal a retry cannot change fails it at once. What a job payload may hold, and for how long, is in
 [SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a
 `warn`: a failed tick loses nothing. No handler rejects, since an unhandled
 rejection exits the process.
 
-`startWorkers()` starts the email, auth-email, notification and maintenance
-Workers, and the analytics Worker when analytics or PostHog's private API is
+`startWorkers()` starts the email, auth-email, notification, maintenance and
+billing Workers, and the analytics Worker when analytics or PostHog's private API is
 configured.
 `WORKER_ENABLED` (default `true`) runs them in the API process. To split them,
 set it to `false` on API-only pods and `true` on a worker deployment that
