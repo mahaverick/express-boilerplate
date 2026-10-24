@@ -217,6 +217,11 @@ class BillingMapping {
   readonly actions: SyncAction[] = []
   cause: BillingSyncCause | null = null
   hasSwitched = false
+  /**
+   * The current subscription belongs to a workspace already on Free and is
+   * being cancelled, so it no longer counts as running.
+   */
+  hasLapsedCurrent = false
 
   /**
    * @param row - The locked row.
@@ -312,6 +317,7 @@ class BillingMapping {
   isCancelledWhileFree(sub: ProviderSubscription): boolean {
     if (this.draft.state !== 'free') return false
     if (wasAuthenticated(sub)) this.actions.push({ kind: 'cancel_now', subscriptionId: sub.id })
+    this.hasLapsedCurrent = true
     return true
   }
 
@@ -531,7 +537,9 @@ export function nextBillingRow(
   }
   if (!mapping.hasSwitched && current !== undefined) mapping.mapCurrent(current)
 
-  let running = current !== undefined && isRunning(current) ? current : undefined
+  // A lapsed current subscription is being cancelled, so a new checkout takes over rather than being refunded.
+  let running =
+    current !== undefined && isRunning(current) && !mapping.hasLapsedCurrent ? current : undefined
   const { pending } = subs
   if (row.pendingSubscriptionId !== null && pending !== undefined) {
     const pendingClass = STATUS_CLASS[pending.status]

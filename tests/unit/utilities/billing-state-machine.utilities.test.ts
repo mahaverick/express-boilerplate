@@ -638,6 +638,43 @@ describe('nextBillingRow: the current subscription', () => {
     }
   )
 
+  it.each(['halted', 'paused'] as const)(
+    'adopts a new checkout on a Free workspace whose %s subscription is being cancelled',
+    (status) => {
+      const lapsed = paying({
+        state: 'free',
+        planId: 'plan-free',
+        pendingSubscriptionId: 'sub_new',
+      })
+      const result = map(lapsed, {
+        current: sub('sub_cur', status, { paidCount: 1 }),
+        pending: sub('sub_new', 'active', { currentEnd: at(31) }),
+      })
+      expect(result.patch).toMatchObject({
+        state: 'active',
+        providerSubscriptionId: 'sub_new',
+        pendingSubscriptionId: null,
+        currentPeriodEnd: at(31),
+      })
+      expect(result.cause).toBe('subscription_activated')
+      expect(result.actions).toStrictEqual([{ kind: 'cancel_now', subscriptionId: 'sub_cur' }])
+    }
+  )
+
+  it('adopts a running subscription the sweep found on a Free workspace whose subscription is being cancelled', () => {
+    const lapsed = paying({ state: 'free', planId: 'plan-free' })
+    const result = map(lapsed, {
+      current: sub('sub_cur', 'pending', { paidCount: 1 }),
+      swept: [sub('sub_found', 'active', { currentEnd: at(31) })],
+    })
+    expect(result.patch).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: 'sub_found',
+      currentPeriodEnd: at(31),
+    })
+    expect(result.actions).toStrictEqual([{ kind: 'cancel_now', subscriptionId: 'sub_cur' }])
+  })
+
   it('cancels an authenticated pending subscription of a workspace already on Free', () => {
     const result = map(paying({ state: 'free' }), {
       current: sub('sub_cur', 'pending', { paidCount: 1 }),
