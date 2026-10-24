@@ -324,6 +324,15 @@ async function commitSync(
     if (patch.providerSubscriptionId !== undefined && patch.providerSubscriptionId !== null) {
       if (locked.provider !== provider.kind) patch.provider = provider.kind
       if (locked.providerMode !== provider.mode) patch.providerMode = provider.mode
+      // A new subscription's payer is the owner who started its checkout until the confirm records who paid: an earlier payer, and their billing address, pay for nothing now.
+      if (
+        patch.providerSubscriptionId !== locked.providerSubscriptionId &&
+        locked.checkoutStartedBy !== null &&
+        locked.payerUserId !== locked.checkoutStartedBy
+      ) {
+        patch.payerUserId = locked.checkoutStartedBy
+        patch.billingEmail = null
+      }
     }
 
     const after = await billingRepository.updateVersioned(run.tenantId, locked.version, patch, tx)
@@ -473,16 +482,18 @@ async function cancelAtCycleEnd(
  * Safe to run twice at once: a cancel that fails because the subscription has
  * already ended is not an error, and the provider refunds a payment once, so
  * only the caller that refunded raises the refund alert. A payment refunded
- * only in part is alerted, so staff refund the rest.
+ * only in part is alerted, so staff refund the rest. A refund is reported
+ * to analytics, timed at the sync's write that found the duplicate.
  * @param provider - The payment provider.
- * @param tenantId - The workspace.
+ * @param reported - The workspace's row as the sync's write left it.
  * @param subscriptionId - The duplicate.
  */
 async function refundDuplicate(
   provider: BillingProviderClient,
-  tenantId: string,
+  reported: TenantBillingRecord,
   subscriptionId: string
 ): Promise<void> {
+  const { tenantId } = reported
   try {
     await provider.cancelSubscription(subscriptionId, false)
   } catch (error) {
@@ -515,7 +526,7 @@ async function refundDuplicate(
         kind: 'duplicate_refunded',
         message: `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(outcome.amountMinor)} paise in ${outcome.refundId}.`,
       })
-      await trackProviderEvent(tenantId, 'duplicate_subscription_refunded', subscriptionId)
+      await trackProviderEvent(reported, 'duplicate_subscription_refunded', subscriptionId)
       return
     }
     case 'nothing_paid': {
@@ -587,7 +598,7 @@ async function runFollowUps(
         break
       }
       case 'refund_duplicate': {
-        await refundDuplicate(provider, tenantId, action.subscriptionId)
+        await refundDuplicate(provider, committed.after, action.subscriptionId)
         break
       }
       case 'promote_next': {

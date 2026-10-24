@@ -302,8 +302,8 @@ points at the code or doc that holds the detail. How things work is in
 - **Outbox writes go through `enqueueAnalytics`, or `enqueueAuditAnalytics`
   for an audit entry,** never the repository: their savepoint and `try`/`catch`
   keep a failed insert from failing the user's action. `enqueueAnalyticsOrThrow`
-  is for a caller that handles the failure itself (the groups backfill and
-  flag exposure).
+  is for a caller that handles the failure itself (the groups backfill, flag
+  exposure and the throttled billing events).
 - **Never store `$group_set` in the outbox.** A `$groupidentify` row is a
   marker the drain fills at send time (`resolveGroupMarkers`); a stored
   snapshot sent late would overwrite a newer one in PostHog.

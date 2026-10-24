@@ -7,17 +7,28 @@
  * Attribution: a member's own action (a checkout, a cancel, a refused
  * invite) is that member's. A change the provider, a job or the reconcile
  * made is attributed to a person when one is known: the owner who started
- * the checkout for an activation or an interval change, the payer for the
- * rest, the trial's owner for a trial's events. Only an event with no such
- * person left is a system event. A staff member's own action in a customer
- * workspace sends no product event: its audit entry is forwarded already.
+ * the checkout for an activation, an interval change or a first charge, the
+ * payer for the rest, the trial's owner for a trial's events. A soft-deleted
+ * account is never named; the next person is, and only an event with no such
+ * person left is a system event. Staff are never named: a staff member's own
+ * action sends no product event (its audit entry is forwarded already), and
+ * a staff-made change is sent as the person the rules attribute it to. An
+ * invitee refused at the door is not a member, so that refusal is a system
+ * event with no use or cap.
  *
  * Every event carries the workspace's plan and billing state after the
  * change. An event fixed by a stamp (the row's version, a subscription, a
- * trial's end) carries a dedupe key, so the same change passed in twice is
- * written once. `plan_feature_blocked` and `plan_limit_approaching` are sent
- * at most once per workspace, key and hour (a Redis key; when Redis fails,
- * the event is skipped and the request goes on).
+ * dispute, a trial's end) carries a dedupe key and a time taken from the same
+ * stable data, never the clock, so the same change sent twice, before or
+ * after the outbox drained, is one event to PostHog (it dedupes on uuid,
+ * timestamp, event and distinct id). `plan_feature_blocked` and
+ * `plan_limit_approaching` are sent at most once per workspace, key and hour:
+ * a Redis key claimed before the outbox write and released when the write
+ * fails; when Redis fails, the event is skipped and the request goes on.
+ *
+ * An owner's cancel leaves a short-lived marker (`markOwnerCancel`) before it
+ * calls the provider, so a cancel the provider's webhook brings in first is
+ * still sent as the owner's (`by: owner`).
  *
  * Every function here returns at once while analytics is off, and never
  * rejects: a failure is logged with ids only.
@@ -30,19 +41,28 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
-import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
+import { UserRepository } from '@/repositories/user.repository'
+import { productEventRows } from '@/services/analytics/analytics-forwarder.service'
+import { enqueueAnalyticsOrThrow } from '@/services/analytics/analytics-outbox.service'
+import { getEffectiveEntitlements, type LimitCheck } from '@/services/billing/entitlements.service'
 import { recordLimitHit } from '@/services/billing/plan-limit-hits.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
-import { withRedisDeadline } from '@/services/redis-deadline.service'
+import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
+import type { SourcedEntitlements } from '@/types/billing'
 import type { BillingDomainEvent, BillingEventDetail } from '@/types/domain-event'
-import { billingDiffEvents, type BillingAttribution } from '@/utilities/billing-analytics.utilities'
-import { planKeyForState } from '@/utilities/billing-rules.utilities'
+import {
+  billingActorOf,
+  billingDiffEvents,
+  type BillingAttribution,
+} from '@/utilities/billing-analytics.utilities'
+import { limitUsage, planKeyForState } from '@/utilities/billing-rules.utilities'
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
 const tenantRepository = new TenantRepository()
+const userRepository = new UserRepository()
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -50,6 +70,12 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * How long a throttled event stays quiet for one workspace and key.
  */
 const THROTTLE_SECONDS = 60 * 60
+
+/**
+ * How long an owner's cancel marker lives: past the provider call and its
+ * webhook's arrival.
+ */
+const OWNER_CANCEL_SECONDS = 15 * 60
 
 /**
  * Who an event is from, and the facts it carries besides its own fields.
@@ -98,7 +124,19 @@ function logFailure(error: unknown, tenantId: string, event: string): void {
 }
 
 /**
- * The person an attribution names on a row.
+ * The first of the candidates whose account exists and is not soft-deleted.
+ * @param candidates - User ids, most fitting first; null for an empty slot.
+ * @returns The id, or null when none is a live account.
+ */
+async function firstLiveUser(candidates: readonly (string | null)[]): Promise<string | null> {
+  for (const id of candidates) {
+    if (id !== null && (await userRepository.findById(id)) !== undefined) return id
+  }
+  return null
+}
+
+/**
+ * The person an attribution names on a row, skipping soft-deleted accounts.
  * @param row - The billing row after the change.
  * @param attribution - Who the event is attributed to.
  * @param trialUserId - The trial's owner, read only when needed.
@@ -111,15 +149,98 @@ async function attributedOf(
 ): Promise<string | null> {
   switch (attribution) {
     case 'checkout': {
-      return row.checkoutStartedBy ?? row.payerUserId
+      return firstLiveUser([row.checkoutStartedBy, row.payerUserId])
     }
     case 'payer': {
-      return row.payerUserId ?? row.checkoutStartedBy ?? (await trialUserId())
+      const found = await firstLiveUser([row.payerUserId, row.checkoutStartedBy])
+      return found ?? firstLiveUser([await trialUserId()])
     }
     case 'trial': {
-      return trialUserId()
+      return firstLiveUser([await trialUserId()])
     }
   }
+}
+
+/**
+ * An owner's cancel marker for one subscription.
+ * @param tenantId - The workspace.
+ * @param subscriptionId - The subscription.
+ * @returns The Redis key.
+ */
+function ownerCancelKey(tenantId: string, subscriptionId: string): string {
+  return redisKey('billing', 'owner-cancel', tenantId, subscriptionId)
+}
+
+/**
+ * Record, before the provider is asked, that an owner is cancelling a
+ * subscription, so whichever write lands the cancel first sends it as the
+ * owner's. Lives `OWNER_CANCEL_SECONDS`. Never rejects; a failure leaves the
+ * event to the usual rules.
+ * @param tenantId - The workspace.
+ * @param subscriptionId - The subscription being cancelled.
+ * @param ownerUserId - The owner.
+ */
+export async function markOwnerCancel(
+  tenantId: string,
+  subscriptionId: string,
+  ownerUserId: string
+): Promise<void> {
+  if (!isAnalyticsEnabled()) return
+  try {
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(ownerCancelKey(tenantId, subscriptionId), ownerUserId, {
+        expiration: { type: 'EX', value: OWNER_CANCEL_SECONDS },
+      })
+    }, 'billing owner cancel marker')
+  } catch (error) {
+    logger.warn('Could not mark an owner cancel', { error: redactedForLog(error), tenantId })
+  }
+}
+
+/**
+ * The owner whose cancel of a subscription is on record.
+ * @param tenantId - The workspace.
+ * @param subscriptionId - The subscription, or null.
+ * @returns Their id, or null when none is on record or Redis failed.
+ */
+async function ownerCancelOf(
+  tenantId: string,
+  subscriptionId: string | null
+): Promise<string | null> {
+  if (subscriptionId === null) return null
+  try {
+    return await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.get(ownerCancelKey(tenantId, subscriptionId))
+    }, 'billing owner cancel marker read')
+  } catch (error) {
+    logger.warn('Could not read an owner cancel marker', { error: redactedForLog(error), tenantId })
+    return null
+  }
+}
+
+/**
+ * Whether a state pays.
+ * @param state - The state.
+ * @returns True for `active` and `past_due`.
+ */
+function isPaying(state: TenantBillingRecord['state']): boolean {
+  return state === 'active' || state === 'past_due'
+}
+
+/**
+ * Whether a change may be a cancel: the period-end cancel turned on, or the
+ * row left a paying state.
+ * @param before - The row before.
+ * @param after - The row after.
+ * @returns True when a cancel marker is worth reading.
+ */
+function canBeCancel(before: TenantBillingRecord, after: TenantBillingRecord): boolean {
+  return (
+    (!before.cancelAtPeriodEnd && after.cancelAtPeriodEnd) ||
+    (isPaying(before.state) && !isPaying(after.state))
+  )
 }
 
 /**
@@ -140,8 +261,10 @@ export interface BillingAnalyticsExtras {
  * Send the analytics events a committed billing change calls for
  * (`billingDiffEvents`), and an `upgrade_request_fulfilled` per fulfilled
  * request, attributed to its requester. Each event's dedupe key is the
- * workspace, the event and the row version the change wrote, so the same
- * change passed in again writes nothing.
+ * workspace, the event and the row version the change wrote, and its time is
+ * that write's, so the same change passed in again is the same event. A
+ * staff-made change names no member: it goes to the person the rules
+ * attribute it to.
  * @param before - The row before the change.
  * @param after - The row after it.
  * @param source - What made the change.
@@ -163,9 +286,14 @@ export async function emitBillingDiffAnalytics(
     const intervals = new Map<string, BillingInterval>(
       prices.map((price) => [price.id, price.interval])
     )
+    const cancellingOwner =
+      source === 'staff' || !canBeCancel(before, after)
+        ? null
+        : await ownerCancelOf(tenantId, before.providerSubscriptionId)
     const events = billingDiffEvents(before, after, source, {
       isWorkspaceActive: tenant.lifecycleState === 'active' && tenant.deletedAt === null,
       intervalOf: (priceId) => (priceId === null ? undefined : intervals.get(priceId)),
+      isOwnerCancel: cancellingOwner !== null,
     })
     let trialUser: string | null | undefined
     /**
@@ -177,11 +305,14 @@ export async function emitBillingDiffAnalytics(
       return trialUser
     }
     const base = { tenantId, ...traitsOf(after), at: after.updatedAt }
+    const actor = billingActorOf(source, extras.actorUserId)
     for (const { detail, attribution } of events) {
+      const isOwnersCancel =
+        detail.type === 'subscription_cancel_scheduled' && detail.by === 'owner'
       await emit(
         {
           ...base,
-          userId: extras.actorUserId ?? null,
+          userId: isOwnersCancel ? (actor ?? cancellingOwner) : actor,
           attributedUserId: await attributedOf(after, attribution, trialUserId),
           dedupeKey: `${tenantId}:${detail.type}:${String(after.version)}`,
         },
@@ -193,7 +324,7 @@ export async function emitBillingDiffAnalytics(
         {
           ...base,
           userId: null,
-          attributedUserId: request.requestedBy,
+          attributedUserId: await firstLiveUser([request.requestedBy]),
           dedupeKey: `${tenantId}:upgrade_request_fulfilled:${request.id}`,
         },
         { type: 'upgrade_request_fulfilled' }
@@ -216,7 +347,7 @@ async function rowOf(tenantId: string): Promise<TenantBillingRecord | undefined>
 /**
  * Send `trial_started` for a workspace whose trial just started, as the user
  * who started it: its creator, or the owner whose acceptance started it.
- * Once per trial start.
+ * Once per trial start, timed at the start.
  * @param tenantId - The workspace.
  * @param userId - The user.
  */
@@ -242,30 +373,61 @@ export async function trackTrialStarted(tenantId: string, userId: string): Promi
 }
 
 /**
+ * The trial reminders, and how long before the trial's end each is timed.
+ */
+const REMINDER_LEAD_MS = {
+  trial_ending: 3 * DAY_MS,
+  trial_ends_today: DAY_MS,
+} as const
+
+/**
+ * Which trial reminder went out.
+ */
+export type TrialReminder = 'trial_midpoint' | keyof typeof REMINDER_LEAD_MS
+
+/**
+ * A reminder's event time, fixed by the trial: halfway through it for the
+ * midpoint (a week before the end without a start), else a fixed lead before
+ * its end. Never the clock, so a repeat is the same event.
+ * @param row - The trial's row.
+ * @param trialEndsAt - Its end.
+ * @param reminder - Which reminder.
+ * @returns The time.
+ */
+function reminderTime(row: TenantBillingRecord, trialEndsAt: Date, reminder: TrialReminder): Date {
+  const end = trialEndsAt.getTime()
+  if (reminder !== 'trial_midpoint') return new Date(end - REMINDER_LEAD_MS[reminder])
+  const start = row.trialStartedAt?.getTime() ?? end - 14 * DAY_MS
+  return new Date(start + Math.floor((end - start) / 2))
+}
+
+/**
  * Send `trial_reminder_sent` for a trial reminder that went out, with the
  * whole days left, attributed to the trial's owner. Once per reminder and
  * trial end.
  * @param row - The trial's row.
- * @param reminder - Which reminder, for the dedupe key.
- * @param now - When it went out.
+ * @param reminder - Which reminder.
+ * @param now - When it went out, for the days left.
  */
 export async function trackTrialReminder(
   row: TenantBillingRecord,
-  reminder: string,
+  reminder: TrialReminder,
   now: Date
 ): Promise<void> {
   if (!isAnalyticsEnabled() || row.trialEndsAt === null) return
-  const { tenantId } = row
+  const { tenantId, trialEndsAt } = row
   try {
-    const daysLeft = Math.max(0, Math.ceil((row.trialEndsAt.getTime() - now.getTime()) / DAY_MS))
+    const daysLeft = Math.max(0, Math.ceil((trialEndsAt.getTime() - now.getTime()) / DAY_MS))
     await emit(
       {
         tenantId,
         userId: null,
-        attributedUserId: (await billingRepository.findTrialUserId(tenantId)) ?? null,
+        attributedUserId: await firstLiveUser([
+          (await billingRepository.findTrialUserId(tenantId)) ?? null,
+        ]),
         ...traitsOf(row),
-        dedupeKey: `${tenantId}:trial_reminder_sent:${reminder}:${String(row.trialEndsAt.getTime())}`,
-        at: now,
+        dedupeKey: `${tenantId}:trial_reminder_sent:${reminder}:${String(trialEndsAt.getTime())}`,
+        at: reminderTime(row, trialEndsAt, reminder),
       },
       { type: 'trial_reminder_sent', daysLeft }
     )
@@ -275,7 +437,8 @@ export async function trackTrialReminder(
 }
 
 /**
- * Send `checkout_started` as the owner who opened an upgrade checkout.
+ * Send `checkout_started` as the owner who opened an upgrade checkout, timed
+ * at the write that stored it.
  * @param row - The row the checkout was stored on.
  * @param input - The owner, and what the checkout charges.
  * @param input.userId - The owner.
@@ -319,30 +482,36 @@ export async function trackCheckoutStarted(
 }
 
 /**
- * Send `checkout_confirmed` as the owner whose upgrade checkout the
- * provider's answer confirmed, with the workspace as the sync left it. Once
- * per subscription.
+ * Send `checkout_confirmed` for an upgrade checkout the provider's answer
+ * confirmed, as the owner who started it (the same person its activation is
+ * sent as), with the workspace as the sync left it. Once per subscription,
+ * timed at the subscription's first cycle (or its first charge, when that
+ * waits for a trial's end).
  * @param tenantId - The workspace.
- * @param userId - The owner.
- * @param subscriptionId - The confirmed subscription.
+ * @param confirmer - The owner who confirmed, named when the starter is gone.
+ * @param subscription - The confirmed subscription as the provider read it.
+ * @param subscription.id - Its id.
+ * @param subscription.currentStart - When its first cycle started, if it did.
+ * @param subscription.startAt - When its first charge is due, if deferred.
  */
 export async function trackCheckoutConfirmed(
   tenantId: string,
-  userId: string,
-  subscriptionId: string
+  confirmer: string,
+  subscription: { id: string; currentStart: Date | null; startAt: Date | null }
 ): Promise<void> {
   if (!isAnalyticsEnabled()) return
   try {
     const row = await rowOf(tenantId)
     if (row === undefined) return
+    const starter = await firstLiveUser([row.checkoutStartedBy])
     await emit(
       {
         tenantId,
-        userId,
+        userId: starter ?? confirmer,
         attributedUserId: null,
         ...traitsOf(row),
-        dedupeKey: `${tenantId}:checkout_confirmed:${subscriptionId}`,
-        at: new Date(),
+        dedupeKey: `${tenantId}:checkout_confirmed:${subscription.id}`,
+        at: subscription.currentStart ?? subscription.startAt ?? row.updatedAt,
       },
       { type: 'checkout_confirmed' }
     )
@@ -353,14 +522,14 @@ export async function trackCheckoutConfirmed(
 
 /**
  * Claim a throttle key for an hour.
- * @param parts - What the key throttles.
+ * @param key - The throttle key.
  * @returns True when this is the first claim in the hour; false when it is not, or Redis failed.
  */
-async function isFirstThisHour(...parts: string[]): Promise<boolean> {
+async function isFirstThisHour(key: string): Promise<boolean> {
   try {
     const reply = await withRedisDeadline(async () => {
       const redis = await getRedis()
-      return redis.set(redisKey('billing', 'analytics-throttle', ...parts), '1', {
+      return redis.set(key, '1', {
         condition: 'NX',
         expiration: { type: 'EX', value: THROTTLE_SECONDS },
       })
@@ -368,10 +537,52 @@ async function isFirstThisHour(...parts: string[]): Promise<boolean> {
     return reply !== null
   } catch (error) {
     logger.warn('Billing analytics throttle unavailable; skipping the event', {
-      error,
-      tenantId: parts[1],
+      error: redactedForLog(error),
     })
     return false
+  }
+}
+
+/**
+ * Release a throttle key whose event was not written, so the next refusal
+ * sends it. Best effort: a failure leaves the key to expire.
+ * @param key - The throttle key.
+ */
+async function releaseThrottle(key: string): Promise<void> {
+  try {
+    await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.del(key)
+      },
+      'billing analytics throttle release',
+      () => {}
+    )
+  } catch {
+    // The key expires within the hour.
+  }
+}
+
+/**
+ * Send a throttled event: claim the hour's key, write the event's rows to
+ * the outbox, and release the key when the write failed, so a failure never
+ * silences the event for the hour.
+ * @param event - The billing event.
+ * @param keyParts - What the throttle is per: the event, the workspace and the key.
+ * @returns True when the event was written.
+ */
+async function didSendThrottled(
+  event: BillingDomainEvent,
+  keyParts: readonly string[]
+): Promise<boolean> {
+  const key = redisKey('billing', 'analytics-throttle', ...keyParts)
+  if (!(await isFirstThisHour(key))) return false
+  try {
+    await enqueueAnalyticsOrThrow(productEventRows(event, 'member'))
+    return true
+  } catch (error) {
+    await releaseThrottle(key)
+    throw error
   }
 }
 
@@ -386,13 +597,19 @@ export interface PlanRefusal {
   kind: 'limit' | 'feature'
   key: string
   /**
-   * The person refused, when known: a member, or an invitee who has an account.
+   * The member refused. Ignored for an outsider.
    */
   userId: string | null
   /**
-   * How the refused person reached the workspace: staff (`platform`) send nothing.
+   * Who was refused: a `member` (an inviter or a feature's user), an
+   * `outsider` (an invitee refused at the door: a system event with no use
+   * or cap), or `platform` staff, who send nothing.
    */
-  access: 'member' | 'platform'
+  audience: 'member' | 'outsider' | 'platform'
+  /**
+   * The entitlements the refusal was decided on, when the caller has them.
+   */
+  entitlements?: SourcedEntitlements
 }
 
 /**
@@ -404,30 +621,30 @@ export interface PlanRefusal {
  * @param refusal - What was refused, and for whom.
  */
 export async function emitPlanRefusal(refusal: PlanRefusal): Promise<void> {
-  if (!isAnalyticsEnabled() || refusal.access === 'platform') return
+  if (!isAnalyticsEnabled() || refusal.audience === 'platform') return
   const { tenantId, key } = refusal
   const type = refusal.kind === 'limit' ? 'plan_limit_reached' : 'plan_feature_blocked'
   try {
-    if (refusal.kind === 'feature' && !(await isFirstThisHour(type, tenantId, key))) return
-    const entitlements = await getEffectiveEntitlements(tenantId)
+    const entitlements = refusal.entitlements ?? (await getEffectiveEntitlements(tenantId))
+    const isOutsider = refusal.audience === 'outsider'
     const source: EventSource = {
       tenantId,
-      userId: refusal.userId,
+      userId: isOutsider ? null : refusal.userId,
       attributedUserId: null,
       plan: entitlements.plan.key,
       billingState: entitlements.state,
       at: new Date(),
     }
     if (refusal.kind === 'feature') {
-      await emit(source, { type: 'plan_feature_blocked', key })
+      const event: BillingDomainEvent = { ...source, type: 'plan_feature_blocked', key }
+      if (!(await didSendThrottled(event, [type, tenantId, key]))) return
     } else {
       const usage = entitlements.limits[key]
       if (usage === undefined || usage.limit === null) return
       await emit(source, {
         type: 'plan_limit_reached',
         key,
-        used: usage.used,
-        limit: usage.limit,
+        ...(!isOutsider && { usage: { used: usage.used, limit: usage.limit } }),
       })
     }
     await recordLimitHit(tenantId)
@@ -438,38 +655,45 @@ export async function emitPlanRefusal(refusal: PlanRefusal): Promise<void> {
 
 /**
  * After a member's write that took one seat commits: send
- * `plan_limit_approaching` when it took the workspace's use across the
- * limit's soft line (`softAt` of the cap), at most once per workspace, key
- * and hour.
+ * `plan_limit_approaching` when the seat moved the workspace into the
+ * limit's "approaching" band, by the same rule the app shows
+ * (`limitUsage`), at most once per workspace, key and hour. The use before
+ * the write was read under the seat lock, so two writes at once each see
+ * their own step and only the one that crosses sends.
  * @param tenantId - The workspace.
  * @param key - The limit.
  * @param userId - The member who wrote.
+ * @param check - The use before the write, the cap, and the plan and state, read under the seat lock.
+ * @param at - When the write that took the seat was made.
  */
 export async function trackLimitApproaching(
   tenantId: string,
   key: 'members',
-  userId: string
+  userId: string,
+  check: LimitCheck,
+  at: Date
 ): Promise<void> {
   if (!isAnalyticsEnabled()) return
   try {
-    const entitlements = await getEffectiveEntitlements(tenantId)
-    const usage = entitlements.limits[key]
-    if (usage === undefined || usage.limit === null) return
     const definition: EntitlementDefinition = ENTITLEMENTS[key]
-    const line = usage.limit * (definition.softAt ?? 1)
-    if (usage.used < line || usage.used - 1 >= line) return
-    if (!(await isFirstThisHour('plan_limit_approaching', tenantId, key))) return
-    await emit(
-      {
-        tenantId,
-        userId,
-        attributedUserId: null,
-        plan: entitlements.plan.key,
-        billingState: entitlements.state,
-        at: new Date(),
-      },
-      { type: 'plan_limit_approaching', key, used: usage.used, limit: usage.limit }
-    )
+    const used = check.used + 1
+    const isCrossing =
+      limitUsage(check.limit, used, definition.softAt).approaching &&
+      !limitUsage(check.limit, check.used, definition.softAt).approaching
+    if (!isCrossing) return
+    const event: BillingDomainEvent = {
+      tenantId,
+      userId,
+      attributedUserId: null,
+      plan: check.plan,
+      billingState: check.state,
+      at,
+      type: 'plan_limit_approaching',
+      key,
+      used,
+      limit: check.limit,
+    }
+    await didSendThrottled(event, ['plan_limit_approaching', tenantId, key])
   } catch (error) {
     logFailure(error, tenantId, 'plan_limit_approaching')
   }
@@ -509,29 +733,29 @@ export async function trackPayerLeft(
 }
 
 /**
- * Send one event the provider caused on a workspace's current row,
- * attributed to the payer (or the checkout's starter). Once per stamp.
- * @param tenantId - The workspace.
+ * Send one event the provider caused, reported by a committed write of the
+ * workspace's row, attributed to the payer (or the checkout's starter). Once
+ * per stamp, timed at that write.
+ * @param row - The row the write left.
  * @param type - The event.
  * @param stamp - What fixes it: the subscription or dispute id.
  */
 export async function trackProviderEvent(
-  tenantId: string,
+  row: TenantBillingRecord,
   type: 'duplicate_subscription_refunded' | 'dispute_opened',
   stamp: string
 ): Promise<void> {
   if (!isAnalyticsEnabled()) return
+  const { tenantId } = row
   try {
-    const row = await rowOf(tenantId)
-    if (row === undefined) return
     await emit(
       {
         tenantId,
         userId: null,
-        attributedUserId: row.payerUserId ?? row.checkoutStartedBy,
+        attributedUserId: await firstLiveUser([row.payerUserId, row.checkoutStartedBy]),
         ...traitsOf(row),
         dedupeKey: `${tenantId}:${type}:${stamp}`,
-        at: new Date(),
+        at: row.updatedAt,
       },
       { type }
     )

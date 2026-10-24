@@ -80,11 +80,41 @@ async function readSignInExtras(
 }
 
 /**
- * Forward one product event: build its row, with the extras of a sign-up
- * or sign-in, and insert it on the pool. A billing event is followed by a
- * `$groupidentify` marker for its workspace, since it changed the
- * workspace's plan, billing state or limit hits; a deduplicated event's
+ * The outbox rows of one product event: its row, and for a billing event
+ * its workspace's `$groupidentify` marker, since the event changed the
+ * workspace's plan, billing state or limit hits. A deduplicated event's
  * marker gets a row id fixed by the same key, so a repeat writes neither.
+ * @param event - The product event.
+ * @param access - How the actor reached the tenant.
+ * @param extras - Person properties and the invitation flag, for a sign-up or sign-in.
+ * @returns The rows, the event first.
+ */
+export function productEventRows(
+  event: ProductDomainEvent,
+  access: DomainEventContext['access'],
+  extras: ProductEventExtras = {}
+): NewAnalyticsOutboxRow[] {
+  const analyticsContext = currentAnalyticsContext()
+  const rows: NewAnalyticsOutboxRow[] = [buildProductEvent(event, analyticsContext, access, extras)]
+  if (isBillingEvent(event)) {
+    const marker = buildTenantGroupIdentify(
+      { id: event.tenantId },
+      analyticsContext,
+      'product',
+      event.at
+    )
+    rows.push(
+      event.dedupeKey === undefined
+        ? marker
+        : { ...marker, id: dedupedRowId(`${event.dedupeKey}:group`) }
+    )
+  }
+  return rows
+}
+
+/**
+ * Forward one product event: build its rows (`productEventRows`), with the
+ * extras of a sign-up or sign-in, and insert them on the pool.
  * `enqueueAnalytics` never throws.
  * @param event - The product event.
  * @param context - Its domain-event context.
@@ -99,24 +129,7 @@ async function forwardProductEvent(
     event.type === 'user_signed_up' || event.type === 'user_signed_in'
       ? await readSignInExtras(event.userId, event.method, event.type === 'user_signed_up')
       : {}
-  const analyticsContext = currentAnalyticsContext()
-  const rows: NewAnalyticsOutboxRow[] = [
-    buildProductEvent(event, analyticsContext, context.access, extras),
-  ]
-  if (isBillingEvent(event)) {
-    const marker = buildTenantGroupIdentify(
-      { id: event.tenantId },
-      analyticsContext,
-      'product',
-      event.at
-    )
-    rows.push(
-      event.dedupeKey === undefined
-        ? marker
-        : { ...marker, id: dedupedRowId(`${event.dedupeKey}:group`) }
-    )
-  }
-  await enqueueAnalytics(rows, db)
+  await enqueueAnalytics(productEventRows(event, context.access, extras), db)
 }
 
 /**

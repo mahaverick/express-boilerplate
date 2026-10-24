@@ -62,7 +62,15 @@ export type BillingEventDetail =
   | { type: 'trial_extended'; days: number }
   | { type: 'trial_ended' }
   | { type: 'plan_limit_approaching'; key: string; used: number; limit: number }
-  | { type: 'plan_limit_reached'; key: string; used: number; limit: number }
+  | {
+      type: 'plan_limit_reached'
+      key: string
+      /**
+       * The use and cap a member saw; absent for an invitee refused at the
+       * door, who is never told the workspace's use.
+       */
+      usage?: { used: number; limit: number }
+    }
   | { type: 'plan_feature_blocked'; key: string }
   | { type: 'upgrade_requested'; key: string | null; surface: string }
   | { type: 'upgrade_request_fulfilled' }

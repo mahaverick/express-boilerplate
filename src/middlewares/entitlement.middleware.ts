@@ -43,8 +43,8 @@ export function requireFeature(key: FeatureKey): RequestHandler {
         next()
         return
       }
-      const { features } = await getEffectiveEntitlements(principal.tenantId)
-      if (features[key] === true) {
+      const entitlements = await getEffectiveEntitlements(principal.tenantId)
+      if (entitlements.features[key] === true) {
         next()
         return
       }
@@ -53,7 +53,8 @@ export function requireFeature(key: FeatureKey): RequestHandler {
         kind: 'feature',
         key,
         userId: request.user?.id ?? null,
-        access: principal.access,
+        audience: principal.access,
+        entitlements,
       })
       next(
         new HttpError(

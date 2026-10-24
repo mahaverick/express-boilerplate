@@ -56,6 +56,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import {
+  markOwnerCancel,
   trackCheckoutConfirmed,
   trackCheckoutStarted,
 } from '@/services/billing/billing-analytics.service'
@@ -738,6 +739,9 @@ async function checkoutAttempts(
               providerMode: provider.mode,
               ...(slot.isTakeover && {
                 providerSubscriptionId: null,
+                // The old subscription's payer pays for nothing now; the new one's is set when it starts.
+                payerUserId: null,
+                billingEmail: null,
                 nextSubscriptionId: null,
                 nextPriceId: null,
                 nextAuthenticatedAt: null,
@@ -979,7 +983,7 @@ export async function confirmCheckout(
 
   await syncOrRetry(tenantId, 'confirm')
   if (stored === row.pendingSubscriptionId) {
-    await trackCheckoutConfirmed(tenantId, actor.userId, stored)
+    await trackCheckoutConfirmed(tenantId, actor.userId, sub)
   }
 
   const user = await userRepository.findById(actor.userId)
@@ -1078,6 +1082,8 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
       return getTenantBilling(actor, tenantId)
     }
     if (!ENDED_STATUSES.has(current.status)) {
+      // Before the provider call: its webhook may land before this write and must still read as the owner's cancel.
+      await markOwnerCancel(tenantId, currentId, actor.userId)
       currentCancel = 'cycle_end'
       if (current.status === 'authenticated') {
         // Read again just before cancelling now: a first charge that landed meanwhile makes it a cycle-end cancel.

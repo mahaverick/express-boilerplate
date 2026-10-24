@@ -53,7 +53,7 @@ import {
 } from '@/services/billing/billing-analytics.service'
 import { sendTrialStarted, sendWorkspaceFull } from '@/services/billing/billing-emails.service'
 import { publishEntitlementsChanged } from '@/services/billing/billing-events.service'
-import { assertWithinLimit } from '@/services/billing/entitlements.service'
+import { assertWithinLimit, type LimitCheck } from '@/services/billing/entitlements.service'
 import { hasInvitationSeat, lockSeats } from '@/services/billing/seats.service'
 import { startDeferredTrial } from '@/services/billing/trial.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
@@ -547,7 +547,7 @@ export async function invite(
   const normalizedEmail = email.trim().toLowerCase()
   const rawToken = generateInvitationToken()
 
-  const seat: SeatOutcome = { access: 'member', tookSeat: false }
+  const seat: SeatOutcome = { access: 'member' }
   const { context, access } = await reportingPlanRefusal(actor, tenantId, seat, () =>
     db.transaction(async (tx) => {
       const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
@@ -573,8 +573,7 @@ export async function invite(
         (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined &&
         !(await hasInvitationSeat(tenantId, normalizedEmail, tx))
       ) {
-        await assertWithinLimit(tenantId, 'members', 1, tx)
-        seat.tookSeat = true
+        seat.check = await assertWithinLimit(tenantId, 'members', 1, tx)
       }
 
       const invitation = await invitationRepository.createPending(
@@ -632,16 +631,17 @@ export async function invite(
     },
     { access }
   )
-  await afterSeatTaken(actor, tenantId, seat)
+  await afterSeatTaken(actor, tenantId, seat, context.invitation.createdAt)
 }
 
 /**
  * How a seat-adding write went, read after it: how the actor reached the
- * workspace, and whether the write took a seat.
+ * workspace, and, when the write took a capped seat, the members limit's use
+ * before it, read under the seat lock.
  */
 interface SeatOutcome {
   access: TenantAccess
-  tookSeat: boolean
+  check?: LimitCheck | undefined
 }
 
 /**
@@ -670,7 +670,7 @@ async function reportingPlanRefusal<T>(
         kind: 'limit',
         key: 'members',
         userId: actor.userId,
-        access: seat.access,
+        audience: seat.access,
       })
     }
     throw error
@@ -678,15 +678,22 @@ async function reportingPlanRefusal<T>(
 }
 
 /**
- * After a member's seat-adding write commits: report when it took the
- * workspace across the members limit's soft line. Staff writes report nothing.
+ * After a member's seat-adding write commits: report when it moved the
+ * workspace into the members limit's "approaching" band. Staff writes
+ * report nothing.
  * @param actor - The member who wrote.
  * @param tenantId - The workspace.
  * @param seat - How the write went.
+ * @param at - When the write was made.
  */
-async function afterSeatTaken(actor: Actor, tenantId: string, seat: SeatOutcome): Promise<void> {
-  if (seat.tookSeat && seat.access === 'member') {
-    await trackLimitApproaching(tenantId, 'members', actor.userId)
+async function afterSeatTaken(
+  actor: Actor,
+  tenantId: string,
+  seat: SeatOutcome,
+  at: Date
+): Promise<void> {
+  if (seat.check !== undefined && seat.access === 'member') {
+    await trackLimitApproaching(tenantId, 'members', actor.userId, seat.check, at)
   }
 }
 
@@ -839,7 +846,7 @@ export async function resend(
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
-  const seat: SeatOutcome = { access: 'member', tookSeat: false }
+  const seat: SeatOutcome = { access: 'member' }
   const invitation = await reportingPlanRefusal(actor, tenantId, seat, () =>
     db.transaction(async (tx) => {
       const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
@@ -858,8 +865,7 @@ export async function resend(
         !(await hasInvitationSeat(tenantId, pending.email, tx)) &&
         (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined
       ) {
-        await assertWithinLimit(tenantId, 'members', 1, tx)
-        seat.tookSeat = true
+        seat.check = await assertWithinLimit(tenantId, 'members', 1, tx)
       }
       // The swap re-checks the cooldown: the read above took no row lock, so a concurrent resend may have landed since.
       const updated = await invitationRepository.replaceToken(
@@ -896,7 +902,7 @@ export async function resend(
       return updated
     })
   )
-  await afterSeatTaken(actor, tenantId, seat)
+  await afterSeatTaken(actor, tenantId, seat, invitation.lastSentAt ?? invitation.createdAt)
   const inviter = await userRepository.findById(actor.userId)
   const invitee = await userRepository.findByEmail(invitation.email)
 
@@ -1086,7 +1092,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     db.transaction(async (tx): Promise<AcceptOutcome> => {
       const valid = await invitationRepository.findValidByTokenHash(tokenHash, tx)
       if (!valid) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
-      onFull(valid.tenant.id, user.id)
+      onFull(valid.tenant.id)
 
       assertInvitedAddress(user, valid.invitation.email)
       // Before the claim: a delete takes the user row, then the invitations the user sent, and this one may be among them. A platform invitation of any role makes the user staff, which the delete's rank rule must see.
@@ -1221,23 +1227,20 @@ async function afterTrialStarted(tenantId: string, ownerUserId: string): Promise
 /**
  * Run a join's transaction, and when the seat lock refused it for the
  * members limit, once it has rolled back tell the workspace's owners and
- * report `plan_limit_reached` as the joining user (a system event when the
- * join was creating their account), then rethrow. The transaction names the
- * workspace, and the joining user when they already have an account,
- * through `onFull` once it knows them.
+ * report `plan_limit_reached` as a system event with no use or cap (the
+ * invitee is not a member), then rethrow. The transaction names the
+ * workspace through `onFull` once it knows it.
  * @param join - Runs the join's transaction.
  * @returns What the join returned.
  * @throws {HttpError} Whatever the join threw, unchanged.
  */
 async function tellOwnersWhenFull<T>(
-  join: (onFull: (tenantId: string, userId?: string) => void) => Promise<T>
+  join: (onFull: (tenantId: string) => void) => Promise<T>
 ): Promise<T> {
   let tenantId: string | undefined
-  let joiningUserId: string | null = null
   try {
-    return await join((id, userId) => {
+    return await join((id) => {
       tenantId = id
-      joiningUserId = userId ?? null
     })
   } catch (error) {
     const isFull = error instanceof HttpError && error.code === PLAN_LIMIT_REACHED_CODE
@@ -1247,8 +1250,8 @@ async function tellOwnersWhenFull<T>(
         tenantId,
         kind: 'limit',
         key: 'members',
-        userId: joiningUserId,
-        access: 'member',
+        userId: null,
+        audience: 'outsider',
       })
     }
     throw error
@@ -1681,7 +1684,7 @@ export async function confirmInvitation(
 
   const sessionId = randomUUID()
   const outcome = await tellOwnersWhenFull(async (onFull) => {
-    onFull(valid.tenant.id, account?.id)
+    onFull(valid.tenant.id)
     return db.transaction(async (tx): Promise<VerifyOutcome> => {
       // The user row first, then the link row: the order a deactivation takes.
       const user = account

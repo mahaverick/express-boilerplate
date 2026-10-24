@@ -1037,7 +1037,8 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   email events from the webhook transaction. The event builder
   (`analytics-event-builder.service.ts`) holds every PII rule.
   `enqueueAnalyticsOrThrow` is for a caller that handles the failure itself:
-  the groups backfill and flag exposure. A passkey sign-in emits the same
+  the groups backfill, flag exposure, and the throttled billing events, which
+  release their throttle key when the write fails. A passkey sign-in emits the same
   `user_signed_in` event as a link, with `method: 'passkey'`; creating and
   deleting a passkey send `passkey_created` and `passkey_deleted`
   (`AUDIT_EVENT_RENAMES`), with the provider name and never a credential ID;
@@ -1107,54 +1108,68 @@ transaction. Every one joins its tenant's group and carries `plan` and
 `billing_state` as they are after the change. A change made by the provider,
 a job or the reconcile is sent as the person it is attributed to, with
 `access: 'system'`: the owner who started the checkout, the payer, or the
-user whose trial it is; only when nobody is known is it a system event. A
-staff member's own action in a customer tenant sends no product event, since
-its audit entry is forwarded already. The property `reason` is on the PII
-drop list, so a downgrade sends `downgrade_cause` and a failed payment
-`failure_code`. An event fixed by a stamp (the row version a change wrote, a
-subscription, a dispute, a trial's end) gets a row id derived from that
-stamp (`dedupedRowId`), so the same change passed in twice is written once.
+user whose trial it is, skipping a soft-deleted account; only when nobody is
+left is it a system event. When a new subscription becomes current, the sync
+sets its payer to the owner who started its checkout (clearing the earlier
+payer's billing address) until the confirm records who paid, so an earlier
+payer is never named for it. Staff are never named: a staff member's own
+action in a customer tenant sends no product event, since its audit entry is
+forwarded already, and a staff-made change goes to the person the rules name.
+An invitee refused at the door is not a member, so that refusal is a system
+event with no use or cap. The property `reason` is on the PII drop list, so
+a downgrade sends `downgrade_cause` and a failed payment `failure_code`.
 
-| Event                                                                 | Sent from                                                                                                                                                                                                                 | `distinct_id`                                                                      |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `trial_started`                                                       | `createTenant`, and the join that starts a staff-made tenant's trial                                                                                                                                                      | the creator, or the owner who joined                                               |
-| `trial_reminder_sent { days_left }`                                   | the three-day, last-day and midpoint trial reminders, once sent                                                                                                                                                           | the trial's user, else system                                                      |
-| `trial_extended { days }`                                             | not sent yet: the staff extension sends it                                                                                                                                                                                |                                                                                    |
-| `trial_ended`                                                         | `emitBillingDiff`: a trialing row moves to Free                                                                                                                                                                           | the trial's user, else system                                                      |
-| `plan_limit_approaching { key, used, limit }`                         | an invite or an expired invitation's resend that takes the tenant across `softAt` of a limit; once per tenant, key and hour                                                                                               | the member who wrote                                                               |
-| `plan_limit_reached { key, used, limit }`                             | an invite, resend or join the members limit refused, after its rollback                                                                                                                                                   | the inviter, or the joining user (system when the join was creating their account) |
-| `plan_feature_blocked { key }`                                        | `requireFeature`; once per tenant, key and hour                                                                                                                                                                           | the member refused                                                                 |
-| `upgrade_requested { key, surface }`                                  | not sent yet: the upgrade request route sends it                                                                                                                                                                          |                                                                                    |
-| `upgrade_request_fulfilled`                                           | `emitBillingDiff`, for each request a move to Paid fulfilled                                                                                                                                                              | the requester                                                                      |
-| `checkout_started { interval, amount_minor, currency, during_trial }` | `startCheckout`, for an upgrade (not an interval switch or a card change)                                                                                                                                                 | the owner                                                                          |
-| `checkout_confirmed`                                                  | `confirmCheckout`, for an upgrade checkout                                                                                                                                                                                | the owner                                                                          |
-| `subscription_activated { interval }`                                 | `emitBillingDiff`: the row becomes `active` with a new subscription                                                                                                                                                       | the owner who started the checkout                                                 |
-| `subscription_renewed`                                                | `emitBillingDiff`: an active row's paid period moves forward on the same subscription (the first charge after an upgrade during a trial included)                                                                         | the payer                                                                          |
-| `payment_failed { failure_code }`                                     | `emitBillingDiff`: `pastDueSince` is set; `retrying`, `halted` or `paused`                                                                                                                                                | the payer                                                                          |
-| `subscription_recovered`                                              | `emitBillingDiff`: a past-due row is active again                                                                                                                                                                         | the payer                                                                          |
-| `subscription_halted`                                                 | `emitBillingDiff`: `haltedAt` is set                                                                                                                                                                                      | the payer                                                                          |
-| `subscription_cancel_scheduled { by }`                                | `emitBillingDiff`: a cancel at period end (not a switch's), or an owner's cancel before the first charge; `by` is `owner`, `customer_bank` (the provider reported a cancel the app did not make), `staff` or `suspension` | the owner who cancelled, else the payer                                            |
-| `subscription_interval_change_scheduled`                              | `emitBillingDiff`: the next subscription is authenticated on the other interval                                                                                                                                           | the owner who started the switch                                                   |
-| `downgraded_to_free { downgrade_cause }`                              | `emitBillingDiff`: the row becomes `free`; `trial_ended`, `payment_failed`, `cancelled`, `staff` or `lifecycle`                                                                                                           | the payer, or the trial's user                                                     |
-| `payer_left`                                                          | `sendPayerLeft`, while a subscription runs                                                                                                                                                                                | the payer (system for a deleted account)                                           |
-| `duplicate_subscription_refunded`                                     | the sync's refund of a duplicate subscription                                                                                                                                                                             | the payer                                                                          |
-| `billing_reconciled { field }`                                        | `emitBillingDiff` from the reconcile: the first column it repaired                                                                                                                                                        | the payer                                                                          |
-| `dispute_opened`                                                      | the dispute webhook, when the tenant's dispute flag turns on                                                                                                                                                              | the payer                                                                          |
+An event fixed by a stamp (the row version a change wrote, a subscription, a
+dispute, a trial's end) gets a row id derived from that stamp
+(`dedupedRowId`) and a time taken from the same data (the write's
+`updatedAt`, the subscription's first cycle, a fixed lead before the trial's
+end), never the clock, so a repeat before or after the drain is the same
+`uuid`, timestamp, event and `distinct_id`, which PostHog deduplicates. A
+refusal has no stamp and no repeat path; its time is when it happened.
+`plan_feature_blocked` and `plan_limit_approaching` are written with
+`enqueueAnalyticsOrThrow` after their hourly throttle key is claimed, and the
+key is released when the write fails, so a failure never silences them for the
+hour. An owner's cancel sets a 15-minute Redis marker before it calls the
+provider, so a cancel its webhook brings in first is still `by: owner`.
+
+Three readings of a workspace's billing feed analytics, and they can briefly
+disagree: group properties and diff events use the stored state, flag traits
+use the state read with the clock (a trial that ended reads `free` before the
+job moves it), and refusals use the effective entitlements the request was
+refused on.
+
+| Event                                                                 | Sent from                                                                                                                                                                                                          | `distinct_id`                                        |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `trial_started`                                                       | `createTenant`, and the join that starts a staff-made tenant's trial                                                                                                                                               | the creator, or the owner who joined                 |
+| `trial_reminder_sent { days_left }`                                   | the three-day, last-day and midpoint trial reminders, once sent                                                                                                                                                    | the trial's user, else system                        |
+| `trial_extended { days }`                                             | not sent yet: the staff extension sends it                                                                                                                                                                         |                                                      |
+| `trial_ended`                                                         | `emitBillingDiff`: a trialing row moves to Free                                                                                                                                                                    | the trial's user, else system                        |
+| `plan_limit_approaching { key, used, limit }`                         | an invite or an expired invitation's resend whose seat moves the limit into its "approaching" band (`limitUsage`, as the app shows it), from the use read under the seat lock; once per tenant, key and hour       | the member who wrote                                 |
+| `plan_limit_reached { key, used, limit }`                             | an invite or resend the members limit refused, after its rollback; a refused join sends `{ key }` only                                                                                                             | the inviter; system for a refused join               |
+| `plan_feature_blocked { key }`                                        | `requireFeature`; once per tenant, key and hour                                                                                                                                                                    | the member refused                                   |
+| `upgrade_requested { key, surface }`                                  | not sent yet: the upgrade request route sends it                                                                                                                                                                   |                                                      |
+| `upgrade_request_fulfilled`                                           | `emitBillingDiff`, for each request a move to Paid fulfilled                                                                                                                                                       | the requester                                        |
+| `checkout_started { interval, amount_minor, currency, during_trial }` | `startCheckout`, for an upgrade (not an interval switch or a card change)                                                                                                                                          | the owner                                            |
+| `checkout_confirmed`                                                  | `confirmCheckout`, for an upgrade checkout                                                                                                                                                                         | the owner who started the checkout                   |
+| `subscription_activated { interval }`                                 | `emitBillingDiff`: the row becomes `active` with a new subscription                                                                                                                                                | the owner who started the checkout                   |
+| `subscription_renewed`                                                | `emitBillingDiff`: an active row's paid period moves forward on the same subscription                                                                                                                              | the payer; the checkout's starter for a first charge |
+| `payment_failed { failure_code }`                                     | `emitBillingDiff`: `pastDueSince` is set; `retrying`, `halted` or `paused`                                                                                                                                         | the payer; the checkout's starter for a first charge |
+| `subscription_recovered`                                              | `emitBillingDiff`: a past-due row is active again                                                                                                                                                                  | the payer                                            |
+| `subscription_halted`                                                 | `emitBillingDiff`: `haltedAt` is set                                                                                                                                                                               | the payer; the checkout's starter for a first charge |
+| `subscription_cancel_scheduled { by }`                                | `emitBillingDiff`: a cancel at period end (not a switch's), or an owner's cancel before the first charge; `by` is `owner`, `customer_bank` (the provider reported a cancel no owner made), `staff` or `suspension` | the owner who cancelled, else the payer              |
+| `subscription_interval_change_scheduled`                              | `emitBillingDiff`: the next subscription is authenticated on the other interval                                                                                                                                    | the owner who started the switch                     |
+| `downgraded_to_free { downgrade_cause }`                              | `emitBillingDiff`: the row becomes `free`; `trial_ended`, `payment_failed`, `cancelled`, `staff` or `lifecycle`                                                                                                    | the payer, or the trial's user                       |
+| `payer_left`                                                          | `sendPayerLeft`, while a subscription runs                                                                                                                                                                         | the payer (system for a deleted account)             |
+| `duplicate_subscription_refunded`                                     | the sync's refund of a duplicate subscription                                                                                                                                                                      | the payer                                            |
+| `billing_reconciled { field }`                                        | `emitBillingDiff` from the reconcile: the first column it repaired                                                                                                                                                 | the payer                                            |
+| `dispute_opened`                                                      | the dispute webhook, when the tenant's dispute flag turns on                                                                                                                                                       | the payer                                            |
 
 The owner actions are audited too, as `billing_checkout_started`,
 `billing_cancel_scheduled`, `billing_interval_switch_scheduled` and
 `billing_card_change_started`. Those are the action log under other names;
 count the product events above in dashboards, never both.
 
-**Metric definitions** (from the billing design):
-
-- trial-to-paid at 30 and 90 days;
-- free-to-paid at 180 days;
-- time to upgrade;
-- paywall hit rate (tenants with ≥1 limit/feature block ÷ active tenants);
-- conversion per prompt surface;
-- payment recovery rate (`subscription_recovered` ÷ `payment_failed` tenants);
-- churn by `downgrade_cause`.
+**Metric definitions** (from the billing design): trial-to-paid at 30 and 90 days; free-to-paid at 180 days; time to upgrade; paywall hit rate (tenants with ≥1 limit/feature block ÷ active tenants); conversion per prompt surface; payment recovery rate (`subscription_recovered` ÷ `payment_failed` tenants); churn by `downgrade_cause`.
 
 ### Error tracking
 

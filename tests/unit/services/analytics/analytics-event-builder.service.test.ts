@@ -849,7 +849,7 @@ const BILLING_DETAILS: readonly BillingEventDetail[] = [
   { type: 'trial_extended', days: 7 },
   { type: 'trial_ended' },
   { type: 'plan_limit_approaching', key: 'members', used: 8, limit: 10 },
-  { type: 'plan_limit_reached', key: 'members', used: 3, limit: 3 },
+  { type: 'plan_limit_reached', key: 'members', usage: { used: 3, limit: 3 } },
   { type: 'plan_feature_blocked', key: 'advanced_example' },
   { type: 'upgrade_requested', key: 'members', surface: 'invite_dialog' },
   { type: 'upgrade_request_fulfilled' },

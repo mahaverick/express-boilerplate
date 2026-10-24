@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vite-plus/test'
 import type { BillingInterval } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
 import {
+  billingActorOf,
   billingDiffEvents,
   type BillingAnalyticsContext,
 } from '@/utilities/billing-analytics.utilities'
@@ -308,5 +309,63 @@ describe('billingDiffEvents', () => {
 
   it('reports no reconcile repair for a reconcile that changed nothing visible', () => {
     expect(typesOf(paying(), paying({ syncedAt: NOW }), 'reconcile')).toEqual([])
+  })
+
+  it("sends a cancel the webhook brings in as the owner's when an owner cancel is on record", () => {
+    const events = billingDiffEvents(
+      paying(),
+      paying({ cancelAtPeriodEnd: true }),
+      'webhook',
+      context({ isOwnerCancel: true })
+    )
+    expect(events.map((event) => event.detail)).toContainEqual({
+      type: 'subscription_cancel_scheduled',
+      by: 'owner',
+    })
+    expect(
+      billingDiffEvents(
+        paying(),
+        paying({ cancelAtPeriodEnd: true }),
+        'staff',
+        context({ isOwnerCancel: true })
+      ).map((event) => event.detail)
+    ).toContainEqual({ type: 'subscription_cancel_scheduled', by: 'staff' })
+  })
+
+  it('attributes the first charge of an upgrade made during a trial, and its failure, to the checkout', () => {
+    const deferred = paying({ trialEndsAt: PERIOD_END })
+    expect(
+      billingDiffEvents(
+        deferred,
+        { ...deferred, currentPeriodEnd: NEXT_PERIOD_END },
+        'webhook',
+        context()
+      )
+    ).toEqual([{ detail: { type: 'subscription_renewed' }, attribution: 'checkout' }])
+    expect(
+      billingDiffEvents(
+        deferred,
+        { ...deferred, state: 'past_due', pastDueSince: NOW, haltedAt: NOW },
+        'webhook',
+        context()
+      ).map((event) => event.attribution)
+    ).toEqual(['checkout', 'checkout'])
+    const charged = paying({ trialEndsAt: PERIOD_END, currentPeriodEnd: NEXT_PERIOD_END })
+    expect(
+      billingDiffEvents(
+        charged,
+        { ...charged, currentPeriodEnd: new Date('2027-02-01T00:00:00.000Z') },
+        'webhook',
+        context()
+      )
+    ).toEqual([{ detail: { type: 'subscription_renewed' }, attribution: 'payer' }])
+  })
+})
+
+describe('billingActorOf', () => {
+  it('names the acting member, and never staff', () => {
+    expect(billingActorOf('owner', 'owner-1')).toBe('owner-1')
+    expect(billingActorOf('webhook', undefined)).toBeNull()
+    expect(billingActorOf('staff', 'staff-1')).toBeNull()
   })
 })

@@ -60,6 +60,9 @@ const PERIOD_END = new Date('2026-11-01T20:00:00.000Z')
 
 beforeAll(async () => {
   await loadPlans()
+  // An earlier file in this worker may have left jobs, and the tests count the queues.
+  await getEmailQueue().obliterate({ force: true })
+  await getNotificationQueue().obliterate({ force: true })
 })
 
 afterEach(async () => {

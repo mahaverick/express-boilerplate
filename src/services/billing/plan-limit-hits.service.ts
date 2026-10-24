@@ -9,6 +9,7 @@
  * wrong one. Both calls wait at most the Redis request deadline.
  */
 import { randomUUID } from 'node:crypto'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { logger } from '@/services/logger.service'
 import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
@@ -51,7 +52,7 @@ export async function recordLimitHit(tenantId: string, now = new Date()): Promis
         .exec()
     }, 'plan refusal count')
   } catch (error) {
-    logger.warn('Could not count a plan refusal', { error, tenantId })
+    logger.warn('Could not count a plan refusal', { error: redactedForLog(error), tenantId })
   }
 }
 
@@ -75,9 +76,15 @@ export async function countLimitHits(
       }
       return transaction.exec()
     }, 'plan refusal counts')
-    return new Map(tenantIds.map((tenantId, index) => [tenantId, Number(replies[index] ?? 0)]))
+    const counts = new Map<string, number>()
+    for (const [index, tenantId] of tenantIds.entries()) {
+      const reply = replies[index]
+      // A reply that is not a count sends no count for that workspace.
+      if (typeof reply === 'number') counts.set(tenantId, reply)
+    }
+    return counts
   } catch (error) {
-    logger.warn('Could not read the plan refusal counts', { error })
+    logger.warn('Could not read the plan refusal counts', { error: redactedForLog(error) })
     return new Map()
   }
 }

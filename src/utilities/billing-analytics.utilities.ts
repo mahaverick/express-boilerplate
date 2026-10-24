@@ -12,14 +12,16 @@
  * - `subscription_recovered`: a `past_due` row is `active` again.
  * - `subscription_renewed`: an `active` row's paid period moves forward on
  *   the same subscription. The first charge after an upgrade during a trial
- *   counts too: it moves the period from the trial's end.
+ *   counts too: it moves the period from the trial's end, and it (with a
+ *   failure or halt of it) is attributed to the checkout's starter.
  * - `payment_failed`: `pastDueSince` is set; its code says whether the
  *   provider still retries, gave up (halted) or the payer paused.
  * - `subscription_halted`: `haltedAt` is set.
  * - `subscription_cancel_scheduled`: `cancelAtPeriodEnd` turns on and no
  *   switch or resubscribe continues Paid, or an owner cancels a subscription
  *   before its first charge (the row leaves Paid at once). `by` comes from
- *   the source, and from the lifecycle for a suspended or archived workspace.
+ *   the source, from an owner's cancel on record (`isOwnerCancel`), and from
+ *   the lifecycle for a suspended or archived workspace.
  * - `subscription_interval_change_scheduled`: the next subscription is first
  *   authenticated on another interval than the current one.
  * - `trial_ended`: a trialing row moves to Free.
@@ -65,6 +67,12 @@ export interface BillingAnalyticsContext {
    * The interval a price bills, or undefined for an unknown price.
    */
   intervalOf: (priceId: string | null) => BillingInterval | undefined
+  /**
+   * Whether an owner's cancel of the current subscription is on record (a
+   * short-lived marker `cancelPaid` sets before it calls the provider), so a
+   * cancel the provider's webhook brings in first is still the owner's.
+   */
+  isOwnerCancel?: boolean
 }
 
 /**
@@ -109,11 +117,45 @@ function isSameValue(a: unknown, b: unknown): boolean {
  * @param isWorkspaceActive - Whether the workspace is active.
  * @returns The `by` value.
  */
-function cancelledBy(source: BillingHistorySource, isWorkspaceActive: boolean): CancelScheduledBy {
-  if (source === 'owner') return 'owner'
+function cancelledBy(
+  source: BillingHistorySource,
+  isWorkspaceActive: boolean,
+  isOwnerCancel: boolean
+): CancelScheduledBy {
+  if (source === 'owner' || (isOwnerCancel && source !== 'staff')) return 'owner'
   if (source === 'staff') return 'staff'
   if (!isWorkspaceActive) return 'suspension'
   return 'customer_bank'
+}
+
+/**
+ * Whether a row's current subscription has not been charged yet: an upgrade
+ * during a trial, whose paid period is set to start at the trial's end.
+ * @param row - The row.
+ * @returns True before the first charge.
+ */
+function isBeforeFirstCharge(row: TenantBillingRecord): boolean {
+  return (
+    row.providerSubscriptionId !== null &&
+    row.trialEndsAt !== null &&
+    row.currentPeriodEnd !== null &&
+    row.currentPeriodEnd <= row.trialEndsAt
+  )
+}
+
+/**
+ * The member a change's events are sent as: the member whose own action
+ * made it, never staff. A staff-made change is sent as the person the rules
+ * attribute it to.
+ * @param source - What made the change.
+ * @param actorUserId - The member who acted, if any.
+ * @returns Their id, or null.
+ */
+export function billingActorOf(
+  source: BillingHistorySource,
+  actorUserId: string | undefined
+): string | null {
+  return source === 'staff' ? null : (actorUserId ?? null)
 }
 
 /**
@@ -154,6 +196,8 @@ export function billingDiffEvents(
   context: BillingAnalyticsContext
 ): BillingDiffEvent[] {
   const events: BillingDiffEvent[] = []
+  // The first charge of an upgrade made during a trial belongs to the checkout, not to an older payer.
+  const chargeAttribution: BillingAttribution = isBeforeFirstCharge(before) ? 'checkout' : 'payer'
   /**
    * Add one event.
    * @param detail - Its type and fields.
@@ -184,19 +228,21 @@ export function billingDiffEvents(
     after.currentPeriodEnd !== null &&
     after.currentPeriodEnd > before.currentPeriodEnd
   ) {
-    add({ type: 'subscription_renewed' })
+    add({ type: 'subscription_renewed' }, chargeAttribution)
   }
   if (before.pastDueSince === null && after.pastDueSince !== null) {
     let failureCode: 'retrying' | 'halted' | 'paused' = 'retrying'
     if (after.haltedAt !== null) failureCode = 'halted'
     else if (after.pausedAt !== null) failureCode = 'paused'
-    add({ type: 'payment_failed', failureCode })
+    add({ type: 'payment_failed', failureCode }, chargeAttribution)
   }
-  if (before.haltedAt === null && after.haltedAt !== null) add({ type: 'subscription_halted' })
+  if (before.haltedAt === null && after.haltedAt !== null) {
+    add({ type: 'subscription_halted' }, chargeAttribution)
+  }
   if (isCancelScheduled(before, after, source)) {
     add({
       type: 'subscription_cancel_scheduled',
-      by: cancelledBy(source, context.isWorkspaceActive),
+      by: cancelledBy(source, context.isWorkspaceActive, context.isOwnerCancel === true),
     })
   }
   if (before.nextAuthenticatedAt === null && after.nextAuthenticatedAt !== null) {

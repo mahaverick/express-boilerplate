@@ -362,9 +362,11 @@ function billingOwnProperties(event: BillingDomainEvent): Record<string, unknown
     case 'trial_extended': {
       return { days: event.days }
     }
-    case 'plan_limit_approaching':
-    case 'plan_limit_reached': {
+    case 'plan_limit_approaching': {
       return { key: event.key, used: event.used, limit: event.limit }
+    }
+    case 'plan_limit_reached': {
+      return { key: event.key, ...event.usage }
     }
     case 'plan_feature_blocked': {
       return { key: event.key }

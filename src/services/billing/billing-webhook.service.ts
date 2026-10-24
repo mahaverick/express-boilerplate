@@ -24,6 +24,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { getEnv } from '@/configs/env.config'
 import type { BillingAlertKind } from '@/constants/billing.constants'
+import type { TenantBillingRecord } from '@/database/models/billing.model'
 import { isUnknownIdError, ProviderError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
@@ -451,19 +452,16 @@ async function syncForSubscription(
  * other column alone.
  * @param tenantId - The workspace.
  * @param isOpen - The flag's new value.
- * @returns True when the flag changed.
+ * @returns The row the write left, or undefined when the flag already had that value.
  */
-async function didSetDisputeOpen(tenantId: string, isOpen: boolean): Promise<boolean> {
+async function setDisputeFlag(
+  tenantId: string,
+  isOpen: boolean
+): Promise<TenantBillingRecord | undefined> {
   return withTransaction(async (tx) => {
     const locked = await billingRepository.lockByTenantId(tenantId, tx)
-    if (locked === undefined || locked.disputeOpen === isOpen) return false
-    const updated = await billingRepository.updateVersioned(
-      tenantId,
-      locked.version,
-      { disputeOpen: isOpen },
-      tx
-    )
-    return updated !== undefined
+    if (locked === undefined || locked.disputeOpen === isOpen) return
+    return billingRepository.updateVersioned(tenantId, locked.version, { disputeOpen: isOpen }, tx)
   })
 }
 
@@ -532,10 +530,10 @@ async function handleDispute(
     return
   }
   await billingRepository.setEventTenant(data.eventRowId, row.tenantId)
-  const hasOpened = (await didSetDisputeOpen(row.tenantId, isOpen)) && isOpen
-  // After the commit: the workspace's first open dispute since its flag was clear.
-  if (hasOpened && disputeId !== null) {
-    await trackProviderEvent(row.tenantId, 'dispute_opened', disputeId)
+  const flagged = await setDisputeFlag(row.tenantId, isOpen)
+  // After the commit: the workspace's first open dispute since its flag was clear, timed at that write.
+  if (flagged !== undefined && isOpen && disputeId !== null) {
+    await trackProviderEvent(flagged, 'dispute_opened', disputeId)
   }
   if (isOpen && paymentId !== null) {
     await alertOnce(

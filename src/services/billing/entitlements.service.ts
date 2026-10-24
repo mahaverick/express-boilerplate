@@ -7,7 +7,11 @@
  * missing billing row: the platform tenant gets every feature and no limit,
  * and a customer workspace with no row is logged and served Free.
  */
-import { PLAN_LIMIT_REACHED_CODE, type PlanKey } from '@/constants/billing.constants'
+import {
+  PLAN_LIMIT_REACHED_CODE,
+  type BillingState,
+  type PlanKey,
+} from '@/constants/billing.constants'
 import {
   ENTITLEMENTS,
   type EntitlementDefinition,
@@ -51,6 +55,19 @@ const LIMIT_COUNTERS: Record<
   (tenantId: string, executor: DbExecutor) => Promise<number>
 > = {
   members: countSeats,
+}
+
+/**
+ * What a passed limit check read under the seat lock.
+ */
+export interface LimitCheck {
+  /**
+   * The use before the write.
+   */
+  used: number
+  limit: number
+  plan: PlanKey
+  state: BillingState
 }
 
 /**
@@ -195,6 +212,8 @@ export async function getEffectiveEntitlements(
  * @param tx - The transaction holding the seat lock.
  * @param options - Who reads a refusal.
  * @param options.audience - `member` (the default) gets `details` with the count and cap; `outsider` gets a message with neither.
+ * @returns The use before the write, the cap, and the plan and state they
+ *   were read under, read under the seat lock; undefined when the limit has no cap.
  * @throws {HttpError} 402 `PLAN_LIMIT_REACHED`.
  */
 export async function assertWithinLimit(
@@ -203,10 +222,18 @@ export async function assertWithinLimit(
   adding: number,
   tx: DbTransaction,
   options: { audience?: LimitAudience } = {}
-): Promise<void> {
+): Promise<LimitCheck | undefined> {
   const entitlements = await getEffectiveEntitlements(tenantId, tx)
   const usage = entitlements.limits[key]
-  if (usage === undefined || usage.limit === null || usage.used + adding <= usage.limit) return
+  if (usage === undefined || usage.limit === null) return undefined
+  if (usage.used + adding <= usage.limit) {
+    return {
+      used: usage.used,
+      limit: usage.limit,
+      plan: entitlements.plan.key,
+      state: entitlements.state,
+    }
+  }
   if (options.audience === 'outsider') {
     throw new HttpError(WORKSPACE_FULL_MESSAGE, 402, PLAN_LIMIT_REACHED_CODE)
   }

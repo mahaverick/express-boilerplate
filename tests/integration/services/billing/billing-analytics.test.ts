@@ -9,7 +9,7 @@
  * a change passed in twice written once. Analytics is switched on by mocking
  * `isAnalyticsEnabled`.
  */
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { PII_PROPERTY_KEYS } from '@/constants/analytics.constants'
 import { BILLING_STATES, PLAN_KEYS } from '@/constants/billing.constants'
@@ -18,9 +18,15 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { requireFeature } from '@/middlewares/entitlement.middleware'
 import { BillingRepository } from '@/repositories/billing.repository'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { resolveGroupMarkers } from '@/services/analytics/analytics-group-marker.service'
+import {
+  trackCheckoutConfirmed,
+  trackProviderEvent,
+  trackTrialReminder,
+} from '@/services/billing/billing-analytics.service'
 import { sendPayerLeft, sendTrialEnding } from '@/services/billing/billing-emails.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
@@ -29,9 +35,11 @@ import { cancelPaid, confirmCheckout, startCheckout } from '@/services/billing/c
 import { db, sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
-import { invite } from '@/services/tenant-invitation.service'
+import { hashToken } from '@/services/session.service'
+import { accept, invite } from '@/services/tenant-invitation.service'
 import { createTenant } from '@/services/tenant.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
+import { grantSeats } from '../../../helpers/billing'
 import {
   confirmBody,
   deleteTrackedTenants,
@@ -45,6 +53,7 @@ import {
   setBilling,
   workspace,
 } from '../../../helpers/billing-api'
+import { withMutatedMethod } from '../../../helpers/mutate'
 import { createTrackedUser, deleteTrackedUsers } from '../../../helpers/platform-users'
 
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
@@ -58,6 +67,7 @@ vi.mock('@/services/billing/billing-provider.service', async () => {
 })
 
 const billingRepository = new BillingRepository()
+const invitationRepository = new TenantInvitationRepository()
 const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
 const DAY_MS = 24 * 60 * 60 * 1000
 const extraTenantIds: string[] = []
@@ -189,6 +199,30 @@ async function rowIdsOf(tenantId: string): Promise<string[]> {
 async function markersOf(tenantId: string): Promise<AnalyticsOutboxRow[]> {
   const rows = await outboxOf(tenantId)
   return rows.filter((row) => row.event === '$groupidentify')
+}
+
+/**
+ * The uuid and timestamp of every outbox row of a workspace, by event.
+ * @param tenantId - The workspace.
+ * @returns Each row's event, id and time, oldest first.
+ */
+async function stampsOf(
+  tenantId: string
+): Promise<{ event: string; id: string; occurredAt: string }[]> {
+  return sql<{ event: string; id: string; occurredAt: string }[]>`
+    select event, id, occurred_at::text as "occurredAt"
+    from analytics_outbox
+    where properties->'$groups'->>'tenant' = ${tenantId}
+      or properties->>'$group_key' = ${tenantId}
+    order by event, id`
+}
+
+/**
+ * Empty a workspace's outbox rows, as the drain does once PostHog has them.
+ * @param tenantId - The workspace.
+ */
+async function drainOutboxOf(tenantId: string): Promise<void> {
+  await sql`delete from analytics_outbox where properties->'$groups'->>'tenant' = ${tenantId} or properties->>'$group_key' = ${tenantId}`
 }
 
 /**
@@ -417,6 +451,163 @@ describe('billing analytics from a billing change', () => {
   })
 })
 
+describe('attribution across payers and owners', () => {
+  it('names the new owner, never the earlier payer, when a Free workspace upgrades again by webhook alone', async () => {
+    const { tenant, owner: earlierPayer } = await workspace()
+    const upgrader = await createTrackedUser()
+    await sql`insert into user_memberships (user_id, tenant_id, role) values (${upgrader.id}, ${tenant.id}, 'owner')`
+    await setBilling(tenant.id, {
+      payerUserId: earlierPayer.id,
+      checkoutStartedBy: earlierPayer.id,
+      billingEmail: earlierPayer.email,
+    })
+    const session = await startCheckout({ userId: upgrader.id }, tenant.id, 'month')
+    await fake.fakeAdvance(session.subscriptionId, 'active')
+
+    await syncTenantBilling(tenant.id, 'webhook')
+    await fake.fakeAdvance(session.subscriptionId, 'halted')
+    await syncTenantBilling(tenant.id, 'webhook')
+
+    expect(await readBilling(tenant.id)).toMatchObject({
+      payerUserId: upgrader.id,
+      billingEmail: null,
+    })
+    const written = await outboxOf(tenant.id)
+    const rows = written.filter(
+      (row) => row.event !== '$groupidentify' && !row.event.startsWith('billing_')
+    )
+    expect(rows.map((row) => row.event)).toEqual(
+      expect.arrayContaining(['subscription_activated', 'payment_failed', 'subscription_halted'])
+    )
+    for (const row of rows) expect(row.distinctId, row.event).toBe(upgrader.id)
+  })
+
+  it('names the checkout starter for the first charge of an upgrade made during a trial', async () => {
+    const { tenantId, owner } = await payingWorkspace()
+    const earlierPayer = await createTrackedUser()
+    const trialEnd = new Date(Date.now() + DAY_MS)
+    await setBilling(tenantId, {
+      payerUserId: earlierPayer.id,
+      checkoutStartedBy: owner.id,
+      trialEndsAt: trialEnd,
+      currentPeriodEnd: trialEnd,
+    })
+    const before = await readBilling(tenantId)
+    await sql`update tenant_billing set current_period_end = ${new Date(Date.now() + 31 * DAY_MS).toISOString()}::timestamptz, version = version + 1 where tenant_id = ${tenantId}`
+
+    await emitBillingDiff(before, await readBilling(tenantId), 'webhook')
+
+    expect(await distinctIdOf(tenantId, 'subscription_renewed')).toBe(owner.id)
+  })
+
+  it('never names a soft-deleted payer: the next person is named', async () => {
+    const { tenantId, owner, subscriptionId } = await payingWorkspace()
+    const goneUser = await createTrackedUser()
+    await sql`update users set deleted_at = now() where id = ${goneUser.id}`
+    await setBilling(tenantId, { payerUserId: goneUser.id, checkoutStartedBy: owner.id })
+    await fake.fakeAdvance(subscriptionId, 'halted')
+
+    await syncTenantBilling(tenantId, 'webhook')
+
+    expect(await distinctIdOf(tenantId, 'subscription_halted')).toBe(owner.id)
+  })
+
+  it('sends a staff-made change as the payer, never as staff', async () => {
+    const { tenantId, owner } = await payingWorkspace()
+    const staffMember = await createTrackedUser()
+    const before = await readBilling(tenantId)
+    await sql`update tenant_billing set cancel_at_period_end = true, version = version + 1 where tenant_id = ${tenantId}`
+
+    await emitBillingDiff(before, await readBilling(tenantId), 'staff', {
+      actorUserId: staffMember.id,
+    })
+
+    const cancel = await oneEvent(tenantId, 'subscription_cancel_scheduled')
+    expect(cancel).toMatchObject({
+      distinctId: owner.id,
+      properties: { by: 'staff', access: 'system' },
+    })
+  })
+
+  it("sends an owner's cancel as by owner even when the provider's webhook lands it first", async () => {
+    const { tenantId, owner } = await payingWorkspace()
+    const original = fake.cancelSubscription.bind(fake)
+
+    await withMutatedMethod(
+      fake,
+      'cancelSubscription',
+      async (id: string, isAtCycleEnd: boolean) => {
+        const cancelled = await original(id, isAtCycleEnd)
+        // The provider's webhook is synced before the owner's own write.
+        await fake.fakeAdvance(id, 'cancelled')
+        await syncTenantBilling(tenantId, 'webhook')
+        return cancelled
+      },
+      async () => {
+        await cancelPaid({ userId: owner.id }, tenantId)
+      }
+    )
+
+    const cancel = await oneEvent(tenantId, 'subscription_cancel_scheduled')
+    expect(cancel).toMatchObject({
+      distinctId: owner.id,
+      properties: { by: 'owner', access: 'member' },
+    })
+  })
+})
+
+describe('event times fixed by stable data', () => {
+  it('sends a change again after the drain with the same uuid and timestamp', async () => {
+    const { tenantId, subscriptionId } = await payingWorkspace()
+    const before = await readBilling(tenantId)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await syncTenantBilling(tenantId, 'webhook')
+    const after = await readBilling(tenantId)
+    const first = await stampsOf(tenantId)
+    await drainOutboxOf(tenantId)
+
+    await emitBillingDiff(before, after, 'webhook')
+
+    expect(await stampsOf(tenantId)).toEqual(first)
+  })
+
+  it('sends a reminder, a confirm and a provider event again later with the same uuid and timestamp', async () => {
+    const { tenantId, owner, subscriptionId } = await payingWorkspace()
+    const row = await readBilling(tenantId)
+    const trialRow = {
+      ...row,
+      state: 'trialing' as const,
+      trialEndsAt: new Date(Date.now() + 2 * DAY_MS),
+    }
+    const sub = await fake.fetchSubscription(subscriptionId)
+    /**
+     * Send each event once, as at `now`.
+     * @param now - The time the sends run at.
+     */
+    const sendAll = async (now: Date): Promise<void> => {
+      await trackTrialReminder(trialRow, 'trial_ending', now)
+      await trackCheckoutConfirmed(tenantId, owner.id, sub)
+      await trackProviderEvent(row, 'dispute_opened', 'disp_FAKEstable')
+      await trackProviderEvent(row, 'duplicate_subscription_refunded', 'sub_FAKEdup')
+    }
+    await sendAll(new Date())
+    const first = await stampsOf(tenantId)
+    expect(first.map((stamp) => stamp.event)).toEqual(
+      expect.arrayContaining([
+        'trial_reminder_sent',
+        'checkout_confirmed',
+        'dispute_opened',
+        'duplicate_subscription_refunded',
+      ])
+    )
+    await drainOutboxOf(tenantId)
+
+    await sendAll(new Date(Date.now() + 60 * 60 * 1000))
+
+    expect(await stampsOf(tenantId)).toEqual(first)
+  })
+})
+
 describe('billing analytics at their own call sites', () => {
   it('sends trial_started as the creator of a workspace that starts a trial', async () => {
     const creator = await createTrackedUser()
@@ -547,19 +738,62 @@ describe('plan refusals', () => {
     })
   })
 
-  it('reports crossing the soft line of the members limit once', async () => {
+  it('reports no approaching limit on Free at 3 of 3, where the app shows none', async () => {
     const { tenant, owner } = await workspace()
     const actor = { userId: owner.id }
 
     await invite(actor, tenant.id, `a-${randomUUID()}@example.test`, 'editor')
-    expect(await eventsOf(tenant.id, 'plan_limit_approaching')).toHaveLength(0)
     await invite(actor, tenant.id, `b-${randomUUID()}@example.test`, 'editor')
+
+    expect(await eventsOf(tenant.id, 'plan_limit_approaching')).toHaveLength(0)
+  })
+
+  it('reports the crossing into the approaching band of a 10-seat limit at 8, once', async () => {
+    const { tenant, owner } = await workspace()
+    await grantSeats(tenant.id, 10)
+    const actor = { userId: owner.id }
+
+    // The owner holds one seat; eight invitations take the workspace to 9 of 10.
+    for (let index = 0; index < 8; index += 1) {
+      await invite(actor, tenant.id, `seat-${String(index)}-${randomUUID()}@example.test`, 'editor')
+    }
 
     const approaching = await oneEvent(tenant.id, 'plan_limit_approaching')
     expect(approaching).toMatchObject({
       distinctId: owner.id,
-      properties: { key: 'members', used: 3, limit: 3 },
+      properties: { key: 'members', used: 8, limit: 10, access: 'member' },
     })
+  })
+
+  it('reports a join refused at the door as a system event with no use or cap', async () => {
+    const { tenant, owner } = await workspace()
+    const extra = [await createTrackedUser(), await createTrackedUser(), await createTrackedUser()]
+    for (const member of extra) {
+      await sql`insert into user_memberships (user_id, tenant_id, role) values (${member.id}, ${tenant.id}, 'viewer')`
+    }
+    const invitee = await createTrackedUser()
+    const rawToken = randomBytes(32).toString('base64url')
+    await db.transaction((tx) =>
+      invitationRepository.createPending(
+        {
+          tenantId: tenant.id,
+          email: invitee.email,
+          role: 'viewer',
+          tokenHash: hashToken(rawToken),
+          invitedBy: owner.id,
+          expiresAt: new Date(Date.now() + DAY_MS),
+        },
+        tx
+      )
+    )
+
+    await expect(accept(rawToken, invitee.id)).rejects.toMatchObject({ statusCode: 402 })
+
+    const reached = await oneEvent(tenant.id, 'plan_limit_reached')
+    expect(reached.distinctId).toBe('system')
+    expect(reached.properties).toMatchObject({ key: 'members', access: 'system' })
+    expect(reached.properties).not.toHaveProperty('used')
+    expect(reached.properties).not.toHaveProperty('limit')
   })
 
   it('reports a feature refusal once an hour per workspace and key, and none for staff', async () => {
