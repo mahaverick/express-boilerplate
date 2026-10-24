@@ -235,3 +235,28 @@ export const UPGRADE_REQUESTS_OWNER_ONLY_MESSAGE =
  */
 export const ALREADY_PAID_MESSAGE =
   'This workspace is already on Paid. Refresh the page to see its features.'
+
+/**
+ * Error code: a staff trial extension on a workspace that is paying or past due.
+ */
+export const TRIAL_NOT_EXTENDABLE_CODE = 'TRIAL_NOT_EXTENDABLE'
+
+/**
+ * The most days a trial may be set to, or extended by at once.
+ */
+export const MAX_TRIAL_DAYS = 90
+
+/**
+ * How many state changes and provider events the staff billing view lists, newest first.
+ */
+export const STAFF_BILLING_LIST_LIMIT = 20
+
+/**
+ * When a staff cancel ends a subscription: at its cycle end, or now.
+ */
+export const STAFF_CANCEL_WHEN = ['cycle_end', 'now'] as const
+
+/**
+ * One choice of when a staff cancel ends a subscription.
+ */
+export type StaffCancelWhen = (typeof STAFF_CANCEL_WHEN)[number]

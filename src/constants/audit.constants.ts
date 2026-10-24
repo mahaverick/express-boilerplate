@@ -3,7 +3,7 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
-import { BILLING_INTERVALS } from '@/constants/billing.constants'
+import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
@@ -267,6 +267,37 @@ export const AUDIT_ACTIONS = {
   'billing.grant_expired': {
     target: 'billing',
     metadata: z.strictObject({ grantId: id, key: z.string().min(1).max(64) }),
+  },
+  // A staff member read a tenant's billing in Apex; platform-billing.service.ts throttles it.
+  'billing.viewed': { target: 'billing', metadata: z.strictObject({}) },
+  // Staff synced a tenant's billing with the payment provider.
+  'billing.resynced': { target: 'billing', metadata: z.strictObject({ reason }) },
+  // Staff extended a tenant's trial, or put a Free tenant back on one; `trialEndsAt` is the new end.
+  'billing.trial_extended': {
+    target: 'billing',
+    metadata: z.strictObject({
+      days: z.number().int().min(1).max(MAX_TRIAL_DAYS),
+      reason,
+      trialEndsAt: z.iso.datetime(),
+    }),
+  },
+  'billing.grant_added': {
+    target: 'billing',
+    metadata: z.strictObject({
+      key: z.string().min(1).max(64),
+      value: z.union([z.boolean(), z.number().int().min(1), z.null()]),
+      expiresAt: z.iso.datetime().nullable(),
+      reason,
+    }),
+  },
+  'billing.grant_revoked': {
+    target: 'billing',
+    metadata: z.strictObject({ key: z.string().min(1).max(64), reason }),
+  },
+  // Staff cancelled a tenant's subscription: at its cycle end, or now.
+  'billing.cancelled_by_staff': {
+    target: 'billing',
+    metadata: z.strictObject({ when: z.enum(STAFF_CANCEL_WHEN), reason }),
   },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {

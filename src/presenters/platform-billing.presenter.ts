@@ -1,0 +1,130 @@
+/**
+ * @file A tenant's billing as the staff routes answer it: the billing view
+ * a member reads, without the owner-only fields, plus the provider's ids,
+ * the effective entitlements with where each value came from, the grants,
+ * and the newest state changes and provider events. A provider event shows
+ * its type, times and error only, never its payload. Dates go out as
+ * `Date`s, which the JSON response writes as ISO strings.
+ */
+import type {
+  BillingHistorySource,
+  BillingProvider,
+  BillingProviderMode,
+  BillingState,
+} from '@/constants/billing.constants'
+import type { EntitlementValue } from '@/constants/entitlements.constants'
+import type {
+  BillingEventRecord,
+  BillingStateHistoryRecord,
+  EntitlementGrant,
+} from '@/database/models/billing.model'
+import type { TenantBillingView } from '@/presenters/billing.presenter'
+import type { SourcedEntitlements } from '@/types/billing'
+
+/**
+ * Where a grant stands: in force, past its expiry, or revoked by staff.
+ */
+type GrantStatus = 'active' | 'expired' | 'revoked'
+
+/**
+ * A staff grant as Apex shows it.
+ */
+export interface GrantView {
+  id: string
+  key: string
+  value: EntitlementValue
+  reason: string
+  /**
+   * The staff member who granted it, or null when no account is on record
+   * (purged, or the grant was written by a script).
+   */
+  grantedBy: { userId: string; name: string } | null
+  createdAt: Date
+  expiresAt: Date | null
+  revokedAt: Date | null
+  status: GrantStatus
+}
+
+/**
+ * A tenant's billing as staff read it.
+ */
+export interface StaffTenantBillingView extends TenantBillingView {
+  provider: BillingProvider | null
+  providerMode: BillingProviderMode | null
+  providerSubscriptionId: string | null
+  pendingSubscriptionId: string | null
+  nextSubscriptionId: string | null
+  syncedAt: Date | null
+  disputeOpen: boolean
+  entitlements: Omit<SourcedEntitlements, 'sources'>
+  sources: SourcedEntitlements['sources']
+  grants: GrantView[]
+  history: {
+    from: BillingState | null
+    to: BillingState
+    cause: string
+    source: BillingHistorySource
+    at: Date
+  }[]
+  events: { type: string; receivedAt: Date; processedAt: Date | null; error: string | null }[]
+}
+
+/**
+ * Project a grant for staff.
+ * @param grant - The grant row.
+ * @param grantedBy - The staff member who granted it, or null.
+ * @param now - The time its expiry is judged at.
+ * @returns The grant with its status.
+ */
+export function toGrantView(
+  grant: EntitlementGrant,
+  grantedBy: GrantView['grantedBy'],
+  now: Date
+): GrantView {
+  let status: GrantStatus = 'active'
+  if (grant.revokedAt !== null) status = 'revoked'
+  else if (grant.expiresAt !== null && grant.expiresAt <= now) status = 'expired'
+  return {
+    id: grant.id,
+    key: grant.key,
+    value: grant.value ?? null,
+    reason: grant.reason,
+    grantedBy,
+    createdAt: grant.createdAt,
+    expiresAt: grant.expiresAt,
+    revokedAt: grant.revokedAt,
+    status,
+  }
+}
+
+/**
+ * Project a state change for staff.
+ * @param entry - The history row.
+ * @returns Its states, cause, source and time.
+ */
+export function toHistoryView(
+  entry: BillingStateHistoryRecord
+): StaffTenantBillingView['history'][number] {
+  return {
+    from: entry.fromState,
+    to: entry.toState,
+    cause: entry.cause,
+    source: entry.source,
+    at: entry.at,
+  }
+}
+
+/**
+ * Project a provider event for staff: its type, times and error, never its
+ * ids or payload.
+ * @param event - The event row.
+ * @returns The event's type and times.
+ */
+export function toEventView(event: BillingEventRecord): StaffTenantBillingView['events'][number] {
+  return {
+    type: event.type,
+    receivedAt: event.receivedAt,
+    processedAt: event.processedAt,
+    error: event.error,
+  }
+}

@@ -33,6 +33,7 @@ import {
   SUBSCRIPTION_EXISTS_CODE,
   SWITCH_BEFORE_FIRST_CHARGE_CODE,
   type BillingInterval,
+  type StaffCancelWhen,
 } from '@/constants/billing.constants'
 import type {
   NewTenantBilling,
@@ -283,31 +284,35 @@ function hasCurrentSubscription(row: TenantBillingRecord): boolean {
 }
 
 /**
+ * What an owner reads when their row belongs to another provider or mode.
+ */
+const OTHER_PROVIDER_OWNER_MESSAGE =
+  'Your subscription is with another payment account. Contact support to change it.'
+
+/**
  * Refuse a write on a live row of another provider or mode: the running
  * provider cannot read or change its subscription, so staff must.
  * @param row - The row.
  * @param provider - The running provider.
  * @param code - The refusal's code.
+ * @param message - What the caller reads.
  * @throws {HttpError} 409 with `code`.
  */
 function assertOwnProviderWhenLive(
   row: TenantBillingRecord,
   provider: BillingProviderClient,
-  code: string
+  code: string,
+  message = OTHER_PROVIDER_OWNER_MESSAGE
 ): void {
   if (!isOtherProvider(row, provider)) return
-  logger.warn('An owner billing write met a row of another provider or mode', {
+  logger.warn('A billing write met a row of another provider or mode', {
     tenantId: row.tenantId,
     rowProvider: row.provider,
     rowMode: row.providerMode,
     provider: provider.kind,
     mode: provider.mode,
   })
-  throw new HttpError(
-    'Your subscription is with another payment account. Contact support to change it.',
-    409,
-    code
-  )
+  throw new HttpError(message, 409, code)
 }
 
 /**
@@ -935,7 +940,10 @@ function isCardChangeOpen(row: TenantBillingRecord, actor: Actor, now: Date): bo
  * @param source - What asked for the sync, for the history.
  * @throws {HttpError} 503 when the row kept moving or the provider is down.
  */
-async function syncOrRetry(tenantId: string, source: 'confirm' | 'owner'): Promise<void> {
+export async function syncOrRetry(
+  tenantId: string,
+  source: 'confirm' | 'owner' | 'staff'
+): Promise<void> {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       await syncTenantBilling(tenantId, source)
@@ -1048,56 +1056,98 @@ async function cancelOrEnded(
 }
 
 /**
- * Cancel Paid, as an owner by membership. A subscription past its first
- * charge is cancelled at its cycle end: the workspace keeps Paid until then
- * and reads cancelling, which this records itself, since the provider does
- * not show a scheduled cancel. A deferred start (upgraded during a trial, not
- * charged yet) cannot be cancelled at its cycle end, so it is cancelled now
- * and the workspace goes back to its trial, or to Free when the trial is
- * over. A scheduled switch or resubscribe is cancelled too.
- * @param actor - The signed-in owner.
- * @param tenantId - The workspace.
- * @returns The workspace's billing after the cancel.
- * @throws {HttpError} 404 when payments are off; 403 for anyone but a member owner; 409 `NO_SUBSCRIPTION` with nothing to cancel; 503 when the provider is down.
+ * What a cancel needs from its caller: the owner's or staff's own lock,
+ * audit entry and refusals.
  */
-export async function cancelPaid(actor: Actor, tenantId: string): Promise<TenantBillingView> {
-  const provider = requireProvider()
-  await assertCustomerTenant(tenantId)
-  const row = await withTransaction((tx) => lockOwnerAndBilling(actor, tenantId, tx))
-  assertOwnProviderWhenLive(row, provider, NO_SUBSCRIPTION_CODE)
-  const currentId =
-    hasCurrentSubscription(row) && !row.cancelAtPeriodEnd ? row.providerSubscriptionId : null
-  const nextId = row.nextSubscriptionId
-  if (currentId === null && nextId === null) {
-    throw noSubscription(
-      row.cancelAtPeriodEnd && row.currentPeriodEnd !== null
-        ? `Your subscription already ends on ${await formatBillingDate(tenantId, row.currentPeriodEnd)}. To keep Paid after that, upgrade again under Billing.`
-        : 'Your workspace has no subscription to cancel. There is nothing to do.'
-    )
-  }
+export interface CancelRequest {
+  tenantId: string
+  /**
+   * Who cancels, for the history and the events.
+   */
+  source: 'owner' | 'staff'
+  /**
+   * When the current subscription ends. A deferred start that has not
+   * charged yet cannot be cancelled at its cycle end, so it ends now either way.
+   */
+  when: StaffCancelWhen
+  /**
+   * The owner who cancels: their cancel is marked before the provider call,
+   * and the change is sent as theirs. Absent for staff.
+   */
+  ownerUserId?: string
+  /**
+   * Take the caller's locks, then the billing row, in the documented order.
+   */
+  lock: (tx: DbTransaction) => Promise<TenantBillingRecord>
+  /**
+   * Record the cancel's audit entry in the write's transaction.
+   */
+  audit: (tx: DbTransaction) => Promise<void>
+  /**
+   * The refusal when there is nothing to cancel.
+   */
+  nothingToCancel: (row: TenantBillingRecord) => Promise<HttpError>
+  /**
+   * What the caller reads when the row belongs to another provider or mode.
+   */
+  otherProviderMessage: string
+}
 
-  let currentCancel: 'cycle_end' | 'now' | undefined
+/**
+ * Cancel a workspace's subscriptions: the current one at its cycle end or
+ * now, and a scheduled switch or resubscribe. A subscription past its first
+ * charge cancelled at its cycle end keeps Paid until then and reads
+ * cancelling, which this records itself, since the provider does not show a
+ * scheduled cancel. A deferred start (upgraded during a trial, not charged
+ * yet) cannot be cancelled at its cycle end, so it is cancelled now and the
+ * workspace goes back to its trial, or to Free when the trial is over. A
+ * charged subscription cancelled now moves the workspace to Free at once.
+ * Provider calls run with no lock held; a provider failure on the current
+ * subscription writes nothing.
+ * @param provider - The running provider.
+ * @param request - The workspace, who cancels, when, and the caller's lock, audit and refusals.
+ * @throws {HttpError} 409 `NO_SUBSCRIPTION` with nothing to cancel; 503 or 502 when the provider fails.
+ */
+export async function cancelSubscriptions(
+  provider: BillingProviderClient,
+  request: CancelRequest
+): Promise<void> {
+  const { tenantId, source, ownerUserId } = request
+  const row = await withTransaction((tx) => request.lock(tx))
+  assertOwnProviderWhenLive(row, provider, NO_SUBSCRIPTION_CODE, request.otherProviderMessage)
+  const currentId =
+    hasCurrentSubscription(row) && (!row.cancelAtPeriodEnd || request.when === 'now')
+      ? row.providerSubscriptionId
+      : null
+  const nextId = row.nextSubscriptionId
+  if (currentId === null && nextId === null) throw await request.nothingToCancel(row)
+
+  let currentCancel: StaffCancelWhen | undefined
+  let isDeferredStart = false
   if (currentId !== null) {
     const current = await callProvider(() => provider.fetchSubscription(currentId))
     if (ENDED_STATUSES.has(current.status) && nextId === null) {
       // It ended at the provider already: the sync records that, and there is nothing to cancel.
-      await syncOrRetry(tenantId, 'owner')
-      return getTenantBilling(actor, tenantId)
+      await syncOrRetry(tenantId, source)
+      return
     }
     if (!ENDED_STATUSES.has(current.status)) {
       // Before the provider call: its webhook may land before this write and must still read as the owner's cancel.
-      await markOwnerCancel(tenantId, currentId, actor.userId)
-      currentCancel = 'cycle_end'
+      if (ownerUserId !== undefined) await markOwnerCancel(tenantId, currentId, ownerUserId)
+      currentCancel = request.when
       try {
         if (current.status === 'authenticated') {
-          // Read again just before cancelling now: a first charge that landed meanwhile makes it a cycle-end cancel.
+          // Read again just before cancelling now: a first charge that landed meanwhile makes it a charged subscription.
           const latest = await callProvider(() => provider.fetchSubscription(currentId))
-          if (latest.status === 'authenticated') currentCancel = 'now'
+          if (latest.status === 'authenticated') {
+            currentCancel = 'now'
+            isDeferredStart = true
+          }
         }
         await cancelOrEnded(provider, currentId, currentCancel === 'cycle_end')
       } catch (error) {
         // The owner's cancel did not happen: a later cancel of this subscription is not theirs.
-        await clearOwnerCancel(tenantId, currentId)
+        if (ownerUserId !== undefined) await clearOwnerCancel(tenantId, currentId)
         throw error
       }
     }
@@ -1114,12 +1164,16 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
 
   const now = new Date()
   const written = await withTransaction(async (tx) => {
-    const locked = await lockOwnerAndBilling(actor, tenantId, tx)
+    const locked = await request.lock(tx)
     const patch: Partial<NewTenantBilling> = {}
     const isSameCurrent = currentId !== null && locked.providerSubscriptionId === currentId
     if (isSameCurrent && currentCancel === 'cycle_end') patch.cancelAtPeriodEnd = true
-    if (isSameCurrent && currentCancel === 'now' && locked.state === 'active') {
-      const isTrialLeft = locked.trialEndsAt !== null && locked.trialEndsAt > now
+    if (
+      isSameCurrent &&
+      currentCancel === 'now' &&
+      (locked.state === 'active' || locked.state === 'past_due')
+    ) {
+      const isTrialLeft = isDeferredStart && locked.trialEndsAt !== null && locked.trialEndsAt > now
       patch.state = isTrialLeft ? 'trialing' : 'free'
       patch.priceId = null
       patch.currentPeriodEnd = null
@@ -1128,6 +1182,9 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
         const free = await planRepository.findPlanByKey('free', tx)
         if (free === undefined) throw new HttpError('The free plan is missing', 500)
         patch.planId = free.id
+        patch.pastDueSince = null
+        patch.haltedAt = null
+        patch.pausedAt = null
       }
     }
     if (isNextCancelled && locked.nextSubscriptionId === nextId) {
@@ -1142,31 +1199,61 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
     if (after === undefined) throw new HttpError('The billing record changed under its lock', 500)
     if (patch.state !== undefined) {
       await billingRepository.appendHistory(
-        {
-          tenantId,
-          fromState: locked.state,
-          toState: patch.state,
-          cause: 'cancelled',
-          source: 'owner',
-        },
+        { tenantId, fromState: locked.state, toState: patch.state, cause: 'cancelled', source },
         tx
       )
     }
-    await record(
-      {
-        action: 'billing.cancel_scheduled',
-        actor,
-        access: 'member',
-        tenantId,
-        targetId: tenantId,
-        metadata: {},
-      },
-      tx
-    )
+    await request.audit(tx)
     return { before: locked, after }
   })
-  await emitBillingDiff(written.before, written.after, 'owner', { actorUserId: actor.userId })
+  await emitBillingDiff(
+    written.before,
+    written.after,
+    source,
+    ownerUserId === undefined ? {} : { actorUserId: ownerUserId }
+  )
   if (nextFailure !== undefined) throw nextFailure
+}
+
+/**
+ * Cancel Paid, as an owner by membership: at the cycle end, or now for a
+ * deferred start that has not charged yet (`cancelSubscriptions`). A
+ * scheduled switch or resubscribe is cancelled too.
+ * @param actor - The signed-in owner.
+ * @param tenantId - The workspace.
+ * @returns The workspace's billing after the cancel.
+ * @throws {HttpError} 404 when payments are off; 403 for anyone but a member owner; 409 `NO_SUBSCRIPTION` with nothing to cancel; 503 when the provider is down.
+ */
+export async function cancelPaid(actor: Actor, tenantId: string): Promise<TenantBillingView> {
+  const provider = requireProvider()
+  await assertCustomerTenant(tenantId)
+  await cancelSubscriptions(provider, {
+    tenantId,
+    source: 'owner',
+    when: 'cycle_end',
+    ownerUserId: actor.userId,
+    lock: (tx) => lockOwnerAndBilling(actor, tenantId, tx),
+    audit: async (tx) => {
+      await record(
+        {
+          action: 'billing.cancel_scheduled',
+          actor,
+          access: 'member',
+          tenantId,
+          targetId: tenantId,
+          metadata: {},
+        },
+        tx
+      )
+    },
+    nothingToCancel: async (row) =>
+      noSubscription(
+        row.cancelAtPeriodEnd && row.currentPeriodEnd !== null
+          ? `Your subscription already ends on ${await formatBillingDate(tenantId, row.currentPeriodEnd)}. To keep Paid after that, upgrade again under Billing.`
+          : 'Your workspace has no subscription to cancel. There is nothing to do.'
+      ),
+    otherProviderMessage: OTHER_PROVIDER_OWNER_MESSAGE,
+  })
   return getTenantBilling(actor, tenantId)
 }
 
@@ -1211,13 +1298,42 @@ async function payerOf(
  * @throws {HttpError} The unknown-route 404 for the platform workspace.
  */
 export async function getTenantBilling(actor: Actor, tenantId: string): Promise<TenantBillingView> {
+  return billingView(tenantId, {
+    isOwner: await isMemberOwner(actor, tenantId),
+    dismissedBanners: await billingRepository.listDismissals(actor.userId, tenantId),
+  })
+}
+
+/**
+ * A workspace's billing as staff read it in Apex: the view every member
+ * reads, with the owner-only fields empty and no banner dismissals, even
+ * for a staff member who is also an owner of the workspace.
+ * @param tenantId - The customer workspace.
+ * @returns The billing view.
+ */
+export async function getTenantBillingForStaff(tenantId: string): Promise<TenantBillingView> {
+  return billingView(tenantId, { isOwner: false, dismissedBanners: [] })
+}
+
+/**
+ * A workspace's billing view.
+ * @param tenantId - The workspace.
+ * @param viewer - What the reader may see: the billing email when an owner, and their own banner dismissals.
+ * @param viewer.isOwner - Whether the reader is an owner by membership.
+ * @param viewer.dismissedBanners - The reader's dismissed banners.
+ * @returns The view.
+ * @throws {HttpError} The unknown-route 404 for the platform workspace.
+ */
+async function billingView(
+  tenantId: string,
+  viewer: { isOwner: boolean; dismissedBanners: string[] }
+): Promise<TenantBillingView> {
   const row = await billingRepository.findByTenantId(tenantId)
   if (row === undefined) {
     await assertCustomerTenant(tenantId)
     logger.error('A customer workspace has no billing row; serving it Free', { tenantId })
   }
   const entitlements = await getEffectiveEntitlements(tenantId)
-  const isOwner = await isMemberOwner(actor, tenantId)
   const price = await priceById(row?.priceId ?? null)
   let nextSwitch: TenantBillingView['nextSwitch'] = null
   if (
@@ -1242,9 +1358,9 @@ export async function getTenantBilling(actor: Actor, tenantId: string): Promise<
     pastDue: entitlements.pastDue,
     nextSwitch,
     payer: await payerOf(tenantId, row?.payerUserId ?? null),
-    billingEmail: isOwner ? (row?.billingEmail ?? null) : null,
+    billingEmail: viewer.isOwner ? (row?.billingEmail ?? null) : null,
     paymentsEnabled: getBillingProvider() !== null,
-    dismissedBanners: await billingRepository.listDismissals(actor.userId, tenantId),
+    dismissedBanners: viewer.dismissedBanners,
   }
 }
 

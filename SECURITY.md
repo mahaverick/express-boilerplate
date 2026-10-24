@@ -740,6 +740,15 @@ their role there is their platform role (`src/services/platform.service.ts`).
   last-owner guard (`409`) apply to it. A grant that waits finds the account
   gone and grants nothing (`401`, or `404 member_not_found` for a role
   change).
+- **Billing.** Staff read a tenant's billing as a platform viewer
+  (`/platform/tenants/:id/billing`, audited as `billing.viewed` once per
+  staff member and tenant every ten minutes), never with the billing email
+  or another owner-only field. A manager resyncs it, extends its trial and
+  adds or revokes grants; an admin cancels its subscription. Staff never take
+  payment for a tenant or move it to Paid without payment: a grant covers a
+  comp, and it only ever adds access. The platform tenant has no billing and
+  answers `tenant_billing_not_found`. A grant id from another tenant answers
+  `grant_not_found`.
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
@@ -761,8 +770,10 @@ Step-up guards:
 
 - on `/platform`: deactivating, deleting and purging a user; suspending,
   archiving and purging a tenant; re-inviting a tenant's owner; changing the
-  maintenance mode; and an email resend of an invitation, which the service
-  checks because the route cannot know the tenant;
+  maintenance mode; every write to a tenant's billing (resync, trial
+  extension, a grant and its revocation, the staff cancel); and an email
+  resend of an invitation, which the service checks because the route cannot
+  know the tenant;
 - on the platform tenant's member routes: a role change, a removal, leaving, an
   invitation and a resend (`requireRecentAuthOnPlatformTenant`), since each
   changes who holds staff power;
@@ -774,8 +785,9 @@ Staff actions that change an account's, a tenant's or a mail's state record why:
 deactivating, reactivating, signing out, deleting and purging a user;
 suspending, reactivating, archiving and purging a tenant; re-inviting its owner;
 resending an email; lifting a suppression; completing an onboarding step or
-sending a reminder; and the member and invitation writes made through platform
-access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
+sending a reminder; resyncing a tenant's billing, extending its trial, adding
+or revoking a grant and cancelling its subscription; and the member and
+invitation writes made through platform access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
 `src/validators/platform.validators.ts`) goes into the audit entry's metadata.
 Staff acting in a customer tenant through their platform role send it in the
 body or get `400 REASON_REQUIRED`, and the services check it again under the

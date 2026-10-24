@@ -317,6 +317,32 @@ export class PlanRepository {
   }
 
   /**
+   * One grant of a workspace, locked `FOR NO KEY UPDATE`. A grant of another
+   * workspace is never found.
+   * @param tenantId - The workspace the grant must belong to.
+   * @param grantId - The grant's id.
+   * @param tx - The open transaction.
+   * @returns The row, or undefined when the workspace has no such grant.
+   */
+  async lockGrant(
+    tenantId: string,
+    grantId: string,
+    tx: DbTransaction
+  ): Promise<EntitlementGrant | undefined> {
+    const [row] = await tx
+      .select()
+      .from(tenantEntitlementGrantModel)
+      .where(
+        and(
+          eq(tenantEntitlementGrantModel.id, grantId),
+          eq(tenantEntitlementGrantModel.tenantId, tenantId)
+        )
+      )
+      .for('no key update')
+    return row
+  }
+
+  /**
    * Revoke a grant that is not yet revoked.
    * @param tenantId - The workspace the grant belongs to.
    * @param grantId - The grant's id.

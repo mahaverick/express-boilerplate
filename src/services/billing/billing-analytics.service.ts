@@ -462,6 +462,38 @@ export async function trackTrialReminder(
 }
 
 /**
+ * Send `trial_extended` for a trial staff extended, with the days added.
+ * Staff are never named: the event is attributed to the trial's owner,
+ * else the payer or the owner who started a checkout, else it is a system
+ * event. Once per extension, timed at the write that made it.
+ * @param row - The row the extension wrote.
+ * @param days - The days added.
+ */
+export async function trackTrialExtended(row: TenantBillingRecord, days: number): Promise<void> {
+  if (!isAnalyticsEnabled()) return
+  const { tenantId } = row
+  try {
+    await emit(
+      {
+        tenantId,
+        userId: null,
+        attributedUserId: await firstLiveUser([
+          (await billingRepository.findTrialUserId(tenantId)) ?? null,
+          row.payerUserId,
+          row.checkoutStartedBy,
+        ]),
+        ...traitsOf(row),
+        dedupeKey: `${tenantId}:trial_extended:${String(row.version)}`,
+        at: row.updatedAt,
+      },
+      { type: 'trial_extended', days }
+    )
+  } catch (error) {
+    logFailure(error, tenantId, 'trial_extended')
+  }
+}
+
+/**
  * Send `checkout_started` as the owner who opened an upgrade checkout, timed
  * at the write that stored it.
  * @param row - The row the checkout was stored on.

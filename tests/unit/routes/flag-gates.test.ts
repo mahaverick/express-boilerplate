@@ -56,6 +56,7 @@ const KNOWN_MOUNTS = [
   '/email-suppressions',
   '/onboarding',
   '/tenants/:id/onboarding',
+  '/tenants/:id/billing',
 ] as const
 
 /**

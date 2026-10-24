@@ -19,7 +19,8 @@
  * - `subscription_halted`: `haltedAt` is set.
  * - `subscription_cancel_scheduled`: `cancelAtPeriodEnd` turns on and no
  *   switch or resubscribe continues Paid, or an owner cancels a subscription
- *   before its first charge (the row leaves Paid at once). `by` comes from
+ *   before its first charge, or staff cancel one now (the row leaves Paid at
+ *   once). `by` comes from
  *   the source, from an owner's cancel on record (`isOwnerCancel`), and from
  *   the lifecycle for a suspended or archived workspace.
  * - `subscription_interval_change_scheduled`: the next subscription is first
@@ -161,8 +162,8 @@ export function billingActorOf(
 
 /**
  * Whether a change scheduled a cancel: the period-end cancel turned on
- * without a switch continuing Paid, or an owner ended a subscription before
- * its first charge.
+ * without a switch continuing Paid, or an owner or staff ended a
+ * subscription at once (before its first charge, or staff cancelling now).
  * @param before - The row before.
  * @param after - The row after.
  * @param source - What made the change.
@@ -175,7 +176,7 @@ function isCancelScheduled(
 ): boolean {
   if (!before.cancelAtPeriodEnd && after.cancelAtPeriodEnd) return !isContinued(after)
   return (
-    source === 'owner' &&
+    (source === 'owner' || source === 'staff') &&
     isPaying(before.state) &&
     !isPaying(after.state) &&
     !before.cancelAtPeriodEnd
