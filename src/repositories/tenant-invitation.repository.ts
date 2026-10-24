@@ -3,7 +3,7 @@
  * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
  * soft-deleted tenant.
  */
-import { and, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
+import { and, count, eq, gt, gte, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
@@ -67,6 +67,15 @@ function cooldownOverCondition(cooldownMs: number) {
  */
 function redeemableCondition() {
   return and(pendingCondition(), gt(invitation.expiresAt, sql`now()`))
+}
+
+/**
+ * The invitation holds a seat on the members limit: it is pending and has
+ * not expired, exactly while it could still be redeemed.
+ * @returns The SQL condition.
+ */
+function seatCondition() {
+  return redeemableCondition()
 }
 
 /**
@@ -376,6 +385,50 @@ export class TenantInvitationRepository {
       )
       .limit(1)
     return row
+  }
+
+  /**
+   * How many seats a tenant's members limit has in use: the distinct
+   * addresses, compared case-insensitively, of its members whose account is
+   * not soft-deleted and of its invitations that hold a seat
+   * (`seatCondition`). An address that is both counts once.
+   * @param tenantId - The tenant.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The number of seats in use.
+   */
+  async countSeats(tenantId: string, executor: DbExecutor = db): Promise<number> {
+    const members = executor
+      .select({ email: sql<string>`lower(${userModel.email})`.as('email') })
+      .from(userMembershipModel)
+      .innerJoin(userModel, eq(userModel.id, userMembershipModel.userId))
+      .where(and(eq(userMembershipModel.tenantId, tenantId), isNull(userModel.deletedAt)))
+    const invited = executor
+      .select({ email: sql<string>`lower(${invitation.email})`.as('email') })
+      .from(invitation)
+      .where(and(eq(invitation.tenantId, tenantId), seatCondition()))
+    // UNION, not UNION ALL: it drops the duplicates, so each address is one seat.
+    const seats = members.union(invited).as('seats')
+    const [row] = await executor.select({ total: count() }).from(seats)
+    return row?.total ?? 0
+  }
+
+  /**
+   * How many invitations a tenant sent since a moment, whatever became of them.
+   * @param tenantId - The tenant.
+   * @param since - The start of the window.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The count.
+   */
+  async countCreatedSince(
+    tenantId: string,
+    since: Date,
+    executor: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ total: count() })
+      .from(invitation)
+      .where(and(eq(invitation.tenantId, tenantId), gte(invitation.createdAt, since)))
+    return row?.total ?? 0
   }
 
   /**

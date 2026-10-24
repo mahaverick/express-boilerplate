@@ -92,3 +92,13 @@ export type BillingAlertKind = (typeof BILLING_ALERT_KINDS)[number]
  * provider event never cuts access early.
  */
 export const CANCEL_BUFFER_DAYS = 3
+
+/**
+ * Error code: a write would take a plan limit past its cap.
+ */
+export const PLAN_LIMIT_REACHED_CODE = 'PLAN_LIMIT_REACHED'
+
+/**
+ * Error code: the workspace's plan does not include the feature a route needs.
+ */
+export const PLAN_FEATURE_REQUIRED_CODE = 'PLAN_FEATURE_REQUIRED'

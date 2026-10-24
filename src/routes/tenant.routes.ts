@@ -7,7 +7,8 @@
  * limiter runs before `resolveTenant()`, so an over-budget caller gets its 429
  * before that middleware's database reads. `GET /:slug/beta` is the reference
  * flag-gated route: `requireFlag` runs after `resolveTenant()`, because
- * `example_beta_page` is tenant-scoped.
+ * `example_beta_page` is tenant-scoped. The billing routes come from
+ * `addBillingRoutes` (billing.routes.ts).
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -26,6 +27,7 @@ import {
   requireRole,
   resolveTenant,
 } from '@/middlewares/tenant.middleware'
+import { addBillingRoutes } from '@/routes/billing.routes'
 
 /**
  * Build the tenant routes. `requireRole` checks the effective role, so staff
@@ -197,6 +199,7 @@ export function createTenantRouter(): Router {
     requireFlag('example_beta_page'),
     flagsController.getExampleBeta
   )
+  addBillingRoutes(router)
 
   return router
 }

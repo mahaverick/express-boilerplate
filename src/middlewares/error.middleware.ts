@@ -250,7 +250,14 @@ export function errorHandler(
       })
     }
     const answer = clientAnswerOf(error, httpError, statusCode)
-    errorResponse(response, answer.message, statusCode, answer.code, httpError?.errors)
+    errorResponse(
+      response,
+      answer.message,
+      statusCode,
+      answer.code,
+      httpError?.errors,
+      httpError?.details === undefined ? {} : { details: httpError.details }
+    )
     return
   }
 

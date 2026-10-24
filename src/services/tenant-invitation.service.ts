@@ -45,7 +45,9 @@ import {
 } from '@/services/account-claim.service'
 import { record } from '@/services/audit.service'
 import { platformRoleForLogin } from '@/services/auth.service'
-import { lockBilling, startDeferredTrial } from '@/services/billing/trial.service'
+import { assertWithinLimit } from '@/services/billing/entitlements.service'
+import { hasInvitationSeat, lockSeats } from '@/services/billing/seats.service'
+import { startDeferredTrial } from '@/services/billing/trial.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import {
@@ -506,7 +508,10 @@ async function tenantForMessages(
  * Invite an address to a tenant. Answers the same way whether or not the
  * address has an account; only an existing member is refused. The actor's
  * role is re-read under lock first, so the grant check runs before any
- * lookup of the address and holds until the invitation is written. After
+ * lookup of the address and holds until the invitation is written. On a
+ * customer workspace the seat lock (`lockSeats`) follows, and a new address
+ * must fit the members limit; an address that already holds a seat through a
+ * pending invitation adds none. After
  * commit it emits `teammate_invited` with the access the actor used; the
  * staff owner invitation and `resend` emit nothing.
  * @param actor - The signed-in user sending the invitation.
@@ -514,7 +519,7 @@ async function tenantForMessages(
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
  * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `tenant_not_found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `tenant_not_found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 402 `PLAN_LIMIT_REACHED` with `details` when a new address would take the workspace past its members limit; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function invite(
   actor: Actor,
@@ -543,6 +548,14 @@ export async function invite(
     }
     const tenant = await tenantForMessages(tenantId, tx)
     const inviter = await userRepository.findById(actor.userId, {}, tx)
+
+    // The seat lock: after the actor's role rows, before the invitation write. Re-inviting an address that holds a seat adds none.
+    if (
+      (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined &&
+      !(await hasInvitationSeat(tenantId, normalizedEmail, tx))
+    ) {
+      await assertWithinLimit(tenantId, 'members', 1, tx)
+    }
 
     const invitation = await invitationRepository.createPending(
       {
@@ -738,7 +751,7 @@ export async function listPending(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `tenant_not_found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `tenant_not_found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown (with `Retry-After`); 402 `PLAN_LIMIT_REACHED` with `details` when renewing an expired invitation would take the workspace past its members limit; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,
@@ -760,6 +773,13 @@ export async function resend(
     // A staff resend (audited, with a reason) skips the cooldown.
     const hasCooldown = options.resentFromId === undefined
     if (hasCooldown) assertResendCooldownOver(pending)
+    // An expired invitation holds no seat, so renewing it takes one, under the seat lock.
+    if (
+      pending.expiresAt <= new Date() &&
+      (await lockSeats({ id: tenantId, isPlatform: tenant.isPlatform }, tx)) !== undefined
+    ) {
+      await assertWithinLimit(tenantId, 'members', 1, tx)
+    }
     // The swap re-checks the cooldown: the read above took no row lock, so a concurrent resend may have landed since.
     const updated = await invitationRepository.replaceToken(
       pending.id,
@@ -966,11 +986,12 @@ async function acceptedEarlierBy(
  * An owner invitation, and any platform-tenant invitation, locks the user's
  * row `FOR SHARE` before the claim (`lockUserForOwnership`), so a concurrent
  * staff delete of the user either sees the new ownership or platform role, or
- * wins and this answers 401.
+ * wins and this answers 401. On a customer workspace the seat lock follows
+ * (`lockSeatForJoin`), before the claim.
  * @param rawToken - The raw token from the link.
  * @param userId - The signed-in user.
  * @returns The tenant, the role the user holds (an existing membership's role is kept), and `alreadyMember`: true for a repeat accept and for a user who was a member already.
- * @throws {HttpError} 404 `invitation_invalid`; 403 `invitation_email_mismatch` when the address differs; 403 `invitation_email_unverified` when it matches but is unverified; 401 when the account is gone or inactive.
+ * @throws {HttpError} 404 `invitation_invalid`; 403 `invitation_email_mismatch` when the address differs; 403 `invitation_email_unverified` when it matches but is unverified; 401 when the account is gone or inactive; 402 `PLAN_LIMIT_REACHED`, with no `details`, when the workspace is over its members limit.
  */
 export async function accept(rawToken: string, userId: string): Promise<AcceptedInvitation> {
   const tokenHash = hashToken(rawToken)
@@ -987,9 +1008,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     if (valid.invitation.role === 'owner' || valid.tenant.isPlatform) {
       await lockUserForOwnership(user.id, () => new HttpError('Sign in to continue.', 401), tx)
     }
-    if (valid.invitation.role === 'owner' && !valid.tenant.isPlatform) {
-      await lockBilling(valid.tenant.id, tx)
-    }
+    await lockSeatForJoin(valid, tx)
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
@@ -1035,9 +1054,26 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
 }
 
 /**
+ * Take the seat lock for a join, after the user-row step and before the
+ * claim, and refuse the join when the workspace is over its members limit,
+ * as after a downgrade. The invitation already holds a seat, so the join adds
+ * none. An owner invitation skips the check, as a staff owner invitation
+ * skips it when sent: a workspace must always be able to get an owner. The
+ * refusal carries no count: the invitee is not a member yet.
+ * @param valid - The invitation and its workspace, as read before the transaction or inside it without a lock.
+ * @param tx - The join's transaction.
+ * @throws {HttpError} 402 `PLAN_LIMIT_REACHED`, with no `details`.
+ */
+async function lockSeatForJoin(valid: ValidInvitation, tx: DbTransaction): Promise<void> {
+  if ((await lockSeats(valid.tenant, tx)) === undefined) return
+  if (valid.invitation.role === 'owner') return
+  await assertWithinLimit(valid.tenant.id, 'members', 0, tx, { audience: 'outsider' })
+}
+
+/**
  * Once an invitation is claimed: when it made `userId` an owner of a customer
  * workspace, start the trial a staff-created workspace was waiting for. The
- * caller took the billing lock (`lockBilling`) before the claim.
+ * caller took the seat lock (`lockSeatForJoin`) before the claim.
  * @param claimed - The claimed invitation.
  * @param userId - The accepting user.
  * @param isPlatform - Whether the invitation's tenant is the platform tenant.
@@ -1371,13 +1407,14 @@ function requestInvitationConfirm(
  * so the loser of two concurrent clicks, which reads the account the
  * winner just created, mails no confirm link for an accepted invitation;
  * then, for a one-click join, the mode is checked once
- * more and one transaction creates the account, claims the invitation, adds
+ * more and one transaction creates the account, takes the seat lock
+ * (`lockSeatForJoin`), claims the invitation, adds
  * the membership, audits `invitation.accepted` and issues a session that
  * does not count as a recent sign-in. A claim that loses (the link went dead
  * since the lookup) rolls the new account back.
  * @param rawToken - The raw token from the link.
  * @returns The one-click session, or the confirm branch's address and follow-up.
- * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in and mails nothing.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in and mails nothing; 402 `PLAN_LIMIT_REACHED`, with no `details`, when a one-click join finds the workspace over its members limit.
  * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` when a mode began after the route's gate.
  */
 export async function verifyInvitation(rawToken: string): Promise<InvitationVerifyOutcome> {
@@ -1403,9 +1440,7 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
   const sessionId = randomUUID()
   const outcome = await db.transaction(async (tx): Promise<VerifyOutcome> => {
     const user = await createInvitedAccount(valid.invitation.email, tx)
-    if (valid.invitation.role === 'owner' && !valid.tenant.isPlatform) {
-      await lockBilling(valid.tenant.id, tx)
-    }
+    await lockSeatForJoin(valid, tx)
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
     if (!claimed) throw invitationInvalid()
@@ -1422,8 +1457,9 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * (creating their verified account when the address has none, which only a
  * staff invitation reaches) and join them. The session counts as a recent
  * sign-in: the click proves the mailbox within `SIGN_IN_LINK_TTL`, as a
- * sign-in link does. Every refusal is the one `invitation_invalid` and
- * spends nothing, with one exception: a never-verified account is claimed
+ * sign-in link does. Every refusal is the one `invitation_invalid`, or a
+ * full workspace's 402, and spends nothing, with one exception: a
+ * never-verified account is claimed
  * before the transaction, as a sign-in link claims one, and that claim
  * stands even if the join is then refused.
  *
@@ -1433,8 +1469,9 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * link's address, and for the link's frontend (Apex for the platform
  * tenant); the account (`invitedAccount`, which claims a never-verified
  * one); the mode again; then one transaction that locks the user row
- * `FOR SHARE` (or inserts the new account), claims the link, claims the
- * invitation (`claimForAcceptById`, which re-checks it atomically), adds
+ * `FOR SHARE` (or inserts the new account), takes the seat lock
+ * (`lockSeatForJoin`), claims the link, claims the invitation
+ * (`claimForAcceptById`, which re-checks it atomically), adds
  * the membership, audits `invitation.accepted` and issues the session. Any
  * refusal inside rolls the link's claim back. No platform-role check runs
  * for an Apex link: the invitee becomes staff by this join, and the
@@ -1442,7 +1479,7 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * @param rawLink - The raw token from the confirm link.
  * @param shownEmail - The address the link displays, trimmed and lowercased, when the client sends it.
  * @returns The session, and the tenant and role it joined with.
- * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in; 402 `PLAN_LIMIT_REACHED`, with no `details`, when the workspace is over its members limit.
  * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
  */
 export async function confirmInvitation(
@@ -1475,9 +1512,7 @@ export async function confirmInvitation(
     const user = account
       ? await lockActiveInvitee(account.id, tx)
       : await createInvitedAccount(email, tx, confirmInvalid)
-    if (valid.invitation.role === 'owner' && !valid.tenant.isPlatform) {
-      await lockBilling(valid.tenant.id, tx)
-    }
+    await lockSeatForJoin(valid, tx)
     const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
     if (link?.invitationId !== invitationId) throw confirmInvalid()
     const claimed = await invitationRepository.claimForAcceptById(invitationId, user.id, tx)

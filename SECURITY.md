@@ -532,7 +532,8 @@ invitee's mailbox receives the confirm link.
 - **One answer on the confirm.** An unknown, used, expired or malformed link,
   an `email` that is not the link's address, an invitation revoked, accepted
   or expired since, a suspended or archived workspace and a deactivated
-  account all answer `404 invitation_invalid`. Each refusal spends nothing:
+  account all answer `404 invitation_invalid`; the one other refusal is a
+  full workspace's `402 PLAN_LIMIT_REACHED`. Each refusal spends nothing:
   the link is claimed inside the joining transaction, after the user row is
   locked, and the invitation is re-checked atomically by
   `claimForAcceptById`, so a refusal rolls the claim back. A never-verified
@@ -588,7 +589,17 @@ registered address to a tenant directly
 
 - **No enumeration.** Inviting answers the same `202` whether or not the
   address has an account. The one distinct answer is `409 already_member`,
-  which tells an owner or admin who is already in their own tenant.
+  which tells an owner or admin who is already in their own tenant. A
+  workspace at its members limit answers `402 PLAN_LIMIT_REACHED` whatever the
+  address: the count it reads (members and pending invitations) is one the
+  inviter can list already.
+- **A full workspace refuses the join, privately.** An accept, verify or
+  confirm into a workspace over its members limit (after a downgrade) answers
+  `402 PLAN_LIMIT_REACHED` with no `details`: the invitee is not a member, so
+  the workspace's count and limit stay hidden. The check runs under the seat
+  lock before the claim, so the refusal spends neither the invitation nor the
+  confirm link. An owner invitation is never refused, so a workspace can
+  always get an owner.
 - **Consent.** The link was mailed to the invited address, so one click on it
   proves the mailbox
   ([Invitation links are single-use](#invitation-links-are-single-use)). A

@@ -66,6 +66,20 @@ export const ENTITLEMENTS = {
 export type EntitlementKey = keyof typeof ENTITLEMENTS
 
 /**
+ * A registry key whose entry is an on/off feature.
+ */
+export type FeatureKey = {
+  [Key in EntitlementKey]: (typeof ENTITLEMENTS)[Key]['kind'] extends 'feature' ? Key : never
+}[EntitlementKey]
+
+/**
+ * A registry key whose entry is a counted limit.
+ */
+export type LimitKey = {
+  [Key in EntitlementKey]: (typeof ENTITLEMENTS)[Key]['kind'] extends 'limit' ? Key : never
+}[EntitlementKey]
+
+/**
  * A registry entry with its key, as the catalog lists it.
  */
 export interface EntitlementCatalogEntry extends EntitlementDefinition {

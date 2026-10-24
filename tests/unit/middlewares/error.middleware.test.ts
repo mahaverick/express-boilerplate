@@ -176,6 +176,47 @@ describe('errorHandler', () => {
     expect(body()).toMatchObject({ code: 'VALIDATION_FAILED', errors: fieldErrors })
   })
 
+  it('writes the details an HttpError carries next to its code', () => {
+    const { response, body } = mockResponse()
+    errorHandler(
+      new HttpError('refused', 402, 'PLAN_FEATURE_REQUIRED', undefined, {
+        details: { key: 'advanced_example' },
+      }),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(body()).toMatchObject({
+      code: 'PLAN_FEATURE_REQUIRED',
+      details: { key: 'advanced_example' },
+    })
+  })
+
+  it('omits the details key when HttpError carries none', () => {
+    const { response, body } = mockResponse()
+    errorHandler(
+      new HttpError('refused', 402, 'PLAN_LIMIT_REACHED'),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(body()).not.toHaveProperty('details')
+  })
+
+  it('never writes details on a masked 5xx', () => {
+    const { response, body } = mockResponse()
+    errorHandler(
+      new HttpError('internal', 500, undefined, undefined, { details: { key: 'members' } }),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(body()).not.toHaveProperty('details')
+  })
+
   it('does not forward a foreign error carrying its own .code property', () => {
     // Node's own system errors (ENOENT, ECONNREFUSED, ...) and many third-party errors already carry a `.code` string. Only an HttpError's own, deliberately-set `code` is client-facing — forwarding any foreign error's `.code` here would leak internal detail the same way an unmasked message would.
     const { response, body } = mockResponse()

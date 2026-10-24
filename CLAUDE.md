@@ -104,6 +104,14 @@ points at the code or doc that holds the detail. How things work is in
   account. The raw token travels in a JSON body, never an API URL, because
   tracing and proxy logs record URLs. See
   [SECURITY.md](SECURITY.md#invitations).
+- **Every write that adds a seat takes the seat lock before it writes.** An
+  invite, the resend of an expired invitation, and an accept, invitation
+  verify or confirm call `lockSeats` (`src/services/billing/seats.service.ts`)
+  before any invitation or membership write, then `assertWithinLimit`. A path
+  that skips it lets two writes at once both take the last seat on a Free
+  workspace. A join refusal passes `audience: 'outsider'`, which sends no
+  `details`: the invitee is not a member, so the count stays private. Its
+  place in the lock order is in [ARCHITECTURE.md](ARCHITECTURE.md#layers).
 - **Keep the revoke UPDATE in `TenantInvitationRepository.createPending`.**
   `tenant_invitations_pending_unique` can't filter on `now()`, so an expired
   invitation still holds the slot, and without the UPDATE every re-invite after

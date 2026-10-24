@@ -294,28 +294,39 @@ in this order:
    tenant creation, and an owner invitation's or any platform-tenant
    invitation's accept (`lockUserForOwnership`,
    `tenant-membership.service.ts`, before the claim);
-   none of these goes on to lock a membership or tenant row. One that also
+   none of these goes on to lock a membership or tenant row, and a customer
+   invitation's accept, verify or confirm goes on only to the seat lock
+   (5 below), before its claims. One that also
    locks token rows takes the user row, then the link row, then the refresh
    rows: a step-up confirm locks the user row, claims its link and then moves
    the session's refresh rows (`confirmStepUpLink`, `step-up.service.ts`); an
    invitation confirm locks the invitee's row `FOR SHARE` (or inserts the new
-   account), then claims its link, then claims the invitation
+   account), then takes the seat lock on a customer tenant, then claims its
+   link, then claims the invitation
    (`claimForAcceptById`), inserts the membership and inserts the refresh row
    (`confirmInvitation`, `tenant-invitation.service.ts`). A deactivation, a
    staff sign-out and a sign-out of the other sessions take the user row and
    then revoke the address's links (`revokeSignInLinksOf`), so a confirm that
    claimed its link before the user row would deadlock against them
    (`tests/integration/services/invitation-confirm-race.test.ts`). A one-click
-   invitation verify inserts the new account before it claims the invitation
-   and inserts the refresh row;
+   invitation verify inserts the new account and takes the seat lock before it
+   claims the invitation and inserts the refresh row;
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);
 4. when the actor has no membership there, the actor's platform-tenant
    membership `FOR SHARE` (`lockPlatformRole`, through `lockTenantAccess` in
    `tenant-access.service.ts`);
-5. the tenant or settings row a write changes (`lockById` in
+5. a customer tenant's billing row, the seat lock (`lockSeats`,
+   `src/services/billing/seats.service.ts`, `FOR NO KEY UPDATE`), taken by
+   every write that adds a seat on the members limit: an invite (after
+   `lockActorRole`), the resend of an expired invitation, and an accept,
+   invitation verify or confirm (after the user-row step). It comes before
+   any invitation or membership-row write, so two such writes queue here and
+   never both take the last seat. The platform tenant has no billing row and
+   takes no seat lock;
+6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
-6. a user's notification preference rows, in `NOTIFICATION_TYPES` order
+7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
    (`updatePreferences`, `notification.service.ts`); that transaction locks
    nothing else (its foreign key takes `FOR KEY SHARE` on the user row).
 
@@ -343,7 +354,8 @@ membership rows in both a customer tenant and the platform tenant locks the
 customer tenant's first. Postgres cannot enforce an application lock order;
 the JSDoc of each lock method states its place, and deadlock regression tests
 (`tests/integration/services/tenant-membership.service.test.ts`,
-`tests/integration/api/platform-user-race.test.ts`) hold it.
+`tests/integration/api/platform-user-race.test.ts`,
+`tests/integration/services/billing/seat-lock-order.test.ts`) hold it.
 
 **Lock modes.** A lock that only guards a read-then-write takes
 `FOR NO KEY UPDATE`, because `FOR UPDATE` conflicts with the `FOR KEY SHARE`
@@ -566,6 +578,15 @@ success with no payload goes through `messageResponse`, which always sends
 `data: null`. Every 5xx `errorHandler` writes, except a maintenance refusal,
 also carries `errorId`. `/health`, `/health/ready` and the SSE stream-capacity
 503 write their own bodies.
+
+A refusal a client can act on also carries `details`, structured facts next
+to `code`: a plan limit's 402 `PLAN_LIMIT_REACHED` sends
+`{ key, used, limit }` and a plan feature's 402 `PLAN_FEATURE_REQUIRED` sends
+`{ key }`. `errorHandler` writes an `HttpError`'s `details` on a 4xx only,
+never on a masked 5xx, and a response without them has no `details` key. A
+full workspace refusing an invitee's join sends none, since the invitee is
+not a member.
+
 The envelope is not RFC 9457 `problem+json`: switching would change what every
 client parses on every response.
 

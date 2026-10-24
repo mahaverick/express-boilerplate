@@ -9,10 +9,12 @@ import { PlanRepository } from '@/repositories/plan.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { initialBillingFor, startDeferredTrial } from '@/services/billing/trial.service'
-import { sql, withTransaction } from '@/services/database.service'
+import { sql, withTransaction, type DbTransaction } from '@/services/database.service'
 import { createTenant } from '@/services/tenant.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import { grantSeats, putTenantOnPaid } from '../../../helpers/billing'
+import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../../helpers/lock-probe'
+import { withMutatedMethod } from '../../../helpers/mutate'
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
@@ -112,13 +114,38 @@ describe('workspace billing at creation', () => {
     expect(claims).toHaveLength(0)
   })
 
-  it('gives exactly one of two parallel creates by one person the trial', async () => {
+  it('gives exactly one of two overlapping creates by one person the trial', async () => {
     const userId = await newUser()
-    const ids = await Promise.all([make(userId), make(userId)])
+    const original = BillingRepository.prototype.claimUserTrial
+    const claimedFirst = deferred<number>()
+    const release = deferred()
+    let calls = 0
 
-    const rows = await Promise.all(ids.map((id) => billingRepository.findByTenantId(id)))
-    const states = rows.map((row) => row?.state ?? 'missing')
-    expect(states.toSorted((a, b) => a.localeCompare(b))).toEqual(['free', 'trialing'])
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'claimUserTrial',
+      async function (this: BillingRepository, id: string, tx: DbTransaction): Promise<boolean> {
+        const isClaimed = await original.call(this, id, tx)
+        calls += 1
+        if (calls === 1) {
+          // Hold the first create open after its claim, so the second runs into it.
+          claimedFirst.resolve(await backendPid(tx))
+          await release.promise
+        }
+        return isClaimed
+      },
+      async () => {
+        const first = make(userId)
+        const holderPid = await untilSignalled(claimedFirst.promise, first, 'the first create')
+        const second = make(userId)
+        expect(await waitForWaiter(holderPid, second)).toBe(true)
+        release.resolve()
+        const ids = await Promise.all([first, second])
+
+        const rows = await Promise.all(ids.map((id) => billingRepository.findByTenantId(id)))
+        expect(rows.map((row) => row?.state)).toEqual(['trialing', 'free'])
+      }
+    )
   })
 
   it('creates a staff workspace on Free and waiting for its first owner', async () => {

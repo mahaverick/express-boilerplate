@@ -2,7 +2,7 @@
  * @file Query access to `user_memberships`. It does not extend `BaseRepository`:
  * the table has no `deletedAt`, and `delete` is a hard delete.
  */
-import { and, count, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
+import { and, count, eq, gte, inArray, isNull, ne, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
@@ -511,6 +511,27 @@ export class UserMembershipRepository {
       .select({ count: count() })
       .from(userMembershipModel)
       .where(eq(userMembershipModel.tenantId, tenantId))
+    return row?.count ?? 0
+  }
+
+  /**
+   * How many memberships of a tenant began since a moment.
+   * @param tenantId - The tenant.
+   * @param since - The start of the window.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The count.
+   */
+  async countJoinedSince(
+    tenantId: string,
+    since: Date,
+    executor: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ count: count() })
+      .from(userMembershipModel)
+      .where(
+        and(eq(userMembershipModel.tenantId, tenantId), gte(userMembershipModel.createdAt, since))
+      )
     return row?.count ?? 0
   }
 
