@@ -256,6 +256,34 @@ export class BillingRepository {
   }
 
   /**
+   * Find a stored event by its row id.
+   * @param id - The stored event's id.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The row, or undefined when none is stored.
+   */
+  async findEventById(
+    id: string,
+    executor: DbExecutor = db
+  ): Promise<BillingEventRecord | undefined> {
+    const [row] = await executor
+      .select()
+      .from(billingEventModel)
+      .where(eq(billingEventModel.id, id))
+    return row
+  }
+
+  /**
+   * Record the workspace an event resolved to, before it is handled, so a
+   * handling that later fails for good can still name the workspace.
+   * @param id - The stored event's id.
+   * @param tenantId - The workspace.
+   * @param executor - Where to run the query. Defaults to the pool.
+   */
+  async setEventTenant(id: string, tenantId: string, executor: DbExecutor = db): Promise<void> {
+    await executor.update(billingEventModel).set({ tenantId }).where(eq(billingEventModel.id, id))
+  }
+
+  /**
    * Mark an event handled. Counts the attempt and replaces any earlier error
    * with the outcome's, or clears it.
    * @param id - The stored event's id.

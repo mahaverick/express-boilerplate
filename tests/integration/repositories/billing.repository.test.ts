@@ -169,6 +169,9 @@ describe('BillingRepository', () => {
     const stored = await repository.findEvent('razorpay', 'test', providerEventId)
     if (stored === undefined) throw new Error('event missing')
 
+    await repository.setEventTenant(stored.id, tenantId)
+    const resolved = await repository.findEventById(stored.id)
+    expect(resolved?.tenantId).toBe(tenantId)
     await repository.markEventProcessed(stored.id, { tenantId, error: 'provider_mismatch' })
 
     const done = await repository.findEvent('razorpay', 'test', providerEventId)

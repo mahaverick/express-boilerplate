@@ -356,6 +356,30 @@ export class FakeBillingProvider implements BillingProviderClient {
   }
 
   /**
+   * A stored dispute's status.
+   * @param disputeId - The dispute id.
+   * @returns The status.
+   * @throws {ProviderError} A non-retryable 400 for an unknown dispute, as Razorpay answers.
+   */
+  async fetchDisputeStatus(disputeId: string): Promise<string> {
+    const dispute = await this.#read<{ status: string }>(`dispute:${disputeId}`)
+    if (dispute === undefined) {
+      throw new ProviderError(`GET /disputes/${disputeId}`, 400, { code: 'BAD_REQUEST_ERROR' })
+    }
+    return dispute.status
+  }
+
+  /**
+   * Test hook: store a dispute in a status, as Razorpay would after a
+   * cardholder disputes a payment or the dispute ends.
+   * @param disputeId - The dispute id.
+   * @param status - Its status, such as `open` or `won`.
+   */
+  async fakeSetDispute(disputeId: string, status: string): Promise<void> {
+    await this.#write(`dispute:${disputeId}`, { status })
+  }
+
+  /**
    * Whether a checkout was signed with the fake key secret for the expected subscription.
    * @param input - What the browser posted.
    * @param expectedSubscriptionId - The subscription the checkout must be for.

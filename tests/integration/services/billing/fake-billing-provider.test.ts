@@ -203,6 +203,16 @@ describe('FakeBillingProvider', () => {
     expect(await provider.findSubscriptionIdForPayment('pay_FAKEunknown')).toBeNull()
   })
 
+  it('answers a stored dispute’s status, and a 400 for an unknown dispute', async () => {
+    const disputeId = `disp_FAKE${String(Date.now())}`
+    await provider.fakeSetDispute(disputeId, 'under_review')
+
+    expect(await provider.fetchDisputeStatus(disputeId)).toBe('under_review')
+    const error = await rejectionOf(provider.fetchDisputeStatus('disp_FAKEunknown'))
+    expect(error).toBeInstanceOf(ProviderError)
+    expect((error as ProviderError).retryable).toBe(false)
+  })
+
   it('lists subscriptions created since a time', async () => {
     const before = new Date(Date.now() - 1000)
     const id = await createOne()

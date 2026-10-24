@@ -44,6 +44,12 @@ const CHARGED = 'webhook-subscription.charged-synthetic'
 const eventIds: string[] = []
 
 /**
+ * Orders strings alphabetically.
+ */
+const byText = (a: string | undefined, b: string | undefined): number =>
+  (a ?? '').localeCompare(b ?? '')
+
+/**
  * The parts of an answer's body these tests read.
  */
 interface WebhookAnswer {
@@ -149,6 +155,7 @@ describe('POST /webhooks/razorpay', () => {
       eventType: 'subscription.charged',
       subscriptionId: 'sub_TESTwebhookroute',
       paymentId: 'pay_FIXTUREsynth01',
+      disputeId: null,
     })
     expect(jobs[0]?.opts.attempts).toBe(8)
     expect(jobs[0]?.opts.backoff).toEqual({ type: 'exponential', delay: 30_000 })
@@ -162,6 +169,21 @@ describe('POST /webhooks/razorpay', () => {
 
     expect(again.status).toBe(200)
     expect(answerOf(again).data).toEqual({ result: 'duplicate' })
+    const rows = await rowsOf(delivery.eventId)
+    expect(rows).toHaveLength(1)
+    expect(await jobsFor(rows[0]?.id ?? '')).toHaveLength(1)
+  })
+
+  it('records and queues two identical deliveries that arrive at once only once', async () => {
+    const delivery = charged()
+
+    const answers = await Promise.all([post(delivery), post(delivery)])
+
+    expect(answers.map((answer) => answer.status)).toEqual([200, 200])
+    expect(answers.map((answer) => answerOf(answer).data?.result).toSorted(byText)).toEqual([
+      'duplicate',
+      'queued',
+    ])
     const rows = await rowsOf(delivery.eventId)
     expect(rows).toHaveLength(1)
     expect(await jobsFor(rows[0]?.id ?? '')).toHaveLength(1)

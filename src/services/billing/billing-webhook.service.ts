@@ -12,8 +12,10 @@
  * The handling never trusts the event's own status: it finds the workspace
  * that holds the subscription and runs `syncTenantBilling`, which fetches
  * every subscription itself, so order and duplicates never matter. A
- * dispute only sets or clears the workspace's `dispute_open` flag and alerts
- * staff; it never changes the billing state.
+ * dispute only sets or clears the workspace's `dispute_open` flag, from the
+ * dispute's current status, and alerts staff; it never changes the billing
+ * state. A subscription whose notes name another environment, read when no
+ * row here holds it, marks the event `other_environment` with no alert.
  *
  * Only ids, the type and the outcome are stored or logged: a payload carries
  * the payer's address, phone and card ids, so the body is never kept, logged
@@ -75,18 +77,25 @@ const SYNC_EVENT_TYPES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * The dispute event that opens a dispute.
+ * The dispute events billing acts on. Each reads the dispute's current
+ * status, so a late delivery cannot reopen a closed dispute.
  */
-const DISPUTE_OPENED = 'payment.dispute.created'
-
-/**
- * The dispute events that end one.
- */
-const DISPUTE_ENDED: ReadonlySet<string> = new Set([
+const DISPUTE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'payment.dispute.created',
   'payment.dispute.won',
   'payment.dispute.lost',
   'payment.dispute.closed',
 ])
+
+/**
+ * Dispute statuses that leave a dispute open.
+ */
+const OPEN_DISPUTE_STATUSES: ReadonlySet<string> = new Set(['open', 'under_review'])
+
+/**
+ * Dispute statuses that end a dispute.
+ */
+const ENDED_DISPUTE_STATUSES: ReadonlySet<string> = new Set(['won', 'lost', 'closed'])
 
 /**
  * What the receipt did: `queued` a job, found a `duplicate` delivery, or
@@ -136,6 +145,7 @@ interface EventIds {
   type: string
   subscriptionId: string | null
   paymentId: string | null
+  disputeId: string | null
   /**
    * The environment the subscription's or payment's notes name, if any.
    */
@@ -163,6 +173,7 @@ function eventIdsOf(event: JsonRecord): EventIds {
     type: typeof event.event === 'string' ? event.event.slice(0, 64) : '',
     subscriptionId: providerId(subscription.id) ?? providerId(invoice.subscription_id),
     paymentId,
+    disputeId: providerId(entityOf(event, 'dispute').id),
     appEnv: typeof appEnv === 'string' ? appEnv : undefined,
   }
 }
@@ -195,7 +206,7 @@ function webhookProvider(): BillingProviderClient {
  * @returns True for a sync or dispute event.
  */
 function isHandledType(type: string): boolean {
-  return SYNC_EVENT_TYPES.has(type) || type === DISPUTE_OPENED || DISPUTE_ENDED.has(type)
+  return SYNC_EVENT_TYPES.has(type) || DISPUTE_EVENT_TYPES.has(type)
 }
 
 /**
@@ -262,6 +273,7 @@ export async function receiveRazorpayWebhook(
       eventType: ids.type,
       subscriptionId: ids.subscriptionId,
       paymentId: ids.paymentId,
+      disputeId: ids.disputeId,
     })
   }
   logger.info('Razorpay webhook received', { providerEventId, type: ids.type, outcome })
@@ -296,23 +308,30 @@ async function alertOnce(
 }
 
 /**
- * Fetch a subscription no row holds. A non-retryable answer (an id the
- * provider does not know) reads as no subscription; a retryable one throws.
- * @param provider - The payment provider.
- * @param subscriptionId - The subscription.
- * @returns The subscription, or undefined when the provider does not know it.
+ * Run a provider read whose non-retryable refusal means the provider does
+ * not know the id; a retryable failure throws for the job's retry.
+ * @param read - The provider read.
+ * @returns What it answered, or undefined when the provider refused it.
  * @throws {ProviderError} When the provider could not answer; the job retries.
  */
-async function fetchUnknown(
-  provider: BillingProviderClient,
-  subscriptionId: string
-): Promise<ProviderSubscription | undefined> {
+async function unlessUnknown<T>(read: () => Promise<T>): Promise<T | undefined> {
   try {
-    return await provider.fetchSubscription(subscriptionId)
+    return await read()
   } catch (error) {
     if (error instanceof ProviderError && !error.retryable) return undefined
     throw error
   }
+}
+
+/**
+ * Whether a subscription's notes name another environment: a test account
+ * shared by several environments delivers every one's events to each.
+ * @param sub - The fetched subscription.
+ * @returns True when the notes name an environment other than this one.
+ */
+function isOtherEnvironment(sub: ProviderSubscription): boolean {
+  const { appEnv } = sub.notes
+  return appEnv !== undefined && appEnv !== getEnv().APP_ENV
 }
 
 /**
@@ -329,10 +348,23 @@ async function notedTenant(sub: ProviderSubscription): Promise<string | undefine
 }
 
 /**
+ * Mark an event that belongs to another environment: processed, no alert.
+ * @param data - The job's payload.
+ */
+async function markOtherEnvironment(data: BillingWebhookJobData): Promise<void> {
+  await billingRepository.markEventProcessed(data.eventRowId, { error: 'other_environment' })
+  logger.debug('A billing webhook for another environment ignored', {
+    providerEventId: data.providerEventId,
+  })
+}
+
+/**
  * Sync the workspace a subscription event concerns, then mark the event.
  * The workspace is the one whose row holds the subscription; when none
- * does, the subscription's own notes may name it (a paid checkout whose
- * pending id was lost), and the sync's checks decide whether it is adopted.
+ * does, the subscription is fetched: one whose notes name another
+ * environment is ignored, and one whose notes name a workspace here (a paid
+ * checkout whose pending id was lost) is offered to that workspace's sync,
+ * whose checks decide whether it is adopted.
  * @param provider - The payment provider.
  * @param data - The job's payload.
  * @param subscriptionId - The subscription the event concerns.
@@ -346,7 +378,11 @@ async function syncForSubscription(
   let tenantId = row?.tenantId
   let extraSubscriptionIds: string[] = []
   if (tenantId === undefined) {
-    const sub = await fetchUnknown(provider, subscriptionId)
+    const sub = await unlessUnknown(() => provider.fetchSubscription(subscriptionId))
+    if (sub !== undefined && isOtherEnvironment(sub)) {
+      await markOtherEnvironment(data)
+      return
+    }
     tenantId = sub === undefined ? undefined : await notedTenant(sub)
     if (tenantId === undefined) {
       await billingRepository.markEventProcessed(data.eventRowId, {
@@ -368,6 +404,7 @@ async function syncForSubscription(
     }
     extraSubscriptionIds = [subscriptionId]
   }
+  await billingRepository.setEventTenant(data.eventRowId, tenantId)
   const result = await syncTenantBilling(tenantId, 'webhook', { extraSubscriptionIds })
   await billingRepository.markEventProcessed(data.eventRowId, {
     tenantId,
@@ -390,9 +427,27 @@ async function setDisputeOpen(tenantId: string, isOpen: boolean): Promise<void> 
 }
 
 /**
+ * The subscription a payment was taken for. A payment the provider refuses
+ * to read reads as unknown.
+ * @param provider - The payment provider.
+ * @param paymentId - The payment, if the event named one.
+ * @returns The subscription id; null when the payment has none; undefined when the payment is unknown.
+ */
+async function subscriptionOfPayment(
+  provider: BillingProviderClient,
+  paymentId: string | null
+): Promise<string | null | undefined> {
+  if (paymentId === null) return undefined
+  return unlessUnknown(() => provider.findSubscriptionIdForPayment(paymentId))
+}
+
+/**
  * Flag or clear a dispute on the workspace that holds the disputed payment's
- * subscription, and alert staff once per payment when one opens. A payment
- * the provider cannot place is alerted with no workspace.
+ * subscription. The dispute's current status decides, never the event type,
+ * so a late `created` after a `closed` leaves the flag cleared. Staff are
+ * alerted once per payment while it is open. A dispute whose subscription
+ * names another environment is ignored; one no workspace here can be tied
+ * to is alerted with no workspace.
  * @param provider - The payment provider.
  * @param data - The job's payload.
  */
@@ -400,48 +455,62 @@ async function handleDispute(
   provider: BillingProviderClient,
   data: BillingWebhookJobData
 ): Promise<void> {
-  const isOpened = data.eventType === DISPUTE_OPENED
-  const { paymentId } = data
-  let subscriptionId: string | null = null
-  if (paymentId !== null) {
-    try {
-      subscriptionId = await provider.findSubscriptionIdForPayment(paymentId)
-    } catch (error) {
-      if (!(error instanceof ProviderError) || error.retryable) throw error
-    }
-  }
-  const row =
-    subscriptionId === null
+  const { paymentId, disputeId } = data
+  const status =
+    disputeId === null
       ? undefined
-      : await billingRepository.findBySubscriptionId(subscriptionId)
+      : await unlessUnknown(() => provider.fetchDisputeStatus(disputeId))
+  const isOpen = status !== undefined && OPEN_DISPUTE_STATUSES.has(status)
+  if (status === undefined || (!isOpen && !ENDED_DISPUTE_STATUSES.has(status))) {
+    await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_dispute' })
+    logger.warn('A billing dispute webhook has no readable dispute status', {
+      providerEventId: data.providerEventId,
+    })
+    return
+  }
+  const subscriptionId = await subscriptionOfPayment(provider, paymentId)
+  const row =
+    typeof subscriptionId === 'string'
+      ? await billingRepository.findBySubscriptionId(subscriptionId)
+      : undefined
   if (row === undefined) {
+    const sub =
+      typeof subscriptionId === 'string'
+        ? await unlessUnknown(() => provider.fetchSubscription(subscriptionId))
+        : undefined
+    if (sub !== undefined && isOtherEnvironment(sub)) {
+      await markOtherEnvironment(data)
+      return
+    }
     await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
-    if (isOpened && paymentId !== null) {
+    if (isOpen && paymentId !== null) {
       await alertOnce(
         null,
         'dispute',
         paymentId,
-        `Payment ${paymentId} has a new dispute, and no workspace here holds its subscription. Respond at the provider.`
+        `Payment ${paymentId} has an open dispute, and no workspace here holds its subscription. Respond at the provider.`
       )
     }
     return
   }
-  await setDisputeOpen(row.tenantId, isOpened)
+  await billingRepository.setEventTenant(data.eventRowId, row.tenantId)
+  await setDisputeOpen(row.tenantId, isOpen)
   await billingRepository.markEventProcessed(data.eventRowId, { tenantId: row.tenantId })
-  if (isOpened && paymentId !== null) {
+  if (isOpen && paymentId !== null) {
     await alertOnce(
       row.tenantId,
       'dispute',
       paymentId,
-      `Payment ${paymentId} has a new dispute. Respond at the provider before its deadline.`
+      `Payment ${paymentId} has an open dispute. Respond at the provider before its deadline.`
     )
   }
 }
 
 /**
  * Handle one stored webhook event: resolve its workspace and sync it, or
- * flag a dispute, then mark the event processed. An event that names no
- * subscription is marked processed with `no_subscription`.
+ * flag a dispute, then mark the event processed. An event whose payment
+ * the provider does not know is marked `unknown_subscription`; one whose
+ * payment belongs to no subscription, `no_subscription`.
  * @param data - The job's payload.
  * @throws {ProviderError} When the provider could not answer; nothing is marked, and the job retries when it is retryable.
  * @throws {BillingSyncConflictError} When the row kept changing; nothing is marked, and the job retries.
@@ -452,13 +521,16 @@ export async function processBillingWebhookEvent(data: BillingWebhookJobData): P
     await billingRepository.markEventProcessed(data.eventRowId, { error: 'payments_off' })
     return
   }
-  if (data.eventType === DISPUTE_OPENED || DISPUTE_ENDED.has(data.eventType)) {
+  if (DISPUTE_EVENT_TYPES.has(data.eventType)) {
     await handleDispute(provider, data)
     return
   }
   const subscriptionId =
-    data.subscriptionId ??
-    (data.paymentId === null ? null : await provider.findSubscriptionIdForPayment(data.paymentId))
+    data.subscriptionId ?? (await subscriptionOfPayment(provider, data.paymentId))
+  if (subscriptionId === undefined) {
+    await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
+    return
+  }
   if (subscriptionId === null) {
     await billingRepository.markEventProcessed(data.eventRowId, { error: 'no_subscription' })
     return
@@ -496,8 +568,12 @@ export async function recordWebhookJobFailure(
       data.subscriptionId === null
         ? undefined
         : await billingRepository.findBySubscriptionId(data.subscriptionId)
+    // An event resolved through its payment names no subscription; its row keeps the workspace it resolved to.
+    const event =
+      row === undefined ? await billingRepository.findEventById(data.eventRowId) : undefined
+    const tenantId = row?.tenantId ?? event?.tenantId ?? null
     await alertOnce(
-      row?.tenantId ?? null,
+      tenantId,
       'webhook_failing',
       data.providerEventId,
       `Provider event ${data.providerEventId} (${data.eventType}) failed after every retry. Resync the workspace.`

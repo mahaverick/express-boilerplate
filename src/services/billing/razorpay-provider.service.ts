@@ -587,6 +587,21 @@ export class RazorpayProvider implements BillingProviderClient {
   }
 
   /**
+   * A dispute's current status.
+   * @param disputeId - The dispute id.
+   * @returns The status.
+   * @throws {ProviderError} A non-retryable error when the answer carries no status.
+   */
+  async fetchDisputeStatus(disputeId: string): Promise<string> {
+    const dispute = asRecord(await this.#call('GET', `/disputes/${encodeURIComponent(disputeId)}`))
+    const status = stringOrNull(dispute.status)
+    if (status === null) {
+      throw new ProviderError('dispute answer', 200, { code: 'UNEXPECTED_ANSWER' })
+    }
+    return status
+  }
+
+  /**
    * Whether a checkout was signed with the key secret for the expected subscription.
    * @param input - What the browser posted.
    * @param expectedSubscriptionId - The subscription the checkout must be for.

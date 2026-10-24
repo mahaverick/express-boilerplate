@@ -400,6 +400,14 @@ export interface BillingProviderClient {
    */
   findSubscriptionIdForPayment(paymentId: string): Promise<string | null>
   /**
+   * A dispute's current status as the provider reports it, such as `open`,
+   * `under_review`, `won`, `lost` or `closed`: deliveries can arrive out of
+   * order, so the status, not the event type, decides whether it is open.
+   * @param disputeId - The provider's dispute id.
+   * @returns The status.
+   */
+  fetchDisputeStatus(disputeId: string): Promise<string>
+  /**
    * Whether a checkout's signature was made by the provider for the expected
    * subscription.
    * @param input - What the browser posted.

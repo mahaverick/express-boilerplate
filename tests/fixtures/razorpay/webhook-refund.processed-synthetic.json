@@ -1,7 +1,7 @@
 {
   "synthetic": true,
   "headers": {
-    "x-razorpay-event-id": "evt_fixture_synthetic_refund_processed",
+    "x-razorpay-event-id": "TsynFixture006",
     "x-razorpay-signature": "32cf0cdbdee126b9a515a9c0713339077c7b314cadb4d74a735783f0aa54bc9f"
   },
   "rawBody": "{\"entity\":\"event\",\"account_id\":\"acc_FIXTURE\",\"event\":\"refund.processed\",\"contains\":[\"refund\",\"payment\"],\"payload\":{\"refund\":{\"entity\":{\"id\":\"rfnd_FIXTUREsynth01\",\"entity\":\"refund\",\"amount\":99900,\"currency\":\"INR\",\"payment_id\":\"pay_FIXTUREsynth01\",\"notes\":[],\"receipt\":null,\"acquirer_data\":{\"arn\":null},\"created_at\":1792813500,\"batch_id\":null,\"status\":\"processed\",\"speed_processed\":\"normal\",\"speed_requested\":\"normal\"}},\"payment\":{\"entity\":{\"id\":\"pay_FIXTUREsynth01\",\"entity\":\"payment\",\"amount\":99900,\"currency\":\"INR\",\"status\":\"refunded\",\"order_id\":\"order_FIXTUREsynth01\",\"invoice_id\":\"inv_FIXTUREsynth01\",\"international\":false,\"method\":\"card\",\"amount_refunded\":99900,\"amount_transferred\":0,\"refund_status\":\"full\",\"captured\":true,\"description\":\"Recurring Payment via Subscription\",\"card_id\":\"card_FIXTURE\",\"card\":{\"id\":\"card_FIXTURE\",\"entity\":\"card\",\"name\":\"\",\"last4\":\"0000\",\"network\":\"Visa\",\"type\":\"credit\",\"issuer\":null,\"international\":false,\"emi\":false,\"sub_type\":\"consumer\"},\"bank\":null,\"wallet\":null,\"vpa\":null,\"email\":\"user@example.com\",\"contact\":\"+919999999999\",\"customer_id\":\"cust_FIXTURE\",\"token_id\":\"token_FIXTURE\",\"notes\":[],\"fee\":2358,\"tax\":360,\"error_code\":null,\"error_description\":null,\"acquirer_data\":{},\"created_at\":1792812300}}},\"created_at\":1792813700}"

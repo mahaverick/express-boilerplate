@@ -76,6 +76,10 @@ export interface WebhookRewrite {
    */
   paymentId?: string
   /**
+   * The dispute id, in the dispute entity.
+   */
+  disputeId?: string
+  /**
    * The event id header; defaults to a fresh one.
    */
   eventId?: string
@@ -159,6 +163,8 @@ export function signedWebhook(name: string, rewrite: WebhookRewrite = {}): Signe
       if (entity !== undefined) entity.payment_id = rewrite.paymentId
     }
   }
+  const dispute = entityOf(body, 'dispute')
+  if (dispute !== undefined && rewrite.disputeId !== undefined) dispute.id = rewrite.disputeId
   const raw = JSON.stringify(body)
   const eventId = rewrite.eventId ?? freshEventId()
   return {

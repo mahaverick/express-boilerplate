@@ -124,6 +124,42 @@ function servePayment(payment: string, subscription: string): void {
 }
 
 /**
+ * Serve a dispute's current status.
+ * @param disputeId - The dispute id.
+ * @param status - Its status.
+ */
+function serveDispute(disputeId: string, status: string): void {
+  api.reply('GET', `/disputes/${disputeId}`, 200, { id: disputeId, status })
+}
+
+/**
+ * A fresh dispute id.
+ * @returns The id.
+ */
+function disputeId(): string {
+  return `disp_TEST${randomUUID().replaceAll('-', '').slice(0, 12)}`
+}
+
+/**
+ * A workspace on an active Razorpay subscription, as a confirmed checkout leaves it.
+ * @returns The workspace id and its subscription id.
+ */
+async function payingWorkspace(): Promise<{ tenantId: string; sub: string }> {
+  const { tenant } = await workspace()
+  const sub = subscriptionId()
+  await setBilling(tenant.id, {
+    state: 'active',
+    planId: plans.paidId,
+    priceId: plans.monthPriceId,
+    providerSubscriptionId: sub,
+    currentPeriodEnd: new Date(Date.now() + 29 * 24 * 3600 * 1000),
+    provider: 'razorpay',
+    providerMode: 'test',
+  })
+  return { tenantId: tenant.id, sub }
+}
+
+/**
  * Post a signed fixture delivery to the app and return its stored event.
  * @param fixture - The fixture name.
  * @param rewrite - The ids to put in it.
@@ -375,8 +411,80 @@ describe('billing webhook jobs', () => {
       tenantId: tenant.id,
     })
 
-    expect(await processed(id)).toMatchObject({ error: 'unknown_subscription' })
+    expect(await processed(id)).toMatchObject({ error: 'other_environment' })
     expect(await billingColumn(tenant.id, 'state')).toBe('free')
+    expect(await alertsNaming('reconcile_repair', sub)).toEqual([])
+  })
+
+  it('ignores an invoice.paid of another environment, whose invoice carries no notes, without an alert', async () => {
+    const sub = subscriptionId()
+    serveSubscription({ id: sub, tenantId: randomUUID(), appEnv: 'qa' })
+
+    const id = await deliver('webhook-invoice.paid-synthetic', { subscriptionId: sub })
+
+    expect(await processed(id)).toMatchObject({ error: 'other_environment' })
+    expect(await alertsNaming('reconcile_repair', sub)).toEqual([])
+  })
+
+  it('never adopts a held subscription whose notes name another workspace', async () => {
+    const { tenantId, sub } = await payingWorkspace()
+    const other = await workspace()
+    serveSubscription({ id: sub, tenantId: other.tenant.id })
+    const before = await readBilling(tenantId)
+
+    const id = await deliver('webhook-subscription.charged-synthetic', {
+      subscriptionId: sub,
+      tenantId: other.tenant.id,
+    })
+
+    expect(await processed(id)).toMatchObject({ tenant_id: tenantId })
+    const after = await readBilling(tenantId)
+    expect(after).toMatchObject({
+      state: before.state,
+      planId: before.planId,
+      providerSubscriptionId: sub,
+      currentPeriodEnd: before.currentPeriodEnd,
+      cancelAtPeriodEnd: before.cancelAtPeriodEnd,
+    })
+    expect(await billingColumn(other.tenant.id, 'state')).toBe('free')
+    const alerts = await sql<{ kind: string; message: string }[]>`
+      select kind, message from billing_alerts where tenant_id = ${tenantId}`
+    expect(alerts).toEqual([
+      {
+        kind: 'reconcile_repair',
+        message: `Ignored subscription ${sub}: its notes name another workspace.`,
+      },
+    ])
+  })
+
+  it('marks a refund whose payment the provider does not know unknown, not failed', async () => {
+    const payment = paymentId()
+    api.reply('GET', `/payments/${payment}`, 404, { error: { code: 'BAD_REQUEST_ERROR' } })
+
+    const id = await deliver('webhook-refund.processed-synthetic', { paymentId: payment })
+
+    expect(await processed(id)).toMatchObject({ error: 'unknown_subscription' })
+  })
+
+  it('names the workspace on the failure alert of an event resolved through its payment', async () => {
+    const { tenantId, sub } = await payingWorkspace()
+    const payment = paymentId()
+    servePayment(payment, sub)
+    api.reply('GET', `/subscriptions/${sub}`, 400, { error: { code: 'BAD_REQUEST_ERROR' } })
+
+    const delivery = signedWebhook('webhook-refund.processed-synthetic', { paymentId: payment })
+    eventIds.push(delivery.eventId)
+    namedIds.push(delivery.eventId)
+    await request(app).post('/api/v1/webhooks/razorpay').set(delivery.headers).send(delivery.body)
+
+    const alerts = await waitUntil(
+      async () => {
+        const found = await alertsNaming('webhook_failing', delivery.eventId)
+        return found.length > 0 ? found : null
+      },
+      { message: 'the failed job raises an alert' }
+    )
+    expect(alerts).toEqual([{ tenant_id: tenantId }])
   })
 
   it('raises no alert for an unpaid subscription no workspace holds', async () => {
@@ -412,41 +520,85 @@ describe('billing webhook jobs', () => {
     expect(api.requests).toHaveLength(0)
   })
 
-  it('sets the dispute flag and alerts on a dispute, then clears it, never changing the state', async () => {
-    const { tenant } = await workspace()
-    const sub = subscriptionId()
+  it('sets the dispute flag and alerts on an open dispute, then clears it, never changing the state', async () => {
+    const { tenantId, sub } = await payingWorkspace()
     const payment = paymentId()
-    await setBilling(tenant.id, {
-      state: 'active',
-      planId: plans.paidId,
-      priceId: plans.monthPriceId,
-      providerSubscriptionId: sub,
-      provider: 'razorpay',
-      providerMode: 'test',
-    })
+    const dispute = disputeId()
     servePayment(payment, sub)
+    serveDispute(dispute, 'open')
 
     const opened = await deliver('webhook-payment.dispute.created-synthetic', {
       paymentId: payment,
+      disputeId: dispute,
     })
-    expect(await processed(opened)).toMatchObject({ tenant_id: tenant.id, error: null })
-    expect(await readBilling(tenant.id)).toMatchObject({ disputeOpen: true, state: 'active' })
-    expect(await alertsNaming('dispute', payment)).toEqual([{ tenant_id: tenant.id }])
+    expect(await processed(opened)).toMatchObject({ tenant_id: tenantId, error: null })
+    expect(await readBilling(tenantId)).toMatchObject({ disputeOpen: true, state: 'active' })
+    expect(await alertsNaming('dispute', payment)).toEqual([{ tenant_id: tenantId }])
 
-    const won = await deliver('webhook-payment.dispute.won-synthetic', { paymentId: payment })
+    serveDispute(dispute, 'won')
+    const won = await deliver('webhook-payment.dispute.won-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
     expect(await processed(won)).toMatchObject({ error: null })
-    expect(await readBilling(tenant.id)).toMatchObject({ disputeOpen: false, state: 'active' })
+    expect(await readBilling(tenantId)).toMatchObject({ disputeOpen: false, state: 'active' })
     expect(await alertsNaming('dispute', payment)).toHaveLength(1)
   })
 
-  it('alerts with no workspace on a dispute whose payment no workspace holds', async () => {
+  it('leaves the flag cleared when a created event lands after the dispute closed', async () => {
+    const { tenantId, sub } = await payingWorkspace()
     const payment = paymentId()
-    servePayment(payment, subscriptionId())
+    const dispute = disputeId()
+    servePayment(payment, sub)
+    serveDispute(dispute, 'closed')
 
-    const id = await deliver('webhook-payment.dispute.created-synthetic', { paymentId: payment })
+    const closed = await deliver('webhook-payment.dispute.closed-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
+    await processed(closed)
+    const late = await deliver('webhook-payment.dispute.created-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
+
+    expect(await processed(late)).toMatchObject({ tenant_id: tenantId, error: null })
+    expect(await billingColumn(tenantId, 'disputeOpen')).toBe(false)
+    expect(await alertsNaming('dispute', payment)).toEqual([])
+  })
+
+  it('alerts with no workspace on an open dispute whose payment no workspace holds', async () => {
+    const payment = paymentId()
+    const sub = subscriptionId()
+    const dispute = disputeId()
+    servePayment(payment, sub)
+    serveSubscription({ id: sub, tenantId: randomUUID() })
+    serveDispute(dispute, 'under_review')
+
+    const id = await deliver('webhook-payment.dispute.created-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
 
     expect(await processed(id)).toMatchObject({ error: 'unknown_subscription' })
     expect(await alertsNaming('dispute', payment)).toEqual([{ tenant_id: null }])
+  })
+
+  it('ignores a dispute of another environment without an alert', async () => {
+    const payment = paymentId()
+    const sub = subscriptionId()
+    const dispute = disputeId()
+    servePayment(payment, sub)
+    serveSubscription({ id: sub, tenantId: randomUUID(), appEnv: 'qa' })
+    serveDispute(dispute, 'open')
+
+    const id = await deliver('webhook-payment.dispute.created-synthetic', {
+      paymentId: payment,
+      disputeId: dispute,
+    })
+
+    expect(await processed(id)).toMatchObject({ error: 'other_environment' })
+    expect(await alertsNaming('dispute', payment)).toEqual([])
   })
 
   it('syncs on an invoice.paid event through its subscription', async () => {

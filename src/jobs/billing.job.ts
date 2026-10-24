@@ -43,6 +43,10 @@ export interface BillingWebhookJobData {
    * reaches its subscription only through it.
    */
   paymentId: string | null
+  /**
+   * The dispute a dispute event names, whose current status decides the flag.
+   */
+  disputeId: string | null
 }
 
 /**

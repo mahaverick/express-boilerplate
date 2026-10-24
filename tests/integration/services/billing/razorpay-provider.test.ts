@@ -460,6 +460,26 @@ describe('findSubscriptionIdForPayment', () => {
   })
 })
 
+describe('fetchDisputeStatus', () => {
+  it('reads the dispute and answers its status', async () => {
+    fake.reply('GET', '/disputes/disp_TESTone', 200, { id: 'disp_TESTone', status: 'won' })
+
+    expect(await provider.fetchDisputeStatus('disp_TESTone')).toBe('won')
+    expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toStrictEqual([
+      'GET /v1/disputes/disp_TESTone',
+    ])
+  })
+
+  it('throws a non-retryable ProviderError for an answer with no status', async () => {
+    fake.reply('GET', '/disputes/disp_TESTbad', 200, { id: 'disp_TESTbad' })
+
+    const error = await rejectionOf(provider.fetchDisputeStatus('disp_TESTbad'))
+
+    expect(error).toBeInstanceOf(ProviderError)
+    expect((error as ProviderError).retryable).toBe(false)
+  })
+})
+
 describe('listInvoices', () => {
   it('maps invoices for owners', async () => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)

@@ -1153,11 +1153,16 @@ then the previous webhook secret before it reads anything
 both per IP: `billing-webhook-rejected` counts only failed responses (30 a
 minute), which caps forged traffic from one address, and `billing-webhook`
 counts only accepted ones (3000 a minute), so unsigned traffic cannot spend
-the budget Razorpay's deliveries need. A bad signature answers 401 with no
+the budget Razorpay's deliveries need. The rejected limiter counts each
+request when it arrives and gives the count back once it succeeds, so more
+than 30 valid deliveries in flight at once from one address can briefly get
+429; Razorpay retries those. A bad signature answers 401 with no
 detail and writes nothing. The route stores the event's ids, type and
 outcome, never its body, which carries the payer's address, phone and card
 ids. An event whose subscription notes name another environment is
-acknowledged and not stored. With payments off, or on the fake provider, the
+acknowledged and not stored; an invoice, refund or dispute event, whose
+payload carries no such notes, is checked against its subscription's notes
+by the Worker and marked `other_environment` without an alert. With payments off, or on the fake provider, the
 route answers the unknown-route 404 before either limiter runs.
 
 There is no global limiter: most authenticated reads mount none. Notification
