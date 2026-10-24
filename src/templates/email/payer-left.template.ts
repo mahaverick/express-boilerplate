@@ -89,12 +89,13 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof PayerLeftVariables> = [
 
 /**
  * What the owners are asked to do once the payer left: while the
- * subscription is active it still charges the payer's card until it renews,
- * so they move the payment method to their own; after a failed payment Paid
- * ends with grace, so they add a card by then.
+ * subscription is active it still charges the payer's card, so they move
+ * the payment method to their own (with the renewal date when there is a
+ * real one to state); after a failed payment Paid ends with grace, so they
+ * add a card by then.
  * @param billingState - The subscription's state.
  * @param tenantName - The workspace's display name.
- * @param periodEndsOn - The renewal date, or the end of grace.
+ * @param periodEndsOn - The renewal date, empty when there is none to state; or the end of grace.
  * @returns The sentences.
  */
 export function payerLeftNextStep(
@@ -102,9 +103,11 @@ export function payerLeftNextStep(
   tenantName: string,
   periodEndsOn: string
 ): string {
-  return billingState === 'active'
-    ? `The subscription still charges their card. It renews on ${periodEndsOn}. To pay with your card, update the payment method in Billing.`
-    : `Add your card by ${periodEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`
+  if (billingState !== 'active') {
+    return `Add your card by ${periodEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`
+  }
+  const renews = periodEndsOn === '' ? '' : ` It renews on ${periodEndsOn}.`
+  return `The subscription still charges their card.${renews} To pay with your card, update the payment method in Billing.`
 }
 
 /**

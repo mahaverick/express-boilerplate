@@ -260,3 +260,21 @@ export function cancelMarkerOf(
   if (row.cancelMarkerBy === 'owner') return { by: 'owner', userId: row.cancelMarkerUserId }
   return null
 }
+
+/**
+ * The date an active subscription renews, when the row knows a real one: a
+ * period end still ahead, not a stand-in (no later than the last sync), and
+ * not a deferred start's first charge (no later than the trial end).
+ * @param row - The row.
+ * @param now - The current time.
+ * @returns The renewal date, or null when none can be stated.
+ */
+export function upcomingRenewalAt(
+  row: Pick<TenantBillingRecord, 'currentPeriodEnd' | 'syncedAt' | 'trialEndsAt'>,
+  now: Date
+): Date | null {
+  const end = row.currentPeriodEnd
+  if (end === null || end <= now || isPeriodEndAtOrBeforeSync(row)) return null
+  if (row.trialEndsAt !== null && end <= row.trialEndsAt) return null
+  return end
+}

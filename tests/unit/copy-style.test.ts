@@ -538,17 +538,29 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     })
   ),
-  payer_left: (['active', 'past_due'] as const).map((billingState) =>
+  payer_left: [
+    ...(['active', 'past_due'] as const).map((billingState) =>
+      renderPayerLeftTemplate({
+        appName: 'Acme',
+        tenantName: 'Acme Robotics',
+        payerName: 'Grace Hopper',
+        leftOn: '1 November 2026',
+        billingState,
+        periodEndsOn: '7 November 2026',
+        billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+      })
+    ),
+    // An active subscription with no real renewal date to state.
     renderPayerLeftTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
       payerName: 'Grace Hopper',
       leftOn: '1 November 2026',
-      billingState,
-      periodEndsOn: '7 November 2026',
+      billingState: 'active',
+      periodEndsOn: '',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
-    })
-  ),
+    }),
+  ],
   upgrade_requested: [
     renderUpgradeRequestedTemplate({
       appName: 'Acme',

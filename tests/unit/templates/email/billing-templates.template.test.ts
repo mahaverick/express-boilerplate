@@ -495,6 +495,22 @@ describe('billing email variants', () => {
     )
   })
 
+  it('drops the renewal sentence when there is no real renewal date to state', () => {
+    const rendered = renderPayerLeftTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      payerName: 'Grace Hopper',
+      leftOn: '1 November 2026',
+      billingState: 'active',
+      periodEndsOn: '',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.text).toContain(
+      'The subscription still charges their card. To pay with your card, update the payment method in Billing.'
+    )
+    expect(rendered.text).not.toContain('renews')
+  })
+
   it('tells the owners a running subscription still charges the payer card, and when it renews', () => {
     const rendered = renderPayerLeftTemplate({
       appName: 'Acme',

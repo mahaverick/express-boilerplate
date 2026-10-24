@@ -66,6 +66,7 @@ import {
   graceEndsAt,
   isPeriodEndAtOrBeforeSync,
   mergeEntitlements,
+  upcomingRenewalAt,
 } from '@/utilities/billing-rules.utilities'
 import {
   billingTransitions,
@@ -1227,7 +1228,7 @@ async function tellPayerLeft(
   const context = await activeContext(tenantId, OWNERS_ONLY)
   if (context === undefined) return
   const deadline = await keepPaidDeadline(row, leftAt)
-  if (deadline === null) {
+  if (deadline === null && row.state !== 'active') {
     logSkipped(tenantId, 'payer_left')
     return
   }
@@ -1235,7 +1236,8 @@ async function tellPayerLeft(
   const payerName = payer === undefined ? '' : displayName(payer)
   const { tenant, appName } = context
   const leftOn = formatDateInZone(leftAt, context.timeZone)
-  const keepPaidBy = formatDateInZone(deadline, context.timeZone)
+  // Empty for an active row with no real renewal date: the sentence naming it is left out.
+  const keepPaidBy = deadline === null ? '' : formatDateInZone(deadline, context.timeZone)
   await notifyOwners(context, {
     type: 'billing_payer_left',
     stamp: `${payerUserId}-${leftOn}`,
@@ -1267,16 +1269,17 @@ async function tellPayerLeft(
 }
 
 /**
- * The last day a workspace keeps Paid without a new card. Past due: the end
- * of grace after a halt or pause, or, while the provider still retries and
- * no grace has started, a full grace from `now` (the stored period end is
- * the last paid one, already over). Otherwise the end of the paid period.
+ * The date the owners are given once the payer left. Past due: the end of
+ * grace after a halt or pause, or, while the provider still retries and no
+ * grace has started, a full grace from `now` (the stored period end is the
+ * last paid one, already over). Active: the renewal date, when the row
+ * knows a real one (`upcomingRenewalAt`).
  * @param row - The workspace's billing row.
  * @param now - When the payer left.
- * @returns The deadline, or null when an active row has no period end.
+ * @returns The date, or null when an active row has no real renewal to state.
  */
 async function keepPaidDeadline(row: TenantBillingRecord, now: Date): Promise<Date | null> {
-  if (row.state !== 'past_due') return row.currentPeriodEnd
+  if (row.state !== 'past_due') return upcomingRenewalAt(row, now)
   const { pastDueGraceDays } = await planRepository.getSettings()
   return graceEndsAt(row, pastDueGraceDays) ?? new Date(now.getTime() + pastDueGraceDays * DAY_MS)
 }
