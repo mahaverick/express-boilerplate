@@ -1176,7 +1176,10 @@ key is released when the write fails, so a failure never silences them for the
 hour. An owner's cancel sets a 15-minute Redis marker before it calls the
 provider, so a cancel its webhook brings in first is still `by: owner`; a
 cancel that fails clears the marker, and a suspended or archived
-workspace's cancel reads `by: suspension` whatever the marker says.
+workspace's cancel reads `by: suspension` whatever the marker says. A sync an
+owner's or a staff member's request runs only brings in what the provider did,
+so it reads the provider's cause: a subscription already cancelled at the
+provider when an owner asks to cancel reads `by: customer_bank`.
 
 Three readings of a workspace's billing feed analytics, and they can briefly
 disagree: group properties and diff events use the stored state, flag traits

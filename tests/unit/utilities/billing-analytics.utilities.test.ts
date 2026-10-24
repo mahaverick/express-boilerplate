@@ -197,19 +197,21 @@ describe('billingDiffEvents', () => {
   })
 
   it.each([
-    ['owner', true, 'owner'],
-    ['staff', true, 'customer_bank'],
-    ['webhook', true, 'customer_bank'],
-    ['reconcile', true, 'customer_bank'],
-    ['job', false, 'suspension'],
+    ['owner', true, true, 'owner'],
+    ['owner', true, false, 'customer_bank'],
+    ['staff', true, false, 'customer_bank'],
+    ['webhook', true, false, 'customer_bank'],
+    ['webhook', true, true, 'customer_bank'],
+    ['reconcile', true, false, 'customer_bank'],
+    ['job', false, false, 'suspension'],
   ] as const)(
-    'schedules a cancel from %s (workspace active: %s) as by %s',
-    (source, isWorkspaceActive, by) => {
+    'schedules a cancel from %s (workspace active: %s, owner act: %s) as by %s',
+    (source, isWorkspaceActive, isOwnerAct, by) => {
       const events = billingDiffEvents(
         paying(),
         paying({ cancelAtPeriodEnd: true }),
         source,
-        context({ isWorkspaceActive })
+        context({ isWorkspaceActive, isOwnerAct })
       )
       expect(events.map((event) => event.detail)).toContainEqual({
         type: 'subscription_cancel_scheduled',
@@ -229,13 +231,22 @@ describe('billingDiffEvents', () => {
 
   it('counts an owner cancel before the first charge as a cancel', () => {
     const deferred = paying({ trialEndsAt: PERIOD_END })
-    expect(
-      typesOf(
-        deferred,
-        row({ state: 'trialing', trialEndsAt: PERIOD_END, payerUserId: 'payer-1' }),
-        'owner'
-      )
-    ).toEqual(['subscription_cancel_scheduled'])
+    const backOnTrial = row({ state: 'trialing', trialEndsAt: PERIOD_END, payerUserId: 'payer-1' })
+    expect(typesOf(deferred, backOnTrial, 'owner', context({ isOwnerAct: true }))).toEqual([
+      'subscription_cancel_scheduled',
+    ])
+  })
+
+  it('reads a sync an owner ran by what the provider did, not as their cancel', () => {
+    const ended = billingDiffEvents(
+      paying(),
+      row({ payerUserId: 'payer-1' }),
+      'owner',
+      context({ isOwnerAct: false })
+    )
+    expect(ended.map((event) => event.detail)).toEqual([
+      { type: 'downgraded_to_free', downgradeCause: 'cancelled' },
+    ])
   })
 
   it('schedules an interval change once the next subscription is authenticated on another interval', () => {

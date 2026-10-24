@@ -20,10 +20,10 @@
  * - `subscription_cancel_scheduled`: `cancelAtPeriodEnd` turns on and no
  *   switch or resubscribe continues Paid, or an owner cancels a subscription
  *   before its first charge, or staff cancel one now (the row leaves Paid at
- *   once). `by` comes from
- *   the source, from an owner's or staff cancel on record (`isOwnerCancel`,
- *   `isStaffCancel`), and from
- *   the lifecycle for a suspended or archived workspace.
+ *   once). `by` comes from an owner's own write (`isOwnerAct`), from an
+ *   owner's or staff cancel on record (`isOwnerCancel`, `isStaffCancel`), and
+ *   from the lifecycle for a suspended or archived workspace. A sync an owner
+ *   or staff member ran reads the provider's own cause.
  * - `subscription_interval_change_scheduled`: the next subscription is first
  *   authenticated on another interval than the current one.
  * - `trial_ended`: a trialing row moves to Free.
@@ -65,6 +65,12 @@ export interface BillingAnalyticsContext {
    * Whether the workspace is active: not suspended or archived.
    */
   isWorkspaceActive: boolean
+  /**
+   * Whether the change is an owner's own write: their cancel, or another
+   * write they made. A sync an owner's request ran is not one: it only brings
+   * in what the provider did, so its source names who asked, not who acted.
+   */
+  isOwnerAct?: boolean
   /**
    * The interval a price bills, or undefined for an unknown price.
    */
@@ -121,22 +127,21 @@ function isSameValue(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Who scheduled a cancel. A staff source alone is not a staff cancel: a
- * staff resync only brings in what the provider did.
- * @param source - What made the change.
+ * Who scheduled a cancel. A staff or owner source alone is not their cancel:
+ * a sync either of them ran only brings in what the provider did.
  * @param isWorkspaceActive - Whether the workspace is active.
  * @param marker - Whether an owner's or a staff member's own cancel is on record.
+ * @param marker.isOwnerAct - The change is an owner's own write.
  * @param marker.isOwnerCancel - An owner's cancel is on record.
  * @param marker.isStaffCancel - The change is a staff member's own cancel.
  * @returns The `by` value.
  */
 function cancelledBy(
-  source: BillingHistorySource,
   isWorkspaceActive: boolean,
-  marker: { isOwnerCancel: boolean; isStaffCancel: boolean }
+  marker: { isOwnerAct: boolean; isOwnerCancel: boolean; isStaffCancel: boolean }
 ): CancelScheduledBy {
-  const { isOwnerCancel, isStaffCancel } = marker
-  if (source === 'owner') return 'owner'
+  const { isOwnerAct, isOwnerCancel, isStaffCancel } = marker
+  if (isOwnerAct) return 'owner'
   if (isStaffCancel) return 'staff'
   // A suspension's cancel wins over an owner's marker: the marker may outlive a cancel that failed.
   if (!isWorkspaceActive) return 'suspension'
@@ -179,19 +184,19 @@ export function billingActorOf(
  * subscription at once (before its first charge, or staff cancelling now).
  * @param before - The row before.
  * @param after - The row after.
- * @param source - What made the change.
+ * @param isOwnerAct - Whether the change is an owner's own write.
  * @param isStaffCancel - Whether the change is a staff member's own cancel.
  * @returns True when a cancel was scheduled.
  */
 function isCancelScheduled(
   before: TenantBillingRecord,
   after: TenantBillingRecord,
-  source: BillingHistorySource,
+  isOwnerAct: boolean,
   isStaffCancel: boolean
 ): boolean {
   if (!before.cancelAtPeriodEnd && after.cancelAtPeriodEnd) return !isContinued(after)
   return (
-    (source === 'owner' || isStaffCancel) &&
+    (isOwnerAct || isStaffCancel) &&
     isPaying(before.state) &&
     !isPaying(after.state) &&
     !before.cancelAtPeriodEnd
@@ -257,10 +262,12 @@ export function billingDiffEvents(
     add({ type: 'subscription_halted' }, chargeAttribution)
   }
   const isStaffCancel = context.isStaffCancel === true
-  if (isCancelScheduled(before, after, source, isStaffCancel)) {
+  const isOwnerAct = source === 'owner' && context.isOwnerAct === true
+  if (isCancelScheduled(before, after, isOwnerAct, isStaffCancel)) {
     add({
       type: 'subscription_cancel_scheduled',
-      by: cancelledBy(source, context.isWorkspaceActive, {
+      by: cancelledBy(context.isWorkspaceActive, {
+        isOwnerAct,
         isOwnerCancel: context.isOwnerCancel === true,
         isStaffCancel,
       }),

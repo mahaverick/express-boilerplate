@@ -639,6 +639,25 @@ describe('a failed owner cancel', () => {
   })
 })
 
+describe('a cancel the provider made before the owner asked', () => {
+  it("reads as the customer's bank, sent as the payer, when the owner's cancel only brings it in", async () => {
+    const { tenantId, owner, subscriptionId } = await payingWorkspace()
+    const payer = await createTrackedUser()
+    await setBilling(tenantId, { payerUserId: payer.id })
+    // Cancelled at the provider; the webhook has not landed yet.
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+
+    await cancelPaid({ userId: owner.id }, tenantId)
+
+    expect(await readBilling(tenantId)).toMatchObject({ cancelAtPeriodEnd: true })
+    const cancel = await oneEvent(tenantId, 'subscription_cancel_scheduled')
+    expect(cancel).toMatchObject({
+      distinctId: payer.id,
+      properties: { by: 'customer_bank', access: 'system' },
+    })
+  })
+})
+
 describe('event times fixed by stable data', () => {
   it('sends a change again after the drain with the same uuid and timestamp', async () => {
     const { tenantId, subscriptionId } = await payingWorkspace()

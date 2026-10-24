@@ -350,9 +350,12 @@ export async function emitBillingDiffAnalytics(
       ? await cancelMarkerOf(tenantId, before.providerSubscriptionId)
       : null
     const cancellingOwner = marker?.by === 'owner' ? marker.userId : null
+    const actor = billingActorOf(source, extras.actorUserId)
     const events = billingDiffEvents(before, after, source, {
       isWorkspaceActive: tenant.lifecycleState === 'active' && tenant.deletedAt === null,
       intervalOf: (priceId) => (priceId === null ? undefined : intervals.get(priceId)),
+      // A sync an owner's request ran names no actor: it brings in what the provider did.
+      isOwnerAct: actor !== null,
       isOwnerCancel: cancellingOwner !== null,
       isStaffCancel: extras.isStaffCancel === true || marker?.by === 'staff',
     })
@@ -366,7 +369,6 @@ export async function emitBillingDiffAnalytics(
       return trialUser
     }
     const base = { tenantId, ...traitsOf(after), at: after.updatedAt }
-    const actor = billingActorOf(source, extras.actorUserId)
     for (const { detail, attribution } of events) {
       const isOwnersCancel =
         detail.type === 'subscription_cancel_scheduled' && detail.by === 'owner'
