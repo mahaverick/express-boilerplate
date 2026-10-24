@@ -12,6 +12,7 @@ import {
   MEMBERSHIP_ROLES,
   REASON_REQUIRED_CODE,
   REASON_REQUIRED_MESSAGE,
+  ROLE_REFUSAL_MESSAGE,
   type MembershipRole,
 } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
@@ -198,10 +199,7 @@ export async function revokeInvitationsBeyondAuthorityElsewhere(
  */
 function assertRoleAtLeast(access: ActorAccess, minimum: MembershipRole): void {
   if (!isRoleAtLeast(access.role, minimum)) {
-    throw new HttpError(
-      "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
-      403
-    )
+    throw new HttpError(ROLE_REFUSAL_MESSAGE, 403)
   }
 }
 

@@ -10,6 +10,7 @@ import { type NextFunction, type Request, type Response } from 'express'
 import {
   REASON_REQUIRED_CODE,
   REASON_REQUIRED_MESSAGE,
+  ROLE_REFUSAL_MESSAGE,
   type MembershipRole,
 } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -199,15 +200,29 @@ export function requireRole(
     const isAdmitted =
       role !== undefined && allowedRoles.some((allowed) => isRoleAtLeast(role, allowed))
     if (!isAdmitted) {
-      next(
-        new HttpError(
-          "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
-          403
-        )
-      )
+      next(new HttpError(ROLE_REFUSAL_MESSAGE, 403))
       return
     }
     next()
+  }
+}
+
+/**
+ * Admit only an owner who reached the tenant through their membership: a
+ * staff platform role, even an owner one, is refused. For an act that is a
+ * member owner's own, such as billing. Refused callers get a 403 with
+ * `message`, which names who can act. The service re-checks the role under
+ * lock. Must run after `resolveTenant`; without a principal it answers 403.
+ * @param message - The refusal the caller reads.
+ * @returns An Express middleware.
+ */
+export function requireMemberOwner(
+  message: string
+): (request: Request, response: Response, next: NextFunction) => void {
+  return (request: Request, _response: Response, next: NextFunction): void => {
+    const principal = request.principal
+    const isAdmitted = principal?.access === 'member' && principal.role === 'owner'
+    next(isAdmitted ? undefined : new HttpError(message, 403))
   }
 }
 

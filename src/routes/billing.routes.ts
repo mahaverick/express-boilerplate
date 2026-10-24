@@ -6,14 +6,19 @@
  * writes and the invoice list need a payment provider: `requirePaymentsEnabled`
  * answers the unknown-route 404 without one, ahead of the JSON gate and the
  * limiter, as an unknown path would. The writes then take the JSON gate, the
- * shared `billingWrite` limiter, `resolveTenant()` and `requireRole('owner')`;
- * the service refuses staff acting through platform access with the same 403.
+ * shared `billingWrite` limiter, `resolveTenant()` and `requireMemberOwner`,
+ * which refuses everyone but an owner by membership (staff acting through a
+ * platform role included); the service re-checks it under lock.
  */
 import type { RequestHandler, Router } from 'express'
+import {
+  BILLING_OWNER_ONLY_MESSAGE,
+  INVOICES_OWNER_ONLY_MESSAGE,
+} from '@/constants/billing.constants'
 import { billingController } from '@/controllers/billing.controller'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requireFeature, requirePaymentsEnabled } from '@/middlewares/entitlement.middleware'
-import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
+import { requireMemberOwner, resolveTenant } from '@/middlewares/tenant.middleware'
 
 /**
  * The limiters the billing routes mount, built once by the tenant router so
@@ -51,7 +56,7 @@ export function addBillingRoutes(router: Router, limiters: BillingRouteLimiters)
     requireJsonContentType,
     limiters.billingWrite,
     resolveTenant(),
-    requireRole('owner'),
+    requireMemberOwner(BILLING_OWNER_ONLY_MESSAGE),
   ]
   router.post('/:slug/billing/checkout', ...ownerWrite, billingController.startCheckout)
   router.post('/:slug/billing/checkout/confirm', ...ownerWrite, billingController.confirmCheckout)
@@ -63,7 +68,7 @@ export function addBillingRoutes(router: Router, limiters: BillingRouteLimiters)
     requirePaymentsEnabled,
     limiters.billingRead,
     resolveTenant(),
-    requireRole('owner'),
+    requireMemberOwner(INVOICES_OWNER_ONLY_MESSAGE),
     billingController.listInvoices
   )
 }

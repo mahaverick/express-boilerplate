@@ -7,7 +7,9 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { BILLING_OWNER_ONLY_MESSAGE } from '@/constants/billing.constants'
 import type { User } from '@/database/models/user.model'
+import { ProviderError } from '@/errors/billing-provider-errors'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -31,6 +33,7 @@ import {
   subscriptionStatus,
   workspace,
 } from '../../helpers/billing-api'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { createTrackedStaff, deleteTrackedUsers, tokenFor } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
@@ -74,6 +77,30 @@ function postAs(user: User, path: string, body: object) {
     .post(`/api/v1/tenants/${path}`)
     .set('Authorization', `Bearer ${tokenFor(user)}`)
     .send(body)
+}
+
+/**
+ * GET a tenant path as `user`.
+ * @param user - The caller.
+ * @param path - The path after `/api/v1/tenants/`.
+ * @returns The response.
+ */
+function getAs(user: User, path: string) {
+  return request(app)
+    .get(`/api/v1/tenants/${path}`)
+    .set('Authorization', `Bearer ${tokenFor(user)}`)
+}
+
+/**
+ * The fake's subscriptions for a workspace created in the last minute.
+ * @param tenantId - The workspace.
+ * @returns Each one's id and status.
+ */
+async function recentSubscriptionsOf(tenantId: string): Promise<{ id: string; status: string }[]> {
+  const recent = await fake.listRecentSubscriptions(new Date(Date.now() - 60_000))
+  return recent
+    .filter((sub) => sub.notes.tenantId === tenantId)
+    .map((sub) => ({ id: sub.id, status: sub.status }))
 }
 
 /**
@@ -155,6 +182,7 @@ describe('POST /api/v1/tenants/:slug/billing/checkout', () => {
     const response = await postAs(editor, `${tenant.slug}/billing/checkout`, { interval: 'month' })
 
     expect(response.status).toBe(403)
+    expect(response.body).toMatchObject({ message: BILLING_OWNER_ONLY_MESSAGE })
     expect(await billingColumn(tenant.id, 'pendingSubscriptionId')).toBeNull()
   })
 
@@ -165,9 +193,7 @@ describe('POST /api/v1/tenants/:slug/billing/checkout', () => {
     const response = await postAs(user, `${tenant.slug}/billing/checkout`, { interval: 'month' })
 
     expect(response.status).toBe(403)
-    expect(response.body).toMatchObject({
-      message: "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
-    })
+    expect(response.body).toMatchObject({ message: BILLING_OWNER_ONLY_MESSAGE })
     expect(await billingColumn(tenant.id, 'pendingSubscriptionId')).toBeNull()
   })
 
@@ -323,6 +349,8 @@ describe('POST /api/v1/tenants/:slug/billing/checkout', () => {
       nextSubscriptionId: nextId,
       nextPriceId: plans.yearPriceId,
     })
+    const beforeAuth = await getAs(owner, `${tenant.slug}/billing`)
+    expect(dataOf(beforeAuth.body)).toMatchObject({ cancelAtPeriodEnd: true, nextSwitch: null })
 
     await fake.fakeAdvance(nextId, 'authenticated')
     const confirmed = await postAs(
@@ -556,5 +584,197 @@ describe('POST /api/v1/tenants/:slug/billing/checkout/confirm', () => {
     const response = await postAs(admin, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
 
     expect(response.status).toBe(403)
+  })
+})
+
+const realUpdate = BillingRepository.prototype.updateVersioned
+
+/**
+ * `updateVersioned` as if another writer always got there first: the real
+ * update with a version no row holds, so it changes nothing.
+ * @param callArguments - The real call's arguments.
+ * @returns Undefined, as for a stale version.
+ */
+function staleUpdate(
+  this: BillingRepository,
+  ...callArguments: Parameters<typeof realUpdate>
+): ReturnType<typeof realUpdate> {
+  const [tenantId, , patch, tx] = callArguments
+  return realUpdate.call(this, tenantId, -1, patch, tx)
+}
+
+describe('owner billing writes when something fails', () => {
+  it('answers 503 BILLING_BUSY with Retry-After when the row keeps moving, and cancels the checkout it made', async () => {
+    const { tenant, owner } = await workspace()
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      staleUpdate,
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+      }
+    )
+
+    expect(response?.status).toBe(503)
+    expect(response?.body).toMatchObject({ code: 'BILLING_BUSY' })
+    expect(response?.headers['retry-after']).toBe('30')
+    expect(await billingColumn(tenant.id, 'pendingSubscriptionId')).toBeNull()
+    const subs = await recentSubscriptionsOf(tenant.id)
+    expect(subs.length).toBeGreaterThan(0)
+    expect(subs.every((sub) => sub.status === 'cancelled')).toBe(true)
+  })
+
+  it('answers 503 PAYMENT_PROVIDER_UNAVAILABLE with Retry-After 30 when the provider may answer later', async () => {
+    const { tenant, owner } = await workspace()
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'createSubscription',
+      () => Promise.reject(new ProviderError('POST /subscriptions', 503)),
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+      }
+    )
+
+    expect(response?.status).toBe(503)
+    expect(response?.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(response?.headers['retry-after']).toBe('30')
+    expect(await billingColumn(tenant.id, 'pendingSubscriptionId')).toBeNull()
+  })
+
+  it('answers 502 PAYMENT_PROVIDER_UNAVAILABLE with no Retry-After when the provider refuses the call', async () => {
+    const { tenant, owner } = await workspace()
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'createSubscription',
+      () =>
+        Promise.reject(
+          new ProviderError('POST /subscriptions', 400, { code: 'BAD_REQUEST_ERROR' })
+        ),
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+      }
+    )
+
+    expect(response?.status).toBe(502)
+    expect(response?.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(response?.headers['retry-after']).toBeUndefined()
+  })
+
+  it('retries the confirm sync once when the row moved under both of its passes', async () => {
+    const { tenant, owner } = await workspace()
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    let calls = 0
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      async function (this: BillingRepository, ...callArguments: Parameters<typeof realUpdate>) {
+        calls += 1
+        // The sync's two passes both lose; the confirm's retry runs a fresh sync.
+        if (calls <= 2) return staleUpdate.apply(this, callArguments)
+        return realUpdate.apply(this, callArguments)
+      },
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+      }
+    )
+
+    expect(calls).toBeGreaterThan(2)
+    expect(response?.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: id,
+    })
+  })
+
+  it('answers 503 BILLING_BUSY when the confirm sync keeps losing', async () => {
+    const { tenant, owner } = await workspace()
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      staleUpdate,
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+      }
+    )
+
+    expect(response?.status).toBe(503)
+    expect(response?.body).toMatchObject({ code: 'BILLING_BUSY' })
+    expect(response?.headers['retry-after']).toBe('30')
+    expect(await billingColumn(tenant.id, 'state')).toBe('free')
+  })
+
+  it('brings in a replaced checkout that was paid meanwhile instead of cancelling it', async () => {
+    const { tenant, owner } = await workspace()
+    const first = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const firstId = String(dataOf(first.body).subscriptionId)
+    const realCreate = fake.createSubscription.bind(fake)
+
+    let second: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'createSubscription',
+      async (input) => {
+        // The first checkout is paid between the read that found it unpaid and its replacement.
+        await fake.fakeAdvance(firstId, 'active')
+        return realCreate(input)
+      },
+      async () => {
+        second = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'year' })
+      }
+    )
+
+    expect(second?.status).toBe(200)
+    expect(await subscriptionStatus(firstId)).toBe('active')
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: firstId,
+    })
+  })
+
+  it('cancels the checkout a pass made when the next pass needs another first charge', async () => {
+    const { tenant, owner } = await workspace()
+    const trialEndsAt = new Date(Date.now() + 10 * DAY_MS)
+    const realCreate = fake.createSubscription.bind(fake)
+    let creates = 0
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'createSubscription',
+      async (input) => {
+        creates += 1
+        const sub = await realCreate(input)
+        // After the first pass creates its checkout, a trial starts: the next pass defers the charge.
+        if (creates === 1) {
+          await setBilling(tenant.id, { state: 'trialing', planId: plans.paidId, trialEndsAt })
+        }
+        return sub
+      },
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+      }
+    )
+
+    expect(response?.status).toBe(200)
+    const chosen = String(dataOf(response?.body).subscriptionId)
+    expect(dataOf(response?.body).startsAt).toBe(trialEndsAt.toISOString())
+    const subs = await recentSubscriptionsOf(tenant.id)
+    expect(subs).toHaveLength(2)
+    expect(subs.filter((sub) => sub.id !== chosen).map((sub) => sub.status)).toEqual(['cancelled'])
   })
 })

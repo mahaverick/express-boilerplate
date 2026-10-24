@@ -169,3 +169,19 @@ export const PAYMENT_PROVIDER_UNAVAILABLE_CODE = 'PAYMENT_PROVIDER_UNAVAILABLE'
  * Error code: the billing record kept changing under a write, so nothing changed.
  */
 export const BILLING_BUSY_CODE = 'BILLING_BUSY'
+
+/**
+ * What anyone but an owner by membership reads when they try to change
+ * billing, staff acting through platform access included.
+ */
+export const BILLING_OWNER_ONLY_MESSAGE = 'Only a workspace owner can change billing. Ask an owner.'
+
+/**
+ * What anyone but an owner by membership reads when they ask for invoices.
+ */
+export const INVOICES_OWNER_ONLY_MESSAGE = 'Only a workspace owner can see invoices. Ask an owner.'
+
+/**
+ * Error code: an interval switch before a deferred start's first charge.
+ */
+export const SWITCH_BEFORE_FIRST_CHARGE_CODE = 'SWITCH_BEFORE_FIRST_CHARGE'

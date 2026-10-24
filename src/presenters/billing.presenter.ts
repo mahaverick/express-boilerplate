@@ -74,7 +74,9 @@ export interface TenantBillingView {
   cancelAtPeriodEnd: boolean
   pastDue: PastDue | null
   /**
-   * The interval billed from the period end, once the new subscription is authenticated.
+   * The interval billed from the period end by a scheduled switch or
+   * resubscribe, shown only once its subscription is authenticated
+   * (`nextAuthenticatedAt`); null before, and for an abandoned checkout.
    */
   nextSwitch: { interval: BillingInterval; startsAt: Date } | null
   payer: BillingPayer | null

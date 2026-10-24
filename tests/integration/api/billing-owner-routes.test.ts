@@ -7,7 +7,12 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
+import {
+  BILLING_OWNER_ONLY_MESSAGE,
+  INVOICES_OWNER_ONLY_MESSAGE,
+} from '@/constants/billing.constants'
 import type { User } from '@/database/models/user.model'
+import { ProviderError } from '@/errors/billing-provider-errors'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
@@ -29,6 +34,7 @@ import {
   subscriptionStatus,
   workspace,
 } from '../../helpers/billing-api'
+import { withMutatedMethod } from '../../helpers/mutate'
 import {
   createTrackedStaff,
   createTrackedUser,
@@ -252,6 +258,35 @@ describe('POST /api/v1/tenants/:slug/billing/interval', () => {
   })
 })
 
+describe('POST /api/v1/tenants/:slug/billing/interval before the first charge', () => {
+  it('refuses a switch during a deferred start with 409 SWITCH_BEFORE_FIRST_CHARGE', async () => {
+    const { tenant, owner } = await workspace()
+    const trialEndsAt = new Date(Date.now() + 5 * DAY_MS)
+    const subscriptionId = await fakeSubscription(
+      { tenantId: tenant.id, priceId: plans.monthPriceId },
+      'month',
+      trialEndsAt
+    )
+    await fake.fakeAdvance(subscriptionId, 'authenticated')
+    await setBilling(tenant.id, {
+      state: 'active',
+      planId: plans.paidId,
+      priceId: plans.monthPriceId,
+      trialEndsAt,
+      currentPeriodEnd: trialEndsAt,
+      providerSubscriptionId: subscriptionId,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/interval`, { interval: 'year' })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({ code: 'SWITCH_BEFORE_FIRST_CHARGE' })
+    expect(await billingColumn(tenant.id, 'nextSubscriptionId')).toBeNull()
+  })
+})
+
 describe('POST /api/v1/tenants/:slug/billing/payment-method', () => {
   it('refuses a workspace with no subscription with 409 NO_SUBSCRIPTION', async () => {
     const { tenant, owner } = await workspace()
@@ -295,6 +330,72 @@ describe('POST /api/v1/tenants/:slug/billing/payment-method', () => {
       billingEmail: secondOwner.email,
       providerSubscriptionId: subscriptionId,
     })
+  })
+})
+
+describe('POST /api/v1/tenants/:slug/billing/checkout/confirm for a card change', () => {
+  it('refuses a re-post of a confirmed card change without a fresh start', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await postAs(owner, `${tenant.slug}/billing/payment-method`)
+    const body = confirmBody(subscriptionId)
+    const first = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, body)
+    expect(first.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      cardChangeStartedAt: null,
+      cardChangeStartedBy: null,
+    })
+
+    const again = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, body)
+
+    expect(again.status).toBe(400)
+    expect(again.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+  })
+
+  it('refuses the current subscription with no card change started', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+
+    const response = await postAs(
+      owner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(subscriptionId)
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+  })
+
+  it('refuses a card change confirmed by an owner who did not start it', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    const secondOwner = await addMember(tenant.id, 'owner')
+    await postAs(owner, `${tenant.slug}/billing/payment-method`)
+
+    const response = await postAs(
+      secondOwner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(subscriptionId)
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+  })
+
+  it('refuses a card change started longer ago than a checkout lives', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await postAs(owner, `${tenant.slug}/billing/payment-method`)
+    await setBilling(tenant.id, { cardChangeStartedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+
+    const response = await postAs(
+      owner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(subscriptionId)
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
   })
 })
 
@@ -349,6 +450,7 @@ describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
     const response = await postAs(admin, `${tenant.slug}/billing/cancel`)
 
     expect(response.status).toBe(403)
+    expect(response.body).toMatchObject({ message: BILLING_OWNER_ONLY_MESSAGE })
     expect(await billingColumn(tenant.id, 'cancelAtPeriodEnd')).toBe(false)
     expect(await subscriptionStatus(subscriptionId)).toBe('active')
   })
@@ -480,6 +582,7 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
     const response = await getAs(admin, `${tenant.slug}/billing/invoices`)
 
     expect(response.status).toBe(403)
+    expect(response.body).toMatchObject({ message: INVOICES_OWNER_ONLY_MESSAGE })
   })
 
   it('hides the invoices from staff with platform access with the same 403', async () => {
@@ -500,5 +603,93 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
 
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({ code: 'CURSOR_INVALID' })
+  })
+})
+
+describe('POST /api/v1/tenants/:slug/billing/cancel when the provider moves or fails', () => {
+  it('cancels at the cycle end when a deferred start was charged just before the cancel', async () => {
+    const { tenant, owner } = await workspace()
+    const trialEndsAt = new Date(Date.now() + 5 * DAY_MS)
+    const subscriptionId = await fakeSubscription(
+      { tenantId: tenant.id, priceId: plans.monthPriceId },
+      'month',
+      trialEndsAt
+    )
+    await fake.fakeAdvance(subscriptionId, 'authenticated')
+    await setBilling(tenant.id, {
+      state: 'active',
+      planId: plans.paidId,
+      priceId: plans.monthPriceId,
+      trialEndsAt,
+      currentPeriodEnd: trialEndsAt,
+      providerSubscriptionId: subscriptionId,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    const realFetch = fake.fetchSubscription.bind(fake)
+    let fetches = 0
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => {
+        const sub = await realFetch(id)
+        fetches += 1
+        // The first charge lands right after the first read.
+        if (id === subscriptionId && fetches === 1) await fake.fakeAdvance(subscriptionId, 'active')
+        return sub
+      },
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+      }
+    )
+
+    expect(response?.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      cancelAtPeriodEnd: true,
+      priceId: plans.monthPriceId,
+    })
+    expect(await subscriptionStatus(subscriptionId)).toBe('active')
+  })
+
+  it('writes the current cancel and answers 503 when the scheduled switch cannot be cancelled; a retry clears it', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    const switched = await postAs(owner, `${tenant.slug}/billing/interval`, { interval: 'year' })
+    const nextId = String(dataOf(switched.body).subscriptionId)
+    const realCancel = fake.cancelSubscription.bind(fake)
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'cancelSubscription',
+      async (id: string, isAtCycleEnd: boolean) => {
+        if (id === nextId) throw new ProviderError(`POST /subscriptions/${id}/cancel`, 503)
+        return realCancel(id, isAtCycleEnd)
+      },
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+      }
+    )
+
+    expect(response?.status).toBe(503)
+    expect(response?.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: subscriptionId,
+      cancelAtPeriodEnd: true,
+      nextSubscriptionId: nextId,
+    })
+
+    const retry = await postAs(owner, `${tenant.slug}/billing/cancel`)
+
+    expect(retry.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      cancelAtPeriodEnd: true,
+      nextSubscriptionId: null,
+      nextPriceId: null,
+    })
+    expect(await subscriptionStatus(nextId)).toBe('cancelled')
   })
 })

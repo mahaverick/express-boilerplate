@@ -20,15 +20,18 @@ import { z } from 'zod'
 import { getEnv } from '@/configs/env.config'
 import {
   BILLING_BUSY_CODE,
+  BILLING_OWNER_ONLY_MESSAGE,
   CHECKOUT_EXPIRY_MS,
   CHECKOUT_MISMATCH_CODE,
   CHECKOUT_REUSE_MIN_REMAINING_MS,
   CHECKOUT_TOTAL_COUNT,
   INVOICE_PAGE_SIZE,
+  INVOICES_OWNER_ONLY_MESSAGE,
   NO_SUBSCRIPTION_CODE,
   PAYMENT_PROVIDER_UNAVAILABLE_CODE,
   SAME_INTERVAL_CODE,
   SUBSCRIPTION_EXISTS_CODE,
+  SWITCH_BEFORE_FIRST_CHARGE_CODE,
   type BillingInterval,
 } from '@/constants/billing.constants'
 import type {
@@ -70,6 +73,7 @@ import type {
   InvoiceView,
   ProviderSubscription,
 } from '@/types/billing'
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { bindScope, listScope, signCursor, verifyCursor } from '@/utilities/list-cursor.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 
@@ -78,13 +82,6 @@ const planRepository = new PlanRepository()
 const tenantRepository = new TenantRepository()
 const membershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
-
-/**
- * The refusal `requireRole` gives, which a staff caller acting through
- * platform access gets too: billing is a member owner's own act.
- */
-const ROLE_REFUSAL_MESSAGE =
-  "Your role in this workspace doesn't allow this. Ask a workspace owner or admin."
 
 /**
  * How many times a write reads, calls the provider and writes before it
@@ -173,7 +170,9 @@ function providerFailure(error: unknown): Error {
     return error instanceof Error ? error : new Error('A billing step failed', { cause: error })
   }
   return new HttpError(
-    'Our payment provider did not answer. Try again in 30 seconds.',
+    error.retryable
+      ? 'Our payment provider did not answer. Try again in 30 seconds.'
+      : 'Our payment provider declined this change. Contact support if it happens again.',
     error.retryable ? 503 : 502,
     PAYMENT_PROVIDER_UNAVAILABLE_CODE,
     undefined,
@@ -218,15 +217,24 @@ async function assertCustomerTenant(tenantId: string): Promise<void> {
 
 /**
  * Lock the actor's access to the workspace and refuse anyone but an owner by
- * membership. Staff acting through a platform role get `requireRole`'s 403.
+ * membership, staff acting through a platform role included, with the
+ * billing refusal the route's gate gives.
  * @param actor - The signed-in user.
  * @param tenantId - The workspace.
  * @param tx - The transaction to hold the locks in.
  * @throws {HttpError} 404 when the actor lost access; 403 below owner or through platform access.
  */
 async function lockMemberOwner(actor: Actor, tenantId: string, tx: DbTransaction): Promise<void> {
-  const { access } = await lockActorRole(actor, tenantId, 'owner', tx)
-  if (access !== 'member') throw new HttpError(ROLE_REFUSAL_MESSAGE, 403)
+  const { role, access } = await lockActorRole(actor, tenantId, 'owner', tx).catch(
+    (error: unknown) => {
+      // A role below owner reads the billing refusal, as the route's gate answers it.
+      if (error instanceof HttpError && error.statusCode === 403) {
+        throw new HttpError(BILLING_OWNER_ONLY_MESSAGE, 403)
+      }
+      throw error
+    }
+  )
+  if (access !== 'member' || role !== 'owner') throw new HttpError(BILLING_OWNER_ONLY_MESSAGE, 403)
 }
 
 /**
@@ -368,7 +376,11 @@ async function prefillFor(actor: Actor): Promise<{ name: string; email: string }
 
 /**
  * Cancel an unpaid checkout no one holds any more, so it cannot be paid. It
- * lapses on its own at its expiry, so a failure is only logged.
+ * lapses on its own at its expiry, so a failure is only logged. A checkout
+ * that is not `created` is never cancelled here, and none reaches it: the
+ * callers pass a subscription they created and never handed out, which no one
+ * can have paid, or a replaced one `retireReplaced` just re-read as
+ * `created`. A paid one is brought in by a sync instead.
  * @param provider - The running provider.
  * @param tenantId - The workspace.
  * @param sub - The subscription.
@@ -378,6 +390,7 @@ async function discardCheckout(
   tenantId: string,
   sub: ProviderSubscription
 ): Promise<void> {
+  // Unreachable for a paid one; see the JSDoc.
   if (sub.status !== 'created') return
   try {
     await provider.cancelSubscription(sub.id, false)
@@ -386,6 +399,38 @@ async function discardCheckout(
       error,
       tenantId,
       subscriptionId: sub.id,
+    })
+  }
+}
+
+/**
+ * Retire a stored checkout a new one replaced: read it again, cancel it while
+ * it is still unpaid, and bring it in with a sync when it was paid in the
+ * meantime, so the sync adopts it or refunds it as a duplicate. Never rejects:
+ * the new checkout is stored, and the reconcile finds whatever this misses.
+ * @param provider - The running provider.
+ * @param tenantId - The workspace.
+ * @param subscriptionId - The replaced subscription.
+ */
+async function retireReplaced(
+  provider: BillingProviderClient,
+  tenantId: string,
+  subscriptionId: string
+): Promise<void> {
+  try {
+    const sub = await provider.fetchSubscription(subscriptionId)
+    if (sub.status === 'created') {
+      await discardCheckout(provider, tenantId, sub)
+      return
+    }
+    if (sub.status === 'authenticated' || sub.status === 'active') {
+      await syncTenantBilling(tenantId, 'owner', { extraSubscriptionIds: [subscriptionId] })
+    }
+  } catch (error) {
+    logger.warn('Could not retire a replaced checkout; the reconcile picks it up', {
+      error,
+      tenantId,
+      subscriptionId,
     })
   }
 }
@@ -519,12 +564,13 @@ async function switchSlot(
   }
   if (row.trialEndsAt !== null && row.trialEndsAt > now) {
     throw new HttpError(
-      'Your first payment is due when your trial ends. Switch the interval after it.',
-      409
+      `Your first payment is due when your trial ends at ${formatUtcDateTime(row.trialEndsAt)}. Switch the interval after that.`,
+      409,
+      SWITCH_BEFORE_FIRST_CHARGE_CODE
     )
   }
   if (row.currentPeriodEnd === null || row.currentPeriodEnd <= now) {
-    throw noSubscription('Your renewal is still processing. Try again in a few minutes.')
+    throw noSubscription('Your renewal payment is still processing. Try again in 1 hour.')
   }
   const current = await priceById(row.priceId)
   if (current?.interval === interval) {
@@ -641,10 +687,14 @@ async function checkoutAttempts(
         throw subscriptionExists('We already have your payment. Refresh Billing to see Paid.')
       }
       if (isPaid) {
+        const starts =
+          read.currentPeriodEnd === null
+            ? 'at the end of this period'
+            : `at ${formatUtcDateTime(read.currentPeriodEnd)}`
         throw subscriptionExists(
           purpose === 'switch'
-            ? 'An interval switch is already scheduled. It starts at the end of this period.'
-            : 'Your workspace already continues on Paid after this period.'
+            ? `An interval switch is already scheduled to start ${starts}. Cancel under Billing to choose again.`
+            : `Your workspace already continues on Paid ${starts}. Cancel under Billing to change it.`
         )
       }
     }
@@ -653,6 +703,11 @@ async function checkoutAttempts(
     else if (created !== undefined && isReusable(created, price.id, slot.startAt, now)) {
       chosen = created
     } else {
+      // A previous pass's checkout no longer fits (its first charge moved): it is never handed out.
+      if (created !== undefined) {
+        await discardCheckout(provider, tenantId, created)
+        delete state.created
+      }
       const providerPlanId = await providerPlanFor(provider, price, planName)
       created = await callProvider(() =>
         provider.createSubscription({
@@ -681,11 +736,13 @@ async function checkoutAttempts(
                 providerSubscriptionId: null,
                 nextSubscriptionId: null,
                 nextPriceId: null,
+                nextAuthenticatedAt: null,
               }),
             }
           : {
               nextSubscriptionId: chosen.id,
               nextPriceId: price.id,
+              nextAuthenticatedAt: null,
               checkoutStartedBy: actor.userId,
             }
       const after = await billingRepository.updateVersioned(tenantId, locked.version, patch, tx)
@@ -707,7 +764,7 @@ async function checkoutAttempts(
     if (stored === undefined) continue
 
     if (held !== undefined && held.id !== chosen.id) {
-      await discardCheckout(provider, tenantId, held)
+      await retireReplaced(provider, tenantId, held.id)
     }
     if (created !== undefined && created.id !== chosen.id) {
       await discardCheckout(provider, tenantId, created)
@@ -794,9 +851,18 @@ export async function startCardChange(actor: Actor, tenantId: string): Promise<C
   const row = await withTransaction(async (tx) => {
     const locked = await lockOwnerAndBilling(actor, tenantId, tx)
     if (!hasCurrentSubscription(locked)) {
-      throw noSubscription('Your workspace has no subscription to change the card for.')
+      throw noSubscription(
+        'Your workspace has no subscription to change the card for. Upgrade to Paid under Billing first.'
+      )
     }
     assertOwnProviderWhenLive(locked, provider, NO_SUBSCRIPTION_CODE)
+    const after = await billingRepository.updateVersioned(
+      tenantId,
+      locked.version,
+      { cardChangeStartedAt: new Date(), cardChangeStartedBy: actor.userId },
+      tx
+    )
+    if (after === undefined) throw new HttpError('The billing record changed under its lock', 500)
     await record(
       {
         action: 'billing.card_change_started',
@@ -824,6 +890,23 @@ export async function startCardChange(actor: Actor, tenantId: string): Promise<C
     startsAt: null,
     prefill,
   }
+}
+
+/**
+ * Whether the actor opened a card change on the current subscription that
+ * can still be confirmed: they started it, within the checkout expiry.
+ * @param row - The row.
+ * @param actor - The signed-in owner.
+ * @param now - The current time.
+ * @returns True when the current subscription may be confirmed as a card change.
+ */
+function isCardChangeOpen(row: TenantBillingRecord, actor: Actor, now: Date): boolean {
+  return (
+    hasCurrentSubscription(row) &&
+    row.cardChangeStartedBy === actor.userId &&
+    row.cardChangeStartedAt !== null &&
+    now.getTime() - row.cardChangeStartedAt.getTime() < CHECKOUT_EXPIRY_MS
+  )
 }
 
 /**
@@ -868,7 +951,7 @@ export async function confirmCheckout(
   const stored = [
     row.pendingSubscriptionId,
     row.nextSubscriptionId,
-    hasCurrentSubscription(row) ? row.providerSubscriptionId : null,
+    isCardChangeOpen(row, actor, new Date()) ? row.providerSubscriptionId : null,
   ].find((id): id is string => id !== null && id === posted)
   if (stored === undefined || isOtherProvider(row, provider)) throw checkoutMismatch()
   if (!provider.verifyCheckout(body, stored)) throw checkoutMismatch()
@@ -892,13 +975,19 @@ export async function confirmCheckout(
         locked.pendingSubscriptionId,
         locked.nextSubscriptionId,
       ].includes(stored)
-      if (!isHeld || (locked.payerUserId === user.id && locked.billingEmail === user.email)) return
-      const after = await billingRepository.updateVersioned(
-        tenantId,
-        locked.version,
-        { payerUserId: user.id, billingEmail: user.email },
-        tx
-      )
+      const isCardChange =
+        locked.providerSubscriptionId === stored && locked.cardChangeStartedAt !== null
+      const patch: Partial<NewTenantBilling> = {
+        ...(isHeld &&
+          (locked.payerUserId !== user.id || locked.billingEmail !== user.email) && {
+            payerUserId: user.id,
+            billingEmail: user.email,
+          }),
+        // A card change is confirmed once: a re-post needs a fresh start.
+        ...(isCardChange && { cardChangeStartedAt: null, cardChangeStartedBy: null }),
+      }
+      if (Object.keys(patch).length === 0) return
+      const after = await billingRepository.updateVersioned(tenantId, locked.version, patch, tx)
       return after === undefined ? undefined : { before: locked, after }
     })
     if (written !== undefined) await emitBillingDiff(written.before, written.after, 'owner')
@@ -956,9 +1045,9 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
   const nextId = row.nextSubscriptionId
   if (currentId === null && nextId === null) {
     throw noSubscription(
-      row.cancelAtPeriodEnd
-        ? 'Your subscription already ends at the end of this period.'
-        : 'Your workspace has no subscription to cancel.'
+      row.cancelAtPeriodEnd && row.currentPeriodEnd !== null
+        ? `Your subscription already ends at ${formatUtcDateTime(row.currentPeriodEnd)}. To keep Paid after that, upgrade again under Billing.`
+        : 'Your workspace has no subscription to cancel. There is nothing to do.'
     )
   }
 
@@ -971,7 +1060,12 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
       return getTenantBilling(actor, tenantId)
     }
     if (!ENDED_STATUSES.has(current.status)) {
-      currentCancel = current.status === 'authenticated' ? 'now' : 'cycle_end'
+      currentCancel = 'cycle_end'
+      if (current.status === 'authenticated') {
+        // Read again just before cancelling now: a first charge that landed meanwhile makes it a cycle-end cancel.
+        const latest = await callProvider(() => provider.fetchSubscription(currentId))
+        if (latest.status === 'authenticated') currentCancel = 'now'
+      }
       await cancelOrEnded(provider, currentId, currentCancel === 'cycle_end')
     }
   }
@@ -1006,6 +1100,7 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
     if (isNextCancelled && locked.nextSubscriptionId === nextId) {
       patch.nextSubscriptionId = null
       patch.nextPriceId = null
+      patch.nextAuthenticatedAt = null
     }
     const after =
       Object.keys(patch).length === 0
@@ -1076,8 +1171,7 @@ async function payerOf(
  * platform access read it; the billing email is shown only to an owner by
  * membership. The state and plan are the effective ones, as entitlements
  * read them. A scheduled switch or resubscribe shows once its subscription
- * is authenticated, which the sync records by marking the current
- * subscription cancelling.
+ * is authenticated, which the sync stamps in `nextAuthenticatedAt`.
  * @param actor - The signed-in user.
  * @param tenantId - The workspace.
  * @returns The billing view.
@@ -1096,7 +1190,7 @@ export async function getTenantBilling(actor: Actor, tenantId: string): Promise<
   if (
     row !== undefined &&
     row.nextSubscriptionId !== null &&
-    row.cancelAtPeriodEnd &&
+    row.nextAuthenticatedAt !== null &&
     row.currentPeriodEnd !== null
   ) {
     const nextPrice = await priceById(row.nextPriceId)
@@ -1153,7 +1247,9 @@ export async function listInvoices(
 ): Promise<ListPage<InvoiceView>> {
   const provider = requireProvider()
   await assertCustomerTenant(tenantId)
-  if (!(await isMemberOwner(actor, tenantId))) throw new HttpError(ROLE_REFUSAL_MESSAGE, 403)
+  if (!(await isMemberOwner(actor, tenantId))) {
+    throw new HttpError(INVOICES_OWNER_ONLY_MESSAGE, 403)
+  }
   const row = await billingRepository.findByTenantId(tenantId)
   const subscriptionIds =
     row === undefined || isOtherProvider(row, provider)
