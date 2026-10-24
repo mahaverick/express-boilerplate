@@ -961,7 +961,9 @@ export class BillingRepository {
    * Claim the renewal reminder of up to `limit` active workspaces on a yearly
    * price, not cancelling, whose paid period ends after `now` and within
    * `days` of it. The claim records the period end it is for, so the next
-   * period gets its own reminder.
+   * period gets its own reminder. A period end no later than the row's last
+   * sync is a stand-in an adoption stored before its cycle was paid (a real
+   * one lies ahead of the sync that wrote it), so it is never claimed.
    * @param now - The run's time.
    * @param days - How many days ahead to remind.
    * @param limit - The most rows to claim.
@@ -974,9 +976,11 @@ export class BillingRepository {
     limit: number,
     tx: DbTransaction
   ): Promise<TenantBillingRecord[]> {
-    const { currentPeriodEnd, renewalReminderForPeriodEnd, priceId } = tenantBillingModel
+    const { currentPeriodEnd, renewalReminderForPeriodEnd, priceId, syncedAt } = tenantBillingModel
     const remindFrom = new Date(now.getTime() + days * DAY_MS)
     const isYearly = sql`exists (select 1 from ${planPriceModel} where ${planPriceModel.id} = ${priceId} and ${planPriceModel.interval} = 'year')`
+    // A stand-in period end is no later than the sync that stored it.
+    const isPaidPeriodEnd = or(isNull(syncedAt), gt(currentPeriodEnd, syncedAt))
     return this.#claim(
       { renewalReminderForPeriodEnd: sql`${currentPeriodEnd}` },
       sql`${renewalReminderForPeriodEnd} is distinct from ${currentPeriodEnd}`,
@@ -985,6 +989,7 @@ export class BillingRepository {
         eq(tenantBillingModel.cancelAtPeriodEnd, false),
         gt(currentPeriodEnd, now),
         lte(currentPeriodEnd, remindFrom),
+        isPaidPeriodEnd,
         isYearly,
         isWorkspaceActive()
       ) ?? isYearly,

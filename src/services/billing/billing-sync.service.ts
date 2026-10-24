@@ -44,6 +44,7 @@ import type {
   ProviderRefundOutcome,
   ProviderSubscription,
 } from '@/types/billing'
+import { isFirstPaidCycle } from '@/utilities/billing-analytics.utilities'
 import { heldSubscriptionIds, isOtherProvider } from '@/utilities/billing-rules.utilities'
 import {
   isRunning,
@@ -159,6 +160,11 @@ interface CommittedSync {
    * claim, so the prompt cancel job is queued after the commit.
    */
   needsLifecycleCancel: boolean
+  /**
+   * The paid period the write moved to is the first paid cycle of a
+   * subscription adopted before it was paid, so it is reported as no renewal.
+   */
+  isFirstPaidCycle: boolean
 }
 
 /**
@@ -441,6 +447,8 @@ async function commitSync(
     return {
       before: locked,
       after,
+      // Read against the locked row: a stand-in period end it stored at an adoption.
+      isFirstPaidCycle: isFirstPaidCycle(locked, fetched.subs.current),
       actions: mapped.actions,
       changed: Object.keys(patch).some((key) => key !== 'syncedAt'),
       fulfilledRequests,
@@ -671,6 +679,7 @@ async function runFollowUps(
   }
   await emitBillingDiff(committed.before, committed.after, run.source, {
     fulfilledRequests: committed.fulfilledRequests,
+    isFirstPaidCycle: committed.isFirstPaidCycle,
   })
   let shouldResync = false
   for (const action of committed.actions) {

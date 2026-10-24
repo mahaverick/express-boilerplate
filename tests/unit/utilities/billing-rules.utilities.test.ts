@@ -4,6 +4,7 @@ import {
   effectiveBillingState,
   extendTrialEnd,
   graceEndsAt,
+  isStandInPeriodEnd,
   limitUsage,
   mergeEntitlements,
   planKeyForState,
@@ -157,5 +158,21 @@ describe('extendTrialEnd', () => {
   })
   it('starts from the current end when it is in the future', () => {
     expect(extendTrialEnd(at(3), T0, 7)).toEqual(at(10))
+  })
+})
+
+const END = new Date('2030-01-01T00:00:00.000Z')
+const SECOND_AFTER_END = new Date(END.getTime() + 1000)
+
+describe('isStandInPeriodEnd', () => {
+  it('reads a period end no later than the last sync as a stand-in', () => {
+    expect(isStandInPeriodEnd({ currentPeriodEnd: END, syncedAt: END })).toBe(true)
+    expect(isStandInPeriodEnd({ currentPeriodEnd: END, syncedAt: SECOND_AFTER_END })).toBe(true)
+  })
+
+  it('reads a period end after the last sync, or with no sync, as paid', () => {
+    expect(isStandInPeriodEnd({ currentPeriodEnd: SECOND_AFTER_END, syncedAt: END })).toBe(false)
+    expect(isStandInPeriodEnd({ currentPeriodEnd: END, syncedAt: null })).toBe(false)
+    expect(isStandInPeriodEnd({ currentPeriodEnd: null, syncedAt: END })).toBe(false)
   })
 })

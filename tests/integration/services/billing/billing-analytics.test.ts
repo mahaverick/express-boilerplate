@@ -311,7 +311,8 @@ describe('billing analytics from a billing change', () => {
 
   it('sends a renewal as the payer', async () => {
     const { tenantId, owner, subscriptionId } = await payingWorkspace()
-    await setBilling(tenantId, { currentPeriodEnd: new Date(Date.now() + DAY_MS) })
+    // The paid period just ended; the provider charges the next cycle, which starts after it.
+    await setBilling(tenantId, { currentPeriodEnd: new Date(Date.now() - 60_000) })
     await fake.fakeAdvance(subscriptionId, 'active')
 
     await syncTenantBilling(tenantId, 'webhook')
@@ -319,6 +320,18 @@ describe('billing analytics from a billing change', () => {
     const renewed = await oneEvent(tenantId, 'subscription_renewed')
     expect(renewed.distinctId).toBe(owner.id)
     expect(renewed.properties).toMatchObject({ plan: 'paid', billing_state: 'active' })
+  })
+
+  it('sends no renewal for the first paid charge after an adoption stored a stand-in period end', async () => {
+    const { tenantId } = await payingWorkspace()
+    // An adoption of an active subscription whose cycle was not paid yet stores the moment it ran, inside that cycle.
+    await setBilling(tenantId, { currentPeriodEnd: new Date(Date.now() + 60_000) })
+
+    await syncTenantBilling(tenantId, 'webhook')
+
+    const after = await readBilling(tenantId)
+    expect(after.currentPeriodEnd?.getTime()).toBeGreaterThan(Date.now() + DAY_MS)
+    expect(await eventsOf(tenantId, 'subscription_renewed')).toHaveLength(0)
   })
 
   it('sends a halt as a failed payment and a halt, then the recovery, as the payer', async () => {
@@ -377,6 +390,22 @@ describe('billing analytics from a billing change', () => {
     expect(cancel.distinctId).toBe(owner.id)
     expect(cancel.properties).toMatchObject({ by: 'owner', access: 'member' })
     expect(await eventNamesOf(tenantId)).toContain('billing_cancel_scheduled')
+  })
+
+  it("reads an owner's cancel of a past-due subscription as cancelled, not a failed payment", async () => {
+    const { tenantId, owner, subscriptionId } = await payingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenantId, {
+      state: 'past_due',
+      pastDueSince: new Date(Date.now() - DAY_MS),
+      haltedAt: new Date(Date.now() - DAY_MS),
+    })
+
+    await cancelPaid({ userId: owner.id }, tenantId)
+
+    const downgraded = await oneEvent(tenantId, 'downgraded_to_free')
+    expect(downgraded.distinctId).toBe(owner.id)
+    expect(downgraded.properties).toMatchObject({ downgrade_cause: 'cancelled' })
   })
 
   it('sends an interval change once the switch is authenticated, as the owner who started it', async () => {

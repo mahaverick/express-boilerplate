@@ -520,6 +520,22 @@ describe('the yearly renewal reminder', () => {
     }
   })
 
+  it('never reminds of a stand-in period end an adoption stored before its cycle was paid', async () => {
+    // A sync that adopted an unpaid cycle just after the run started stamped its own time as the period end.
+    const stamp = new Date(NOW.getTime() + HOUR)
+    const stamped = await paying('year', stamp)
+    await setBilling(stamped.tenantId, { syncedAt: stamp })
+    const real = await paying('year', new Date(NOW.getTime() + 5 * DAY))
+    await setBilling(real.tenantId, { syncedAt: new Date(NOW.getTime() - DAY) })
+
+    await runDailyBilling(NOW)
+    await sendRenewalUpcoming(await readBilling(stamped.tenantId))
+
+    expect(await mailsOf(stamped.tenantId, 'renewal_upcoming')).toStrictEqual([])
+    expect(await billingColumn(stamped.tenantId, 'renewalReminderForPeriodEnd')).toBeNull()
+    expect(await mailsOf(real.tenantId, 'renewal_upcoming')).toHaveLength(2)
+  })
+
   it('mails a new billing address that replaced the one already reminded', async () => {
     const { tenantId } = await paying('year', new Date(NOW.getTime() + 5 * DAY))
     await sendRenewalUpcoming(await readBilling(tenantId))

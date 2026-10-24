@@ -556,6 +556,11 @@ describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
       cancelAtPeriodEnd: false,
       pastDueSince: null,
     })
+    // The owner chose it: the mail says the subscription was cancelled, not that a payment failed.
+    const moved = await sql<{ variables: Record<string, string> }[]>`
+      select variables from email_messages
+      where tenant_id = ${tenant.id} and template_key = 'moved_to_free'`
+    expect(moved.map((row) => row.variables['downgradeCause'])).toStrictEqual(['cancelled'])
   })
 
   it('refuses a second cancel with 409 NO_SUBSCRIPTION', async () => {

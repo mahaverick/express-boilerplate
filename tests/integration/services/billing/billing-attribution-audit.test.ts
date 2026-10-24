@@ -508,7 +508,8 @@ describe('every billing event at its real call site', () => {
 
   it('subscription_renewed: the charged webhook, as the payer', async () => {
     const { tenant, payer, subscriptionId } = await payingWorkspace()
-    await setBilling(tenant.id, { currentPeriodEnd: new Date(Date.now() + DAY_MS) })
+    // The paid period just ended, before the cycle the charge pays started.
+    await setBilling(tenant.id, { currentPeriodEnd: new Date(Date.now() - 60_000) })
 
     await webhook(subscriptionId, 'subscription.charged')
 

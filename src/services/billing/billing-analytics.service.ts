@@ -317,6 +317,11 @@ export interface BillingAnalyticsExtras {
    * provider's: its events read `by: staff` and cause `staff`.
    */
   isStaffCancel?: boolean
+  /**
+   * The sync read the change's paid period as the first paid cycle of a
+   * subscription adopted before it was paid, so it is no renewal.
+   */
+  isFirstPaidCycle?: boolean
 }
 
 /**
@@ -361,6 +366,7 @@ export async function emitBillingDiffAnalytics(
       isOwnerCancel: cancellingOwner !== null,
       isStaffCancel: extras.isStaffCancel === true,
       hasStaffCancelMarker: marker?.by === 'staff',
+      isFirstPaidCycle: extras.isFirstPaidCycle === true,
     })
     let trialUser: string | null | undefined
     /**

@@ -36,6 +36,7 @@
  */
 import type { BillingHistorySource, BillingInterval } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
+import type { ProviderSubscription } from '@/types/billing'
 import type { BillingEventDetail, CancelScheduledBy } from '@/types/domain-event'
 import {
   downgradeCauseOf,
@@ -95,6 +96,35 @@ export interface BillingAnalyticsContext {
    * since the marker may outlive a cancel that failed.
    */
   hasStaffCancelMarker?: boolean
+  /**
+   * Whether the change's paid period is the first paid cycle of a
+   * subscription adopted before that cycle was paid (`isFirstPaidCycle`):
+   * the period end it moves from was a stand-in, so it is no renewal.
+   */
+  isFirstPaidCycle?: boolean
+}
+
+/**
+ * Whether the provider's current cycle is the first paid one after an
+ * adoption: the sync took over an active subscription whose cycle was not
+ * paid yet and stored a stand-in period end of that moment, which lies
+ * inside the cycle. A renewal's cycle starts where the stored paid period
+ * ended, or later.
+ * @param before - The row before the change.
+ * @param current - The row's current subscription as the provider read it.
+ * @returns True when the stored period end lies inside the current cycle.
+ */
+export function isFirstPaidCycle(
+  before: TenantBillingRecord,
+  current: ProviderSubscription | undefined
+): boolean {
+  return (
+    current !== undefined &&
+    current.id === before.providerSubscriptionId &&
+    current.currentStart !== null &&
+    before.currentPeriodEnd !== null &&
+    before.currentPeriodEnd > current.currentStart
+  )
 }
 
 /**
@@ -262,7 +292,8 @@ export function billingDiffEvents(
     after.providerSubscriptionId === before.providerSubscriptionId &&
     before.currentPeriodEnd !== null &&
     after.currentPeriodEnd !== null &&
-    after.currentPeriodEnd > before.currentPeriodEnd
+    after.currentPeriodEnd > before.currentPeriodEnd &&
+    context.isFirstPaidCycle !== true
   ) {
     add({ type: 'subscription_renewed' }, chargeAttribution)
   }
@@ -298,10 +329,12 @@ export function billingDiffEvents(
     }
   }
   if (before.state !== 'free' && after.state === 'free') {
+    // An owner's own cancel, by their write or the marker of one, a past-due one included.
+    const isOwnersCancel = isOwnerAct || context.isOwnerCancel === true
     const cause: DowngradeCause =
       !context.isWorkspaceActive && isPaying(before.state)
         ? 'lifecycle'
-        : downgradeCauseOf(before, isStaffCancel)
+        : downgradeCauseOf(before, isStaffCancel, isOwnersCancel)
     const attribution = cause === 'trial_ended' ? 'trial' : 'payer'
     if (cause === 'trial_ended') add({ type: 'trial_ended' }, 'trial')
     add({ type: 'downgraded_to_free', downgradeCause: cause }, attribution)

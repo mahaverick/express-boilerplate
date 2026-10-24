@@ -8,9 +8,11 @@
 import { describe, expect, it } from 'vite-plus/test'
 import type { BillingInterval } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
+import type { ProviderSubscription } from '@/types/billing'
 import {
   billingActorOf,
   billingDiffEvents,
+  isFirstPaidCycle,
   type BillingAnalyticsContext,
 } from '@/utilities/billing-analytics.utilities'
 
@@ -410,6 +412,39 @@ describe('billingDiffEvents', () => {
     })
   })
 
+  it("reads an owner's cancel of a past-due subscription as cancelled, by their write or their marker", () => {
+    const pastDue = paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW })
+    const free = row({ version: 9 })
+    /**
+     * The downgrade cause a change sends.
+     * @param source - What made the change.
+     * @param rules - The rules' context.
+     * @returns The cause.
+     */
+    const causeOf = (
+      source: Parameters<typeof billingDiffEvents>[2],
+      rules: BillingAnalyticsContext
+    ): unknown =>
+      billingDiffEvents(pastDue, free, source, rules).find(
+        (event) => event.detail.type === 'downgraded_to_free'
+      )?.detail
+    expect(causeOf('owner', context({ isOwnerAct: true }))).toMatchObject({
+      downgradeCause: 'cancelled',
+    })
+    expect(causeOf('webhook', context({ isOwnerCancel: true }))).toMatchObject({
+      downgradeCause: 'cancelled',
+    })
+    expect(causeOf('owner', context())).toMatchObject({ downgradeCause: 'payment_failed' })
+    expect(causeOf('job', context())).toMatchObject({ downgradeCause: 'payment_failed' })
+  })
+
+  it('sends no renewal for the first paid cycle of a subscription adopted before it was paid', () => {
+    const adopted = paying({ currentPeriodEnd: NOW })
+    const paid = { ...adopted, currentPeriodEnd: NEXT_PERIOD_END }
+    expect(typesOf(adopted, paid, 'webhook', context({ isFirstPaidCycle: true }))).toEqual([])
+    expect(typesOf(adopted, paid, 'webhook', context())).toEqual(['subscription_renewed'])
+  })
+
   it('attributes the first charge of an upgrade made during a trial, and its failure, to the checkout', () => {
     const deferred = paying({ trialEndsAt: PERIOD_END })
     expect(
@@ -437,6 +472,52 @@ describe('billingDiffEvents', () => {
         context()
       )
     ).toEqual([{ detail: { type: 'subscription_renewed' }, attribution: 'payer' }])
+  })
+})
+
+/**
+ * The current subscription as the provider reads it.
+ * @param overrides - What to change.
+ * @returns The subscription.
+ */
+function current(overrides: Partial<ProviderSubscription> = {}): ProviderSubscription {
+  return {
+    id: 'sub_1',
+    status: 'active',
+    planId: 'plan_rzp',
+    currentStart: PERIOD_END,
+    currentEnd: NEXT_PERIOD_END,
+    startAt: null,
+    createdAt: null,
+    endedAt: null,
+    chargeAt: null,
+    notes: {},
+    paidCount: 2,
+    customerId: null,
+    expireBy: null,
+    hasScheduledChanges: false,
+    latestInvoicePaid: true,
+    ...overrides,
+  }
+}
+
+describe('isFirstPaidCycle', () => {
+  it('reads a stored period end inside the paid cycle as a stand-in, so the cycle is the first paid one', () => {
+    const adopted = paying({ currentPeriodEnd: new Date('2026-12-03T00:00:00.000Z') })
+    expect(isFirstPaidCycle(adopted, current())).toBe(true)
+  })
+
+  it('reads a renewal, whose cycle starts where the stored one ended or later, as no first cycle', () => {
+    expect(isFirstPaidCycle(paying(), current())).toBe(false)
+    expect(isFirstPaidCycle(paying({ currentPeriodEnd: NOW }), current())).toBe(false)
+  })
+
+  it('reads nothing without a cycle start, a stored period end or the same subscription', () => {
+    const adopted = paying({ currentPeriodEnd: new Date('2026-12-03T00:00:00.000Z') })
+    expect(isFirstPaidCycle(adopted, current({ currentStart: null }))).toBe(false)
+    expect(isFirstPaidCycle(adopted, current({ id: 'sub_2' }))).toBe(false)
+    expect(isFirstPaidCycle(adopted, undefined)).toBe(false)
+    expect(isFirstPaidCycle(paying({ currentPeriodEnd: null }), current())).toBe(false)
   })
 })
 

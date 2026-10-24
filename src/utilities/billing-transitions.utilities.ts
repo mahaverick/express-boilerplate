@@ -21,9 +21,10 @@
  *   same interval sends nothing.
  * - Moved to Free: the row becomes `free`. Its cause, first match wins:
  *   `staff` for a staff cancel (`isStaffCancel`; a staff resync that brings
- *   in the provider's change reads the real cause); `trial_ended` from a trial; `payment_failed`
- *   from a past-due, halted or paused row; `cancelled` otherwise (a
- *   cancelled, completed or expired subscription).
+ *   in the provider's change reads the real cause); `trial_ended` from a trial;
+ *   `cancelled` for an owner's own cancel (`isOwnerCancel`), a past-due one
+ *   included; `payment_failed` from a past-due, halted or paused row;
+ *   `cancelled` otherwise (a cancelled, completed or expired subscription).
  */
 import type {
   BillingHistorySource,
@@ -65,6 +66,12 @@ export interface TransitionContext {
    * what the provider did.
    */
   isStaffCancel?: boolean
+  /**
+   * Whether the change is an owner's own cancel write: an owner who cancels a
+   * past-due subscription chose to, so its move to Free reads `cancelled`,
+   * not `payment_failed`. Counts only with source `owner`.
+   */
+  isOwnerCancel?: boolean
 }
 
 /**
@@ -76,14 +83,17 @@ const PAYING_STATES: ReadonlySet<BillingState> = new Set(['active', 'past_due'])
  * Why an active workspace moved to Free.
  * @param before - The row it left.
  * @param isStaffCancel - Whether a staff member's own cancel made the move.
+ * @param isOwnerCancel - Whether an owner's own cancel made it.
  * @returns The cause.
  */
 export function downgradeCauseOf(
   before: TenantBillingRecord,
-  isStaffCancel: boolean
+  isStaffCancel: boolean,
+  isOwnerCancel = false
 ): DowngradeCause {
   if (isStaffCancel) return 'staff'
   if (before.state === 'trialing') return 'trial_ended'
+  if (isOwnerCancel) return 'cancelled'
   if (before.state === 'past_due' || before.haltedAt !== null || before.pausedAt !== null) {
     return 'payment_failed'
   }
@@ -163,7 +173,11 @@ export function billingTransitions(
   }
   if (before.state !== 'free' && after.state === 'free') {
     const isStaffCancel = source === 'staff' && context.isStaffCancel === true
-    transitions.push({ kind: 'moved_to_free', cause: downgradeCauseOf(before, isStaffCancel) })
+    const isOwnerCancel = source === 'owner' && context.isOwnerCancel === true
+    transitions.push({
+      kind: 'moved_to_free',
+      cause: downgradeCauseOf(before, isStaffCancel, isOwnerCancel),
+    })
   }
   return transitions
 }

@@ -215,6 +215,18 @@ describe('billingTransitions', () => {
     expect(kinds(paying(), row(), 'webhook', staffCancel)).toEqual(['moved_to_free:cancelled'])
   })
 
+  it("names an owner's own cancel of a past-due subscription cancelled, never from another source", () => {
+    const pastDue = paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW })
+    const ownerCancel = { ...CONTEXT, isOwnerCancel: true }
+    expect(kinds(pastDue, row({ version: 9 }), 'owner', ownerCancel)).toEqual([
+      'moved_to_free:cancelled',
+    ])
+    expect(kinds(pastDue, row({ version: 9 }), 'owner')).toEqual(['moved_to_free:payment_failed'])
+    expect(kinds(pastDue, row({ version: 9 }), 'webhook', ownerCancel)).toEqual([
+      'moved_to_free:payment_failed',
+    ])
+  })
+
   it('asks a suspended or archived workspace to act in Billing for nothing', () => {
     const context = { ...CONTEXT, isWorkspaceActive: false }
     const trial = row({ state: 'trialing', planId: 'plan-paid' })

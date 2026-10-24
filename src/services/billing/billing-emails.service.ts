@@ -61,7 +61,11 @@ import { getEffectiveEntitlements } from '@/services/billing/entitlements.servic
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
 import { payerLeftNextStep } from '@/templates/email/payer-left.template'
-import { graceEndsAt, mergeEntitlements } from '@/utilities/billing-rules.utilities'
+import {
+  graceEndsAt,
+  isStandInPeriodEnd,
+  mergeEntitlements,
+} from '@/utilities/billing-rules.utilities'
 import {
   billingTransitions,
   type BillingTransition,
@@ -107,6 +111,12 @@ export interface BillingDiffExtras {
    * not set it, so its mail names the real cause.
    */
   isStaffCancel?: boolean
+  /**
+   * The sync read the change's paid period as the first paid cycle of a
+   * subscription adopted before it was paid (`isFirstPaidCycle`), so it is
+   * no renewal. Analytics only.
+   */
+  isFirstPaidCycle?: boolean
 }
 
 /**
@@ -672,6 +682,8 @@ export async function sendBillingDiffEmails(
       isWorkspaceActive,
       intervalOf: (priceId) => (priceId === null ? undefined : prices.get(priceId)?.interval),
       isStaffCancel: extras.isStaffCancel === true,
+      // Only an owner's own write passes its actor: their cancel, a past-due one included.
+      isOwnerCancel: source === 'owner' && extras.actorUserId !== undefined,
     })
     // A suspended or archived workspace's members are not told it went Paid.
     const fulfilled = isWorkspaceActive ? (extras.fulfilledRequests ?? []) : []
@@ -988,6 +1000,8 @@ export async function sendRenewalUpcoming(row: TenantBillingRecord): Promise<voi
   try {
     const due = await stillDue(row, 'active', 'renewal_upcoming', async (fresh) => {
       if (fresh.cancelAtPeriodEnd || fresh.priceId === null) return false
+      // A stand-in period end an adoption stored before its cycle was paid: no renewal date to state.
+      if (isStandInPeriodEnd(fresh)) return false
       const [price] = await planRepository.findPricesByIds([fresh.priceId])
       return price?.interval === 'year'
     })

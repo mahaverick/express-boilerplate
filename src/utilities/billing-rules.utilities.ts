@@ -194,3 +194,22 @@ export function heldSubscriptionIds(row: {
     (id) => id !== null
   )
 }
+
+/**
+ * Whether a row's period end, still ahead, is a stand-in: an adoption of an
+ * active subscription whose cycle was not paid yet stores the sync's own
+ * time, and that sync's `syncedAt`, so the period end is no later than the
+ * last sync. A paid period end lies ahead of the sync that wrote it.
+ * @param row - The row.
+ * @returns True when the period end is no later than the last sync.
+ */
+export function isStandInPeriodEnd(row: {
+  currentPeriodEnd: Date | null
+  syncedAt: Date | null
+}): boolean {
+  return (
+    row.currentPeriodEnd !== null &&
+    row.syncedAt !== null &&
+    row.currentPeriodEnd.getTime() <= row.syncedAt.getTime()
+  )
+}
