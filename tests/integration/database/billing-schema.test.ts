@@ -30,9 +30,12 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 const tenantIds: string[] = []
 const userIds: string[] = []
 const priceIds: string[] = []
+const eventIds: string[] = []
 
 afterEach(async () => {
   await truncateAuditLogs()
+  if (eventIds.length > 0) await sql`delete from billing_events where id = any(${eventIds})`
+  eventIds.length = 0
   if (priceIds.length > 0) await sql`delete from plan_prices where id = any(${priceIds})`
   priceIds.length = 0
   if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
@@ -97,6 +100,24 @@ async function insertBilling(tenantId: string, state: string): Promise<void> {
   await sql`
     insert into tenant_billing (tenant_id, state, plan_id)
     values (${tenantId}, ${state}, ${await planId('free')})`
+}
+
+/**
+ * Inserts a provider event with raw SQL, tracked for cleanup, and returns its id.
+ */
+async function insertEvent(row: {
+  providerEventId: string
+  provider?: string
+  mode?: string
+}): Promise<string> {
+  const [inserted] = await sql<{ id: string }[]>`
+    insert into billing_events (provider, mode, provider_event_id, type)
+    values (${row.provider ?? 'razorpay'}, ${row.mode ?? 'test'}, ${row.providerEventId},
+      'subscription.charged')
+    returning id`
+  if (!inserted) throw new Error('event insert returned no row')
+  eventIds.push(inserted.id)
+  return inserted.id
 }
 
 describe('billing tables', () => {
@@ -199,6 +220,108 @@ describe('billing CHECKs', () => {
       insert into billing_alerts (kind, message) values ('card_expiring', 'A card expires soon.')`).rejects.toMatchObject(
       { code: '23514', constraint_name: 'billing_alerts_kind_check' }
     )
+  })
+})
+
+describe('provider and history CHECKs', () => {
+  it.each([
+    [
+      'a price provider',
+      async () => {
+        const free = await planId('free')
+        await sql`
+          insert into plan_prices (plan_id, currency, interval, amount_minor, active, provider)
+          values (${free}, 'INR', 'month', 100, false, 'stripe')`
+      },
+      'plan_prices_provider_check',
+    ],
+    [
+      'a price provider mode',
+      async () => {
+        const free = await planId('free')
+        await sql`
+          insert into plan_prices (plan_id, currency, interval, amount_minor, active, provider_mode)
+          values (${free}, 'INR', 'month', 100, false, 'sandbox')`
+      },
+      'plan_prices_provider_mode_check',
+    ],
+    [
+      'a billing row provider',
+      async () => {
+        const tenantId = await insertTenant()
+        await insertBilling(tenantId, 'free')
+        await sql`update tenant_billing set provider = 'stripe' where tenant_id = ${tenantId}`
+      },
+      'tenant_billing_provider_check',
+    ],
+    [
+      'a billing row provider mode',
+      async () => {
+        const tenantId = await insertTenant()
+        await insertBilling(tenantId, 'free')
+        await sql`update tenant_billing set provider_mode = 'sandbox' where tenant_id = ${tenantId}`
+      },
+      'tenant_billing_provider_mode_check',
+    ],
+    [
+      'an event provider',
+      () => insertEvent({ providerEventId: randomUUID(), provider: 'stripe' }),
+      'billing_events_provider_check',
+    ],
+    [
+      'an event mode',
+      () => insertEvent({ providerEventId: randomUUID(), mode: 'sandbox' }),
+      'billing_events_mode_check',
+    ],
+    [
+      'a history from_state',
+      async () => {
+        const tenantId = await insertTenant()
+        await sql`
+          insert into billing_state_history (tenant_id, from_state, to_state, cause, source)
+          values (${tenantId}, 'cancelled', 'free', 'created', 'job')`
+      },
+      'billing_state_history_from_state_check',
+    ],
+    [
+      'a history to_state',
+      async () => {
+        const tenantId = await insertTenant()
+        await sql`
+          insert into billing_state_history (tenant_id, from_state, to_state, cause, source)
+          values (${tenantId}, 'free', 'cancelled', 'created', 'job')`
+      },
+      'billing_state_history_to_state_check',
+    ],
+  ])('refuses %s outside the known set', async (_label, write, constraint) => {
+    await expect(write()).rejects.toMatchObject({ code: '23514', constraint_name: constraint })
+  })
+
+  it('accepts a known provider and mode on an event, and a null from_state in history', async () => {
+    const tenantId = await insertTenant()
+    await expect(
+      insertEvent({ providerEventId: randomUUID(), provider: 'fake', mode: 'live' })
+    ).resolves.toBeTypeOf('string')
+    await expect(sql`
+      insert into billing_state_history (tenant_id, from_state, to_state, cause, source)
+      values (${tenantId}, null, 'trialing', 'created', 'owner')`).resolves.toBeDefined()
+  })
+})
+
+describe('billing_events_provider_event_unique', () => {
+  it('refuses the same event id twice for one provider and mode', async () => {
+    const providerEventId = randomUUID()
+    await insertEvent({ providerEventId })
+    await expect(insertEvent({ providerEventId })).rejects.toMatchObject({
+      code: '23505',
+      constraint_name: 'billing_events_provider_event_unique',
+    })
+  })
+
+  it('keeps the same event id apart across modes', async () => {
+    const providerEventId = randomUUID()
+    await insertEvent({ providerEventId, mode: 'test' })
+    await expect(insertEvent({ providerEventId, mode: 'live' })).resolves.toBeTypeOf('string')
   })
 })
 

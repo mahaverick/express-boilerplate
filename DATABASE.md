@@ -238,7 +238,8 @@ marked by a comment in its file (0024's has none):
   `999000` a year, no provider plan ids), the single `billing_settings` row
   (trial on, 14 days, 7 days' grace), and a `free` `tenant_billing` row on the
   Free plan for every tenant that is not the platform tenant, archived and
-  soft-deleted ones included.
+  soft-deleted ones included. It moves the `audit_logs` target-type CHECK swap
+  after that backfill, to the end of the file.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
@@ -634,15 +635,19 @@ as described so it does not build them a second time under the lock, then run
   `email_messages` for `user_id IS NULL`, so on a large table run the
   retention purge first.
 
-- **`0033` blocks every read and write on `audit_logs`, and writes to `tenants`
-  and `users`, until the batch commits.** Its new tables are empty, so
-  creating them and their indexes is instant. Swapping
-  `audit_logs_target_type_check` drops the constraint, which takes an
-  `ACCESS EXCLUSIVE` lock on `audit_logs`, and re-adds it, which scans every
-  audit row while the lock is held; every audited write waits. The new foreign
-  keys take `SHARE ROW EXCLUSIVE` on `tenants` and `users`, so writes to a
-  tenant or user row wait; reads do not. The backfill reads every `tenants`
-  row once. Apply it in a quiet window.
+- **`0033` blocks writes to `tenants` and `users` until the batch commits, and
+  every read and write on `audit_logs` from its last two statements to the
+  commit.** Its new tables are empty, so creating them and their indexes is
+  instant. The new foreign keys take `SHARE ROW EXCLUSIVE` on `tenants` and
+  `users`, so writes to a tenant or user row wait; reads do not. The backfill
+  reads every `tenants` row once. The `audit_logs_target_type_check` swap runs
+  last, after the backfill: dropping the constraint takes an `ACCESS EXCLUSIVE`
+  lock on `audit_logs`, and re-adding it scans every audit row while the lock
+  is held, so every audited write waits until the commit. Taking that lock
+  last keeps it out of the foreign-key adds and the backfill, and follows the
+  order a request takes (`tenants` and `users`, then its audit row), so the
+  migration never holds `audit_logs` while it waits on a request's tenant or
+  user lock. Apply it in a quiet window.
 
 ## The test database
 

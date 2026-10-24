@@ -164,7 +164,6 @@ CREATE TABLE "user_trials" (
 	"started_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "audit_logs" DROP CONSTRAINT "audit_logs_target_type_check";--> statement-breakpoint
 ALTER TABLE "billing_alerts" ADD CONSTRAINT "billing_alerts_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "billing_events" ADD CONSTRAINT "billing_events_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "billing_settings" ADD CONSTRAINT "billing_settings_updated_by_users_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
@@ -194,7 +193,6 @@ CREATE INDEX "tenant_billing_trial_ends_idx" ON "tenant_billing" USING btree ("t
 CREATE INDEX "tenant_billing_period_end_idx" ON "tenant_billing" USING btree ("current_period_end") WHERE "tenant_billing"."state" in ('active', 'past_due');--> statement-breakpoint
 CREATE INDEX "tenant_entitlement_grants_live_idx" ON "tenant_entitlement_grants" USING btree ("tenant_id") WHERE "tenant_entitlement_grants"."revoked_at" is null;--> statement-breakpoint
 CREATE UNIQUE INDEX "upgrade_requests_open_unique" ON "upgrade_requests" USING btree ("tenant_id","requested_by") WHERE "upgrade_requests"."fulfilled_at" is null;--> statement-breakpoint
-ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_target_type_check" CHECK ("audit_logs"."target_type" is null or "audit_logs"."target_type" in ('tenant', 'membership', 'invitation', 'settings', 'user', 'email_message', 'email_suppression', 'platform', 'plan', 'billing'));--> statement-breakpoint
 -- Hand-added: the two plans. A key the registry knows and a plan omits reads as the registry default.
 INSERT INTO "plans" ("key", "name", "entitlements", "sort_order") VALUES
 	('free', 'Free', '{"members": 3, "advanced_example": false}'::jsonb, 0),
@@ -209,4 +207,7 @@ INSERT INTO "billing_settings" ("id", "trial_enabled", "trial_days", "past_due_g
 -- Hand-added: every customer workspace, archived and soft-deleted ones too, starts on Free. The platform tenant gets no row.
 INSERT INTO "tenant_billing" ("tenant_id", "state", "plan_id")
 	SELECT "tenants"."id", 'free', (SELECT "id" FROM "plans" WHERE "key" = 'free')
-	FROM "tenants" WHERE NOT "tenants"."is_platform";
+	FROM "tenants" WHERE NOT "tenants"."is_platform";--> statement-breakpoint
+-- Hand-ordered: the audit target-type CHECK is swapped last, after the backfill.
+ALTER TABLE "audit_logs" DROP CONSTRAINT "audit_logs_target_type_check";--> statement-breakpoint
+ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_target_type_check" CHECK ("audit_logs"."target_type" is null or "audit_logs"."target_type" in ('tenant', 'membership', 'invitation', 'settings', 'user', 'email_message', 'email_suppression', 'platform', 'plan', 'billing'));
