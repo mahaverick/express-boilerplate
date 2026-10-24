@@ -411,14 +411,14 @@ async function markCancelling(tenantId: string, subscriptionId: string): Promise
  * @param provider - The payment provider.
  * @param row - The claimed row.
  * @param now - The run's time.
- * @returns The row to cancel from.
+ * @returns The row to cancel from, and whether a sync ran.
  * @throws {Error} When the sync fails; staff are alerted once and nothing is cancelled, so the claim's retry tries again.
  */
 async function bringInPaidCheckouts(
   provider: BillingProviderClient,
   row: TenantBillingRecord,
   now: Date
-): Promise<TenantBillingRecord> {
+): Promise<{ row: TenantBillingRecord; hasSynced: boolean }> {
   const { tenantId } = row
   let isPaid = false
   for (const id of [row.pendingSubscriptionId, row.nextSubscriptionId]) {
@@ -437,7 +437,7 @@ async function bringInPaidCheckouts(
       )
     }
   }
-  if (!isPaid) return row
+  if (!isPaid) return { row, hasSynced: false }
   try {
     await syncTenantBilling(tenantId, 'job', { now })
   } catch (error) {
@@ -447,7 +447,33 @@ async function bringInPaidCheckouts(
     )
     throw error
   }
-  return (await billingRepository.findByTenantId(tenantId)) ?? row
+  return { row: (await billingRepository.findByTenantId(tenantId)) ?? row, hasSynced: true }
+}
+
+/**
+ * The row to cancel from after the sync of a paid checkout, when this run
+ * still holds the lifecycle claim. That sync releases the claim when it
+ * adopts a subscription (and queues another cancel job): this run takes it
+ * again, unless another job took it first, which then cancels instead, so
+ * no cancel goes out twice.
+ * @param scope - The running provider's query scope.
+ * @param claimed - The row as this run claimed it.
+ * @param fresh - The row after the sync.
+ * @returns The row, claimed by this run, or undefined when another job holds the claim or nothing is left to claim.
+ */
+async function holdClaim(
+  scope: ProviderScope,
+  claimed: TenantBillingRecord,
+  fresh: TenantBillingRecord
+): Promise<TenantBillingRecord | undefined> {
+  const sentAt = fresh.lifecycleCancelSentAt
+  if (sentAt !== null) {
+    return sentAt.getTime() === claimed.lifecycleCancelSentAt?.getTime() ? fresh : undefined
+  }
+  const [again] = await withTransaction((tx) =>
+    billingRepository.claimLifecycleCancels(scope, 1, tx, fresh.tenantId)
+  )
+  return again
 }
 
 /**
@@ -463,10 +489,13 @@ async function bringInPaidCheckouts(
  * time is over or the provider refuses a cycle-end cancel without a cycle,
  * and no card may be charged later. When the current subscription cannot be
  * read, an archive cancels it now anyway, and a suspension alerts staff once.
+ * After a sync that brought a paid checkout in, the lifecycle state is read
+ * again (a workspace reactivated meanwhile is skipped and released) and
+ * the claim is held again (`holdClaim`) before any cancel.
  * @param provider - The payment provider.
  * @param claimed - The claimed row.
  * @param now - The run's time.
- * @returns `acted`, or `skipped` for a workspace that is active again or gone.
+ * @returns `acted`, or `skipped` for a workspace that is active again or gone, or whose claim another job holds.
  */
 async function cancelLifecycleRow(
   provider: BillingProviderClient,
@@ -480,8 +509,21 @@ async function cancelLifecycleRow(
     await billingRepository.releaseLifecycleCancelClaim(tenantId)
     return 'skipped'
   }
-  const isArchived = tenant.lifecycleState === 'archived'
-  const row = await bringInPaidCheckouts(provider, claimed, now)
+  let isArchived = tenant.lifecycleState === 'archived'
+  const brought = await bringInPaidCheckouts(provider, claimed, now)
+  let { row } = brought
+  if (brought.hasSynced) {
+    const again = await tenantRepository.findByIdIncludingDeleted(tenantId)
+    if (again === undefined) return 'skipped'
+    if (again.lifecycleState === 'active') {
+      await billingRepository.releaseLifecycleCancelClaim(tenantId)
+      return 'skipped'
+    }
+    isArchived = again.lifecycleState === 'archived'
+    const held = await holdClaim({ kind: provider.kind, mode: provider.mode }, claimed, row)
+    if (held === undefined) return 'skipped'
+    row = held
+  }
   const isPaying = row.state === 'active' || row.state === 'past_due'
   const currentId = isArchived || !row.cancelAtPeriodEnd ? row.providerSubscriptionId : null
   if (currentId !== null) {

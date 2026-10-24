@@ -939,7 +939,11 @@ id it holds whatever the row's state: the current one at its cycle end for a
 suspended workspace that pays, else now; a checkout and a switch now. A
 checkout or switch that reads as paid is brought in by a sync first, so a
 paid checkout is adopted (and cancelled as the current one) or refunded as a
-duplicate, never discarded. The claim is released when the workspace is
+duplicate, never discarded. After that sync the cancel reads the lifecycle
+state again (a reactivated workspace is skipped and released) and holds the
+claim again, since the sync released it when it adopted the checkout: when
+another job took the claim first, that job cancels and this one does
+nothing, so no cancel goes out twice. The claim is released when the workspace is
 reactivated, when a sync gives a suspended or archived workspace a new
 current subscription (an adoption or a handover) or an id it did not hold,
 which also queues the prompt cancel, and once a day for a cancel that failed and alerted

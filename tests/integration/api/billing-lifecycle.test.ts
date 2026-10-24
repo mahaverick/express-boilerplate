@@ -22,7 +22,7 @@ import { BillingRepository } from '@/repositories/billing.repository'
 import { runFrequentBilling } from '@/services/billing/billing-scheduler.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { cancelPaid } from '@/services/billing/checkout.service'
-import { sql } from '@/services/database.service'
+import { sql, withTransaction } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { purgeTenant, purgeUser } from '@/services/platform-purge.service'
 import { archiveTenant, reactivateTenant, suspendTenant } from '@/services/platform-tenant.service'
@@ -142,6 +142,40 @@ async function runLifecycleJobs(): Promise<number> {
     await job.remove()
   }
   return jobs.length
+}
+
+/**
+ * Run the queued prompt cancel jobs, and run `between` once, right after the
+ * cancel's own sync of a paid checkout released the claim (it queues one
+ * more cancel job then) and before the cancel goes on.
+ * @param tenantId - The workspace.
+ * @param between - What happens in between.
+ */
+async function afterInJobSync(tenantId: string, between: () => Promise<void>): Promise<void> {
+  const outer = await lifecycleJobs()
+  const outerIds = new Set(outer.map((job) => job.id))
+  const original = BillingRepository.prototype.findByTenantId
+  let hasRun = false
+  const read = vi.spyOn(BillingRepository.prototype, 'findByTenantId')
+  read.mockImplementation(async function (this: BillingRepository, ...readArguments) {
+    if (!hasRun && readArguments[0] === tenantId) {
+      const queued = await lifecycleJobs()
+      if (queued.some((job) => !outerIds.has(job.id))) {
+        hasRun = true
+        await between()
+      }
+    }
+    return original.apply(this, readArguments)
+  })
+  try {
+    for (const job of outer) {
+      await processBillingJob(job)
+      await job.remove()
+    }
+  } finally {
+    read.mockRestore()
+  }
+  expect(hasRun).toBe(true)
 }
 
 /**
@@ -421,6 +455,61 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     const cancels = await recordingCancels(runLifecycleJobs)
 
     expect(cancels).toStrictEqual([[subscriptionId, false]])
+  })
+
+  it('leaves the cancel to the job that took the claim after the sync of a paid checkout released it', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    await suspendTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+
+    const cancels = await recordingCancels(() =>
+      afterInJobSync(tenant.id, async () => {
+        // Another worker claims the row the sync released, and will cancel it itself.
+        const [claimed] = await withTransaction((tx) =>
+          new BillingRepository().claimLifecycleCancels(
+            { kind: 'fake', mode: 'test' },
+            1,
+            tx,
+            tenant.id
+          )
+        )
+        expect(claimed?.tenantId).toBe(tenant.id)
+      })
+    )
+
+    expect(cancels).toStrictEqual([])
+    expect(await billingColumn(tenant.id, 'providerSubscriptionId')).toBe(pending)
+  })
+
+  it('cancels nothing and releases the claim when the workspace is reactivated during the sync of a paid checkout', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    await suspendTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+
+    const cancels = await recordingCancels(() =>
+      afterInJobSync(tenant.id, async () => {
+        await sql`update tenants set lifecycle_state = 'active' where id = ${tenant.id}`
+      })
+    )
+
+    expect(cancels).toStrictEqual([])
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: pending,
+      cancelAtPeriodEnd: false,
+      lifecycleCancelSentAt: null,
+    })
   })
 
   it('brings in a paid checkout before a suspension cancels it, so it ends at its cycle end and is never discarded', async () => {
