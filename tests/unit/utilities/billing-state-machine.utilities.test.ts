@@ -169,6 +169,15 @@ describe('nextBillingRow: the pending checkout', () => {
     })
     expect(result.patch).not.toHaveProperty('currentPeriodEnd')
     expect(result.patch.state).toBe('active')
+    expect(result.actions).toStrictEqual([
+      {
+        kind: 'alert',
+        alert: 'reconcile_repair',
+        message:
+          'Workspace is active on subscription sub_new with no paid period end. Check its invoices.',
+        subscriptionId: 'sub_new',
+      },
+    ])
   })
 
   it('resets a scheduled cancel when a new checkout becomes current', () => {
@@ -370,6 +379,25 @@ describe('nextBillingRow: the interval switch', () => {
     )
     expect(result.patch).not.toHaveProperty('providerSubscriptionId')
   })
+})
+
+describe('nextBillingRow: a next subscription with a failed charge', () => {
+  it.each(['pending', 'halted', 'paused'] as const)(
+    'neither cancels the current subscription nor hands over to a next one that reads %s',
+    (status) => {
+      const next = sub('sub_next', status, { customerId: 'cust_FAKE1', paidCount: 0 })
+      const running = map(switching(), { current: sub('sub_cur', 'active'), next })
+      expect(running).toStrictEqual({ patch: {}, cause: null, actions: [] })
+
+      const ended = map(
+        switching({ cancelAtPeriodEnd: true }),
+        { current: sub('sub_cur', 'cancelled', { paidCount: 1 }), next },
+        at(31)
+      )
+      expect(ended.patch).not.toHaveProperty('providerSubscriptionId')
+      expect(ended.actions).not.toContainEqual({ kind: 'promote_next' })
+    }
+  )
 })
 
 describe('nextBillingRow: the current subscription', () => {
@@ -595,6 +623,52 @@ describe('nextBillingRow: the current subscription', () => {
   it('changes nothing for a current subscription that never started', () => {
     const result = map(paying(), { current: sub('sub_cur', 'created') })
     expect(result).toStrictEqual({ patch: {}, cause: null, actions: [] })
+  })
+
+  it.each(['halted', 'paused'] as const)(
+    'cancels a %s subscription of a workspace already on Free, without a new grace window',
+    (status) => {
+      const lapsed = paying({ state: 'free', planId: 'plan-free' })
+      const result = map(lapsed, { current: sub('sub_cur', status, { paidCount: 1 }) })
+      expect(result).toStrictEqual({
+        patch: {},
+        cause: null,
+        actions: [{ kind: 'cancel_now', subscriptionId: 'sub_cur' }],
+      })
+    }
+  )
+
+  it('cancels an authenticated pending subscription of a workspace already on Free', () => {
+    const result = map(paying({ state: 'free' }), {
+      current: sub('sub_cur', 'pending', { paidCount: 1 }),
+    })
+    expect(result).toStrictEqual({
+      patch: {},
+      cause: null,
+      actions: [{ kind: 'cancel_now', subscriptionId: 'sub_cur' }],
+    })
+  })
+
+  it('leaves a never-authenticated pending subscription of a workspace on Free alone', () => {
+    const result = map(paying({ state: 'free' }), {
+      current: sub('sub_cur', 'pending', { paidCount: 0, customerId: null }),
+    })
+    expect(result).toStrictEqual({ patch: {}, cause: null, actions: [] })
+  })
+
+  it('alerts when the workspace is active with no paid period end', () => {
+    const result = map(paying({ currentPeriodEnd: null }), {
+      current: sub('sub_cur', 'active', { latestInvoicePaid: false }),
+    })
+    expect(result.actions).toStrictEqual([
+      {
+        kind: 'alert',
+        alert: 'reconcile_repair',
+        message:
+          'Workspace is active on subscription sub_cur with no paid period end. Check its invoices.',
+        subscriptionId: 'sub_cur',
+      },
+    ])
   })
 
   it('changes nothing when no subscription was fetched', () => {

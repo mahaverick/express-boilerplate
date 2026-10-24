@@ -32,7 +32,16 @@ export type SyncAction =
   | { kind: 'cancel_current_at_cycle_end'; subscriptionId: string }
   | { kind: 'promote_next' }
   | { kind: 'refund_duplicate'; subscriptionId: string }
-  | { kind: 'alert'; alert: BillingAlertKind; message: string }
+  | {
+      kind: 'alert'
+      alert: BillingAlertKind
+      message: string
+      /**
+       * The subscription the alert names, so the caller can skip an alert
+       * already raised for it.
+       */
+      subscriptionId?: string
+    }
 
 /**
  * Why a workspace's billing state changed, as its history records it. The
@@ -292,6 +301,21 @@ class BillingMapping {
   }
 
   /**
+   * A workspace already on Free whose subscription still reads as a failed
+   * or stopped charge: its paid time is over, so it never goes back to past
+   * due (that would start a fresh grace window). The subscription is
+   * cancelled now instead, when the payer ever authenticated it; the state
+   * and the failed-payment stamps stay as they are.
+   * @param sub - The current subscription, reading `pending`, `halted` or `paused`.
+   * @returns True when the workspace is on Free and nothing else applies.
+   */
+  isCancelledWhileFree(sub: ProviderSubscription): boolean {
+    if (this.draft.state !== 'free') return false
+    if (wasAuthenticated(sub)) this.actions.push({ kind: 'cancel_now', subscriptionId: sub.id })
+    return true
+  }
+
+  /**
    * Make a subscription the current one and map its status.
    * @param sub - The subscription taking over.
    * @param priceId - Its price.
@@ -325,14 +349,17 @@ class BillingMapping {
         return
       }
       case 'pending': {
+        if (this.isCancelledWhileFree(sub)) return
         if (wasAuthenticated(sub)) this.markPastDue(sub, 'payment_failed')
         return
       }
       case 'halted': {
+        if (this.isCancelledWhileFree(sub)) return
         this.markPastDue(sub, 'subscription_halted')
         return
       }
       case 'paused': {
+        if (this.isCancelledWhileFree(sub)) return
         this.markPastDue(sub, 'subscription_paused')
         return
       }
@@ -400,6 +427,10 @@ class BillingMapping {
   /**
    * The interval switch: cancel the current subscription at cycle end once
    * the next one is authenticated, and hand over when the current one ends.
+   * Only an `authenticated` or `active` next subscription counts: one that
+   * reads `pending`, `halted` or `paused` has a failed charge, and the switch
+   * waits rather than cancel a paying subscription for it. Whether its payer
+   * authenticated cannot tell this apart, since a switch shares the customer.
    * @param current - The current subscription, if fetched.
    * @param next - The next subscription.
    */
@@ -418,6 +449,7 @@ class BillingMapping {
         break
       }
     }
+    if (next.status !== 'authenticated' && next.status !== 'active') return
     const hasPeriodEnded = draft.currentPeriodEnd !== null && this.now >= draft.currentPeriodEnd
     const isHandover =
       current === undefined ||
@@ -518,6 +550,19 @@ export function nextBillingRow(
   for (const found of subs.swept ?? []) {
     if (held.has(found.id) || !isRunning(found)) continue
     running = mapping.adoptOrRefund(found, running)
+  }
+
+  if (
+    draft.state === 'active' &&
+    draft.currentPeriodEnd === null &&
+    draft.providerSubscriptionId !== null
+  ) {
+    mapping.actions.push({
+      kind: 'alert',
+      alert: 'reconcile_repair',
+      message: `Workspace is active on subscription ${draft.providerSubscriptionId} with no paid period end. Check its invoices.`,
+      subscriptionId: draft.providerSubscriptionId,
+    })
   }
 
   const isStateChanged = draft.state !== row.state
