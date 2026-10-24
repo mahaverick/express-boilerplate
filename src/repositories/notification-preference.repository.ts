@@ -50,8 +50,9 @@ export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
  * `tenant_invitation`, which sends no email on this path and is listed to
  * match the write side, `maintenance_mode_changed`, so no owner or admin
  * can miss that customers are locked out, and the billing notices, so no
- * owner misses that their workspace is about to lose Paid, needs a card, or
- * turns people away. Keep in sync by hand with
+ * owner misses that their workspace is about to lose Paid or needs a card.
+ * `workspace_full` is not here: it is an in-app notice with no email, so its
+ * email toggle stays switchable. Keep in sync by hand with
  * `NON_DISABLEABLE_NOTIFICATION_TYPES` (notification.validators.ts), or a
  * client could `PUT` a preference this repository then ignores.
  */
@@ -62,7 +63,6 @@ const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
   'billing_payment_failed',
   'billing_upgrade_requested',
   'billing_payer_left',
-  'workspace_full',
 ])
 
 /**
