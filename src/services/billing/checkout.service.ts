@@ -590,10 +590,41 @@ async function openCheckout(
   provider: BillingProviderClient,
   input: CheckoutRequest
 ): Promise<CheckoutSession> {
-  const { actor, tenantId, interval, purpose } = input
+  const { actor, tenantId, interval } = input
   await assertCustomerTenant(tenantId)
   const { price, planName } = await paidPrice(interval)
   const prefill = await prefillFor(actor)
+  const state: { created?: ProviderSubscription } = {}
+  try {
+    return await checkoutAttempts(provider, input, price, planName, prefill, state)
+  } catch (error) {
+    // A subscription created on a pass that then failed or was refused is never handed out.
+    if (state.created !== undefined) await discardCheckout(provider, tenantId, state.created)
+    throw error
+  }
+}
+
+/**
+ * The passes of `openCheckout`. Records the subscription a pass created in
+ * `state`, so the caller can cancel it when a later pass throws.
+ * @param provider - The running provider.
+ * @param input - The caller, workspace, interval, purpose and slot rule.
+ * @param price - The price asked for.
+ * @param planName - The name the provider plan carries.
+ * @param prefill - The checkout form's prefill.
+ * @param state - Where the created subscription is recorded.
+ * @param state.created - The subscription a pass created and has not handed out.
+ * @returns The session.
+ */
+async function checkoutAttempts(
+  provider: BillingProviderClient,
+  input: CheckoutRequest,
+  price: PlanPrice,
+  planName: string,
+  prefill: CheckoutSession['prefill'],
+  state: { created?: ProviderSubscription }
+): Promise<CheckoutSession> {
+  const { actor, tenantId, interval, purpose } = input
   let created: ProviderSubscription | undefined
   for (let attempt = 1; attempt <= WRITE_ATTEMPTS; attempt += 1) {
     const read = await withTransaction((tx) => lockOwnerAndBilling(actor, tenantId, tx))
@@ -633,6 +664,7 @@ async function openCheckout(
         })
       )
       chosen = created
+      state.created = created
     }
 
     const stored = await withTransaction(async (tx) => {
@@ -680,6 +712,7 @@ async function openCheckout(
     if (created !== undefined && created.id !== chosen.id) {
       await discardCheckout(provider, tenantId, created)
     }
+    delete state.created
     await emitBillingDiff(stored.before, stored.after, 'owner')
     return {
       purpose,
@@ -692,7 +725,6 @@ async function openCheckout(
       prefill,
     }
   }
-  if (created !== undefined) await discardCheckout(provider, tenantId, created)
   throw billingBusy()
 }
 
