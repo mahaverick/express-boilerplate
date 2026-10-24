@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { PII_PROPERTY_KEYS } from '@/constants/analytics.constants'
+import { BILLING_STATES, PLAN_KEYS } from '@/constants/billing.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -26,7 +27,7 @@ import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { processBillingWebhookEvent } from '@/services/billing/billing-webhook.service'
 import { cancelPaid, confirmCheckout, startCheckout } from '@/services/billing/checkout.service'
 import { db, sql } from '@/services/database.service'
-import { closeQueue } from '@/services/queue.service'
+import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import { invite } from '@/services/tenant-invitation.service'
 import { createTenant } from '@/services/tenant.service'
@@ -67,6 +68,9 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
+  // The changes queue billing mail; a later file in this worker counts the queue's jobs.
+  await getEmailQueue().obliterate({ force: true })
+  await getNotificationQueue().obliterate({ force: true })
   await sql`delete from analytics_outbox where properties->'$groups'->>'tenant' is not null or properties->>'$group_type' = 'tenant'`
   await truncateAuditLogs()
   if (extraTenantIds.length > 0) {
@@ -119,9 +123,20 @@ async function oneEvent(tenantId: string, event: string): Promise<AnalyticsOutbo
   expect(rows, `${event} rows`).toHaveLength(1)
   const [row] = rows
   if (row === undefined) throw new Error(`no ${event}`)
-  expect(row.properties.$groups).toEqual({ tenant: tenantId })
-  for (const key of Object.keys(row.properties)) expect(PII_KEYS.has(key), key).toBe(false)
+  expectBillingShape(row, tenantId)
   return row
+}
+
+/**
+ * Check a billing event's tenant group, its plan and state traits, and that it carries no PII key.
+ * @param row - The event's row.
+ * @param tenantId - The workspace it must join.
+ */
+function expectBillingShape(row: AnalyticsOutboxRow, tenantId: string): void {
+  expect(row.properties.$groups).toEqual({ tenant: tenantId })
+  expect(PLAN_KEYS).toContain(row.properties.plan)
+  expect(BILLING_STATES).toContain(row.properties.billing_state)
+  for (const key of Object.keys(row.properties)) expect(PII_KEYS.has(key), key).toBe(false)
 }
 
 /**
@@ -323,6 +338,29 @@ describe('billing analytics from a billing change', () => {
     expect(await eventNamesOf(tenantId)).toContain('billing_cancel_scheduled')
   })
 
+  it('sends an interval change once the switch is authenticated, as the owner who started it', async () => {
+    const { tenantId, owner } = await payingWorkspace()
+    const next = await fakeSubscription(
+      { tenantId, priceId: plans.yearPriceId },
+      'year',
+      new Date(Date.now() + 20 * DAY_MS)
+    )
+    await setBilling(tenantId, {
+      nextSubscriptionId: next,
+      nextPriceId: plans.yearPriceId,
+      checkoutStartedBy: owner.id,
+      payerUserId: null,
+    })
+    await fake.fakeAdvance(next, 'authenticated')
+
+    await syncTenantBilling(tenantId, 'webhook')
+
+    const scheduled = await oneEvent(tenantId, 'subscription_interval_change_scheduled')
+    expect(scheduled.distinctId).toBe(owner.id)
+    expect(scheduled.properties).toMatchObject({ plan: 'paid', billing_state: 'active' })
+    expect(await eventsOf(tenantId, 'subscription_cancel_scheduled')).toHaveLength(0)
+  })
+
   it('sends a reconcile repair as billing_reconciled with the field it fixed', async () => {
     const { tenantId, subscriptionId } = await payingWorkspace()
     await fake.fakeAdvance(subscriptionId, 'halted')
@@ -502,6 +540,7 @@ describe('plan refusals', () => {
     expect(pending).toHaveLength(2)
     const reached = await eventsOf(tenant.id, 'plan_limit_reached')
     expect(reached).toHaveLength(2)
+    for (const row of reached) expectBillingShape(row, tenant.id)
     expect(reached[0]).toMatchObject({
       distinctId: owner.id,
       properties: { key: 'members', used: 3, limit: 3, plan: 'free', billing_state: 'free' },
