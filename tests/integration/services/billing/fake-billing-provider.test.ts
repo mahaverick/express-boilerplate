@@ -136,6 +136,18 @@ describe('FakeBillingProvider', () => {
     expect(page.items[0]).toMatchObject({ status: 'paid', amountMinor: 99_900, currency: 'INR' })
   })
 
+  it("starts a deferred start's first cycle at its start, not at the moment it is charged", async () => {
+    const startAt = new Date('2026-12-01T00:00:00.000Z')
+    const id = await createOne(startAt)
+    await provider.fakeAdvance(id, 'authenticated')
+
+    const first = await provider.fakeAdvance(id, 'active')
+
+    expect(first.currentStart?.getTime()).toBe(startAt.getTime())
+    expect(first.currentEnd?.toISOString()).toBe('2027-01-01T00:00:00.000Z')
+    expect(first.paidCount).toBe(1)
+  })
+
   it('marks a pending or halted cycle unpaid', async () => {
     const id = await createOne()
     await provider.fakeAdvance(id, 'active')

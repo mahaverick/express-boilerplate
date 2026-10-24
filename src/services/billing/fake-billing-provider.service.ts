@@ -415,9 +415,11 @@ export class FakeBillingProvider implements BillingProviderClient {
     record.status = status
     if (status === 'authenticated' || status === 'active') record.customerId ??= fakeId('cust')
     if (status === 'active') {
-      const end = cycleEnd(now, record.interval)
+      // A deferred start's first cycle begins at its start, as Razorpay's does, not when the test charges it.
+      const start = record.paidCount === 0 && record.startAt !== null ? record.startAt : now
+      const end = cycleEnd(start, record.interval)
       const paymentId = fakeId('pay')
-      record.currentStart = now
+      record.currentStart = start
       record.currentEnd = end
       record.chargeAt = record.cancelAtCycleEnd ? null : end
       record.startAt ??= now
