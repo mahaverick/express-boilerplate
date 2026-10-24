@@ -6,7 +6,7 @@
 /**
  * Every state a workspace's billing record can hold.
  */
-const BILLING_STATES = ['free', 'trialing', 'active', 'past_due', 'halted', 'paused'] as const
+const BILLING_STATES = ['trialing', 'free', 'active', 'past_due'] as const
 
 /**
  * One state of a workspace's billing record.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test'
-import type { BillingStateInput } from '@/types/billing'
+import type { BillingStateInput, EntitlementGrantInput } from '@/types/billing'
 import {
   effectiveBillingState,
   extendTrialEnd,
@@ -24,7 +24,11 @@ const base: BillingStateInput = {
 }
 
 /** A standing grant, with optional overrides. */
-const grant = (key: string, value: boolean | number | null, extra = {}) => ({
+const grant = (
+  key: string,
+  value: boolean | number | null,
+  extra: Partial<EntitlementGrantInput> = {}
+) => ({
   key,
   value,
   expiresAt: null,
@@ -49,11 +53,13 @@ describe('effectiveBillingState', () => {
       'free',
     ],
     ['past_due inside grace', { state: 'past_due', haltedAt: at(1) }, 5, 'past_due'],
-    ['halted 8 days on', { state: 'halted', haltedAt: at(1) }, 9, 'free'],
-    ['paused 8 days on', { state: 'paused', pausedAt: at(1) }, 9, 'free'],
+    ['halted 8 days on', { state: 'past_due', haltedAt: at(1) }, 9, 'free'],
+    ['paused 8 days on', { state: 'past_due', pausedAt: at(1) }, 9, 'free'],
     ['past_due beyond grace', { state: 'past_due', haltedAt: at(1) }, 9, 'free'],
     ['active, period end + 9', { currentPeriodEnd: at(30) }, 39, 'active'],
     ['active, period end + 11', { currentPeriodEnd: at(30) }, 41, 'free'],
+    ['trial exactly at its end', { state: 'trialing', trialEndsAt: at(14) }, 14, 'trialing'],
+    ['past_due exactly at grace end', { state: 'past_due', haltedAt: at(1) }, 8, 'past_due'],
     ['free stays free', { state: 'free' }, 100, 'free'],
   ]
   it.each(cases)('%s', (_name, patch, day, expected) => {
@@ -94,6 +100,17 @@ describe('mergeEntitlements', () => {
     expect(sources.advanced_example).toBe('grant')
   })
 
+  it('keeps the plan as the source when it already has the feature', () => {
+    const { sources } = mergeEntitlements('paid', {}, [grant('advanced_example', true)], T0)
+    expect(sources.advanced_example).toBe('plan')
+  })
+
+  it('keeps the plan value when a grant value has the wrong type', () => {
+    const bad = mergeEntitlements('free', {}, [grant('members', true)], T0)
+    expect(bad.values.members).toBe(3)
+    expect(bad.sources.members).toBe('plan')
+  })
+
   it('raises a limit with the larger value, and null wins', () => {
     const over3 = mergeEntitlements('free', { members: 3 }, [grant('members', 10)], T0)
     expect(over3.values.members).toBe(10)
@@ -128,7 +145,6 @@ describe('limitUsage', () => {
   it('flags the warning band only below the cap', () => {
     expect(limitUsage(5, 4).approaching).toBe(true)
     expect(limitUsage(5, 5).approaching).toBe(false)
-    expect(limitUsage(5, 5).reached).toBe(true)
     expect(limitUsage(null, 50).approaching).toBe(false)
     expect(limitUsage(5, 3).approaching).toBe(false)
   })

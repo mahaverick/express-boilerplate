@@ -63,7 +63,7 @@ export function effectiveBillingState(
     if (row.cancelAtPeriodEnd) return now > buffered ? 'free' : state
     return now > addDays(buffered, graceDays) ? 'free' : state
   }
-  if (state === 'past_due' || state === 'halted' || state === 'paused') {
+  if (state === 'past_due') {
     const end = graceEndsAt(row, graceDays)
     return end && now > end ? 'free' : state
   }
@@ -109,16 +109,17 @@ export function mergeEntitlements(
     if (!Object.hasOwn(ENTITLEMENTS, grant.key)) continue
     const key = grant.key as EntitlementKey
     const definition: EntitlementDefinition = ENTITLEMENTS[key]
+    const current = values[key]
     if (definition.kind === 'feature') {
-      values[key] = true
-      sources[key] = 'grant'
+      if (current !== true) {
+        values[key] = true
+        sources[key] = 'grant'
+      }
       continue
     }
-    const current = values[key]
-    const next =
-      current === null || grant.value === null
-        ? null
-        : Math.max(current as number, grant.value as number)
+    if (typeof grant.value !== 'number' && grant.value !== null) continue
+    if (typeof current !== 'number' && current !== null) continue
+    const next = current === null || grant.value === null ? null : Math.max(current, grant.value)
     if (next !== current) {
       values[key] = next
       sources[key] = 'grant'
@@ -138,7 +139,6 @@ export function limitUsage(limit: number | null, used: number, softAt = 0.8): Li
   return {
     limit,
     used,
-    reached: limit !== null && used >= limit,
     approaching: limit !== null && used < limit && used >= Math.ceil(limit * softAt),
   }
 }

@@ -75,10 +75,6 @@ export interface LimitUsage {
    */
   used: number
   /**
-   * Whether the count has reached the cap.
-   */
-  reached: boolean
-  /**
    * Whether the count is inside the warning band below the cap.
    */
   approaching: boolean
