@@ -48,14 +48,21 @@ export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 /**
  * Notification types whose email channel a user may never disable:
  * `tenant_invitation`, which sends no email on this path and is listed to
- * match the write side, and `maintenance_mode_changed`, so no owner or admin
- * can miss that customers are locked out. Keep in sync by hand with
+ * match the write side, `maintenance_mode_changed`, so no owner or admin
+ * can miss that customers are locked out, and the billing notices, so no
+ * owner misses that their workspace is about to lose Paid, needs a card, or
+ * turns people away. Keep in sync by hand with
  * `NON_DISABLEABLE_NOTIFICATION_TYPES` (notification.validators.ts), or a
  * client could `PUT` a preference this repository then ignores.
  */
 const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
   'tenant_invitation',
   'maintenance_mode_changed',
+  'billing_trial_ending',
+  'billing_payment_failed',
+  'billing_upgrade_requested',
+  'billing_payer_left',
+  'workspace_full',
 ])
 
 /**

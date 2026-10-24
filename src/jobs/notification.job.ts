@@ -53,6 +53,15 @@ export interface NotificationJobData {
    * to `addEmailJob` with `email`.
    */
   emailContext?: EmailContext
+  /**
+   * A key fixed by the event the notification reports, for one that must
+   * reach its user once however often it is enqueued (a billing change
+   * synced twice). When set, the in-app row's dedupe key and the email's job
+   * key are built from it instead of from the job, so a re-run adds neither
+   * a second row nor a second email (`addEmailJobOnce`). At most 100
+   * characters, with no ':'.
+   */
+  dedupeKey?: string
 }
 
 /**

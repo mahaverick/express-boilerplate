@@ -1,0 +1,141 @@
+/**
+ * @file Which billing emails a committed change sends, read only from the
+ * row before and after it and the source of the change. Pure: the caller
+ * reads the workspace's lifecycle and the prices' intervals and passes them
+ * in. Each rule fires on one column's move, so a write that repeats the same
+ * state fires none.
+ *
+ * - Paid welcome: the row becomes `active` from another state with a new
+ *   current subscription. A recovery on the same subscription is not new.
+ * - Payment failed: `haltedAt` is set, once per halt.
+ * - Paid cancelled: `cancelAtPeriodEnd` turns on while Paid runs, unless a
+ *   scheduled switch or resubscribe continues it, or the workspace is
+ *   suspended or archived (the move to Free says why).
+ * - Interval switch scheduled: the next subscription is first authenticated
+ *   and bills another interval than the current one. A resubscribe on the
+ *   same interval sends nothing.
+ * - Moved to Free: the row becomes `free`. Its cause, first match wins:
+ *   `staff` for a staff change; `trial_ended` from a trial; `lifecycle` for a
+ *   suspended or archived workspace; `payment_failed` from a past-due,
+ *   halted or paused row; `cancelled` otherwise (a cancelled, completed or
+ *   expired subscription).
+ */
+import type {
+  BillingHistorySource,
+  BillingInterval,
+  BillingState,
+} from '@/constants/billing.constants'
+import type { TenantBillingRecord } from '@/database/models/billing.model'
+
+/**
+ * Why a workspace moved to Free, for its email: a trial's end has its own.
+ */
+export type DowngradeCause = 'trial_ended' | 'payment_failed' | 'cancelled' | 'staff' | 'lifecycle'
+
+/**
+ * One email-worthy change.
+ */
+export type BillingTransition =
+  | { kind: 'paid_welcome' }
+  | { kind: 'payment_failed' }
+  | { kind: 'paid_cancelled' }
+  | { kind: 'interval_switch_scheduled' }
+  | { kind: 'moved_to_free'; cause: DowngradeCause }
+
+/**
+ * What the rules need besides the rows.
+ */
+export interface TransitionContext {
+  /**
+   * Whether the workspace is active: not suspended or archived.
+   */
+  isWorkspaceActive: boolean
+  /**
+   * The interval a price bills, or undefined for an unknown price.
+   */
+  intervalOf: (priceId: string | null) => BillingInterval | undefined
+}
+
+/**
+ * The states in which a workspace pays.
+ */
+const PAYING_STATES: ReadonlySet<BillingState> = new Set(['active', 'past_due'])
+
+/**
+ * Why a workspace moved to Free.
+ * @param before - The row it left.
+ * @param source - What made the change.
+ * @param context - The workspace facts.
+ * @returns The cause.
+ */
+function downgradeCauseOf(
+  before: TenantBillingRecord,
+  source: BillingHistorySource,
+  context: TransitionContext
+): DowngradeCause {
+  if (source === 'staff') return 'staff'
+  if (before.state === 'trialing') return 'trial_ended'
+  if (!context.isWorkspaceActive) return 'lifecycle'
+  if (before.state === 'past_due' || before.haltedAt !== null || before.pausedAt !== null) {
+    return 'payment_failed'
+  }
+  return 'cancelled'
+}
+
+/**
+ * Whether a switch or resubscribe continues Paid after the current
+ * subscription ends.
+ * @param after - The row after the change.
+ * @returns True when an authenticated next subscription is scheduled.
+ */
+function isContinued(after: TenantBillingRecord): boolean {
+  return after.nextSubscriptionId !== null && after.nextAuthenticatedAt !== null
+}
+
+/**
+ * The email-worthy changes between two rows, in the order they are sent.
+ * @param before - The row before the change.
+ * @param after - The row after it.
+ * @param source - What made the change.
+ * @param context - The workspace's lifecycle and the prices' intervals.
+ * @returns Each transition once; none when nothing an email reports changed.
+ */
+export function billingTransitions(
+  before: TenantBillingRecord,
+  after: TenantBillingRecord,
+  source: BillingHistorySource,
+  context: TransitionContext
+): BillingTransition[] {
+  const transitions: BillingTransition[] = []
+  if (
+    before.state !== 'active' &&
+    after.state === 'active' &&
+    after.providerSubscriptionId !== null &&
+    after.providerSubscriptionId !== before.providerSubscriptionId
+  ) {
+    transitions.push({ kind: 'paid_welcome' })
+  }
+  if (before.haltedAt === null && after.haltedAt !== null) {
+    transitions.push({ kind: 'payment_failed' })
+  }
+  if (
+    !before.cancelAtPeriodEnd &&
+    after.cancelAtPeriodEnd &&
+    PAYING_STATES.has(after.state) &&
+    !isContinued(after) &&
+    context.isWorkspaceActive
+  ) {
+    transitions.push({ kind: 'paid_cancelled' })
+  }
+  if (before.nextAuthenticatedAt === null && after.nextAuthenticatedAt !== null) {
+    const next = context.intervalOf(after.nextPriceId)
+    const current = context.intervalOf(after.priceId)
+    if (next !== undefined && current !== undefined && next !== current) {
+      transitions.push({ kind: 'interval_switch_scheduled' })
+    }
+  }
+  if (before.state !== 'free' && after.state === 'free') {
+    transitions.push({ kind: 'moved_to_free', cause: downgradeCauseOf(before, source, context) })
+  }
+  return transitions
+}

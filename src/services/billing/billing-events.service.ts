@@ -1,14 +1,20 @@
 /**
  * @file What follows a committed billing change, read from the difference
  * between the row before and after it, never from the provider event that
- * caused it: an entitlements push to every member's open app. Emails,
- * notifications and analytics events for the same change hang off
- * `emitBillingDiff`; it is the one place they read the diff.
+ * caused it: an entitlements push to every member's open app, and the billing
+ * emails and notifications (`sendBillingDiffEmails`). Analytics events for the
+ * same change hang off `emitBillingDiff` too; it is the one place they read
+ * the diff. Every write path that changes a billing row calls it after its
+ * commit, never inside the transaction.
  */
 import type { BillingHistorySource } from '@/constants/billing.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import {
+  sendBillingDiffEmails,
+  type BillingDiffExtras,
+} from '@/services/billing/billing-emails.service'
 import { logger } from '@/services/logger.service'
 import { emitEntitlementsChanged } from '@/services/notification-emitter.service'
 
@@ -63,16 +69,20 @@ export async function publishEntitlementsChanged(tenantId: string): Promise<void
 
 /**
  * Act on a committed billing change: push it to members' open apps when
- * anything they see changed. Never rejects: the change is committed, and a
- * missed push only delays the app until its next read.
+ * anything they see changed, and send the emails and notifications it calls
+ * for, each once however often the same change is passed in. Never rejects:
+ * the change is committed, and a missed push only delays the app until its
+ * next read; a failed send is logged with ids only.
  * @param before - The row before the change.
  * @param after - The row after it.
  * @param source - What made the change.
+ * @param extras - What the change did besides the row: the upgrade requests it fulfilled.
  */
 export async function emitBillingDiff(
   before: TenantBillingRecord,
   after: TenantBillingRecord,
-  source: BillingHistorySource
+  source: BillingHistorySource,
+  extras: BillingDiffExtras = {}
 ): Promise<void> {
   const changed = VISIBLE_KEYS.filter((key) => !isSameValue(before[key], after[key]))
   if (changed.length === 0) return
@@ -88,4 +98,5 @@ export async function emitBillingDiff(
   } catch (error) {
     logger.error('Could not push an entitlements change', { error, tenantId: after.tenantId })
   }
+  await sendBillingDiffEmails(before, after, source, extras)
 }

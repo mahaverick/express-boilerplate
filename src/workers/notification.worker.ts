@@ -8,7 +8,7 @@
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import { redactedForLog } from '@/errors/postgres-errors'
-import { addEmailJob } from '@/jobs/email.job'
+import { addEmailJob, addEmailJobOnce } from '@/jobs/email.job'
 import {
   isTerminalFailure,
   recordPermanentFailure,
@@ -50,11 +50,13 @@ function idOf(job: Pick<Job<NotificationJobData>, 'id'>): string {
 
 /**
  * The idempotency key for this job's in-app row. Stable across retries of
- * one job; the timestamp keeps it unique if job ids restart.
+ * one job; the timestamp keeps it unique if job ids restart. A job with its
+ * own `dedupeKey` uses that, so the same event enqueued again adds no row.
  * @param job - The notification job.
  * @returns The `notifications.dedupe_key` value.
  */
 function dedupeKeyFor(job: Job<NotificationJobData>): string {
+  if (job.data.dedupeKey !== undefined) return `notification-${job.data.dedupeKey}`
   return `notification-job-${idOf(job)}-${job.timestamp}`
 }
 
@@ -84,7 +86,9 @@ export function emailJobIdFor(job: Pick<Job<NotificationJobData>, 'id' | 'timest
  * timestamp is in both keys because job ids restart at 1 when the queue's
  * Redis keys are flushed. One gap is accepted: email jobs are removed on
  * completion, so a retry after the email was sent can send it again, as a
- * second attempt on the same message.
+ * second attempt on the same message. A job with its own `dedupeKey` closes
+ * that gap: its keys come from the event, and its email is enqueued only
+ * while its message row is still `queued` (`addEmailJobOnce`).
  *
  * The row is emitted only after its insert commits, so a live stream never
  * shows a notification that `GET /api/v1/notifications` or a replay cannot.
@@ -129,6 +133,13 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
   const isEmailEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'email')
   if (!isEmailEnabled) return
 
+  if (job.data.dedupeKey !== undefined) {
+    await addEmailJobOnce(email, userId, {
+      jobId: `notification-email-${job.data.dedupeKey}`,
+      ...(emailContext !== undefined && { context: emailContext }),
+    })
+    return
+  }
   await addEmailJob(email, userId, {
     jobId: emailJobIdFor(job),
     ...(emailContext !== undefined && { context: emailContext }),

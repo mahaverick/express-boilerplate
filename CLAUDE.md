@@ -259,8 +259,8 @@ points at the code or doc that holds the detail. How things work is in
   sign in to switch maintenance off. `tenant_invitation` mail goes through `addEmailJob()`
   directly, since the invitee may have no account.
 - **Some email channels can't be switched off** (`tenant_invitation`,
-  `maintenance_mode_changed`): disabling them would cut off an invitee or
-  silence the mail an account owner must see. `PUT /notifications/preferences`
+  `maintenance_mode_changed` and the billing notices): disabling them would
+  cut off an invitee or silence the mail an account owner must see. `PUT /notifications/preferences`
   answers 400 for `emailEnabled: false` on any of them (the repository's
   `upsert` refuses it too); `inAppEnabled` can still be switched off for any
   type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
@@ -524,7 +524,10 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   Under 30 words a sentence; no vague failure words, weasel, peacock or filler
   words, or jargon such as "token"; a next step on every error; an absolute
   UTC time from `formatUtcDateTime` (`src/utilities/date-text.utilities.ts`) in
-  mail and notifications. `tests/unit/copy-style.test.ts` fails on a banned
+  mail and notifications. The one exception is a billing date: the date alone,
+  in the workspace's time zone (`formatBillingDate`,
+  `src/services/billing/billing-dates.service.ts`), so it matches the day on
+  the customer's bank message. `tests/unit/copy-style.test.ts` fails on a banned
   phrase or a long sentence. zod's own messages come from
   `src/validators/zod-messages.validators.ts`; a schema's own message wins.
   Never rename a `code` to change copy: clients branch on codes.

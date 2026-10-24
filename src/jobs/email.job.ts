@@ -186,3 +186,27 @@ export async function addEmailJob(
   const tracked = await createTrackedEmail(message, userId, { context, jobKey: jobOptions.jobId })
   return enqueueTrackedEmail(message, userId, tracked.id, jobOptions)
 }
+
+/**
+ * `addEmailJob` for a mail that must go out once however often its caller
+ * runs: a billing change synced twice, or a notification job run again after
+ * its email was sent. The fixed `jobId` is the message row's `job_key`, which
+ * outlives the job: once a row for it has left `queued` (sent, suppressed or
+ * failed in the sending), nothing is enqueued again. A row still `queued`
+ * has its job enqueued again, which BullMQ skips while that job exists.
+ * @param message - The email to send.
+ * @param userId - The user this email is for; `''` when there is none, stored as NULL.
+ * @param options - Job options with the fixed `jobId`; `context` goes on the message row.
+ * @returns The job, or undefined when the mail was already handled.
+ * @throws {Error} Whatever `createTrackedEmail` or `enqueueTrackedEmail` throws.
+ */
+export async function addEmailJobOnce(
+  message: MailMessage,
+  userId: string,
+  options: EmailJobOptions & { jobId: string }
+): Promise<Job<EmailJobData> | undefined> {
+  const { context, ...jobOptions } = options
+  const tracked = await createTrackedEmail(message, userId, { context, jobKey: jobOptions.jobId })
+  if (tracked.status !== 'queued') return undefined
+  return enqueueTrackedEmail(message, userId, tracked.id, jobOptions)
+}

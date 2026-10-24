@@ -55,6 +55,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import { formatBillingDate } from '@/services/billing/billing-dates.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import {
@@ -73,7 +74,6 @@ import type {
   InvoiceView,
   ProviderSubscription,
 } from '@/types/billing'
-import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { bindScope, listScope, signCursor, verifyCursor } from '@/utilities/list-cursor.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 
@@ -564,7 +564,7 @@ async function switchSlot(
   }
   if (row.trialEndsAt !== null && row.trialEndsAt > now) {
     throw new HttpError(
-      `Your first payment is due when your trial ends at ${formatUtcDateTime(row.trialEndsAt)}. Switch the interval after that.`,
+      `Your first payment is due when your trial ends on ${await formatBillingDate(row.tenantId, row.trialEndsAt)}. Switch the interval after that.`,
       409,
       SWITCH_BEFORE_FIRST_CHARGE_CODE
     )
@@ -690,7 +690,7 @@ async function checkoutAttempts(
         const starts =
           read.currentPeriodEnd === null
             ? 'at the end of this period'
-            : `at ${formatUtcDateTime(read.currentPeriodEnd)}`
+            : `on ${await formatBillingDate(tenantId, read.currentPeriodEnd)}`
         throw subscriptionExists(
           purpose === 'switch'
             ? `An interval switch is already scheduled to start ${starts}. Cancel under Billing to choose again.`
@@ -1046,7 +1046,7 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
   if (currentId === null && nextId === null) {
     throw noSubscription(
       row.cancelAtPeriodEnd && row.currentPeriodEnd !== null
-        ? `Your subscription already ends at ${formatUtcDateTime(row.currentPeriodEnd)}. To keep Paid after that, upgrade again under Billing.`
+        ? `Your subscription already ends on ${await formatBillingDate(tenantId, row.currentPeriodEnd)}. To keep Paid after that, upgrade again under Billing.`
         : 'Your workspace has no subscription to cancel. There is nothing to do.'
     )
   }

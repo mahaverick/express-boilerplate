@@ -72,7 +72,8 @@ const emailSuppressionRepository = new EmailSuppressionRepository()
 export const TOKEN_MASK = '••••••'
 
 /**
- * What a preview shows for the inviter, whose name the email record never stores.
+ * What a preview shows for another person's name (the inviter, the payer who
+ * left, the member who asked to upgrade), which the email record never stores.
  */
 export const INVITER_NAME_PLACEHOLDER = 'A teammate'
 
@@ -581,6 +582,207 @@ export function buildPreviewMessage(
             occurredAt: fill('occurredAt'),
             settingsUrl: securitySettingsPageUrl(origin, templateKey),
             appName: fill('appName'),
+          },
+        }
+      }
+      case 'trial_started': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            trialEndsOn: fill('trialEndsOn'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'trial_midpoint': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            daysLeft: fill('daysLeft'),
+            trialEndsOn: fill('trialEndsOn'),
+            usageSummary: fill('usageSummary'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'trial_ending': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            trialEndsOn: fill('trialEndsOn'),
+            memberLimit: fill('memberLimit'),
+            membersUsed: fill('membersUsed'),
+            monthlyPrice: fill('monthlyPrice'),
+            yearlyPrice: fill('yearlyPrice'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'trial_ends_today': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            memberLimit: fill('memberLimit'),
+            membersUsed: fill('membersUsed'),
+            monthlyPrice: fill('monthlyPrice'),
+            yearlyPrice: fill('yearlyPrice'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'trial_ended': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            summary: fill('summary'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'paid_welcome': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            amount: fill('amount'),
+            interval: fill('interval') === 'year' ? 'year' : 'month',
+            nextChargeOn: fill('nextChargeOn'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'renewal_upcoming': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            renewsOn: fill('renewsOn'),
+            amount: fill('amount'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'payment_failed': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            amount: fill('amount'),
+            graceEndsOn: fill('graceEndsOn'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'moved_to_free': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            downgradeCause: fill('downgradeCause'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'paid_cancelled': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            endsOn: fill('endsOn'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'interval_switch_scheduled': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            interval: fill('interval') === 'year' ? 'year' : 'month',
+            switchOn: fill('switchOn'),
+            amount: fill('amount'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'payer_left': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            // Never stored: another person's name that a purge of the payer could not find.
+            payerName: INVITER_NAME_PLACEHOLDER,
+            leftOn: fill('leftOn'),
+            periodEndsOn: fill('periodEndsOn'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'upgrade_requested': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            // Never stored: another person's name that a purge of the requester could not find.
+            requesterName: INVITER_NAME_PLACEHOLDER,
+            monthlyPrice: fill('monthlyPrice'),
+            yearlyPrice: fill('yearlyPrice'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
+      case 'upgrade_request_fulfilled': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            tenantLink: fill('tenantLink'),
+          },
+        }
+      }
+      case 'winback': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            memberLimit: fill('memberLimit'),
+            monthlyPrice: fill('monthlyPrice'),
+            billingLink: fill('billingLink'),
           },
         }
       }

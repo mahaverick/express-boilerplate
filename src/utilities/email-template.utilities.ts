@@ -22,6 +22,21 @@ export const EMAIL_TEMPLATE_KEYS = [
   'invitation_confirm',
   'passkey_created',
   'passkey_deleted',
+  'trial_started',
+  'trial_midpoint',
+  'trial_ending',
+  'trial_ends_today',
+  'trial_ended',
+  'paid_welcome',
+  'renewal_upcoming',
+  'payment_failed',
+  'moved_to_free',
+  'paid_cancelled',
+  'interval_switch_scheduled',
+  'payer_left',
+  'upgrade_requested',
+  'upgrade_request_fulfilled',
+  'winback',
 ] as const
 
 /**

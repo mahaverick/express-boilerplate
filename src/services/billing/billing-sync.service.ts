@@ -12,15 +12,20 @@
  *    runs again once, then gives up for the caller to retry;
  * 4. after the commit, inserts alerts, runs the follow-up provider calls
  *    (cancel, refund, the switch's cycle-end cancel), pushes the change to
- *    members, and syncs once more after a handover or a cancel so the new
- *    provider state lands at once.
+ *    members and sends its emails (`emitBillingDiff`, which also tells each
+ *    member whose upgrade request the write fulfilled), and syncs once more
+ *    after a handover or a cancel so the new provider state lands at once.
  *
  * A subscription whose notes name another workspace is never adopted, and one
  * whose notes name an unknown price is never made current: both are ignored
  * and alerted.
  */
 import type { BillingAlertKind, BillingHistorySource } from '@/constants/billing.constants'
-import type { NewTenantBilling, TenantBillingRecord } from '@/database/models/billing.model'
+import type {
+  NewTenantBilling,
+  TenantBillingRecord,
+  UpgradeRequest,
+} from '@/database/models/billing.model'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
@@ -135,6 +140,10 @@ interface CommittedSync {
   after: TenantBillingRecord
   actions: SyncAction[]
   changed: boolean
+  /**
+   * The upgrade requests the write fulfilled, so their requesters are told.
+   */
+  fulfilledRequests: UpgradeRequest[]
 }
 
 /**
@@ -330,14 +339,16 @@ async function commitSync(
         tx
       )
     }
-    if (after.state === 'active' && locked.state !== 'active') {
-      await billingRepository.fulfilUpgradeRequests(run.tenantId, tx)
-    }
+    const fulfilledRequests =
+      after.state === 'active' && locked.state !== 'active'
+        ? await billingRepository.fulfilUpgradeRequests(run.tenantId, tx)
+        : []
     return {
       before: locked,
       after,
       actions: mapped.actions,
       changed: Object.keys(patch).some((key) => key !== 'syncedAt'),
+      fulfilledRequests,
     }
   })
 }
@@ -559,7 +570,9 @@ async function runFollowUps(
       })
     }
   }
-  await emitBillingDiff(committed.before, committed.after, run.source)
+  await emitBillingDiff(committed.before, committed.after, run.source, {
+    fulfilledRequests: committed.fulfilledRequests,
+  })
   let shouldResync = false
   for (const action of committed.actions) {
     switch (action.kind) {

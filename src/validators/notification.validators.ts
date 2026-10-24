@@ -38,13 +38,19 @@ export const notificationIdSchema = z.object({
  * delivery; `updatePreferencesSchemaFor` refuses to store `emailEnabled:
  * false` for them, so the settings UI never shows a toggle the repository
  * would ignore. `maintenance_mode_changed` must reach every
- * platform owner and admin; `tenant_invitation` has no email on the
+ * platform owner and admin, and each billing notice every owner of the
+ * workspace; `tenant_invitation` has no email on the
  * notification path and is listed only to keep the two sets the same. Their
  * in-app channel stays switchable.
  */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'tenant_invitation',
   'maintenance_mode_changed',
+  'billing_trial_ending',
+  'billing_payment_failed',
+  'billing_upgrade_requested',
+  'billing_payer_left',
+  'workspace_full',
 ])
 
 /**
