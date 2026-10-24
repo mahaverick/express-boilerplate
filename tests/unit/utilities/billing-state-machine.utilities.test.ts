@@ -94,6 +94,7 @@ function sub(
     currentStart: isActive ? at(0) : null,
     currentEnd: isActive ? at(30) : null,
     startAt: at(0),
+    createdAt: at(-1),
     endedAt: null,
     chargeAt: isActive ? at(30) : null,
     notes: { tenantId: TENANT_ID, priceId: PRICE_MONTH },

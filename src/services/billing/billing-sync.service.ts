@@ -324,14 +324,13 @@ async function commitSync(
     if (patch.providerSubscriptionId !== undefined && patch.providerSubscriptionId !== null) {
       if (locked.provider !== provider.kind) patch.provider = provider.kind
       if (locked.providerMode !== provider.mode) patch.providerMode = provider.mode
-      // A new subscription's payer is the owner who started its checkout until the confirm records who paid: an earlier payer, and their billing address, pay for nothing now.
+      // A new subscription with no payer on record (a stored checkout clears it) is paid for by the owner who started its checkout until a confirm says who paid; a payer the confirm set is never replaced.
       if (
         patch.providerSubscriptionId !== locked.providerSubscriptionId &&
-        locked.checkoutStartedBy !== null &&
-        locked.payerUserId !== locked.checkoutStartedBy
+        locked.payerUserId === null &&
+        locked.checkoutStartedBy !== null
       ) {
         patch.payerUserId = locked.checkoutStartedBy
-        patch.billingEmail = null
       }
     }
 

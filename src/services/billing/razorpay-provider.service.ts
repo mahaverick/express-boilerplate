@@ -360,6 +360,7 @@ export class RazorpayProvider implements BillingProviderClient {
       currentStart: dateFrom(record.current_start),
       currentEnd: dateFrom(record.current_end),
       startAt: dateFrom(record.start_at),
+      createdAt: dateFrom(record.created_at),
       endedAt: dateFrom(record.ended_at),
       chargeAt: dateFrom(record.charge_at),
       notes: notesFrom(record.notes),

@@ -122,10 +122,11 @@ function cancelledBy(
   isWorkspaceActive: boolean,
   isOwnerCancel: boolean
 ): CancelScheduledBy {
-  if (source === 'owner' || (isOwnerCancel && source !== 'staff')) return 'owner'
+  if (source === 'owner') return 'owner'
   if (source === 'staff') return 'staff'
+  // A suspension's cancel wins over an owner's marker: the marker may outlive a cancel that failed.
   if (!isWorkspaceActive) return 'suspension'
-  return 'customer_bank'
+  return isOwnerCancel ? 'owner' : 'customer_bank'
 }
 
 /**

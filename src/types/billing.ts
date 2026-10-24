@@ -199,6 +199,10 @@ export interface ProviderSubscription {
    */
   startAt: Date | null
   /**
+   * When the provider created the subscription, or null when it did not say.
+   */
+  createdAt: Date | null
+  /**
    * When the subscription ended, or null while it runs.
    */
   endedAt: Date | null

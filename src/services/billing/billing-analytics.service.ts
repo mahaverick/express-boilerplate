@@ -199,6 +199,31 @@ export async function markOwnerCancel(
 }
 
 /**
+ * Forget an owner's cancel marker when the cancel did not happen. Best
+ * effort: a failure leaves the marker to expire.
+ * @param tenantId - The workspace.
+ * @param subscriptionId - The subscription.
+ */
+export async function clearOwnerCancel(tenantId: string, subscriptionId: string): Promise<void> {
+  if (!isAnalyticsEnabled()) return
+  try {
+    await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.del(ownerCancelKey(tenantId, subscriptionId))
+      },
+      'billing owner cancel marker release',
+      () => {}
+    )
+  } catch (error) {
+    logger.warn('Could not clear an owner cancel marker', {
+      error: redactedForLog(error),
+      tenantId,
+    })
+  }
+}
+
+/**
  * The owner whose cancel of a subscription is on record.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription, or null.
@@ -493,11 +518,17 @@ export async function trackCheckoutStarted(
  * @param subscription.id - Its id.
  * @param subscription.currentStart - When its first cycle started, if it did.
  * @param subscription.startAt - When its first charge is due, if deferred.
+ * @param subscription.createdAt - When the provider created it, the time when it has neither.
  */
 export async function trackCheckoutConfirmed(
   tenantId: string,
   confirmer: string,
-  subscription: { id: string; currentStart: Date | null; startAt: Date | null }
+  subscription: {
+    id: string
+    currentStart: Date | null
+    startAt: Date | null
+    createdAt: Date | null
+  }
 ): Promise<void> {
   if (!isAnalyticsEnabled()) return
   try {
@@ -511,7 +542,11 @@ export async function trackCheckoutConfirmed(
         attributedUserId: null,
         ...traitsOf(row),
         dedupeKey: `${tenantId}:checkout_confirmed:${subscription.id}`,
-        at: subscription.currentStart ?? subscription.startAt ?? row.updatedAt,
+        at:
+          subscription.currentStart ??
+          subscription.startAt ??
+          subscription.createdAt ??
+          row.updatedAt,
       },
       { type: 'checkout_confirmed' }
     )

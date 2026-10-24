@@ -56,6 +56,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import {
+  clearOwnerCancel,
   markOwnerCancel,
   trackCheckoutConfirmed,
   trackCheckoutStarted,
@@ -737,11 +738,13 @@ async function checkoutAttempts(
               checkoutStartedBy: actor.userId,
               provider: provider.kind,
               providerMode: provider.mode,
-              ...(slot.isTakeover && {
-                providerSubscriptionId: null,
-                // The old subscription's payer pays for nothing now; the new one's is set when it starts.
+              // A new checkout's payer is not known yet: an earlier payer, and their billing address, pay for nothing now. The confirm records who paid.
+              ...(chosen.id !== locked.pendingSubscriptionId && {
                 payerUserId: null,
                 billingEmail: null,
+              }),
+              ...(slot.isTakeover && {
+                providerSubscriptionId: null,
                 nextSubscriptionId: null,
                 nextPriceId: null,
                 nextAuthenticatedAt: null,
@@ -1085,12 +1088,18 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
       // Before the provider call: its webhook may land before this write and must still read as the owner's cancel.
       await markOwnerCancel(tenantId, currentId, actor.userId)
       currentCancel = 'cycle_end'
-      if (current.status === 'authenticated') {
-        // Read again just before cancelling now: a first charge that landed meanwhile makes it a cycle-end cancel.
-        const latest = await callProvider(() => provider.fetchSubscription(currentId))
-        if (latest.status === 'authenticated') currentCancel = 'now'
+      try {
+        if (current.status === 'authenticated') {
+          // Read again just before cancelling now: a first charge that landed meanwhile makes it a cycle-end cancel.
+          const latest = await callProvider(() => provider.fetchSubscription(currentId))
+          if (latest.status === 'authenticated') currentCancel = 'now'
+        }
+        await cancelOrEnded(provider, currentId, currentCancel === 'cycle_end')
+      } catch (error) {
+        // The owner's cancel did not happen: a later cancel of this subscription is not theirs.
+        await clearOwnerCancel(tenantId, currentId)
+        throw error
       }
-      await cancelOrEnded(provider, currentId, currentCancel === 'cycle_end')
     }
   }
   let nextFailure: Error | undefined

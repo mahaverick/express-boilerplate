@@ -120,6 +120,7 @@ function toSubscription(record: FakeSubscriptionRecord): ProviderSubscription {
     currentStart: dateOrNull(record.currentStart),
     currentEnd: dateOrNull(record.currentEnd),
     startAt: dateOrNull(record.startAt),
+    createdAt: new Date(record.createdAt),
     endedAt: dateOrNull(record.endedAt),
     chargeAt: dateOrNull(record.chargeAt),
     notes: { ...record.notes },

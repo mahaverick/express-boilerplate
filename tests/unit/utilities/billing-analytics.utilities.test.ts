@@ -332,6 +332,19 @@ describe('billingDiffEvents', () => {
     ).toContainEqual({ type: 'subscription_cancel_scheduled', by: 'staff' })
   })
 
+  it("reads a suspended workspace's cancel as by suspension even with an owner cancel on record", () => {
+    const events = billingDiffEvents(
+      paying(),
+      paying({ cancelAtPeriodEnd: true }),
+      'job',
+      context({ isWorkspaceActive: false, isOwnerCancel: true })
+    )
+    expect(events.map((event) => event.detail)).toContainEqual({
+      type: 'subscription_cancel_scheduled',
+      by: 'suspension',
+    })
+  })
+
   it('attributes the first charge of an upgrade made during a trial, and its failure, to the checkout', () => {
     const deferred = paying({ trialEndsAt: PERIOD_END })
     expect(

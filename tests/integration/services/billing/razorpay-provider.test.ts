@@ -161,6 +161,7 @@ describe('fetchSubscription', () => {
       currentStart: new Date(1_792_812_180_000),
       currentEnd: new Date(1_795_458_600_000),
       startAt: new Date(1_792_812_180_000),
+      createdAt: new Date(1_792_812_071_000),
       endedAt: null,
       chargeAt: new Date(1_795_458_600_000),
       notes: { tenantId: 'probe-t2', appEnv: 'local', priceId: 'probe-p1' },

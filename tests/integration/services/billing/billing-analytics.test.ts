@@ -15,6 +15,7 @@ import { PII_PROPERTY_KEYS } from '@/constants/analytics.constants'
 import { BILLING_STATES, PLAN_KEYS } from '@/constants/billing.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import type { User } from '@/database/models/user.model'
+import { ProviderError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { requireFeature } from '@/middlewares/entitlement.middleware'
 import { BillingRepository } from '@/repositories/billing.repository'
@@ -552,6 +553,83 @@ describe('attribution across payers and owners', () => {
     expect(cancel).toMatchObject({
       distinctId: owner.id,
       properties: { by: 'owner', access: 'member' },
+    })
+  })
+})
+
+describe('a payer the confirm set', () => {
+  it('keeps the owner who paid and confirmed as the payer when the activation lands later', async () => {
+    const { tenant, owner: payingOwner } = await workspace()
+    const reopener = await createTrackedUser()
+    await sql`insert into user_memberships (user_id, tenant_id, role) values (${reopener.id}, ${tenant.id}, 'owner')`
+    const session = await startCheckout({ userId: payingOwner.id }, tenant.id, 'month')
+    const reopened = await startCheckout({ userId: reopener.id }, tenant.id, 'month')
+    expect(reopened.subscriptionId).toBe(session.subscriptionId)
+    // Still `created` at the provider: the confirm's own sync changes nothing, and only the payer is recorded.
+
+    await confirmCheckout(
+      { userId: payingOwner.id },
+      tenant.id,
+      confirmBody(session.subscriptionId)
+    )
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'free',
+      payerUserId: payingOwner.id,
+      billingEmail: payingOwner.email,
+    })
+    await fake.fakeAdvance(session.subscriptionId, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      payerUserId: payingOwner.id,
+      billingEmail: payingOwner.email,
+    })
+  })
+
+  it('sends a confirm posted again for an uncharged checkout with the same uuid and timestamp', async () => {
+    const { tenant, owner } = await workspace()
+    const session = await startCheckout({ userId: owner.id }, tenant.id, 'month')
+    // Not charged yet, with an immediate start: neither start time is set, so the time is the creation's.
+    const sub = await fake.fetchSubscription(session.subscriptionId)
+    expect(sub).toMatchObject({ currentStart: null, startAt: null })
+    expect(sub.createdAt).toBeInstanceOf(Date)
+
+    await confirmCheckout({ userId: owner.id }, tenant.id, confirmBody(session.subscriptionId))
+    const firstStamps = await stampsOf(tenant.id)
+    const first = firstStamps.filter((stamp) => stamp.event === 'checkout_confirmed')
+    expect(first).toHaveLength(1)
+    await drainOutboxOf(tenant.id)
+    await confirmCheckout({ userId: owner.id }, tenant.id, confirmBody(session.subscriptionId))
+
+    const againStamps = await stampsOf(tenant.id)
+    const again = againStamps.filter((stamp) => stamp.event === 'checkout_confirmed')
+    expect(again).toEqual(first)
+  })
+})
+
+describe('a failed owner cancel', () => {
+  it('forgets the owner, so a later suspension cancel reads by suspension', async () => {
+    const { tenantId, owner, subscriptionId } = await payingWorkspace()
+
+    await withMutatedMethod(
+      fake,
+      'cancelSubscription',
+      () => Promise.reject(new ProviderError('POST /subscriptions/x/cancel', 503, {})),
+      async () => {
+        await expect(cancelPaid({ userId: owner.id }, tenantId)).rejects.toBeDefined()
+      }
+    )
+    const client = await getRedis()
+    expect(await client.exists(redisKey('billing', 'owner-cancel', tenantId, subscriptionId))).toBe(
+      0
+    )
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    await syncTenantBilling(tenantId, 'job')
+
+    expect(await propertiesOf(tenantId, 'subscription_cancel_scheduled')).toMatchObject({
+      by: 'suspension',
     })
   })
 })

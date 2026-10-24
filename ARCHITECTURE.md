@@ -1109,10 +1109,10 @@ transaction. Every one joins its tenant's group and carries `plan` and
 a job or the reconcile is sent as the person it is attributed to, with
 `access: 'system'`: the owner who started the checkout, the payer, or the
 user whose trial it is, skipping a soft-deleted account; only when nobody is
-left is it a system event. When a new subscription becomes current, the sync
-sets its payer to the owner who started its checkout (clearing the earlier
-payer's billing address) until the confirm records who paid, so an earlier
-payer is never named for it. Staff are never named: a staff member's own
+left is it a system event. Storing a new checkout clears the payer and the billing address, and when
+the new subscription becomes current with no payer on record the sync sets
+the owner who started the checkout; a payer the confirm recorded is never
+replaced, so an earlier payer is never named for it. Staff are never named: a staff member's own
 action in a customer tenant sends no product event, since its audit entry is
 forwarded already, and a staff-made change goes to the person the rules name.
 An invitee refused at the door is not a member, so that refusal is a system
@@ -1130,7 +1130,9 @@ refusal has no stamp and no repeat path; its time is when it happened.
 `enqueueAnalyticsOrThrow` after their hourly throttle key is claimed, and the
 key is released when the write fails, so a failure never silences them for the
 hour. An owner's cancel sets a 15-minute Redis marker before it calls the
-provider, so a cancel its webhook brings in first is still `by: owner`.
+provider, so a cancel its webhook brings in first is still `by: owner`; a
+cancel that fails clears the marker, and a suspended or archived
+workspace's cancel reads `by: suspension` whatever the marker says.
 
 Three readings of a workspace's billing feed analytics, and they can briefly
 disagree: group properties and diff events use the stored state, flag traits
