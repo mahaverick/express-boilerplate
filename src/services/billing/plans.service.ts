@@ -5,7 +5,7 @@
  * switches. Nothing provider-side leaves here: prices go through
  * `toPriceView`, and the catalog drops the registry's own defaults.
  */
-import { getEnv } from '@/configs/env.config'
+import { isGstRegistered } from '@/configs/billing.config'
 import type { BillingInterval, PlanKey } from '@/constants/billing.constants'
 import {
   entitlementCatalog,
@@ -82,6 +82,6 @@ export async function listPublicPlans(now = new Date()): Promise<PublicPlans> {
     })),
     trial: { enabled: settings.trialEnabled, days: settings.trialDays },
     paymentsEnabled: getBillingProvider() !== null,
-    gstRegistered: getEnv().BILLING_GST_REGISTERED,
+    gstRegistered: isGstRegistered(),
   }
 }

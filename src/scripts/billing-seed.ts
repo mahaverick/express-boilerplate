@@ -297,7 +297,6 @@ export const SEED_TENANTS: readonly SeedTenant[] = [
         trialMidpointSentAt: daysFromNow(context, -9),
         trialReminder3dSentAt: daysFromNow(context, -5),
         trialReminderLastDaySentAt: daysFromNow(context, -2),
-        trialEndedNotifiedAt: daysFromNow(context, -2),
       },
       history: [
         ...trialHistory(16),

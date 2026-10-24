@@ -74,15 +74,6 @@ export function billingProviderConfig(env: BillingEnv = getEnv()): BillingProvid
 }
 
 /**
- * Whether owners can start and change paid subscriptions.
- * @param env - The settings to read; defaults to the validated environment.
- * @returns True when a provider is configured.
- */
-export function isPaymentsEnabled(env: BillingEnv = getEnv()): boolean {
-  return billingProviderConfig(env) !== null
-}
-
-/**
  * Whether the business is registered for GST.
  * @param env - The settings to read; defaults to the validated environment.
  * @returns True when prices carry a GST line.

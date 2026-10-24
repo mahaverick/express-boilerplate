@@ -1110,7 +1110,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 29 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 33 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),

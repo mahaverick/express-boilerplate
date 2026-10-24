@@ -3,7 +3,7 @@
  * case here is a crafted env, never the memoised getEnv().
  */
 import { describe, expect, it } from 'vite-plus/test'
-import { billingProviderConfig, isGstRegistered, isPaymentsEnabled } from '@/configs/billing.config'
+import { billingProviderConfig, isGstRegistered } from '@/configs/billing.config'
 import { parseEnv } from '@/configs/env.config'
 
 const base: Record<string, string> = {
@@ -74,13 +74,6 @@ describe('billingProviderConfig', () => {
 
   it('rejects a key id that is not a Razorpay key', () => {
     expect(() => env({ RAZORPAY_KEY_ID: 'sk_live_abc' })).toThrow(/RAZORPAY_KEY_ID/)
-  })
-})
-
-describe('isPaymentsEnabled', () => {
-  it('follows whether a provider is configured', () => {
-    expect(isPaymentsEnabled(env({}))).toBe(false)
-    expect(isPaymentsEnabled(env({ BILLING_FAKE_PROVIDER: 'true' }))).toBe(true)
   })
 })
 
