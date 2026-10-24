@@ -220,6 +220,24 @@ describe('POST /webhooks/razorpay', () => {
     expect(after[0]?.count).toBe(before[0]?.count)
   })
 
+  it('accepts the bare event id Razorpay sends and refuses one of an unsafe shape', async () => {
+    const delivery = signedWebhook(CHARGED, {
+      subscriptionId: 'sub_TESTwebhookroute',
+      eventId: 'TrbKyvYxfyP4cL',
+    })
+    eventIds.push(delivery.eventId)
+
+    const accepted = await post(delivery)
+    const refused = await post({
+      body: delivery.body,
+      headers: { ...delivery.headers, 'x-razorpay-event-id': 'evt id; drop' },
+    })
+
+    expect(accepted.status).toBe(200)
+    expect(await rowsOf('TrbKyvYxfyP4cL')).toHaveLength(1)
+    expect(refused.status).toBe(400)
+  })
+
   it('refuses a signed body that is not JSON with 400', async () => {
     const body = 'not json'
 

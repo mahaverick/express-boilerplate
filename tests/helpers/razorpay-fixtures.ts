@@ -122,11 +122,11 @@ export function razorpaySignature(body: string, secret = PROBE_WEBHOOK_SECRET): 
 }
 
 /**
- * A fresh event id in Razorpay's shape.
+ * A fresh event id in Razorpay's shape: 14 letters and digits, no prefix.
  * @returns The id.
  */
 function freshEventId(): string {
-  return `evt_TEST${randomUUID().replaceAll('-', '').slice(0, 16)}`
+  return `T${randomUUID().replaceAll('-', '').slice(0, 13)}`
 }
 
 /**

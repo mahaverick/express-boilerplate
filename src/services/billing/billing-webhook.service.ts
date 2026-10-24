@@ -49,6 +49,13 @@ const ALERT_MESSAGE_MAX_LENGTH = 280
 const PROVIDER_ID_PATTERN = /^[A-Za-z]+_[A-Za-z0-9]{1,58}$/
 
 /**
+ * The shape of the `x-razorpay-event-id` header this app stores. Razorpay
+ * sends a bare id with no prefix (`TrbKyvYxfyP4cL`); it is only a dedupe key,
+ * so any short id of safe characters is accepted.
+ */
+const EVENT_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/
+
+/**
  * The event types the sync acts on. Any other type is recorded and ignored.
  */
 const SYNC_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -219,8 +226,8 @@ export async function receiveRazorpayWebhook(
     logger.warn('Razorpay webhook payload rejected')
     throw new HttpError('Invalid payload', 400, 'INVALID_PAYLOAD')
   }
-  const providerEventId = providerId(headerOf(headers, 'x-razorpay-event-id'))
-  if (providerEventId === null) {
+  const providerEventId = headerOf(headers, 'x-razorpay-event-id')
+  if (providerEventId === undefined || !EVENT_ID_PATTERN.test(providerEventId)) {
     logger.warn('Razorpay webhook without an event id rejected')
     throw new HttpError('Missing event id', 400, 'INVALID_PAYLOAD')
   }
