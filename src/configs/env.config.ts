@@ -786,6 +786,50 @@ const EnvSchema = z.object({
       'Signs local fake email webhook events (`pnpm email:fire-event`), as an HMAC-SHA256 hex digest in the x-fake-signature header. Read only when APP_ENV is local, the one environment that serves POST /api/v1/webhooks/email/fake. Defaults to "fake-webhook"; not a credential.'
     ),
 
+  RAZORPAY_KEY_ID: z
+    .string()
+    .regex(
+      /^rzp_(test|live)_[A-Za-z0-9]+$/,
+      'must be a Razorpay key id: rzp_test_ or rzp_live_ then letters and digits'
+    )
+    .optional()
+    .describe(
+      'Razorpay API key id (Razorpay dashboard, Account and Settings, API keys): rzp_test_ for test mode, rzp_live_ for live mode. Set it with RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET to turn on paid plans; with none of the three set, paid checkout and the Razorpay webhook answer 404. Live keys are accepted only when APP_ENV is prod.'
+    ),
+  RAZORPAY_KEY_SECRET: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Razorpay API key secret that pairs with RAZORPAY_KEY_ID. Set all three Razorpay variables or none.'
+    ),
+  RAZORPAY_WEBHOOK_SECRET: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Signing secret of the Razorpay webhook endpoint (Razorpay dashboard, Webhooks). Verifies each event on POST /api/v1/webhooks/razorpay. Set all three Razorpay variables or none.'
+    ),
+  RAZORPAY_WEBHOOK_SECRET_PREVIOUS: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'The webhook signing secret you rotated away from. While set, events signed with it still verify, so a rotation drops no event. Unset it once Razorpay sends only the new secret. Needs RAZORPAY_WEBHOOK_SECRET.'
+    ),
+  BILLING_GST_REGISTERED: z
+    .stringbool()
+    .default(false)
+    .describe(
+      'Whether the business is registered for GST. When false, prices show without a GST line. Defaults to false.'
+    ),
+  BILLING_FAKE_PROVIDER: z
+    .stringbool()
+    .default(false)
+    .describe(
+      'Replaces Razorpay with an in-process fake for the dev seed and end-to-end runs. Only APP_ENV=local accepts it, and it cannot be set together with Razorpay keys. Defaults to false.'
+    ),
+
   /**
    * Per-stage bounds, not a per-send deadline: DNS retries double this
    * timeout, the OS-lookup fallback has none, and a multi-address host can take

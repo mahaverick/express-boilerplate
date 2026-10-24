@@ -559,3 +559,50 @@ describe('WEBAUTHN_RP_ID', () => {
     expect(runChecks({ ...split, PASSKEY_MODE: 'off' }).error).toBeUndefined()
   })
 })
+
+describe('billing settings', () => {
+  const keys = {
+    RAZORPAY_KEY_ID: 'rzp_test_A1',
+    RAZORPAY_KEY_SECRET: 's',
+    RAZORPAY_WEBHOOK_SECRET: 'w',
+  }
+
+  it('accepts no Razorpay settings, a full test set locally and a full live set in prod', () => {
+    expect(runChecks(local).error).toBeUndefined()
+    expect(runChecks({ ...local, ...keys }).error).toBeUndefined()
+    expect(
+      runChecks({ ...deployed, ...keys, RAZORPAY_KEY_ID: 'rzp_live_A1' }).error
+    ).toBeUndefined()
+  })
+
+  it('refuses a partial Razorpay config and names the missing variables', () => {
+    const { error } = runChecks({ ...local, RAZORPAY_KEY_ID: 'rzp_test_A1' })
+    expect(error).toContain('RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET are missing')
+    expect(error).not.toContain('RAZORPAY_KEY_ID,')
+  })
+
+  it('refuses rzp_live_ outside prod and rzp_test_ in prod', () => {
+    expect(runChecks({ ...local, ...keys, RAZORPAY_KEY_ID: 'rzp_live_A1' }).error).toContain(
+      'is a live key, but APP_ENV is local'
+    )
+    expect(runChecks({ ...deployed, ...keys }).error).toContain(
+      'is a test key, but APP_ENV is prod'
+    )
+  })
+
+  it('refuses a previous webhook secret without the current one', () => {
+    expect(runChecks({ ...local, RAZORPAY_WEBHOOK_SECRET_PREVIOUS: 'w1' }).error).toContain(
+      'RAZORPAY_WEBHOOK_SECRET_PREVIOUS is set but RAZORPAY_WEBHOOK_SECRET is not'
+    )
+  })
+
+  it('refuses BILLING_FAKE_PROVIDER outside local and alongside Razorpay keys', () => {
+    expect(runChecks({ ...local, BILLING_FAKE_PROVIDER: 'true' }).error).toBeUndefined()
+    expect(runChecks({ ...deployed, BILLING_FAKE_PROVIDER: 'true' }).error).toContain(
+      'Only APP_ENV=local may use the fake provider'
+    )
+    expect(runChecks({ ...local, ...keys, BILLING_FAKE_PROVIDER: 'true' }).error).toContain(
+      'BILLING_FAKE_PROVIDER is true and Razorpay keys are set'
+    )
+  })
+})
