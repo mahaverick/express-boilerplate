@@ -52,7 +52,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 31 limiters in `RATE_LIMITS`.
+ * The names of the 33 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -86,6 +86,8 @@ export type RateLimitName =
   | 'billingRead'
   | 'billingWebhook'
   | 'billingWebhookRejected'
+  | 'publicPlans'
+  | 'upgradeRequest'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -163,7 +165,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 31 rate-limit specs this API enforces, each commented with the reason
+ * The 33 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -578,5 +580,28 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     keyBy: 'ip',
     counts: 'rejected',
     unit: 'attempts',
+  },
+  /**
+   * 120 a minute per IP on the public plan list (`GET /plans`), which
+   * signed-out pricing pages read. The answer is cacheable for a minute, so
+   * a browser rarely asks twice; a shared office address still has room.
+   */
+  publicPlans: {
+    name: 'public-plans',
+    windowMs: 60_000,
+    limit: 120,
+    keyBy: 'ip',
+    unit: 'requests',
+  },
+  /**
+   * 10 an hour per member on asking an owner to upgrade. A request while one
+   * is open sends nothing new, so this only bounds a script.
+   */
+  upgradeRequest: {
+    name: 'upgrade-request',
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    keyBy: 'user',
+    unit: 'requests',
   },
 }

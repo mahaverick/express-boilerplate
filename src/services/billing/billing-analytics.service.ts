@@ -556,6 +556,35 @@ export async function trackCheckoutConfirmed(
 }
 
 /**
+ * Send `upgrade_requested` for a request just opened, as the member who
+ * asked, with the workspace as it stands. Once per request opening: the
+ * dedupe key and the time are the request's id and creation time, so a
+ * request reopened after it lapsed is a new event.
+ * @param request - The request.
+ */
+export async function trackUpgradeRequested(request: UpgradeRequest): Promise<void> {
+  if (!isAnalyticsEnabled()) return
+  const { tenantId } = request
+  try {
+    const row = await rowOf(tenantId)
+    if (row === undefined) return
+    await emit(
+      {
+        tenantId,
+        userId: request.requestedBy,
+        attributedUserId: null,
+        ...traitsOf(row),
+        dedupeKey: `${tenantId}:upgrade_requested:${request.id}:${String(request.createdAt.getTime())}`,
+        at: request.createdAt,
+      },
+      { type: 'upgrade_requested', key: request.entitlementKey, surface: request.surface }
+    )
+  } catch (error) {
+    logFailure(error, tenantId, 'upgrade_requested')
+  }
+}
+
+/**
  * Claim a throttle key for an hour.
  * @param key - The throttle key.
  * @returns True when this is the first claim in the hour; false when it is not, or Redis failed.

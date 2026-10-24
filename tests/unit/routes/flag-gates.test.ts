@@ -50,6 +50,7 @@ const KNOWN_MOUNTS = [
   '/platform',
   '/flags',
   '/status',
+  '/plans',
   '/users',
   '/emails',
   '/email-suppressions',

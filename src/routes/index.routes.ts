@@ -10,6 +10,7 @@ import { createAuthRouter } from '@/routes/auth.routes'
 import { createFlagsRouter } from '@/routes/flags.routes'
 import { createInvitationRouter } from '@/routes/invitation.routes'
 import { createNotificationRouter } from '@/routes/notification.routes'
+import { createPlansRouter } from '@/routes/plans.routes'
 import { createPlatformRouter } from '@/routes/platform.routes'
 import { createProfileRouter } from '@/routes/profile.routes'
 import { createStatusRouter } from '@/routes/status.routes'
@@ -30,5 +31,6 @@ export function createApiRouter(): Router {
   router.use('/platform', createPlatformRouter())
   router.use('/flags', createFlagsRouter())
   router.use('/status', createStatusRouter())
+  router.use('/plans', createPlansRouter())
   return router
 }

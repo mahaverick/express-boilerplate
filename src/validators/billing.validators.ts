@@ -2,7 +2,12 @@
  * @file Request bodies and queries of a workspace owner's billing routes.
  */
 import { z } from 'zod'
-import { BILLING_INTERVALS } from '@/constants/billing.constants'
+import {
+  BILLING_INTERVALS,
+  DISMISSIBLE_BANNERS,
+  UPGRADE_SURFACES,
+} from '@/constants/billing.constants'
+import { ENTITLEMENTS, type EntitlementKey } from '@/constants/entitlements.constants'
 import { MAX_CURSOR_LENGTH } from '@/utilities/list-cursor.utilities'
 
 /**
@@ -50,4 +55,27 @@ export const checkoutConfirmBodySchema = z.object({
  */
 export const invoiceListQuerySchema = z.object({
   cursor: z.string().max(MAX_CURSOR_LENGTH).optional(),
+})
+
+/**
+ * Every entitlement key, for a request that names the one a member hit.
+ */
+const ENTITLEMENT_KEYS = Object.keys(ENTITLEMENTS) as [EntitlementKey, ...EntitlementKey[]]
+
+/**
+ * `POST /upgrade-requests`: where the member asked, and the limit or feature
+ * they hit, if any.
+ */
+export const upgradeRequestBodySchema = z.strictObject({
+  key: z
+    .enum(ENTITLEMENT_KEYS, { error: 'Choose a limit or feature this product has.' })
+    .optional(),
+  surface: z.enum(UPGRADE_SURFACES, { error: 'Say where the request came from.' }),
+})
+
+/**
+ * `POST /banner-dismissals`: which banner to stop showing.
+ */
+export const bannerDismissalBodySchema = z.strictObject({
+  banner: z.enum(DISMISSIBLE_BANNERS, { error: 'Choose a banner that can be dismissed.' }),
 })

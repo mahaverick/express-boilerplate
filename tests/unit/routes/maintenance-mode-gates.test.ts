@@ -74,6 +74,7 @@ const KNOWN_MOUNTS = [
   '/platform',
   '/flags',
   '/status',
+  '/plans',
 ] as const
 
 const PREFIX_PATHS = new Set(
@@ -298,6 +299,7 @@ describe('maintenance-mode route classification', () => {
         'POST /api/v1/auth/passkeys/step-up/options',
         'POST /api/v1/auth/passkeys/step-up/verify',
         'GET /api/v1/profile',
+        'GET /api/v1/plans',
       ].toSorted(byText)
     )
   })

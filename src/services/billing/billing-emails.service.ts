@@ -80,6 +80,11 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const UNNAMED_PAYER = 'A teammate'
 
 /**
+ * How a member who gave no name is named in an upgrade request.
+ */
+const UNNAMED_REQUESTER = 'A teammate'
+
+/**
  * What a committed change carries besides its rows.
  */
 export interface BillingDiffExtras {
@@ -988,6 +993,54 @@ export async function sendWorkspaceFull(tenantId: string, now = new Date()): Pro
     })
   } catch (error) {
     logSendFailure(error, tenantId, 'workspace_full')
+  }
+}
+
+/**
+ * Tell the workspace's active owners that a member asked to upgrade: a
+ * notification carrying the email. The requester's name is another person's,
+ * so it goes in the email alone, never in the stored notification. Once per
+ * request opening (its id and creation time, so a request reopened after it
+ * lapsed tells the owners again). Sent after the commit that opened it; a
+ * suspended or archived workspace gets nothing. Never rejects.
+ * @param request - The request just opened.
+ */
+export async function sendUpgradeRequested(request: UpgradeRequest): Promise<void> {
+  const { tenantId } = request
+  try {
+    const context = await activeContext(tenantId, null)
+    if (context === undefined) return
+    const { tenant, appName } = context
+    const requester = await userRepository.findById(request.requestedBy)
+    const requesterName = requester === undefined ? '' : displayName(requester)
+    const prices = await paidPrices()
+    if (prices === undefined) logSkipped(tenantId, 'upgrade_requested')
+    await notifyOwners(context, {
+      type: 'billing_upgrade_requested',
+      stamp: `${request.id}-${String(request.createdAt.getTime())}`,
+      title: 'A teammate asked to upgrade',
+      body: `A member of ${tenant.name} asked you to move it to Paid. Upgrade from Billing.`,
+      email:
+        prices === undefined
+          ? null
+          : {
+              templateKey: 'upgrade_requested',
+              messageFor: (to) => ({
+                to,
+                templateKey: 'upgrade_requested',
+                variables: {
+                  appName,
+                  tenantName: tenant.name,
+                  requesterName: requesterName === '' ? UNNAMED_REQUESTER : requesterName,
+                  monthlyPrice: prices.monthly,
+                  yearlyPrice: prices.yearly,
+                  billingLink: buildBillingLink(tenant.slug, 'upgrade_requested'),
+                },
+              }),
+            },
+    })
+  } catch (error) {
+    logSendFailure(error, tenantId, 'upgrade_requested')
   }
 }
 

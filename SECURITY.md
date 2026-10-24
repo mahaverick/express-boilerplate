@@ -1146,7 +1146,12 @@ The billing limiters count per user and guard the payment provider, whose own
 rate limit every workspace shares: one `billing-write` budget across a
 workspace owner's checkout, confirm, interval switch, card change and cancel
 (10 a minute), and `billing-read` on the invoice list, which reads the
-provider on every page (30 a minute). The billing read itself has none.
+provider on every page (30 a minute). The billing read itself has none. A
+member's upgrade request has its own per-user `upgrade-request` budget (10 an
+hour); a request while one is open notifies no one, so it only bounds a
+script. The public plan list (`GET /plans`) needs no sign-in and counts per IP
+on `public-plans` (120 a minute); its answer carries no provider id and is
+cacheable for a minute.
 
 The Razorpay webhook (`POST /webhooks/razorpay`) is public, so it verifies
 Razorpay's HMAC-SHA256 signature over the raw body against the current and
@@ -1182,7 +1187,8 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 everything but health, the email and Razorpay webhooks, the collect proxy, the public status,
 `/platform`, the sign-in link routes, Google sign-in, the step-up routes
 (link and passkey), the passkey sign-in routes, refresh, logout,
-`GET /auth/providers`, `GET /auth/passkeys/config` and `GET /profile`. Listing,
+`GET /auth/providers`, `GET /auth/passkeys/config`, `GET /profile` and the
+public plan list (`GET /plans`). Listing,
 creating, renaming and deleting a passkey are customer routes: `read_only`
 refuses the writes, and on the routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
 staff through. The let-through list is visible during maintenance: a route on
@@ -1236,7 +1242,7 @@ reload and the queue pause.
 | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                                                                                                  |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                                                                                         |
-| Global rate limiting                                  | **Partial**         | 31 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
+| Global rate limiting                                  | **Partial**         | 33 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`) and the passkeys a claim clears (`user.passkeys_cleared_on_claim`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                                                                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                                                                                         |

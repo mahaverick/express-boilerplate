@@ -202,6 +202,8 @@ export function createTenantRouter(): Router {
   addBillingRoutes(router, {
     billingWrite: createRateLimiter(RATE_LIMITS.billingWrite),
     billingRead: createRateLimiter(RATE_LIMITS.billingRead),
+    upgradeRequest: createRateLimiter(RATE_LIMITS.upgradeRequest),
+    memberWrite: writeLimiter,
   })
 
   return router

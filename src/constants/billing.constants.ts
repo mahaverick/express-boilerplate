@@ -185,3 +185,53 @@ export const INVOICES_OWNER_ONLY_MESSAGE = 'Only a workspace owner can see invoi
  * Error code: an interval switch before a deferred start's first charge.
  */
 export const SWITCH_BEFORE_FIRST_CHARGE_CODE = 'SWITCH_BEFORE_FIRST_CHARGE'
+
+/**
+ * Where in the product a member asked an owner to upgrade.
+ */
+export const UPGRADE_SURFACES = ['limit', 'feature', 'banner', 'billing_page', 'pricing'] as const
+
+/**
+ * One place a member can ask to upgrade from.
+ */
+export type UpgradeSurface = (typeof UPGRADE_SURFACES)[number]
+
+/**
+ * Days an open upgrade request lasts before it lapses.
+ */
+export const UPGRADE_REQUEST_EXPIRY_DAYS = 30
+
+/**
+ * The billing banners a member can dismiss for a workspace.
+ */
+export const DISMISSIBLE_BANNERS = ['trial_ended'] as const
+
+/**
+ * Error code: an upgrade request for a workspace already paying for Paid.
+ */
+export const ALREADY_PAID_CODE = 'ALREADY_PAID'
+
+/**
+ * What an owner reads when they ask to upgrade: they can do it themselves.
+ */
+export const UPGRADE_REQUEST_OWNER_MESSAGE = 'Owners can upgrade from Billing.'
+
+/**
+ * What staff acting through platform access read when they ask to upgrade
+ * a workspace: only its members can.
+ */
+export const UPGRADE_REQUEST_MEMBERS_ONLY_MESSAGE =
+  'Only workspace members can ask to upgrade. Ask an owner of the workspace.'
+
+/**
+ * What anyone but an owner by membership reads when they ask for the
+ * workspace's upgrade requests.
+ */
+export const UPGRADE_REQUESTS_OWNER_ONLY_MESSAGE =
+  'Only a workspace owner can see upgrade requests. Ask an owner.'
+
+/**
+ * What a member reads when they ask to upgrade a workspace already on Paid.
+ */
+export const ALREADY_PAID_MESSAGE =
+  'This workspace is already on Paid. Refresh the page to see its features.'

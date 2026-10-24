@@ -9,16 +9,28 @@
  * shared `billingWrite` limiter, `resolveTenant()` and `requireMemberOwner`,
  * which refuses everyone but an owner by membership (staff acting through a
  * platform role included); the service re-checks it under lock.
+ *
+ * A member's upgrade request and banner dismissal need no payment provider.
+ * The request takes its own `upgradeRequest` limiter and leaves the
+ * owner and staff refusals to the service, which decides under lock; the
+ * owners' list of requests is `requireMemberOwner`'s; a dismissal is a
+ * member's own (`requireMembership`, so staff get the non-member 404) and
+ * spends the tenant router's shared `authenticatedWrite` budget.
  */
 import type { RequestHandler, Router } from 'express'
 import {
   BILLING_OWNER_ONLY_MESSAGE,
   INVOICES_OWNER_ONLY_MESSAGE,
+  UPGRADE_REQUESTS_OWNER_ONLY_MESSAGE,
 } from '@/constants/billing.constants'
 import { billingController } from '@/controllers/billing.controller'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requireFeature, requirePaymentsEnabled } from '@/middlewares/entitlement.middleware'
-import { requireMemberOwner, resolveTenant } from '@/middlewares/tenant.middleware'
+import {
+  requireMemberOwner,
+  requireMembership,
+  resolveTenant,
+} from '@/middlewares/tenant.middleware'
 
 /**
  * The limiters the billing routes mount, built once by the tenant router so
@@ -33,6 +45,15 @@ export interface BillingRouteLimiters {
    * The invoice list's budget.
    */
   billingRead: RequestHandler
+  /**
+   * A member's upgrade requests' budget.
+   */
+  upgradeRequest: RequestHandler
+  /**
+   * The tenant router's shared `authenticatedWrite` instance, for the
+   * banner dismissal.
+   */
+  memberWrite: RequestHandler
 }
 
 /**
@@ -70,5 +91,27 @@ export function addBillingRoutes(router: Router, limiters: BillingRouteLimiters)
     resolveTenant(),
     requireMemberOwner(INVOICES_OWNER_ONLY_MESSAGE),
     billingController.listInvoices
+  )
+
+  router.post(
+    '/:slug/upgrade-requests',
+    requireJsonContentType,
+    limiters.upgradeRequest,
+    resolveTenant(),
+    billingController.requestUpgrade
+  )
+  router.get(
+    '/:slug/upgrade-requests',
+    resolveTenant(),
+    requireMemberOwner(UPGRADE_REQUESTS_OWNER_ONLY_MESSAGE),
+    billingController.listUpgradeRequests
+  )
+  router.post(
+    '/:slug/banner-dismissals',
+    requireJsonContentType,
+    limiters.memberWrite,
+    resolveTenant(),
+    requireMembership(),
+    billingController.dismissBanner
   )
 }

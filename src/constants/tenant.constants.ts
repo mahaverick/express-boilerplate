@@ -105,6 +105,9 @@ export const RESERVED_SLUGS = [
   'dev',
   'localhost',
   'platform',
+  'pricing',
+  'checkout',
+  'upgrade',
 ] as const
 
 /**

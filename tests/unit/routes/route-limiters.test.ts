@@ -120,6 +120,13 @@ function limiterMarksOf(route: DiscoveredRoute | undefined): unknown[] {
 }
 
 /**
+ * The rate-limiter handler a route carries, the instance itself.
+ */
+function limiterOf(route: DiscoveredRoute | undefined): RequestHandler | undefined {
+  return route?.handlers.find((handler) => Object.hasOwn(handler, RATE_LIMITER_MARK))
+}
+
+/**
  * Routes deliberately exempt from carrying any rate limiter, with why.
  * Empty: every write route either has its own route-specific limiter or
  * gets `authenticatedWrite`. Kept as a mechanism for a legitimate exception
@@ -183,6 +190,22 @@ describe('every write route carries a rate limiter', () => {
       (route) => route.path === '/:slug/billing/invoices'
     )
     expect(limiterMarksOf(invoices)).toEqual([RATE_LIMITS.billingRead.name])
+  })
+
+  it('limits an upgrade request on its own budget, a banner dismissal on authenticated-write, and the public plans per IP', () => {
+    const app = createApp()
+    const writes = writeRoutesOf(app)
+    const upgradeRequest = writes.find((route) => route.path === '/:slug/upgrade-requests')
+    const dismissal = writes.find((route) => route.path === '/:slug/banner-dismissals')
+    expect(limiterMarksOf(upgradeRequest)).toEqual([RATE_LIMITS.upgradeRequest.name])
+    expect(limiterMarksOf(dismissal)).toEqual([RATE_LIMITS.authenticatedWrite.name])
+    // The tenant router's one authenticated-write instance, so the in-memory fallback keeps one budget.
+    const onboardingDismiss = writes.find((route) => route.path === '/:slug/onboarding/dismiss')
+    expect(limiterOf(dismissal)).toBe(limiterOf(onboardingDismiss))
+    const plansRoute = routesOf(app, new Set(['get'])).find(
+      (route) => route.path === '/' && limiterMarksOf(route).includes(RATE_LIMITS.publicPlans.name)
+    )
+    expect(plansRoute).toBeDefined()
   })
 
   it('fails when a route loses its limiter — proven by removing authenticatedWrite’s marker', async () => {
