@@ -265,6 +265,8 @@ describe('runBillingSeed', () => {
     const moved = await tenantId('billing-trial-10-days')
     await setBilling(moved, { state: 'free', trialEndsAt: new Date(Date.now() - DAY_MS) })
     await sql`delete from user_memberships where tenant_id = ${await tenantId('billing-free-over-limit')} and role <> 'owner'`
+    const suspended = await tenantId('billing-past-due-halted')
+    await sql`update tenants set lifecycle_state = 'suspended', name = 'Renamed' where id = ${suspended}`
     const before = await sendCounts()
 
     expect(await runBillingSeed(['--'], SEED_ENV)).toBe(0)
@@ -272,11 +274,42 @@ describe('runBillingSeed', () => {
     expect(await seededTenants()).toStrictEqual(firstIds)
     expect(await effectiveStates()).toStrictEqual(EXPECTED_STATES)
     expect(await memberCount('billing-free-over-limit')).toBe(5)
+    const [tenantRow] = await sql<{ lifecycleState: string; name: string }[]>`
+      select lifecycle_state as "lifecycleState", name from tenants where id = ${suspended}`
+    expect(tenantRow).toStrictEqual({
+      lifecycleState: 'active',
+      name: SEED_TENANTS.find((spec) => spec.slug === 'billing-past-due-halted')?.name,
+    })
     expect(await sendCounts()).toStrictEqual(before)
     const alerts = await sql<{ count: number }[]>`
       select count(*)::int as count from billing_alerts a join tenants t on t.id = a.tenant_id
       where t.slug = any(${Object.keys(EXPECTED_STATES)})`
     expect(alerts[0]?.count).toBe(1)
+  })
+
+  it('refuses a workspace with a seed slug that someone else owns, changing nothing', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const taken = await tenantId('billing-free-grant')
+    const [stranger] = await sql<{ id: string }[]>`
+      insert into users (email) values ('seed-stranger@example.test') returning id`
+    if (!stranger) throw new Error('setup: no user row')
+    await sql`update user_memberships set role = 'editor' where tenant_id = ${taken} and role = 'owner'`
+    await sql`insert into user_memberships (user_id, tenant_id, role) values (${stranger.id}, ${taken}, 'owner')`
+    const moved = await tenantId('billing-trial-10-days')
+    await setBilling(moved, { state: 'free' })
+
+    try {
+      expect(await runBillingSeed([], SEED_ENV)).toBe(1)
+
+      expect(stderr).toHaveBeenCalledOnce()
+      const untouched = await readBilling(moved)
+      expect(untouched.state).toBe('free')
+    } finally {
+      await sql`delete from users where id = ${stranger.id}`
+      await sql`update user_memberships set role = 'owner' where tenant_id = ${taken} and role = 'editor' and user_id = (select id from users where email = 'billing-owner@example.test')`
+    }
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    expect(await runBillingSeed([], SEED_ENV)).toBe(0)
   })
 
   it('ends the fake subscriptions a rerun replaces, so no old one still runs', async () => {
@@ -350,6 +383,23 @@ describe('runBillingTimeTravel', () => {
     expect(subAfter.currentEnd?.getTime()).toBe((subBefore.currentEnd?.getTime() ?? 0) - DAY_MS)
   })
 
+  it('changes no row when the fake subscriptions cannot be moved', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    vi.spyOn(fake, 'fakeShiftBack').mockRejectedValue(new Error('Redis is down'))
+    const id = await tenantId('billing-yearly-cancelling')
+    const before = await readBilling(id)
+
+    expect(
+      await runBillingTimeTravel(['--tenant', 'billing-yearly-cancelling', '--days', '2'], SEED_ENV)
+    ).toBe(1)
+
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/run it again\.\n$/))
+    const after = await readBilling(id)
+    expect(after.currentPeriodEnd).toStrictEqual(before.currentPeriodEnd)
+    expect(after.version).toBe(before.version)
+    expect(await queuedJobs(getBillingQueue())).toHaveLength(0)
+  })
+
   it('refuses a workspace on a real provider, changing nothing', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     const id = await tenantId('billing-active-monthly')
@@ -388,6 +438,8 @@ describe('runBillingTimeTravel', () => {
     [['--tenant', 'billing-trial-10-days', '--days', 'two']],
     [['--tenant', 'billing-no-such-workspace', '--days', '1']],
     [['--days', '1']],
+    [['--tenant', '--days', '3']],
+    [['--tenant', 'billing-trial-10-days', '--days', '--tenant']],
   ])('exits 1 for the arguments %j', async (argv) => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
 

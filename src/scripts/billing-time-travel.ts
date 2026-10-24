@@ -73,7 +73,8 @@ function parseArguments(argv: readonly string[]): TimeTravelArguments {
   let slug: string | undefined
   let days: number | undefined
   for (let index = 0; index < tokens.length; index += 2) {
-    const value = tokens[index + 1]
+    const next = tokens[index + 1]
+    const value = next?.startsWith('--') === true ? undefined : next
     if (tokens[index] === '--tenant' && slug === undefined && value !== undefined) {
       slug = value
     } else if (tokens[index] === '--days' && days === undefined && value !== undefined) {
@@ -108,6 +109,74 @@ function fakeFor(row: TenantBillingRecord): FakeBillingProvider | null {
 }
 
 /**
+ * Move the dates of a workspace's fake subscriptions.
+ * @param fake - The fake provider.
+ * @param subscriptionIds - The subscriptions the row holds.
+ * @param ms - How far back, in milliseconds; negative moves them forward again.
+ * @throws {Error} When Redis cannot be reached or written.
+ */
+async function shiftFake(
+  fake: FakeBillingProvider,
+  subscriptionIds: readonly string[],
+  ms: number
+): Promise<void> {
+  const moved: string[] = []
+  try {
+    for (const id of subscriptionIds) {
+      await fake.fakeShiftBack(id, ms)
+      moved.push(id)
+    }
+  } catch (error) {
+    // Put back the ones that moved, so the fake and the row still agree.
+    for (const id of moved) {
+      try {
+        await fake.fakeShiftBack(id, -ms)
+      } catch {
+        // Redis is already failing; the refusal below asks for a rerun either way.
+      }
+    }
+    throw new Error(
+      'Redis did not take the new fake subscription dates, so the billing record stayed as it was. Check that Redis is running, then run it again.',
+      { cause: error }
+    )
+  }
+}
+
+/**
+ * Move the row's dates back under its lock, when it still holds the same
+ * provider and subscriptions it was read with.
+ * @param tenantId - The workspace.
+ * @param read - The row as read before the fake moved.
+ * @param ms - How far back, in milliseconds.
+ * @returns The row after the move, or undefined when it changed or is gone.
+ * @throws {Error} The real-provider refusal when the row now names one.
+ */
+async function shiftRow(
+  tenantId: string,
+  read: TenantBillingRecord,
+  ms: number
+): Promise<TenantBillingRecord | undefined> {
+  return withTransaction(async (tx) => {
+    const locked = await billingRepository.lockByTenantId(tenantId, tx)
+    if (locked === undefined) return
+    if (locked.provider !== null && locked.provider !== 'fake') {
+      throw new Error(REAL_PROVIDER_REFUSAL)
+    }
+    const isSameSubscriptions =
+      locked.providerSubscriptionId === read.providerSubscriptionId &&
+      locked.pendingSubscriptionId === read.pendingSubscriptionId &&
+      locked.nextSubscriptionId === read.nextSubscriptionId
+    if (!isSameSubscriptions) return
+    const patch: Partial<Record<(typeof SHIFTED_COLUMNS)[number], Date | null>> = {}
+    for (const column of SHIFTED_COLUMNS) {
+      const value = locked[column]
+      patch[column] = value === null ? null : new Date(value.getTime() - ms)
+    }
+    return billingRepository.updateVersioned(tenantId, locked.version, patch, tx)
+  })
+}
+
+/**
  * Move one workspace's billing dates back, then queue a sync and a run.
  * @param argv - The arguments after the script path.
  * @param env - The environment slice; defaults to the validated environment.
@@ -133,30 +202,23 @@ export async function runBillingTimeTravel(
     if (row.provider !== null && row.provider !== 'fake') throw new Error(REAL_PROVIDER_REFUSAL)
     const fake = fakeFor(row)
     const ms = days * DAY_MS
-    const shifted = await withTransaction(async (tx) => {
-      const locked = await billingRepository.lockByTenantId(tenant.id, tx)
-      if (locked === undefined) return
-      if (locked.provider !== null && locked.provider !== 'fake') {
-        throw new Error(REAL_PROVIDER_REFUSAL)
-      }
-      const patch: Partial<Record<(typeof SHIFTED_COLUMNS)[number], Date | null>> = {}
-      for (const column of SHIFTED_COLUMNS) {
-        const value = locked[column]
-        patch[column] = value === null ? null : new Date(value.getTime() - ms)
-      }
-      return billingRepository.updateVersioned(tenant.id, locked.version, patch, tx)
-    })
-    if (shifted === undefined) {
-      throw new Error('The billing record changed while it was being moved. Run it again.')
+    const subscriptionIds = [
+      row.providerSubscriptionId,
+      row.pendingSubscriptionId,
+      row.nextSubscriptionId,
+    ].filter((id): id is string => id !== null)
+    // The fake moves first: a Redis failure stops the run before the row changes.
+    if (fake !== null) await shiftFake(fake, subscriptionIds, ms)
+    let shifted: TenantBillingRecord | undefined
+    try {
+      shifted = await shiftRow(tenant.id, row, ms)
+    } catch (error) {
+      if (fake !== null) await shiftFake(fake, subscriptionIds, -ms)
+      throw error
     }
-    if (fake !== null) {
-      for (const id of [
-        shifted.providerSubscriptionId,
-        shifted.pendingSubscriptionId,
-        shifted.nextSubscriptionId,
-      ]) {
-        if (id !== null) await fake.fakeShiftBack(id, ms)
-      }
+    if (shifted === undefined) {
+      if (fake !== null) await shiftFake(fake, subscriptionIds, -ms)
+      throw new Error('The billing record changed while it was being moved. Run it again.')
     }
     await addBillingSyncJob({ tenantId: tenant.id, source: 'job' })
     await addBillingFrequentRunJob()

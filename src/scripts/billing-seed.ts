@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url'
 /**
  * @file `pnpm billing:seed`: on local only, with `BILLING_FAKE_PROVIDER=true`,
  * create 13 workspaces (slugs `billing-*`) that cover every billing state, so
@@ -16,6 +15,7 @@ import { fileURLToPath } from 'node:url'
  * daily reconcile never finds an old one still running.
  * Prints slugs, ids and states only.
  */
+import { fileURLToPath } from 'node:url'
 import { and, eq, isNull, notInArray } from 'drizzle-orm'
 import { getEnv, isBillingLocalToolAllowed, type Env } from '@/configs/env.config'
 import type { BillingInterval, BillingState } from '@/constants/billing.constants'
@@ -38,7 +38,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { createLinkedAccount, markEmailVerified } from '@/services/account-claim.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.service'
-import { closeDatabase, withTransaction } from '@/services/database.service'
+import { closeDatabase, db, withTransaction } from '@/services/database.service'
 import { closeRedis } from '@/services/redis.service'
 import type { ProviderSubscription } from '@/types/billing'
 import { effectiveBillingState } from '@/utilities/billing-rules.utilities'
@@ -673,6 +673,39 @@ async function writeBilling(
 }
 
 /**
+ * Refuse an existing workspace with a seed slug that the seed's owner does
+ * not own alone: it is someone's own workspace, not an earlier seed's.
+ * @param slug - The slug.
+ * @param tenantId - The workspace.
+ * @param ownerId - The seed's owner.
+ * @throws {Error} When any other person owns it, or the seed's owner does not.
+ */
+async function assertSeedOwned(slug: string, tenantId: string, ownerId: string): Promise<void> {
+  const owners = await db
+    .select({ userId: userMembershipModel.userId })
+    .from(userMembershipModel)
+    .where(and(eq(userMembershipModel.tenantId, tenantId), eq(userMembershipModel.role, 'owner')))
+  if (owners.length !== 1 || owners[0]?.userId !== ownerId) {
+    throw new Error(
+      `Workspace ${slug} is not owned by the seed's owner, so the seed changed nothing. Archive or rename it, then run the seed again.`
+    )
+  }
+}
+
+/**
+ * Put an earlier seed's workspace back to its name and to active, in case
+ * someone renamed or suspended it since.
+ * @param spec - The workspace's slug and name.
+ * @param tenantId - The workspace.
+ */
+async function resetTenant(spec: SeedTenant, tenantId: string): Promise<void> {
+  await withTransaction(async (tx) => {
+    await tenantRepository.transitionLifecycle(tenantId, ['suspended'], 'active', tx)
+    await tenantRepository.update(tenantId, { name: spec.name }, {}, tx)
+  })
+}
+
+/**
  * Create a seeded workspace, its owner the seed's owner.
  * @param spec - The workspace's slug and name.
  * @param ownerId - The seed's owner.
@@ -760,9 +793,14 @@ export async function runBillingSeed(
       const tenant = await tenantRepository.findBySlug(spec.slug)
       if (tenant !== undefined) existing.set(spec.slug, tenant.id)
     }
+    for (const [slug, tenantId] of existing) {
+      await assertSeedOwned(slug, tenantId, context.ownerId)
+    }
     await endOldSubscriptions(fake, new Set(existing.values()))
     for (const spec of SEED_TENANTS) {
-      const tenantId = existing.get(spec.slug) ?? (await createTenant(spec, context.ownerId))
+      const found = existing.get(spec.slug)
+      const tenantId = found ?? (await createTenant(spec, context.ownerId))
+      if (found !== undefined) await resetTenant(spec, found)
       await resetMembers(tenantId, context, spec.members)
       await writeBilling(tenantId, context, await spec.build(context, tenantId))
       const row = await billingRepository.findByTenantId(tenantId)

@@ -6,6 +6,7 @@ import {
   getDatabaseUrl,
   getEnv,
   isCookieSecure,
+  isBillingLocalToolAllowed,
   isFakeEmailWebhookAllowed,
   logFormat,
   parseEnv,
@@ -765,6 +766,15 @@ describe('the fake email webhook', () => {
     ['prod', false],
   ] as const)('isFakeEmailWebhookAllowed on %s is %s', (appEnv, expected) => {
     expect(isFakeEmailWebhookAllowed({ APP_ENV: appEnv })).toBe(expected)
+  })
+
+  it.each([
+    ['local', true],
+    ['dev', false],
+    ['qa', false],
+    ['prod', false],
+  ] as const)('isBillingLocalToolAllowed on %s is %s', (appEnv, expected) => {
+    expect(isBillingLocalToolAllowed({ APP_ENV: appEnv })).toBe(expected)
   })
 })
 
