@@ -5,7 +5,10 @@
  * file finds the recipients, builds each message and enqueues it once.
  *
  * Recipients: the workspace's active owners, one mail each by address case
- * blind, and the billing address when it is no owner's. A fulfilled upgrade
+ * blind, and the billing address when it is no owner's. Once the payer is no
+ * longer an active member, the billing address gets only the mail about the
+ * mandate their card still backs (`MANDATE_TEMPLATES`, and the move to Free
+ * when a payment failed or the subscription was cancelled). A fulfilled upgrade
  * request mails its requester alone. A type with a notification (payment
  * failed) reaches each owner as a notification job carrying the email, so the
  * email is not also sent directly; the billing address has no account, so it
@@ -57,6 +60,7 @@ import { buildBillingLink, buildTenantHomeLink } from '@/services/billing/billin
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
+import { payerLeftNextStep } from '@/templates/email/payer-left.template'
 import { graceEndsAt, mergeEntitlements } from '@/utilities/billing-rules.utilities'
 import {
   billingTransitions,
@@ -117,6 +121,26 @@ interface BillingRecipient {
 }
 
 /**
+ * The mail about the mandate the payer's card backs: the billing address
+ * gets it even after the payer stopped being a member, since it is still
+ * their card. Trial, win-back, upgrade and usage mail never reach them then.
+ */
+const MANDATE_TEMPLATES: ReadonlySet<EmailTemplateKey> = new Set([
+  'renewal_upcoming',
+  'payment_failed',
+  'paid_cancelled',
+])
+
+/**
+ * The causes of a move to Free that end the payer's mandate, so their
+ * billing address is told even after they left.
+ */
+const MANDATE_DOWNGRADE_CAUSES: ReadonlySet<DowngradeCause> = new Set([
+  'payment_failed',
+  'cancelled',
+])
+
+/**
  * What every message for one workspace needs.
  */
 interface MailContext {
@@ -131,7 +155,25 @@ interface MailContext {
    * The billing address when it is no owner's, else null.
    */
   billingAddress: string | null
+  /**
+   * False once the payer on record is no longer an active member: their
+   * billing address then gets only mandate mail (`reachesBillingAddress`).
+   */
+  isPayerMember: boolean
 }
+
+/**
+ * The billing row's payer columns a mail's recipients depend on.
+ */
+interface PayerOnRecord {
+  billingEmail: string | null
+  payerUserId: string | null
+}
+
+/**
+ * No payer: a mail for the owners alone.
+ */
+const OWNERS_ONLY: PayerOnRecord = { billingEmail: null, payerUserId: null }
 
 /**
  * A message for one recipient's address.
@@ -164,16 +206,22 @@ function sendKey(...parts: readonly string[]): string {
 /**
  * The workspace's active owners, once each by address, and the billing
  * address when it is no owner's: an address a deactivated owner holds counts
- * as an owner's, so it is not mailed either.
+ * as an owner's, so it is not mailed either. Also whether the payer on record
+ * is still an active member; no payer on record counts as one.
  * @param tenantId - The workspace.
- * @param billingEmail - The address the payer gave, if any.
- * @returns The owners and the extra billing address.
+ * @param payer - The address the payer gave, if any, and the payer.
+ * @returns The owners, the extra billing address and whether the payer is a member.
  */
 async function billingRecipients(
   tenantId: string,
-  billingEmail: string | null
-): Promise<{ owners: BillingRecipient[]; billingAddress: string | null }> {
+  payer: PayerOnRecord
+): Promise<Pick<MailContext, 'owners' | 'billingAddress' | 'isPayerMember'>> {
+  const { billingEmail, payerUserId } = payer
   const members = await membershipRepository.listByTenant(tenantId)
+  const isPayerMember =
+    payerUserId === null ||
+    // The list leaves soft-deleted accounts out.
+    members.some(({ user }) => user.id === payerUserId && user.active)
   // Every owner's address, a deactivated owner's included: the billing address is never mailed in their place.
   const ownerAddresses = new Set<string>()
   const byAddress = new Map<string, BillingRecipient>()
@@ -189,22 +237,44 @@ async function billingRecipients(
   return {
     owners: [...byAddress.values()],
     billingAddress: billingEmail === null || isOwnersAddress ? null : billingEmail,
+    isPayerMember,
   }
 }
 
 /**
  * Read what every message for the workspace needs.
  * @param tenant - The workspace.
- * @param billingEmail - The address the payer gave, if any.
+ * @param payer - The address the payer gave, if any, and the payer.
  * @returns The context.
  */
-async function loadContext(tenant: Tenant, billingEmail: string | null): Promise<MailContext> {
+async function loadContext(tenant: Tenant, payer: PayerOnRecord): Promise<MailContext> {
   return {
     tenant,
     timeZone: await billingTimeZone(tenant.id),
     appName: getEnv().APP_NAME,
-    ...(await billingRecipients(tenant.id, billingEmail)),
+    ...(await billingRecipients(tenant.id, payer)),
   }
+}
+
+/**
+ * The billing address a mail goes to besides the owners: none when there is
+ * none, and, once the payer is no longer a member, none for anything but
+ * mail about the mandate their card backs.
+ * @param context - The workspace.
+ * @param templateKey - The mail.
+ * @param cause - For a move to Free, why it moved.
+ * @returns The address, or null.
+ */
+function reachesBillingAddress(
+  context: MailContext,
+  templateKey: EmailTemplateKey,
+  cause?: DowngradeCause
+): string | null {
+  if (context.billingAddress === null || context.isPayerMember) return context.billingAddress
+  const isMandateMail =
+    MANDATE_TEMPLATES.has(templateKey) ||
+    (templateKey === 'moved_to_free' && cause !== undefined && MANDATE_DOWNGRADE_CAUSES.has(cause))
+  return isMandateMail ? context.billingAddress : null
 }
 
 /**
@@ -223,7 +293,9 @@ async function mailOnce(
   messageFor: MessageFor
 ): Promise<void> {
   const tenantId = context.tenant.id
-  const who = recipient.userId === '' ? 'billing-address' : recipient.userId
+  // The billing address by its own text, so an address that replaced it is mailed too; hashed into the key, never stored.
+  const who =
+    recipient.userId === '' ? `billing-address:${recipient.email.toLowerCase()}` : recipient.userId
   try {
     await addEmailJobOnce(messageFor(recipient.email), recipient.userId, {
       jobId: `billing-${templateKey}-${sendKey(tenantId, stamp, who)}`,
@@ -240,22 +312,25 @@ async function mailOnce(
 }
 
 /**
- * Mail the owners and the billing address.
+ * Mail the owners and the billing address (`reachesBillingAddress`).
  * @param context - The workspace.
  * @param templateKey - The template.
  * @param stamp - What fixes this transition.
  * @param messageFor - The message for one address.
+ * @param cause - For a move to Free, why it moved.
  */
 async function mailOwners(
   context: MailContext,
   templateKey: EmailTemplateKey,
   stamp: string,
-  messageFor: MessageFor
+  messageFor: MessageFor,
+  cause?: DowngradeCause
 ): Promise<void> {
+  const billingAddress = reachesBillingAddress(context, templateKey, cause)
   const recipients =
-    context.billingAddress === null
+    billingAddress === null
       ? context.owners
-      : [...context.owners, { userId: '', email: context.billingAddress }]
+      : [...context.owners, { userId: '', email: billingAddress }]
   for (const recipient of recipients) {
     await mailOnce(context, templateKey, stamp, recipient, messageFor)
   }
@@ -319,12 +394,13 @@ async function notifyOwners(
       })
     }
   }
-  if (email !== null && context.billingAddress !== null) {
+  const billingAddress = email === null ? null : reachesBillingAddress(context, email.templateKey)
+  if (email !== null && billingAddress !== null) {
     await mailOnce(
       context,
       email.templateKey,
       notice.stamp,
-      { userId: '', email: context.billingAddress },
+      { userId: '', email: billingAddress },
       email.messageFor
     )
   }
@@ -516,16 +592,22 @@ async function sendMovedToFree(
     }))
     return
   }
-  await mailOwners(context, 'moved_to_free', stamp, (to) => ({
-    to,
-    templateKey: 'moved_to_free',
-    variables: {
-      appName,
-      tenantName: tenant.name,
-      downgradeCause: cause,
-      billingLink: buildBillingLink(tenant.slug, 'moved_to_free'),
-    },
-  }))
+  await mailOwners(
+    context,
+    'moved_to_free',
+    stamp,
+    (to) => ({
+      to,
+      templateKey: 'moved_to_free',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        downgradeCause: cause,
+        billingLink: buildBillingLink(tenant.slug, 'moved_to_free'),
+      },
+    }),
+    cause
+  )
 }
 
 /**
@@ -594,7 +676,7 @@ export async function sendBillingDiffEmails(
     // A suspended or archived workspace's members are not told it went Paid.
     const fulfilled = isWorkspaceActive ? (extras.fulfilledRequests ?? []) : []
     if (transitions.length === 0 && fulfilled.length === 0) return
-    const context = await loadContext(tenant, after.billingEmail)
+    const context = await loadContext(tenant, after)
     for (const transition of transitions) {
       await sendTransition(context, transition, after, prices)
     }
@@ -644,17 +726,17 @@ export async function sendHeldBackWarnings(tenantId: string): Promise<void> {
  * for a missing, platform, suspended or archived workspace, whose owners are
  * never asked to act in Billing.
  * @param tenantId - The workspace.
- * @param billingEmail - The address the payer gave, or null to mail owners alone.
+ * @param payer - The billing row's payer and address, or `OWNERS_ONLY` to mail owners alone.
  * @returns The context, or undefined when the workspace gets no such mail.
  */
 async function activeContext(
   tenantId: string,
-  billingEmail: string | null
+  payer: PayerOnRecord
 ): Promise<MailContext | undefined> {
   const tenant = await tenantRepository.findByIdIncludingDeleted(tenantId)
   if (tenant === undefined || tenant.isPlatform) return undefined
   if (tenant.lifecycleState !== 'active' || tenant.deletedAt !== null) return undefined
-  return loadContext(tenant, billingEmail)
+  return loadContext(tenant, payer)
 }
 
 /**
@@ -761,7 +843,7 @@ export async function sendTrialEnding(row: TenantBillingRecord, now: Date): Prom
   const { tenantId } = row
   try {
     if ((await stillDue(row, 'trialing', 'trial_ending')) === undefined) return
-    const context = await activeContext(tenantId, row.billingEmail)
+    const context = await activeContext(tenantId, row)
     if (context === undefined) return
     const prices = await paidPrices()
     const members = await freeMembers(tenantId, now)
@@ -812,7 +894,7 @@ export async function sendTrialEndsToday(row: TenantBillingRecord, now: Date): P
   const { tenantId } = row
   try {
     if ((await stillDue(row, 'trialing', 'trial_ends_today')) === undefined) return
-    const context = await activeContext(tenantId, row.billingEmail)
+    const context = await activeContext(tenantId, row)
     if (context === undefined) return
     const prices = await paidPrices()
     const members = await freeMembers(tenantId, now)
@@ -867,7 +949,7 @@ export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Pr
   const { tenantId } = row
   try {
     if ((await stillDue(row, 'trialing', 'trial_midpoint')) === undefined) return
-    const context = await activeContext(tenantId, row.billingEmail)
+    const context = await activeContext(tenantId, row)
     if (context === undefined) return
     if (row.trialEndsAt === null) {
       logSkipped(tenantId, 'trial_midpoint')
@@ -910,7 +992,7 @@ export async function sendRenewalUpcoming(row: TenantBillingRecord): Promise<voi
       return price?.interval === 'year'
     })
     if (due === undefined) return
-    const context = await activeContext(tenantId, row.billingEmail)
+    const context = await activeContext(tenantId, row)
     if (context === undefined) return
     const [price] = row.priceId === null ? [] : await planRepository.findPricesByIds([row.priceId])
     if (row.currentPeriodEnd === null || price === undefined) {
@@ -950,7 +1032,7 @@ export async function sendWinback(
   const { tenantId } = row
   try {
     if ((await stillDue(row, 'free', 'winback')) === undefined) return
-    const context = await activeContext(tenantId, row.billingEmail)
+    const context = await activeContext(tenantId, row)
     if (context === undefined) return
     const prices = await paidPrices()
     const members = await freeMembers(tenantId, now)
@@ -988,7 +1070,7 @@ export async function sendTrialStarted(tenantId: string): Promise<void> {
     if (row?.state !== 'trialing' || row.trialStartedAt === null || row.trialEndsAt === null) {
       return
     }
-    const context = await activeContext(tenantId, row.billingEmail)
+    const context = await activeContext(tenantId, row)
     if (context === undefined) return
     const { tenant, appName } = context
     const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
@@ -1017,7 +1099,7 @@ export async function sendTrialStarted(tenantId: string): Promise<void> {
  */
 export async function sendWorkspaceFull(tenantId: string, now = new Date()): Promise<void> {
   try {
-    const context = await activeContext(tenantId, null)
+    const context = await activeContext(tenantId, OWNERS_ONLY)
     if (context === undefined) return
     const entitlements = await getEffectiveEntitlements(tenantId)
     const usage = entitlements.limits.members
@@ -1047,7 +1129,7 @@ export async function sendWorkspaceFull(tenantId: string, now = new Date()): Pro
 export async function sendUpgradeRequested(request: UpgradeRequest): Promise<void> {
   const { tenantId } = request
   try {
-    const context = await activeContext(tenantId, null)
+    const context = await activeContext(tenantId, OWNERS_ONLY)
     if (context === undefined) return
     const { tenant, appName } = context
     const requester = await userRepository.findById(request.requestedBy)
@@ -1125,7 +1207,7 @@ async function tellPayerLeft(
     row.providerSubscriptionId !== null &&
     !row.cancelAtPeriodEnd
   if (!isLive) return
-  const context = await activeContext(tenantId, null)
+  const context = await activeContext(tenantId, OWNERS_ONLY)
   if (context === undefined) return
   const deadline = await keepPaidDeadline(row, leftAt)
   if (deadline === null) {
@@ -1141,7 +1223,7 @@ async function tellPayerLeft(
     type: 'billing_payer_left',
     stamp: `${payerUserId}-${leftOn}`,
     title: 'Your workspace needs a new card',
-    body: `The person who paid for ${tenant.name} left on ${leftOn}. Add your card by ${keepPaidBy} to keep Paid.`,
+    body: `The person who paid for ${tenant.name} left on ${leftOn}. ${payerLeftNextStep(row.state, tenant.name, keepPaidBy)}`,
     email: {
       templateKey: 'payer_left',
       messageFor: (to) => ({
@@ -1152,6 +1234,7 @@ async function tellPayerLeft(
           tenantName: tenant.name,
           payerName: payerName === '' ? UNNAMED_PAYER : payerName,
           leftOn,
+          billingState: row.state,
           periodEndsOn: keepPaidBy,
           billingLink: buildBillingLink(tenant.slug, 'payer_left'),
         },

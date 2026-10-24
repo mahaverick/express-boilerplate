@@ -354,6 +354,7 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
         tenantName: 'Acme',
         payerName: 'Grace',
         leftOn: '1 November 2026',
+        billingState: 'active',
         periodEndsOn: '7 November 2026',
         billingLink: buildBillingLink('acme', 'payer_left', getEnv().WEB_URL),
       },

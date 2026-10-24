@@ -41,9 +41,15 @@ export interface PayerLeftVariables {
    */
   leftOn: string
   /**
-   * The last day the workspace keeps Paid without a new card, as a date in
-   * the workspace's time zone: the end of the paid period, or the end of
-   * grace after a failed payment.
+   * The subscription's state: `active` while it still charges the payer's
+   * card, `past_due` after a payment failed. Any other value reads as
+   * `past_due`.
+   */
+  billingState: string
+  /**
+   * A date in the workspace's time zone: the renewal date while the
+   * subscription is active, or the last day the workspace keeps Paid without
+   * a new card after a failed payment (the end of grace).
    */
   periodEndsOn: string
   /**
@@ -60,7 +66,14 @@ export interface PayerLeftVariables {
  */
 export const PAYER_LEFT_TEMPLATE_META: EmailTemplateMeta<PayerLeftVariables> = {
   senderClass: 'general',
-  previewVariables: ['appName', 'tenantName', 'leftOn', 'periodEndsOn', 'billingLink'],
+  previewVariables: [
+    'appName',
+    'tenantName',
+    'leftOn',
+    'billingState',
+    'periodEndsOn',
+    'billingLink',
+  ],
   resendAction: null,
 }
 
@@ -69,9 +82,30 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof PayerLeftVariables> = [
   'tenantName',
   'payerName',
   'leftOn',
+  'billingState',
   'periodEndsOn',
   'billingLink',
 ]
+
+/**
+ * What the owners are asked to do once the payer left: while the
+ * subscription is active it still charges the payer's card until it renews,
+ * so they move the payment method to their own; after a failed payment Paid
+ * ends with grace, so they add a card by then.
+ * @param billingState - The subscription's state.
+ * @param tenantName - The workspace's display name.
+ * @param periodEndsOn - The renewal date, or the end of grace.
+ * @returns The sentences.
+ */
+export function payerLeftNextStep(
+  billingState: string,
+  tenantName: string,
+  periodEndsOn: string
+): string {
+  return billingState === 'active'
+    ? `The subscription still charges their card. It renews on ${periodEndsOn}. To pay with your card, update the payment method in Billing.`
+    : `Add your card by ${periodEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`
+}
 
 /**
  * Render the payer left email: plain-text and HTML parts with one
@@ -81,7 +115,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof PayerLeftVariables> = [
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderPayerLeftTemplate(variables: PayerLeftVariables): RenderedEmail {
-  const { appName, tenantName, payerName, leftOn, periodEndsOn, billingLink } =
+  const { appName, tenantName, payerName, leftOn, billingState, periodEndsOn, billingLink } =
     requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, PAYER_LEFT_TEMPLATE_KEY)
   return renderBillingEmail({
     templateKey: PAYER_LEFT_TEMPLATE_KEY,
@@ -89,8 +123,11 @@ export function renderPayerLeftTemplate(variables: PayerLeftVariables): Rendered
     appName,
     paragraphs: [
       `${payerName} paid for Paid and left ${tenantName} on ${leftOn}.`,
-      `Add your card by ${periodEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
+      payerLeftNextStep(billingState, tenantName, periodEndsOn),
     ],
-    button: { label: 'Add your card', link: billingLink },
+    button: {
+      label: billingState === 'active' ? 'Update payment method' : 'Add your card',
+      link: billingLink,
+    },
   })
 }

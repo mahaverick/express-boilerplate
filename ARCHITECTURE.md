@@ -1446,6 +1446,15 @@ map; the detail lives in the sections it links.
   least an hour before it, so it can't be paid after the renewal charged. A
   next subscription the sync still reads as paid after the current one renewed
   is cancelled and refunded as a duplicate, and the current one kept.
+- **Mail recipients.** Billing mail goes to the workspace's active owners and
+  to the billing address the payer gave, when it is no owner's
+  (`src/services/billing/billing-emails.service.ts`). Once the payer is no
+  longer an active member, that address gets only mail about the mandate
+  their card still backs: the renewal reminder, a failed payment, a cancel,
+  and a move to Free after a failed payment or a cancel. A payer who leaves
+  while the subscription runs is reported to the remaining owners: an active
+  one still charges the payer's card until they update the payment method,
+  and a past-due one keeps Paid only until its grace ends.
 - **Provider.** `getBillingProvider()`
   (`src/services/billing/billing-provider.service.ts`) answers Razorpay when
   its keys are set, the fake when `BILLING_FAKE_PROVIDER` is (local only), and

@@ -288,6 +288,7 @@ const CASES: readonly TemplateCase[] = [
       tenantName: 'Rocket Co',
       payerName: 'Grace Hopper',
       leftOn: '1 November 2026',
+      billingState: 'past_due',
       periodEndsOn: '7 November 2026',
       billingLink: BILLING_LINK,
     },
@@ -491,6 +492,25 @@ describe('billing email variants', () => {
     })
     expect(rendered.html).toContain(
       `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Update your card</a>`
+    )
+  })
+
+  it('tells the owners a running subscription still charges the payer card, and when it renews', () => {
+    const rendered = renderPayerLeftTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      payerName: 'Grace Hopper',
+      leftOn: '1 November 2026',
+      billingState: 'active',
+      periodEndsOn: '30 November 2026',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.text).toContain(
+      'The subscription still charges their card. It renews on 30 November 2026. To pay with your card, update the payment method in Billing.'
+    )
+    expect(rendered.text).not.toContain('moves to Free')
+    expect(rendered.html).toContain(
+      `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Update payment method</a>`
     )
   })
 

@@ -31,6 +31,7 @@ import {
   getNotificationQueue,
 } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
+import { removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import {
   deleteTrackedTenants,
@@ -42,7 +43,7 @@ import {
   setBilling,
   workspace,
 } from '../../../helpers/billing-api'
-import { deleteTrackedUsers } from '../../../helpers/platform-users'
+import { createTrackedUser, deleteTrackedUsers } from '../../../helpers/platform-users'
 import { queuedJobs } from '../../../helpers/queue-jobs'
 
 vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
@@ -519,6 +520,20 @@ describe('the yearly renewal reminder', () => {
     }
   })
 
+  it('mails a new billing address that replaced the one already reminded', async () => {
+    const { tenantId } = await paying('year', new Date(NOW.getTime() + 5 * DAY))
+    await sendRenewalUpcoming(await readBilling(tenantId))
+    await setBilling(tenantId, { billingEmail: 'finance@example.test' })
+
+    await sendRenewalUpcoming(await readBilling(tenantId))
+
+    const mails = await mailsOf(tenantId, 'renewal_upcoming')
+    const recipients = mails.map((mail) => mail.recipient)
+    expect(recipients).toHaveLength(3)
+    expect(recipients).toContain('accounts@example.test')
+    expect(recipients).toContain('finance@example.test')
+  })
+
   it('reminds once when two daily runs overlap', async () => {
     const { tenantId } = await paying('year', new Date(NOW.getTime() + 5 * DAY))
 
@@ -602,6 +617,31 @@ describe('win-back emails', () => {
 
     expect(actedIn(reports, 'winback_7d')).toBe(1)
     expect(await mailsOf(tenantId, 'winback')).toHaveLength(2)
+  })
+})
+
+describe('a payer who is no longer a member', () => {
+  it('gets the reminder of their running mandate, and no win-back once the workspace is on Free', async () => {
+    const { tenantId, ownerId } = await paying('year', new Date(NOW.getTime() + 5 * DAY))
+    const payer = await createTrackedUser()
+    await sql`insert into user_memberships (user_id, tenant_id, role) values (${payer.id}, ${tenantId}, 'admin')`
+    await setBilling(tenantId, { payerUserId: payer.id, billingEmail: payer.email })
+    await removeMember({ userId: ownerId }, tenantId, payer.id)
+
+    await runDailyBilling(NOW)
+    // Their card still pays: the renewal is theirs to know about.
+    const renewal = await mailsOf(tenantId, 'renewal_upcoming')
+    expect(renewal.map((mail) => mail.recipient)).toContain(payer.email)
+    expect(renewal).toHaveLength(2)
+
+    // The subscription ended and the workspace has been on Free a week.
+    await setBilling(tenantId, { state: 'free', planId: plans.freeId, priceId: null })
+    await history(tenantId, 'active', 'free', new Date(NOW.getTime() + 2 * DAY))
+    await runDailyBilling(new Date(NOW.getTime() + 9 * DAY + HOUR))
+
+    const winback = await mailsOf(tenantId, 'winback')
+    expect(winback).toHaveLength(1)
+    expect(winback.map((mail) => mail.recipient)).not.toContain(payer.email)
   })
 })
 

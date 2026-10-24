@@ -437,6 +437,27 @@ describe('the payer left notice', () => {
     await expectPayerLeftTold(second.tenant.id, [second.owner.id])
   })
 
+  it('tells the owners a running subscription still charges the payer card until they update it', async () => {
+    const { tenant, owner } = await workspace({ firstName: 'Pat' })
+    const [coOwner] = await addMembers(tenant.id, 'owner', 1)
+    await payingBy(tenant.id, owner)
+    const periodEnd = new Date('2030-03-01T10:00:00.000Z')
+    await setBilling(tenant.id, { currentPeriodEnd: periodEnd })
+
+    await leaveTenant({ userId: owner.id }, tenant.id)
+
+    const [job] = await noticeJobsOf(tenant.id)
+    expect(job?.data.userId).toBe(coOwner?.id)
+    expect(job?.data.email?.variables).toMatchObject({
+      billingState: 'active',
+      periodEndsOn: '1 March 2030',
+    })
+    expect(job?.data.body).toContain(
+      'The subscription still charges their card. It renews on 1 March 2030.'
+    )
+    expect(job?.data.body).not.toContain('Add your card')
+  })
+
   it('gives the end of grace as the deadline when the payment has failed', async () => {
     const { tenant, owner } = await workspace({ firstName: 'Pat' })
     await sql`update users set last_name = 'Payer' where id = ${owner.id}`

@@ -538,16 +538,17 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     })
   ),
-  payer_left: [
+  payer_left: (['active', 'past_due'] as const).map((billingState) =>
     renderPayerLeftTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
       payerName: 'Grace Hopper',
       leftOn: '1 November 2026',
+      billingState,
       periodEndsOn: '7 November 2026',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
-    }),
-  ],
+    })
+  ),
   upgrade_requested: [
     renderUpgradeRequestedTemplate({
       appName: 'Acme',

@@ -182,6 +182,7 @@ const SAMPLE_VARIABLES: {
     tenantName: 'Acme',
     payerName: 'Grace',
     leftOn: '1 November 2026',
+    billingState: 'active',
     periodEndsOn: '7 November 2026',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
@@ -377,7 +378,14 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       payer_left: {
         senderClass: 'general',
-        previewVariables: ['appName', 'tenantName', 'leftOn', 'periodEndsOn', 'billingLink'],
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'leftOn',
+          'billingState',
+          'periodEndsOn',
+          'billingLink',
+        ],
         resendAction: null,
       },
       upgrade_requested: {

@@ -743,6 +743,7 @@ export function buildPreviewMessage(
             // Never stored: another person's name that a purge of the payer could not find.
             payerName: INVITER_NAME_PLACEHOLDER,
             leftOn: fill('leftOn'),
+            billingState: fill('billingState'),
             periodEndsOn: fill('periodEndsOn'),
             billingLink: fill('billingLink'),
           },

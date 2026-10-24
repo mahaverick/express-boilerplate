@@ -97,6 +97,7 @@ describe('buildPreviewMessage', () => {
         tenantName: 'Acme Robotics',
         payerName: 'Grace Hopper',
         leftOn: '1 November 2026',
+        billingState: 'active',
         periodEndsOn: '7 November 2026',
         billingLink,
       },
