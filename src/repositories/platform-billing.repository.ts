@@ -1,11 +1,12 @@
 /**
  * @file Staff-only, cross-tenant reads of billing: workspace counts by plan
- * and state, subscriber counts by price, the alerts list, and billing columns
- * for a page of workspaces. Only `services/platform-*.service.ts` may import
+ * and state, subscriber counts by price, the alerts list, billing columns
+ * for a page of workspaces, and the billing records of every workspace a
+ * page at a time. Only `services/platform-*.service.ts` may import
  * this file (an eslint rule). Counts leave out the platform tenant and
  * soft-deleted tenants.
  */
-import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import {
   BILLING_STATES,
   PLAN_KEYS,
@@ -20,6 +21,7 @@ import {
 } from '@/database/models/billing.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { db, type DbExecutor } from '@/services/database.service'
+import type { BillingStateInput } from '@/types/billing'
 import {
   defineList,
   listPage,
@@ -53,6 +55,13 @@ export interface TenantBillingSummary {
   haltedAt: Date | null
   pausedAt: Date | null
   disputeOpen: boolean
+}
+
+/**
+ * A workspace's stored billing fields, enough to tell its effective state.
+ */
+export interface TenantBillingStateRow extends BillingStateInput {
+  tenantId: string
 }
 
 /**
@@ -153,6 +162,42 @@ export class PlatformBillingRepository {
     executor: DbExecutor = db
   ): Promise<ListPage<BillingAlertListRow>> {
     return listPage(executor, billingAlertList(params.search), params)
+  }
+
+  /**
+   * One page of live customer workspaces' billing records, in tenant id
+   * order, after `afterTenantId`.
+   * @param afterTenantId - The last tenant id of the previous page, or undefined for the first page.
+   * @param limit - The page size.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The page; shorter than `limit` on the last one.
+   */
+  async pageBillingStates(
+    afterTenantId: string | undefined,
+    limit: number,
+    executor: DbExecutor = db
+  ): Promise<TenantBillingStateRow[]> {
+    return executor
+      .select({
+        tenantId: tenantBillingModel.tenantId,
+        state: tenantBillingModel.state,
+        trialEndsAt: tenantBillingModel.trialEndsAt,
+        currentPeriodEnd: tenantBillingModel.currentPeriodEnd,
+        cancelAtPeriodEnd: tenantBillingModel.cancelAtPeriodEnd,
+        haltedAt: tenantBillingModel.haltedAt,
+        pausedAt: tenantBillingModel.pausedAt,
+      })
+      .from(tenantBillingModel)
+      .innerJoin(tenantModel, eq(tenantBillingModel.tenantId, tenantModel.id))
+      .where(
+        and(
+          isNull(tenantModel.deletedAt),
+          eq(tenantModel.isPlatform, false),
+          afterTenantId === undefined ? undefined : gt(tenantBillingModel.tenantId, afterTenantId)
+        )
+      )
+      .orderBy(asc(tenantBillingModel.tenantId))
+      .limit(limit)
   }
 
   /**

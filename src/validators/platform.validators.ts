@@ -2,6 +2,7 @@
  * @file The staff request bodies and queries. List queries come from `listParamsSchema`.
  */
 import { z } from 'zod'
+import { BILLING_STATES } from '@/constants/billing.constants'
 import { FLAG_STATES } from '@/constants/flags.constants'
 import { STATS_RANGES } from '@/constants/platform.constants'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
@@ -14,13 +15,15 @@ import { newTenantSchema } from '@/validators/tenant.validators'
 
 /**
  * `GET /api/v1/platform/tenants` query: the shared list params; `state` is
- * a comma list of lifecycle states, active and suspended unless given.
+ * a comma list of lifecycle states, active and suspended unless given;
+ * `billingState` a comma list of stored billing states, any unless given.
  */
 export const platformTenantListSchema = listParamsSchema({
   sorts: ['name', 'created', '-created'],
   defaultSort: 'name',
   filters: {
     state: listFilter('state', TENANT_LIFECYCLE_STATES).default(['active', 'suspended']),
+    billingState: listFilter('billingState', BILLING_STATES).optional(),
   },
 })
 

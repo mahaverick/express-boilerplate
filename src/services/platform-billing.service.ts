@@ -1,46 +1,84 @@
 /**
- * @file Staff billing of one customer tenant, behind
- * `/api/v1/platform/tenants/:id/billing`: the read, the resync, the trial
- * extension, grants and their revocation, and the staff cancel. The
- * platform tenant is never billed and answers `tenant_billing_not_found`
- * before any lock or read; an archived tenant stays readable.
+ * @file Staff billing, behind `/api/v1/platform`. For one customer tenant
+ * (`/tenants/:id/billing`): the read, the resync, the trial extension,
+ * grants and their revocation, and the staff cancel. The platform tenant is
+ * never billed and answers `tenant_billing_not_found` before any lock or
+ * read; an archived tenant stays readable. Platform-wide: the plans with
+ * their prices and tenant counts, a plan change's preview, the plan edit, a
+ * new price, the billing settings and the alerts list.
  *
  * Every write re-checks the staff member's platform role under lock
  * (`assertStillPlatformRole`, which locks the platform-role row, then the
- * user row), then takes the tenant's billing row, the documented lock order.
- * Provider calls never run inside a transaction. Each write is audited with
- * platform access and the staff member's reason; a write that changes the
- * billing row then runs `emitBillingDiff` with source `staff`, whose events
- * name the payer or the trial's owner, never the staff member. A grant does
- * not change the row, so it pushes the entitlements change itself.
+ * user row), then takes the row it changes: a tenant's billing row, the
+ * documented lock order, or a plan or the settings row, which no tenant
+ * write locks. Provider calls never run inside a transaction. Each write is
+ * audited with platform access and the staff member's reason; a write that
+ * changes the billing row then runs `emitBillingDiff` with source `staff`,
+ * whose events name the payer or the trial's owner, never the staff member.
+ * A grant does not change the row, so it pushes the entitlements change
+ * itself, and so do a plan edit and a grace change, to every tenant they
+ * reach.
  *
  * A trial extension bypasses the one-trial-per-person rule: it makes no
  * per-person claim. It clears the trial reminder claims, so the reminders
  * run again for the new end. A held unpaid checkout keeps the first charge
  * it was created with; the owner's next checkout re-creates it for the new
  * trial end.
+ *
+ * A plan edit applies to every tenant on the plan at once, and a lowered
+ * limit deletes nothing: a tenant over it keeps its members and can add
+ * none. A new price retires the active one of its interval; a subscriber
+ * keeps the price it pays, and no provider plan is made until the first
+ * checkout on the new price. Trial settings apply to trials that start after
+ * the change; the past-due grace applies at once to every past-due tenant,
+ * since its end is computed on each read.
  */
 import {
+  BILLING_STATES,
   NO_SUBSCRIPTION_CODE,
   PAYMENT_PROVIDER_UNAVAILABLE_CODE,
+  PLAN_KEYS,
+  PLAN_VERSION_CONFLICT_CODE,
+  PRICE_WARNING_ABOVE_MINOR,
   STAFF_BILLING_LIST_LIMIT,
   TRIAL_NOT_EXTENDABLE_CODE,
+  type BillingState,
+  type PlanKey,
   type StaffCancelWhen,
 } from '@/constants/billing.constants'
-import type { EntitlementGrant } from '@/database/models/billing.model'
+import {
+  ENTITLEMENTS,
+  entitlementCatalog,
+  type EntitlementCatalogEntry,
+  type EntitlementDefinition,
+  type EntitlementKey,
+  type EntitlementValue,
+} from '@/constants/entitlements.constants'
+import type { BillingSettingsRecord, EntitlementGrant, Plan } from '@/database/models/billing.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { displayName } from '@/presenters/billing.presenter'
 import {
+  toBillingAlertView,
   toEventView,
   toGrantView,
   toHistoryView,
+  toStaffPriceView,
+  type BillingAlertView,
+  type BillingSettingsView,
   type GrantView,
+  type PlanChangePreview,
+  type StaffPlanView,
   type StaffTenantBillingView,
+  type TenantStateCounts,
 } from '@/presenters/platform-billing.presenter'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import {
+  PlatformBillingRepository,
+  type TenantBillingStateRow,
+} from '@/repositories/platform-billing.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
@@ -64,11 +102,24 @@ import { auditThrottledView } from '@/services/platform-view-audit.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import { redisKey } from '@/services/redis.service'
 import type { Actor } from '@/types/actor'
-import { extendTrialEnd } from '@/utilities/billing-rules.utilities'
-import type { GrantBody } from '@/validators/platform-billing.validators'
+import {
+  effectiveBillingState,
+  extendTrialEnd,
+  mergeEntitlements,
+  planKeyForState,
+} from '@/utilities/billing-rules.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
+import type {
+  BillingAlertListQuery,
+  CreatePriceBody,
+  GrantBody,
+  UpdateBillingSettingsBody,
+  UpdatePlanBody,
+} from '@/validators/platform-billing.validators'
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
+const platformBillingRepository = new PlatformBillingRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 
@@ -517,4 +568,452 @@ export async function cancelByStaff(
     })
   }
   return staffView(tenantId)
+}
+
+/**
+ * How many tenants' billing records one query reads when a plan edit or a
+ * grace change finds the tenants to tell.
+ */
+const PUBLISH_BATCH_SIZE = 500
+
+/**
+ * The staff plan list: both plans, the registry's catalog, and the price
+ * above which Apex asks staff to confirm.
+ */
+interface StaffPlansView {
+  plans: StaffPlanView[]
+  catalog: Pick<EntitlementCatalogEntry, 'key' | 'kind' | 'label' | 'description'>[]
+  priceWarningAboveMinor: typeof PRICE_WARNING_ABOVE_MINOR
+}
+
+/**
+ * The 409 a plan or settings edit answers when someone else saved first.
+ * @param what - What was edited, as staff read it.
+ * @returns The error.
+ */
+function versionConflict(what: 'plan' | 'billing settings'): HttpError {
+  return new HttpError(
+    `Someone changed the ${what} after you opened this page. Reload it, then try again.`,
+    409,
+    PLAN_VERSION_CONFLICT_CODE
+  )
+}
+
+/**
+ * Live customer tenants by the state each record stores, counted under the
+ * plan that state serves: Paid for trialing, active and past due, Free for
+ * free. A lapsed trial or period counts under its stored state until the
+ * billing job moves it.
+ * @param counts - Tenants by stored plan and state.
+ * @param key - The plan.
+ * @returns A count for every state, zero for the states the plan does not serve.
+ */
+function countsServedBy(
+  counts: Record<PlanKey, Record<BillingState, number>>,
+  key: PlanKey
+): TenantStateCounts {
+  const result = Object.fromEntries(BILLING_STATES.map((state) => [state, 0])) as TenantStateCounts
+  for (const state of BILLING_STATES) {
+    if (planKeyForState(state) !== key) continue
+    result[state] = PLAN_KEYS.reduce((sum, plan) => sum + counts[plan][state], 0)
+  }
+  return result
+}
+
+/**
+ * Every entitlement of a plan, a key it does not set reading its registry default.
+ * @param key - The plan's key.
+ * @param values - The plan's stored values.
+ * @returns A value for every registry key.
+ */
+function planValues(
+  key: PlanKey,
+  values: Record<string, EntitlementValue>
+): Record<EntitlementKey, EntitlementValue> {
+  return mergeEntitlements(key, values, [], new Date()).values
+}
+
+/**
+ * A plan as staff see it.
+ * @param plan - The plan row.
+ * @param counts - Tenants by stored plan and state.
+ * @param subscribers - Paying tenants by price id.
+ * @returns The staff plan view.
+ */
+async function staffPlanOf(
+  plan: Plan,
+  counts: Record<PlanKey, Record<BillingState, number>>,
+  subscribers: Record<string, number>
+): Promise<StaffPlanView> {
+  const prices = await planRepository.listPrices(plan.id)
+  return {
+    id: plan.id,
+    key: plan.key,
+    name: plan.name,
+    description: plan.description ?? '',
+    version: plan.version,
+    entitlements: planValues(plan.key, plan.entitlements),
+    prices: prices.map((price) => toStaffPriceView(price, subscribers[price.id] ?? 0)),
+    tenantCounts: countsServedBy(counts, plan.key),
+  }
+}
+
+/**
+ * One plan as staff see it, read after a write.
+ * @param plan - The plan row.
+ * @returns The staff plan view.
+ */
+async function staffPlanView(plan: Plan): Promise<StaffPlanView> {
+  return staffPlanOf(
+    plan,
+    await platformBillingRepository.countTenantsByPlanAndState(),
+    await platformBillingRepository.countSubscribersByPrice()
+  )
+}
+
+/**
+ * Both plans as staff see them, with the entitlement catalog.
+ * @returns The staff plan list.
+ */
+export async function listStaffPlans(): Promise<StaffPlansView> {
+  const rows = await planRepository.listPlans()
+  const counts = await platformBillingRepository.countTenantsByPlanAndState()
+  const subscribers = await platformBillingRepository.countSubscribersByPrice()
+  const plans: StaffPlanView[] = []
+  for (const plan of rows) plans.push(await staffPlanOf(plan, counts, subscribers))
+  return {
+    plans,
+    catalog: entitlementCatalog().map(({ key, kind, label, description }) => ({
+      key,
+      kind,
+      label,
+      description,
+    })),
+    priceWarningAboveMinor: PRICE_WARNING_ABOVE_MINOR,
+  }
+}
+
+/**
+ * A plan's stored values with the sent ones written over them: keys not
+ * sent keep their values. The edit stores this, and the preview compares it.
+ * @param plan - The plan row.
+ * @param sent - The entitlements the edit sends.
+ * @returns The values to store.
+ */
+function nextEntitlements(
+  plan: Plan,
+  sent: Record<string, EntitlementValue>
+): Record<string, EntitlementValue> {
+  return { ...plan.entitlements, ...sent }
+}
+
+/**
+ * Whether moving an entitlement from one value to another gives tenants more.
+ * @param key - The registry key.
+ * @param from - The value now.
+ * @param to - The value after.
+ * @returns `increase` when tenants get more, `decrease` when less.
+ */
+function directionOf(
+  key: EntitlementKey,
+  from: EntitlementValue,
+  to: EntitlementValue
+): 'increase' | 'decrease' {
+  const definition: EntitlementDefinition = ENTITLEMENTS[key]
+  if (definition.kind === 'feature') return to === true ? 'increase' : 'decrease'
+  if (to === null) return 'increase'
+  if (from === null) return 'decrease'
+  return Number(to) > Number(from) ? 'increase' : 'decrease'
+}
+
+/**
+ * What a plan edit would change, key by key in registry order, and how many
+ * tenants the plan serves by stored state. Nothing is written; the edit
+ * computes the same.
+ * @param planId - The plan.
+ * @param sent - The entitlements the edit would send (the body schema checked them).
+ * @returns The changes and the tenants affected.
+ * @throws {HttpError} 404 `plan_not_found`.
+ */
+export async function previewPlanChange(
+  planId: string,
+  sent: Record<string, EntitlementValue>
+): Promise<PlanChangePreview> {
+  const plan = await planRepository.findPlan(planId)
+  if (plan === undefined) throw notFoundError('plan')
+  const before = planValues(plan.key, plan.entitlements)
+  const after = planValues(plan.key, nextEntitlements(plan, sent))
+  const changes = (Object.keys(ENTITLEMENTS) as EntitlementKey[])
+    .filter((key) => before[key] !== after[key])
+    .map((key) => ({
+      key,
+      from: before[key],
+      to: after[key],
+      direction: directionOf(key, before[key], after[key]),
+    }))
+  const counts = await platformBillingRepository.countTenantsByPlanAndState()
+  return { changes, affected: countsServedBy(counts, plan.key) }
+}
+
+/**
+ * Tell the open apps of every live customer tenant a predicate picks, a
+ * page of billing records at a time. Never rejects: the change is
+ * committed, and a missed push only delays an app until its next read.
+ * @param shouldTell - Whether a tenant's record calls for a push.
+ * @param context - Ids for the log line when a page cannot be read.
+ */
+async function publishWhere(
+  shouldTell: (row: TenantBillingStateRow) => boolean,
+  context: Record<string, string>
+): Promise<void> {
+  let after: string | undefined
+  try {
+    for (;;) {
+      const page = await platformBillingRepository.pageBillingStates(after, PUBLISH_BATCH_SIZE)
+      for (const row of page) if (shouldTell(row)) await publishQuietly(row.tenantId)
+      if (page.length < PUBLISH_BATCH_SIZE) return
+      after = page.at(-1)?.tenantId
+    }
+  } catch (error) {
+    logger.error('Could not push an entitlements change to every tenant', {
+      error,
+      ...context,
+    })
+  }
+}
+
+/**
+ * A plan's columns as its audit entry records them.
+ * @param plan - The plan row.
+ * @returns Its name, description and every entitlement.
+ */
+function planSnapshot(plan: Plan) {
+  return {
+    name: plan.name,
+    description: plan.description ?? '',
+    entitlements: planValues(plan.key, plan.entitlements),
+  }
+}
+
+/**
+ * Edit a plan's name, description or entitlements. The edit applies to every
+ * tenant on the plan at once; a lowered limit deletes nothing. Sent
+ * entitlements replace those keys' values, as the preview showed. After the
+ * commit, every tenant whose effective plan is this one is told: trialing
+ * ones for Paid, and for Free the free ones and those whose trial or period
+ * lapsed before the billing job ran.
+ * @param actor - The staff member (a platform admin or above).
+ * @param planId - The plan.
+ * @param body - The version read, the changes and the reason (the body schema checked them).
+ * @returns The plan as staff see it after the edit.
+ * @throws {HttpError} 404 `plan_not_found`; 409 `PLAN_VERSION_CONFLICT` for a stale version.
+ */
+export async function updatePlan(
+  actor: Actor,
+  planId: string,
+  body: UpdatePlanBody
+): Promise<StaffPlanView> {
+  const updated = await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const locked = await planRepository.lockPlan(planId, tx)
+    if (locked === undefined) throw notFoundError('plan')
+    if (locked.version !== body.version) throw versionConflict('plan')
+    const after = await planRepository.updatePlanVersioned(
+      planId,
+      locked.version,
+      {
+        ...(body.name !== undefined && { name: body.name }),
+        ...(body.description !== undefined && {
+          description: body.description === '' ? null : body.description,
+        }),
+        ...(body.entitlements !== undefined && {
+          entitlements: nextEntitlements(locked, body.entitlements),
+        }),
+      },
+      tx
+    )
+    if (after === undefined) throw new HttpError('The plan changed under its lock', 500)
+    const platform = await tenantRepository.findPlatformTenant(tx)
+    if (platform === undefined) throw new HttpError('The platform tenant is missing', 500)
+    const counts = await platformBillingRepository.countTenantsByPlanAndState(tx)
+    const affected = countsServedBy(counts, locked.key)
+    await record(
+      {
+        action: 'plan.updated',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: planId,
+        metadata: {
+          before: planSnapshot(locked),
+          after: planSnapshot(after),
+          affected: {
+            trialing: affected.trialing,
+            active: affected.active,
+            past_due: affected.past_due,
+            free: affected.free,
+          },
+          reason: body.reason,
+        },
+      },
+      tx
+    )
+    return after
+  })
+  const settings = await planRepository.getSettings()
+  const now = new Date()
+  await publishWhere(
+    (row) =>
+      planKeyForState(effectiveBillingState(row, now, settings.pastDueGraceDays)) === updated.key,
+    { planId }
+  )
+  return staffPlanView(updated)
+}
+
+/**
+ * Add a price to Paid for an interval. In the same transaction the active
+ * price of that interval is retired; a tenant paying it keeps it, and new
+ * checkouts get the new one. No provider call: the provider plan is made at
+ * the first checkout on the price. A price above `PRICE_WARNING_ABOVE_MINOR`
+ * is allowed; Apex asks staff to confirm it first.
+ * @param actor - The staff member (a platform admin or above).
+ * @param planId - The plan.
+ * @param body - The interval, amount and reason (the body schema checked them).
+ * @returns The plan as staff see it, with the new price.
+ * @throws {HttpError} 404 `plan_not_found`; 400 for Free, which has no prices; 409 when another price change won the slot.
+ */
+export async function createPrice(
+  actor: Actor,
+  planId: string,
+  body: CreatePriceBody
+): Promise<StaffPlanView> {
+  const plan = await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const locked = await planRepository.lockPlan(planId, tx)
+    if (locked === undefined) throw notFoundError('plan')
+    if (locked.key === 'free') {
+      throw new HttpError('Free has no price. Add the price to Paid instead.', 400)
+    }
+    await planRepository.insertPriceRetiringActive(
+      { planId, currency: 'INR', interval: body.interval, amountMinor: body.amountMinor },
+      tx
+    )
+    const platform = await tenantRepository.findPlatformTenant(tx)
+    if (platform === undefined) throw new HttpError('The platform tenant is missing', 500)
+    await record(
+      {
+        action: 'plan.price_created',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: planId,
+        metadata: { interval: body.interval, amountMinor: body.amountMinor, reason: body.reason },
+      },
+      tx
+    )
+    return locked
+  })
+  return staffPlanView(plan)
+}
+
+/**
+ * The settings as staff see them.
+ * @param settings - The settings row.
+ * @returns The view, naming the staff member who changed them last.
+ */
+async function settingsView(settings: BillingSettingsRecord): Promise<BillingSettingsView> {
+  const [editor] =
+    settings.updatedBy === null
+      ? []
+      : await userRepository.findManyByIds([settings.updatedBy], { includeDeleted: true })
+  return {
+    trialEnabled: settings.trialEnabled,
+    trialDays: settings.trialDays,
+    pastDueGraceDays: settings.pastDueGraceDays,
+    version: settings.version,
+    updatedAt: settings.updatedAt,
+    updatedBy: editor === undefined ? null : { userId: editor.id, name: displayName(editor) },
+  }
+}
+
+/**
+ * The platform-wide trial and grace settings.
+ * @returns The settings, with their version and last editor.
+ */
+export async function getBillingSettings(): Promise<BillingSettingsView> {
+  return settingsView(await planRepository.getSettings())
+}
+
+/**
+ * Change the trial switch, the trial length or the past-due grace. Trial
+ * settings apply to trials that start after the change. The grace applies
+ * at once to every past-due tenant, since its end is computed on each read;
+ * the tenants whose effective state the change moves are told after the
+ * commit.
+ * @param actor - The staff member (a platform admin or above).
+ * @param body - The version read, the changes and the reason (the body schema checked them).
+ * @returns The settings after the change.
+ * @throws {HttpError} 409 `PLAN_VERSION_CONFLICT` for a stale version.
+ */
+export async function updateBillingSettings(
+  actor: Actor,
+  body: UpdateBillingSettingsBody
+): Promise<BillingSettingsView> {
+  const { before, after } = await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const locked = await planRepository.lockSettings(tx)
+    if (locked.version !== body.version) throw versionConflict('billing settings')
+    const fields = ['trialEnabled', 'trialDays', 'pastDueGraceDays'] as const
+    const changedFields = fields.filter(
+      (field) => body[field] !== undefined && body[field] !== locked[field]
+    )
+    const written = await planRepository.updateSettingsVersioned(
+      locked.version,
+      {
+        ...(body.trialEnabled !== undefined && { trialEnabled: body.trialEnabled }),
+        ...(body.trialDays !== undefined && { trialDays: body.trialDays }),
+        ...(body.pastDueGraceDays !== undefined && { pastDueGraceDays: body.pastDueGraceDays }),
+        updatedBy: actor.userId,
+      },
+      tx
+    )
+    if (written === undefined) throw new HttpError('The settings changed under their lock', 500)
+    const platform = await tenantRepository.findPlatformTenant(tx)
+    if (platform === undefined) throw new HttpError('The platform tenant is missing', 500)
+    await record(
+      {
+        action: 'billing.settings_updated',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: platform.id,
+        metadata: { changedFields: [...changedFields], reason: body.reason },
+      },
+      tx
+    )
+    return { before: locked, after: written }
+  })
+  if (before.pastDueGraceDays !== after.pastDueGraceDays) {
+    const now = new Date()
+    await publishWhere(
+      (row) =>
+        effectiveBillingState(row, now, before.pastDueGraceDays) !==
+        effectiveBillingState(row, now, after.pastDueGraceDays),
+      { change: 'pastDueGraceDays' }
+    )
+  }
+  return settingsView(after)
+}
+
+/**
+ * One page of billing alerts, newest first unless asked otherwise.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listBillingAlerts(
+  query: BillingAlertListQuery
+): Promise<ListPage<BillingAlertView>> {
+  const page = await platformBillingRepository.listAlerts(query.params)
+  return { ...page, items: page.items.map((row) => toBillingAlertView(row)) }
 }

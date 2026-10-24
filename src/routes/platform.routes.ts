@@ -22,7 +22,10 @@ import {
   requirePlatformRole,
 } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
-import { createPlatformTenantBillingRouter } from '@/routes/platform-billing.routes'
+import {
+  addPlatformPlanRoutes,
+  createPlatformTenantBillingRouter,
+} from '@/routes/platform-billing.routes'
 import {
   createPlatformEmailRouter,
   createPlatformEmailSuppressionRouter,
@@ -65,6 +68,7 @@ export function createPlatformRouter(): Router {
     '/tenants/:id/billing',
     createPlatformTenantBillingRouter({ searchLimiter, writeLimiter })
   )
+  addPlatformPlanRoutes(router, { searchLimiter, writeLimiter })
   router.get(
     '/tenants',
     requirePlatformRole('viewer'),

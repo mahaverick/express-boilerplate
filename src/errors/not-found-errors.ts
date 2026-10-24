@@ -78,6 +78,10 @@ export const NOT_FOUND = {
     message:
       "We couldn't find this grant on this tenant. Refresh the tenant's Billing tab to see its grants.",
   },
+  plan: {
+    code: 'plan_not_found',
+    message: "We couldn't find this plan. Go back to Plans and pick one from the list.",
+  },
   suppression: {
     code: 'suppression_not_found',
     message:

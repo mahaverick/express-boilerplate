@@ -261,3 +261,15 @@ export const STAFF_CANCEL_WHEN = ['cycle_end', 'now'] as const
  * One choice of when a staff cancel ends a subscription.
  */
 export type StaffCancelWhen = (typeof STAFF_CANCEL_WHEN)[number]
+
+/**
+ * Error code: a staff plan or billing settings edit sent a `version` someone
+ * else's edit has since replaced.
+ */
+export const PLAN_VERSION_CONFLICT_CODE = 'PLAN_VERSION_CONFLICT'
+
+/**
+ * A price above this many paise (₹15,000) is allowed, but Apex asks staff to
+ * confirm it, in case of a slipped digit.
+ */
+export const PRICE_WARNING_ABOVE_MINOR = 1_500_000

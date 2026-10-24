@@ -31,6 +31,8 @@ interface PlatformTenantRowBody {
   lifecycleState: string
   memberCount: number
   createdAt: string
+  billingState: string | null
+  planKey: string | null
 }
 
 /**
@@ -94,6 +96,20 @@ function search(token: string, query: Record<string, string> = {}): Promise<Resp
  */
 function newTag(): string {
   return `t${randomUUID().slice(0, 8)}`
+}
+
+/**
+ * Put a tenant's stored billing in a state, on the plan that state serves.
+ */
+async function setBillingState(
+  tenantId: string,
+  state: 'trialing' | 'active' | 'past_due'
+): Promise<void> {
+  await sql`update tenant_billing set state = ${state},
+    plan_id = (select id from plans where key = 'paid'),
+    trial_ends_at = case when ${state}::text = 'trialing' then now() + interval '7 days' end,
+    past_due_since = case when ${state}::text = 'past_due' then now() end
+    where tenant_id = ${tenantId}`
 }
 
 describe('GET /api/v1/platform/tenants', () => {
@@ -268,6 +284,8 @@ describe('GET /api/v1/platform/tenants', () => {
           lifecycleState: 'active',
           memberCount: 2,
           createdAt: tenant.createdAt.toISOString(),
+          billingState: 'free',
+          planKey: 'free',
         },
       ])
     })
@@ -474,6 +492,73 @@ describe('GET /api/v1/platform/tenants', () => {
       )
 
       expect([...first.items, ...second.items].map((t) => t.id)).not.toContain(suspended.id)
+    })
+  })
+  describe('billing', () => {
+    it("shows each row's stored state and plan, and filters by state", async () => {
+      const tag = newTag()
+      const free = await createNamedTenant(`${tag} Free`)
+      const trialing = await createNamedTenant(`${tag} Trialing`)
+      const active = await createNamedTenant(`${tag} Active`)
+      const pastDue = await createNamedTenant(`${tag} Past due`)
+      await setBillingState(trialing.id, 'trialing')
+      await setBillingState(active.id, 'active')
+      await setBillingState(pastDue.id, 'past_due')
+      const token = await createStaff()
+
+      const all = pageOf(await search(token, { search: tag }))
+      const onlyPastDue = pageOf(await search(token, { search: tag, billingState: 'past_due' }))
+      const paying = pageOf(await search(token, { search: tag, billingState: 'active,past_due' }))
+
+      expect(
+        Object.fromEntries(all.items.map((row) => [row.id, [row.billingState, row.planKey]]))
+      ).toEqual({
+        [free.id]: ['free', 'free'],
+        [trialing.id]: ['trialing', 'paid'],
+        [active.id]: ['active', 'paid'],
+        [pastDue.id]: ['past_due', 'paid'],
+      })
+      expect(onlyPastDue.items.map((row) => row.id)).toEqual([pastDue.id])
+      expect(paying.items.map((row) => row.id).toSorted()).toEqual(
+        [active.id, pastDue.id].toSorted()
+      )
+    })
+
+    it('shows null for a tenant with no billing record, and any state filter leaves it out', async () => {
+      const tag = newTag()
+      const bare = await createNamedTenant(`${tag} Bare`)
+      await sql`delete from tenant_billing where tenant_id = ${bare.id}`
+      const token = await createStaff()
+
+      const all = pageOf(await search(token, { search: tag }))
+      const filtered = pageOf(
+        await search(token, { search: tag, billingState: 'trialing,free,active,past_due' })
+      )
+
+      expect(all.items.map((row) => [row.billingState, row.planKey])).toEqual([[null, null]])
+      expect(filtered.items).toEqual([])
+    })
+
+    it('never lists the platform tenant under a billing state filter', async () => {
+      const platform = await platformTenant()
+
+      const page = pageOf(
+        await search(await createStaff(), {
+          search: platform.slug,
+          state: 'active,suspended,archived',
+          billingState: 'trialing,free,active,past_due',
+          limit: '50',
+        })
+      )
+
+      expect(page.items.map((tenant) => tenant.id)).not.toContain(platform.id)
+    })
+
+    it('rejects an unknown billing state with 400', async () => {
+      const response = await search(await createStaff(), { billingState: 'cancelled' })
+
+      expect(response.status).toBe(400)
+      expect((response.body as ApiEnvelope<unknown>).errors?.billingState).toHaveLength(1)
     })
   })
 })

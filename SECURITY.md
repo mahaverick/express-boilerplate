@@ -752,6 +752,12 @@ their role there is their platform role (`src/services/platform.service.ts`).
   sync records it, as with an owner's cancel. The platform tenant has no billing and
   answers `tenant_billing_not_found`. A grant id from another tenant answers
   `grant_not_found`.
+  Viewers read the plans and the billing settings; an admin previews and
+  edits a plan, adds a price, changes the settings and reads the billing
+  alerts. A plan or settings edit carries the version it read and is refused
+  `409 PLAN_VERSION_CONFLICT` when someone saved first. A plan edit reaches
+  every tenant on the plan at once; a new price never moves a subscriber off
+  the price it pays.
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
@@ -774,7 +780,9 @@ Step-up guards:
 - on `/platform`: deactivating, deleting and purging a user; suspending,
   archiving and purging a tenant; re-inviting a tenant's owner; changing the
   maintenance mode; every write to a tenant's billing (resync, trial
-  extension, a grant and its revocation, the staff cancel); and an email
+  extension, a grant and its revocation, the staff cancel); a plan edit, a
+  new price and a billing settings change (a plan preview writes nothing and
+  needs none); and an email
   resend of an invitation, which the service checks because the route cannot
   know the tenant;
 - on the platform tenant's member routes: a role change, a removal, leaving, an
@@ -789,7 +797,8 @@ deactivating, reactivating, signing out, deleting and purging a user;
 suspending, reactivating, archiving and purging a tenant; re-inviting its owner;
 resending an email; lifting a suppression; completing an onboarding step or
 sending a reminder; resyncing a tenant's billing, extending its trial, adding
-or revoking a grant and cancelling its subscription; and the member and
+or revoking a grant and cancelling its subscription; editing a plan, adding a
+price and changing the billing settings; and the member and
 invitation writes made through platform access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
 `src/validators/platform.validators.ts`) goes into the audit entry's metadata.
 Staff acting in a customer tenant through their platform role send it in the

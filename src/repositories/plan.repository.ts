@@ -76,6 +76,18 @@ export class PlanRepository {
   }
 
   /**
+   * Lock a plan row `FOR NO KEY UPDATE`, so two staff edits of one plan
+   * read each other's version.
+   * @param id - The plan's id.
+   * @param tx - The open transaction.
+   * @returns The locked row, or undefined when there is no such plan.
+   */
+  async lockPlan(id: string, tx: DbTransaction): Promise<Plan | undefined> {
+    const [row] = await tx.select().from(planModel).where(eq(planModel.id, id)).for('no key update')
+    return row
+  }
+
+  /**
    * Change a plan only if its version is still `expectedVersion`. Adds one to
    * `version` and sets `updated_at`.
    * @param id - The plan's id.
@@ -242,6 +254,18 @@ export class PlanRepository {
    */
   async getSettings(executor: DbExecutor = db): Promise<BillingSettingsRecord> {
     const [row] = await executor.select().from(billingSettingsModel).limit(1)
+    if (row === undefined) throw new HttpError('Billing settings are missing', 500)
+    return row
+  }
+
+  /**
+   * Lock the single billing settings row `FOR NO KEY UPDATE`.
+   * @param tx - The open transaction.
+   * @returns The locked row.
+   * @throws {HttpError} 500 when the seeded row is missing.
+   */
+  async lockSettings(tx: DbTransaction): Promise<BillingSettingsRecord> {
+    const [row] = await tx.select().from(billingSettingsModel).limit(1).for('no key update')
     if (row === undefined) throw new HttpError('Billing settings are missing', 500)
     return row
   }

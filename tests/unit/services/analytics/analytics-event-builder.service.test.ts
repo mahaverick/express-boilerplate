@@ -248,6 +248,19 @@ describe('buildAuditEvents', () => {
     })
   })
 
+  it("keeps a plan edit's snapshots in the audit log and sends its tenant counts", () => {
+    const snapshot = { name: 'Free', description: `Ask ${PII_EMAIL}`, entitlements: { members: 3 } }
+    const affected = { trialing: 0, active: 0, past_due: 0, free: 4 }
+    const [row] = buildAuditEvents(
+      auditRow('plan.updated', { before: snapshot, after: snapshot, affected, reason: 'Review' }),
+      {}
+    )
+    expect(row?.properties).toMatchObject({ affected, has_reason: true })
+    expect(row?.properties).not.toHaveProperty('before')
+    expect(row?.properties).not.toHaveProperty('after')
+    expect(JSON.stringify(row)).not.toContain(PII_EMAIL)
+  })
+
   it('adds no has_reason to an action without a reason', () => {
     const [row] = buildAuditEvents(auditRow('tenant.updated', { changed: ['name'] }), {})
     expect(row?.properties).not.toHaveProperty('has_reason')
@@ -598,6 +611,9 @@ const CANDIDATES: readonly unknown[] = [
   0,
   7,
   NONE,
+  // A plan edit's snapshot, its free text carrying the probes, and its tenant counts.
+  { name: PII_NAME, description: PII_EMAIL, entitlements: { members: 3 } },
+  { trialing: 0, active: 1, past_due: 0, free: 7 },
 ]
 
 /**

@@ -59,7 +59,7 @@ interface GateRow {
   /**
    * Which fixture `:id` resolves to.
    */
-  target?: 'user' | 'tenant' | 'email' | 'suppression'
+  target?: 'user' | 'tenant' | 'email' | 'suppression' | 'plan'
   /**
    * A write that is telemetry, not a staff action: no step-up, and
    * `logStaffWrites` leaves no `Staff write` line for it.
@@ -253,6 +253,26 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: true,
     target: 'tenant',
   },
+  { method: 'get', path: '/plans', minRole: 'viewer', requiresStepUp: false },
+  // A preview writes nothing and takes no reason, so it needs no step-up.
+  {
+    method: 'post',
+    path: '/plans/:id/preview',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'plan',
+  },
+  { method: 'patch', path: '/plans/:id', minRole: 'admin', requiresStepUp: true, target: 'plan' },
+  {
+    method: 'post',
+    path: '/plans/:id/prices',
+    minRole: 'admin',
+    requiresStepUp: true,
+    target: 'plan',
+  },
+  { method: 'get', path: '/billing-settings', minRole: 'viewer', requiresStepUp: false },
+  { method: 'patch', path: '/billing-settings', minRole: 'admin', requiresStepUp: true },
+  { method: 'get', path: '/billing/alerts', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/me/flags', minRole: 'viewer', requiresStepUp: false },
   // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, so the route takes no step-up; it is neither audited nor logged as a staff write.
   {
@@ -396,7 +416,7 @@ describe('the platform route walker', () => {
 describe('/api/v1/platform route gates', () => {
   const userIds: string[] = []
   const tenantIds: string[] = []
-  const ids = { user: '', tenant: '', email: '', suppression: '', grant: '' }
+  const ids = { user: '', tenant: '', email: '', suppression: '', grant: '', plan: '' }
 
   /**
    * A fresh verified user with a token for a sign-in at `authenticatedAt`, tracked for cleanup.
@@ -465,6 +485,9 @@ describe('/api/v1/platform route gates', () => {
       select id from tenant_entitlement_grants where tenant_id = ${tenant.id}`
     if (!grant) throw new Error('setup: the grant was not stored')
     ids.grant = grant.id
+    const [plan] = await sql<{ id: string }[]>`select id from plans where key = 'free'`
+    if (!plan) throw new Error('setup: the billing migration seeds the free plan')
+    ids.plan = plan.id
     // A security notice: its detail and preview answer 200, and a resend never reaches a delegate.
     const message = await createTrackedMessage({
       templateKey: 'password_changed',

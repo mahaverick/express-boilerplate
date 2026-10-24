@@ -1,26 +1,40 @@
 /**
- * @file Handlers for `/api/v1/platform/tenants/:id/billing`. Every route runs
- * behind `requireAuth` and `requirePlatformRole` (platform-billing.routes.ts),
- * and every write behind `requireRecentAuth`. Each write answers the staff
- * billing view after it. A body is parsed before the grant id, so a write's
- * validation answer does not depend on which grant it names.
+ * @file Handlers for the staff billing routes: one tenant's under
+ * `/api/v1/platform/tenants/:id/billing`, and the plans, prices, billing
+ * settings and alerts under `/api/v1/platform`. Every route runs behind
+ * `requireAuth` and `requirePlatformRole` (platform-billing.routes.ts), and
+ * every write behind `requireRecentAuth`. Each write answers the view it
+ * changed. A body is parsed before the grant or plan id is looked up, so a
+ * write's validation answer does not depend on which one it names.
  */
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
 import {
   addGrant,
   cancelByStaff,
+  createPrice,
   extendTrial,
+  getBillingSettings,
   getStaffTenantBilling,
+  listBillingAlerts,
+  listStaffPlans,
+  previewPlanChange,
   resyncTenantBilling,
   revokeGrant,
+  updateBillingSettings,
+  updatePlan,
 } from '@/services/platform-billing.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
+  billingAlertListSchema,
+  createPriceBodySchema,
   extendTrialBodySchema,
   grantBodySchema,
+  planPreviewBodySchema,
   staffCancelBodySchema,
+  updateBillingSettingsBodySchema,
+  updatePlanBodySchema,
 } from '@/validators/platform-billing.validators'
 import { parseIdParameter, reasonBodySchema } from '@/validators/platform.validators'
 
@@ -100,6 +114,67 @@ class PlatformBillingController extends BaseController {
       await cancelByStaff(actorFrom(request), tenantId, when, reason),
       'Subscription cancelled.'
     )
+  })
+
+  /**
+   * `GET /platform/plans`: both plans with prices and tenant counts, and the catalog.
+   */
+  listPlans = this.handle(async (_request, response) => {
+    successResponse(response, await listStaffPlans(), 'Plans retrieved.')
+  })
+
+  /**
+   * `POST /platform/plans/:id/preview`: what an entitlements edit would change, and for how many tenants.
+   */
+  previewPlan = this.handle(async (request, response) => {
+    const { entitlements } = parseBody(planPreviewBodySchema, request.body)
+    const planId = parseIdParameter(request.params.id, 'plan')
+    successResponse(response, await previewPlanChange(planId, entitlements), 'Preview ready.')
+  })
+
+  /**
+   * `PATCH /platform/plans/:id`: edit a plan's name, description or entitlements.
+   */
+  updatePlan = this.handle(async (request, response) => {
+    const body = parseBody(updatePlanBodySchema, request.body)
+    const planId = parseIdParameter(request.params.id, 'plan')
+    successResponse(response, await updatePlan(actorFrom(request), planId, body), 'Plan saved.')
+  })
+
+  /**
+   * `POST /platform/plans/:id/prices`: add a price, retiring the active one of its interval.
+   */
+  createPrice = this.handle(async (request, response) => {
+    const body = parseBody(createPriceBodySchema, request.body)
+    const planId = parseIdParameter(request.params.id, 'plan')
+    successResponse(response, await createPrice(actorFrom(request), planId, body), 'Price added.')
+  })
+
+  /**
+   * `GET /platform/billing-settings`: the trial and grace settings.
+   */
+  getSettings = this.handle(async (_request, response) => {
+    successResponse(response, await getBillingSettings(), 'Billing settings retrieved.')
+  })
+
+  /**
+   * `PATCH /platform/billing-settings`: change the trial or grace settings.
+   */
+  updateSettings = this.handle(async (request, response) => {
+    const body = parseBody(updateBillingSettingsBodySchema, request.body)
+    successResponse(
+      response,
+      await updateBillingSettings(actorFrom(request), body),
+      'Billing settings saved.'
+    )
+  })
+
+  /**
+   * `GET /platform/billing/alerts`: one page of billing alerts.
+   */
+  listAlerts = this.handle(async (request, response) => {
+    const query = parseBody(billingAlertListSchema, request.query)
+    successResponse(response, await listBillingAlerts(query), 'Billing alerts retrieved.')
   })
 }
 

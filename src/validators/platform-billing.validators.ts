@@ -1,17 +1,25 @@
 /**
- * @file Request bodies of the staff billing routes of one tenant: the trial
- * extension, a grant, and the staff cancel. Every write carries the staff
- * member's reason (`reasonSchema`). A grant names a registry key and a value
- * of that key's kind, so a typo or a wrong kind is a field error, never a
- * stored grant that grants nothing.
+ * @file Request bodies of the staff billing routes: one tenant's trial
+ * extension, grant and staff cancel; a plan's preview and edit; a new
+ * price; the billing settings edit; and the alerts list query. Every write
+ * carries the staff member's reason (`reasonSchema`). A grant or a plan
+ * names registry keys and values of each key's kind, so a typo or a wrong
+ * kind is a field error, never a stored value that grants nothing. A grant
+ * and a plan share one cap on a limit.
  */
 import { z } from 'zod'
-import { MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
-import { ENTITLEMENTS, type EntitlementDefinition } from '@/constants/entitlements.constants'
+import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
+import {
+  ENTITLEMENTS,
+  type EntitlementDefinition,
+  type EntitlementValue,
+} from '@/constants/entitlements.constants'
+import { listParamsSchema } from '@/validators/list.validators'
 import { reasonSchema } from '@/validators/platform.validators'
+import { safeText } from '@/validators/safe-text.validators'
 
 /**
- * The largest limit a grant may set; null grants no cap at all.
+ * The largest limit a grant or a plan may set; null is no cap at all.
  */
 const MAX_GRANT_LIMIT = 1_000_000
 
@@ -19,6 +27,22 @@ const MAX_GRANT_LIMIT = 1_000_000
  * `MAX_GRANT_LIMIT` as people read it.
  */
 const MAX_GRANT_LIMIT_TEXT = '1,000,000'
+
+/**
+ * Whether a value is one a limit may hold: a whole number from 1 to
+ * `MAX_GRANT_LIMIT`, or null for no cap.
+ * @param value - The value sent.
+ * @returns True when a limit may take it.
+ */
+function isLimitValue(value: unknown): boolean {
+  if (value === null) return true
+  return (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= MAX_GRANT_LIMIT
+  )
+}
 
 /**
  * `POST /tenants/:id/billing/extend-trial`: how many days to add, and why.
@@ -68,14 +92,7 @@ export const grantBodySchema = z
         message: 'A feature grant turns the feature on. Send true.',
       })
     }
-    if (
-      definition?.kind === 'limit' &&
-      body.value !== null &&
-      (typeof body.value !== 'number' ||
-        !Number.isSafeInteger(body.value) ||
-        body.value < 1 ||
-        body.value > MAX_GRANT_LIMIT)
-    ) {
+    if (definition?.kind === 'limit' && !isLimitValue(body.value)) {
       context.addIssue({
         code: 'custom',
         path: ['value'],
@@ -103,3 +120,202 @@ export const staffCancelBodySchema = z.strictObject({
   when: z.enum(STAFF_CANCEL_WHEN, { error: 'Choose cycle_end or now.' }),
   reason: reasonSchema,
 })
+
+/**
+ * A plan's entitlements as staff send them: any of the registry's keys, each
+ * with a value of its kind. A limit takes what a grant takes; a feature
+ * takes `true` or `false`, since a plan may leave a feature out. Every bad
+ * key is reported, one message each.
+ */
+const planEntitlementsSchema = z
+  .record(z.string(), z.unknown(), { error: 'Send entitlements as an object of keys and values.' })
+  .superRefine((entitlements, context) => {
+    const known = Object.keys(ENTITLEMENTS).join(', ')
+    for (const [key, value] of Object.entries(entitlements)) {
+      if (!Object.hasOwn(ENTITLEMENTS, key)) {
+        context.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `Remove the keys this product doesn't have. It has: ${known}.`,
+        })
+        continue
+      }
+      const definition: EntitlementDefinition = ENTITLEMENTS[key as keyof typeof ENTITLEMENTS]
+      if (definition.kind === 'feature' && typeof value !== 'boolean') {
+        context.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${definition.label}: send true to include the feature or false to leave it out.`,
+        })
+      }
+      if (definition.kind === 'limit' && !isLimitValue(value)) {
+        context.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${definition.label}: enter a whole number from 1 to ${MAX_GRANT_LIMIT_TEXT}, or null for no cap.`,
+        })
+      }
+    }
+  })
+  .transform((entitlements) => entitlements as Record<string, EntitlementValue>)
+
+/**
+ * `POST /plans/:id/preview`: the entitlements an edit would send.
+ */
+export const planPreviewBodySchema = z.strictObject({ entitlements: planEntitlementsSchema })
+
+/**
+ * The longest plan name, the column's width.
+ */
+const MAX_PLAN_NAME_LENGTH = 64
+
+/**
+ * The longest plan description, the column's width.
+ */
+const MAX_PLAN_DESCRIPTION_LENGTH = 280
+
+/**
+ * A stored row's `version`, as the client read it.
+ */
+const versionSchema = z
+  .number({ error: 'Send the version you loaded, a whole number.' })
+  .int('Send the version you loaded, a whole number.')
+  .min(1, 'Send the version you loaded, a whole number.')
+
+/**
+ * `PATCH /plans/:id`: the version the client read, at least one of name,
+ * description and entitlements, and why. The entitlements sent replace those
+ * keys' values; keys not sent keep theirs. An empty description clears it.
+ */
+export const updatePlanBodySchema = z
+  .strictObject({
+    version: versionSchema,
+    name: z
+      .string({ error: 'Enter a plan name.' })
+      .trim()
+      .min(1, 'Enter a plan name.')
+      .max(
+        MAX_PLAN_NAME_LENGTH,
+        `Keep the plan name to ${String(MAX_PLAN_NAME_LENGTH)} characters.`
+      )
+      .refine(safeText(), 'Remove the control characters from the plan name.')
+      .optional(),
+    description: z
+      .string({ error: 'Enter the description as text.' })
+      .trim()
+      .max(
+        MAX_PLAN_DESCRIPTION_LENGTH,
+        `Keep the description to ${String(MAX_PLAN_DESCRIPTION_LENGTH)} characters.`
+      )
+      .refine(safeText(), 'Remove the control characters from the description.')
+      .optional(),
+    entitlements: planEntitlementsSchema.optional(),
+    reason: reasonSchema,
+  })
+  .refine(
+    (body) =>
+      body.name !== undefined || body.description !== undefined || body.entitlements !== undefined,
+    { message: 'Change the name, the description or an entitlement.' }
+  )
+
+/**
+ * A validated plan edit.
+ */
+export type UpdatePlanBody = z.infer<typeof updatePlanBodySchema>
+
+/**
+ * The lowest price staff may set, in paise: ₹1.
+ */
+const MIN_PRICE_MINOR = 100
+
+/**
+ * The highest price staff may set, in paise: ₹1,00,000.
+ */
+const MAX_PRICE_MINOR = 10_000_000
+
+/**
+ * What a price outside the range reads.
+ */
+const PRICE_RANGE_MESSAGE =
+  'Enter the price in paise, a whole number from 100 (₹1) to 10000000 (₹1,00,000).'
+
+/**
+ * `POST /plans/:id/prices`: the interval, the amount in paise, tax
+ * included, and why.
+ */
+export const createPriceBodySchema = z.strictObject({
+  interval: z.enum(BILLING_INTERVALS, { error: 'Choose month or year.' }),
+  amountMinor: z
+    .number({ error: PRICE_RANGE_MESSAGE })
+    .int(PRICE_RANGE_MESSAGE)
+    .min(MIN_PRICE_MINOR, PRICE_RANGE_MESSAGE)
+    .max(MAX_PRICE_MINOR, PRICE_RANGE_MESSAGE),
+  reason: reasonSchema,
+})
+
+/**
+ * A validated new price.
+ */
+export type CreatePriceBody = z.infer<typeof createPriceBodySchema>
+
+/**
+ * The longest grace staff may give a halted or paused subscription, in
+ * days. The `billing_settings` CHECK holds the same range.
+ */
+const MAX_PAST_DUE_GRACE_DAYS = 30
+
+/**
+ * `PATCH /billing-settings`: the version the client read, at least one
+ * setting, and why. The trial length runs 1 to `MAX_TRIAL_DAYS` days and the
+ * grace 1 to `MAX_PAST_DUE_GRACE_DAYS`, the ranges the table's CHECKs hold.
+ */
+export const updateBillingSettingsBodySchema = z
+  .strictObject({
+    version: versionSchema,
+    trialEnabled: z.boolean({ error: 'Send true to offer trials or false to stop.' }).optional(),
+    trialDays: z
+      .number({ error: `Enter a whole number of days from 1 to ${String(MAX_TRIAL_DAYS)}.` })
+      .int(`Enter a whole number of days from 1 to ${String(MAX_TRIAL_DAYS)}.`)
+      .min(1, `Enter a whole number of days from 1 to ${String(MAX_TRIAL_DAYS)}.`)
+      .max(MAX_TRIAL_DAYS, `Enter a whole number of days from 1 to ${String(MAX_TRIAL_DAYS)}.`)
+      .optional(),
+    pastDueGraceDays: z
+      .number({
+        error: `Enter a whole number of days from 1 to ${String(MAX_PAST_DUE_GRACE_DAYS)}.`,
+      })
+      .int(`Enter a whole number of days from 1 to ${String(MAX_PAST_DUE_GRACE_DAYS)}.`)
+      .min(1, `Enter a whole number of days from 1 to ${String(MAX_PAST_DUE_GRACE_DAYS)}.`)
+      .max(
+        MAX_PAST_DUE_GRACE_DAYS,
+        `Enter a whole number of days from 1 to ${String(MAX_PAST_DUE_GRACE_DAYS)}.`
+      )
+      .optional(),
+    reason: reasonSchema,
+  })
+  .refine(
+    (body) =>
+      body.trialEnabled !== undefined ||
+      body.trialDays !== undefined ||
+      body.pastDueGraceDays !== undefined,
+    { message: 'Change trialEnabled, trialDays or pastDueGraceDays.' }
+  )
+
+/**
+ * A validated billing settings edit.
+ */
+export type UpdateBillingSettingsBody = z.infer<typeof updateBillingSettingsBodySchema>
+
+/**
+ * `GET /platform/billing/alerts` query: the shared list params, newest
+ * first unless asked otherwise; `search` matches the message.
+ */
+export const billingAlertListSchema = listParamsSchema({
+  sorts: ['-at', 'at'],
+  defaultSort: '-at',
+  filters: {},
+})
+
+/**
+ * A parsed alerts list query.
+ */
+export type BillingAlertListQuery = z.output<typeof billingAlertListSchema>

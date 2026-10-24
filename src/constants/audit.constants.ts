@@ -80,6 +80,28 @@ const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(3
 const reason = z.string().min(1).max(500)
 
 /**
+ * A plan's columns staff can edit, as a plan edit's entry records them
+ * before and after: no personal data, only the plan's own text and values.
+ */
+const entitlementKey = z.string().min(1).max(64)
+const entitlementValue = z.union([z.boolean(), z.number().int(), z.null()])
+const planSnapshot = z.strictObject({
+  name: z.string().max(64),
+  description: z.string().max(280),
+  entitlements: z.record(entitlementKey, entitlementValue),
+})
+
+/**
+ * Live customer tenants by billing state.
+ */
+const tenantStateCounts = z.strictObject({
+  trialing: z.number().int().min(0),
+  active: z.number().int().min(0),
+  past_due: z.number().int().min(0),
+  free: z.number().int().min(0),
+})
+
+/**
  * The reason on a member or invitation write: present when staff acted
  * through platform access, absent when a member did. Optional rather than
  * nullable, so a member's entry carries no `reason` key.
@@ -298,6 +320,30 @@ export const AUDIT_ACTIONS = {
   'billing.cancelled_by_staff': {
     target: 'billing',
     metadata: z.strictObject({ when: z.enum(STAFF_CANCEL_WHEN), reason }),
+  },
+  // Staff edited a plan's name, description or entitlements; `affected` counts the tenants on it by stored state.
+  'plan.updated': {
+    target: 'plan',
+    metadata: z.strictObject({
+      before: planSnapshot,
+      after: planSnapshot,
+      affected: tenantStateCounts,
+      reason,
+    }),
+  },
+  // Staff added a price to a plan, which retired the active price of its interval.
+  'plan.price_created': {
+    target: 'plan',
+    metadata: z.strictObject({
+      interval: z.enum(BILLING_INTERVALS),
+      amountMinor: z.number().int().positive(),
+      reason,
+    }),
+  },
+  // Staff changed the platform-wide trial or grace settings; the field names only.
+  'billing.settings_updated': {
+    target: 'platform',
+    metadata: z.strictObject({ changedFields, reason }),
   },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {
