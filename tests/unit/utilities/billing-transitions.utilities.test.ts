@@ -231,6 +231,17 @@ describe('billingTransitions', () => {
     ])
   })
 
+  it("reads a cancel the webhook brings in before the cancel's own write by its marker", () => {
+    const pastDue = paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW })
+    const byStaff = { ...CONTEXT, cancelMarker: { by: 'staff' as const } }
+    const byOwner = { ...CONTEXT, cancelMarker: { by: 'owner' as const, userId: 'owner-1' } }
+    expect(kinds(paying(), row(), 'webhook', byStaff)).toEqual(['moved_to_free:staff'])
+    expect(kinds(pastDue, row(), 'webhook', byOwner)).toEqual(['moved_to_free:cancelled'])
+    expect(kinds(pastDue, row(), 'webhook', { ...CONTEXT, cancelMarker: null })).toEqual([
+      'moved_to_free:payment_failed',
+    ])
+  })
+
   it('asks a suspended or archived workspace to act in Billing for nothing', () => {
     const context = { ...CONTEXT, isWorkspaceActive: false }
     const trial = row({ state: 'trialing', planId: 'plan-paid' })

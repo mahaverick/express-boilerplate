@@ -592,6 +592,46 @@ describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
     expect(moved.map((row) => row.variables['downgradeCause'])).toStrictEqual(['cancelled'])
   })
 
+  it('clears its cancel marker in its own write', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+
+    const response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+
+    expect(response.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      cancelAtPeriodEnd: true,
+      cancelMarkerSubscriptionId: null,
+      cancelMarkerBy: null,
+      cancelMarkerUserId: null,
+      cancelMarkerAt: null,
+    })
+  })
+
+  it('sends no cancel to the provider when its marker cannot be written, and changes nothing', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    const before = await readBilling(tenant.id)
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'setCancelMarker',
+      () => Promise.reject(new Error('the marker write failed')),
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+      }
+    )
+
+    expect(response?.status).toBe(500)
+    expect(cancel).not.toHaveBeenCalled()
+    cancel.mockRestore()
+    const after = await readBilling(tenant.id)
+    expect(after.version).toBe(before.version)
+    expect(after).toMatchObject({ cancelAtPeriodEnd: false, cancelMarkerSubscriptionId: null })
+  })
+
   it('refuses a second cancel with 409 NO_SUBSCRIPTION', async () => {
     const { tenant, owner } = await workspace()
     await makePaying(tenant.id)

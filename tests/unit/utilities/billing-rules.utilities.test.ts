@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test'
 import type { BillingStateInput, EntitlementGrantInput } from '@/types/billing'
 import {
+  cancelMarkerOf,
   effectiveBillingState,
   extendTrialEnd,
   graceEndsAt,
@@ -8,6 +9,7 @@ import {
   limitUsage,
   mergeEntitlements,
   planKeyForState,
+  upcomingRenewalAt,
 } from '@/utilities/billing-rules.utilities'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -178,5 +180,97 @@ describe('isPeriodEndAtOrBeforeSync', () => {
     )
     expect(isPeriodEndAtOrBeforeSync({ currentPeriodEnd: END, syncedAt: null })).toBe(false)
     expect(isPeriodEndAtOrBeforeSync({ currentPeriodEnd: null, syncedAt: END })).toBe(false)
+  })
+})
+
+const MARKED_AT = new Date('2030-01-01T00:00:00.000Z')
+const FIFTEEN_MINUTES = 15 * 60 * 1000
+
+/**
+ * A row's current subscription and the cancel marker on it.
+ * @param overrides - The columns to change.
+ * @returns The row's marker columns.
+ */
+const marked = (
+  overrides: Partial<Parameters<typeof cancelMarkerOf>[0]> = {}
+): Parameters<typeof cancelMarkerOf>[0] => ({
+  providerSubscriptionId: 'sub_cur',
+  cancelMarkerSubscriptionId: 'sub_cur',
+  cancelMarkerBy: 'owner',
+  cancelMarkerUserId: 'owner-1',
+  cancelMarkerAt: MARKED_AT,
+  ...overrides,
+})
+
+describe('cancelMarkerOf', () => {
+  it("reads an owner's marker, an owner whose account is gone, and staff, within the window", () => {
+    const atEdge = new Date(MARKED_AT.getTime() + FIFTEEN_MINUTES)
+    expect(cancelMarkerOf(marked(), atEdge)).toStrictEqual({ by: 'owner', userId: 'owner-1' })
+    expect(cancelMarkerOf(marked({ cancelMarkerUserId: null }), MARKED_AT)).toStrictEqual({
+      by: 'owner',
+      userId: null,
+    })
+    expect(
+      cancelMarkerOf(marked({ cancelMarkerBy: 'staff', cancelMarkerUserId: null }), MARKED_AT)
+    ).toStrictEqual({ by: 'staff' })
+  })
+
+  it('ignores a marker older than 15 minutes, by one millisecond', () => {
+    const late = new Date(MARKED_AT.getTime() + FIFTEEN_MINUTES + 1)
+    expect(cancelMarkerOf(marked(), late)).toBeNull()
+  })
+
+  it('ignores a marker for another subscription, or none', () => {
+    expect(cancelMarkerOf(marked({ cancelMarkerSubscriptionId: 'sub_old' }), MARKED_AT)).toBeNull()
+    expect(cancelMarkerOf(marked({ providerSubscriptionId: null }), MARKED_AT)).toBeNull()
+    expect(
+      cancelMarkerOf(
+        marked({ cancelMarkerSubscriptionId: null, providerSubscriptionId: null }),
+        MARKED_AT
+      )
+    ).toBeNull()
+  })
+
+  it('ignores a marker with no time or no one who asked', () => {
+    expect(cancelMarkerOf(marked({ cancelMarkerAt: null }), MARKED_AT)).toBeNull()
+    expect(cancelMarkerOf(marked({ cancelMarkerBy: null }), MARKED_AT)).toBeNull()
+  })
+})
+
+describe('upcomingRenewalAt', () => {
+  const now = new Date('2030-01-01T00:00:00.000Z')
+  const ahead = new Date('2030-02-01T00:00:00.000Z')
+
+  it('answers a period end ahead of now, of the last sync and of the trial end', () => {
+    expect(
+      upcomingRenewalAt({ currentPeriodEnd: ahead, syncedAt: now, trialEndsAt: null }, now)
+    ).toBe(ahead)
+    expect(
+      upcomingRenewalAt(
+        { currentPeriodEnd: ahead, syncedAt: null, trialEndsAt: new Date('2029-12-20T00:00:00Z') },
+        now
+      )
+    ).toBe(ahead)
+  })
+
+  it('answers null for no period end, or one at or before now', () => {
+    expect(
+      upcomingRenewalAt({ currentPeriodEnd: null, syncedAt: null, trialEndsAt: null }, now)
+    ).toBeNull()
+    expect(
+      upcomingRenewalAt({ currentPeriodEnd: now, syncedAt: null, trialEndsAt: null }, now)
+    ).toBeNull()
+  })
+
+  it('answers null for a stand-in, no later than the last sync, though still ahead', () => {
+    expect(
+      upcomingRenewalAt({ currentPeriodEnd: ahead, syncedAt: ahead, trialEndsAt: null }, now)
+    ).toBeNull()
+  })
+
+  it("answers null for a deferred start's first charge, at or before the trial end", () => {
+    expect(
+      upcomingRenewalAt({ currentPeriodEnd: ahead, syncedAt: now, trialEndsAt: ahead }, now)
+    ).toBeNull()
   })
 })

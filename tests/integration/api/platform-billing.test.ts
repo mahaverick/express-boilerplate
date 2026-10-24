@@ -996,6 +996,39 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(events[0]?.properties).toMatchObject({ by: 'staff' })
   })
 
+  it("mails cause staff, never to a removed payer, when a staff cancel's webhook lands before its own write", async () => {
+    const { tenant } = await payingWorkspace()
+    const exPayer = await createTrackedUser()
+    await setBilling(tenant.id, { payerUserId: exPayer.id, billingEmail: exPayer.email })
+    const { token } = await staff('admin')
+    const original = fake.cancelSubscription.bind(fake)
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    await withMutatedMethod(
+      fake,
+      'cancelSubscription',
+      async (id: string, isAtCycleEnd: boolean) => {
+        const cancelled = await original(id, isAtCycleEnd)
+        // The provider's webhook is synced before the staff cancel's own write.
+        await syncTenantBilling(tenant.id, 'webhook')
+        return cancelled
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(response?.status).toBe(200)
+    const after = await readBilling(tenant.id)
+    expect(after.state).toBe('free')
+    const rows = await sql<{ recipient: string; variables: Record<string, string> }[]>`
+      select recipient, variables from email_messages
+      where tenant_id = ${tenant.id} and template_key = 'moved_to_free'`
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.every((row) => row.variables['downgradeCause'] === 'staff')).toBe(true)
+    expect(rows.map((row) => row.recipient)).not.toContain(exPayer.email)
+  })
+
   it('audits a cancel of a subscription that had already ended at the provider', async () => {
     const { tenant, subscriptionId } = await payingWorkspace()
     await fake.fakeAdvance(subscriptionId, 'cancelled')
