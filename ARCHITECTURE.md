@@ -227,8 +227,9 @@ regularly passes 300 ms trips the cooldown. What each caller then does is in
 - `@typescript-eslint/no-restricted-imports`: controllers import
   `database/models` for types only.
 - `no-restricted-imports` over `src/**`, with `src/services/platform-*.service.ts`
-  exempt: the five cross-tenant repositories (`platform-tenant`,
-  `platform-stats`, `platform-user`, `platform-email`, `platform-onboarding`)
+  exempt: the six cross-tenant repositories (`platform-tenant`,
+  `platform-stats`, `platform-user`, `platform-email`, `platform-onboarding`,
+  `platform-billing`)
   stay out of every other module, so "your tenants" is never served from a
   query that sees every tenant.
 - `import-x/no-cycle` over relative and `@/` imports.

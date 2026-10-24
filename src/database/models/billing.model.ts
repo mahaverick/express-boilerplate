@@ -6,7 +6,7 @@
  * and the settings row, and gives every existing customer workspace a Free
  * record. The platform tenant never has a billing record.
  */
-import { sql, type InferSelectModel } from 'drizzle-orm'
+import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
   boolean,
   char,
@@ -511,3 +511,73 @@ export type TenantBillingRecord = InferSelectModel<typeof tenantBillingModel>
  * A tenant_entitlement_grants row as read from the database.
  */
 export type EntitlementGrant = InferSelectModel<typeof tenantEntitlementGrantModel>
+
+/**
+ * A new `tenant_billing` row.
+ */
+export type NewTenantBilling = InferInsertModel<typeof tenantBillingModel>
+
+/**
+ * A row of `plans`.
+ */
+export type Plan = InferSelectModel<typeof planModel>
+
+/**
+ * A row of `plan_prices`.
+ */
+export type PlanPrice = InferSelectModel<typeof planPriceModel>
+
+/**
+ * A new `plan_prices` row.
+ */
+export type NewPlanPrice = InferInsertModel<typeof planPriceModel>
+
+/**
+ * A new `tenant_entitlement_grants` row.
+ */
+export type NewEntitlementGrant = InferInsertModel<typeof tenantEntitlementGrantModel>
+
+/**
+ * The `billing_settings` row.
+ */
+export type BillingSettingsRecord = InferSelectModel<typeof billingSettingsModel>
+
+/**
+ * A row of `billing_events`.
+ */
+export type BillingEventRecord = InferSelectModel<typeof billingEventModel>
+
+/**
+ * A new `billing_events` row.
+ */
+export type NewBillingEvent = InferInsertModel<typeof billingEventModel>
+
+/**
+ * A new `billing_state_history` row.
+ */
+export type NewBillingStateHistory = InferInsertModel<typeof billingStateHistoryModel>
+
+/**
+ * A row of `billing_state_history`.
+ */
+export type BillingStateHistoryRecord = InferSelectModel<typeof billingStateHistoryModel>
+
+/**
+ * A row of `upgrade_requests`.
+ */
+export type UpgradeRequest = InferSelectModel<typeof upgradeRequestModel>
+
+/**
+ * A new `upgrade_requests` row.
+ */
+export type NewUpgradeRequest = InferInsertModel<typeof upgradeRequestModel>
+
+/**
+ * A row of `billing_alerts`.
+ */
+export type BillingAlertRecord = InferSelectModel<typeof billingAlertModel>
+
+/**
+ * A new `billing_alerts` row.
+ */
+export type NewBillingAlert = InferInsertModel<typeof billingAlertModel>
