@@ -130,7 +130,7 @@ export const planPriceModel = pgTable(
       'plan_prices_provider_mode_check',
       sql`${table.providerMode} is null or ${table.providerMode} in (${sql.raw(sqlValueList(BILLING_PROVIDER_MODES))})`
     ),
-    // coalesce stands in for NULLS NOT DISTINCT, which a partial unique index cannot take here: one default (no-country) price.
+    // drizzle's uniqueIndex has no nullsNotDistinct, so coalesce makes the no-country price one value.
     uniqueIndex('plan_prices_active_unique')
       .on(table.planId, table.currency, sql`coalesce(${table.country}, '')`, table.interval)
       .where(sql`${table.active}`),
