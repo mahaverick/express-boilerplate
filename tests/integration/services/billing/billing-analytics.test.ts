@@ -334,6 +334,42 @@ describe('billing analytics from a billing change', () => {
     expect(await eventsOf(tenantId, 'subscription_renewed')).toHaveLength(0)
   })
 
+  it('sends no renewal for the first paid charge after a real adoption of an unpaid cycle', async () => {
+    const { tenant, owner } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      checkoutStartedBy: owner.id,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    const original = fake.fetchSubscription.bind(fake)
+
+    // The provider shows the cycle started but its invoice not yet paid.
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => ({ ...(await original(id)), latestInvoicePaid: false }),
+      async () => {
+        await syncTenantBilling(tenant.id, 'webhook')
+      }
+    )
+    const adopted = await readBilling(tenant.id)
+    expect(adopted).toMatchObject({ state: 'active', providerSubscriptionId: pending })
+    // The stand-in: no later than the sync that stored it.
+    expect(adopted.currentPeriodEnd?.getTime()).toBeLessThanOrEqual(
+      adopted.syncedAt?.getTime() ?? 0
+    )
+
+    await syncTenantBilling(tenant.id, 'webhook')
+
+    const paid = await readBilling(tenant.id)
+    expect(paid.currentPeriodEnd?.getTime()).toBeGreaterThan(Date.now() + DAY_MS)
+    expect(await eventsOf(tenant.id, 'subscription_activated')).toHaveLength(1)
+    expect(await eventsOf(tenant.id, 'subscription_renewed')).toHaveLength(0)
+  })
+
   it('sends a halt as a failed payment and a halt, then the recovery, as the payer', async () => {
     const { tenantId, owner, subscriptionId } = await payingWorkspace()
     await fake.fakeAdvance(subscriptionId, 'halted')

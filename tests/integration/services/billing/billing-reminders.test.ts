@@ -16,6 +16,7 @@ import {
   sendTrialMidpoint,
   sendWinback,
 } from '@/services/billing/billing-emails.service'
+import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import {
   runDailyBilling,
   runFrequentBilling,
@@ -658,6 +659,96 @@ describe('a payer who is no longer a member', () => {
     const winback = await mailsOf(tenantId, 'winback')
     expect(winback).toHaveLength(1)
     expect(winback.map((mail) => mail.recipient)).not.toContain(payer.email)
+  })
+})
+
+/**
+ * A paying workspace whose payer, on record with their own address, is no
+ * longer a member.
+ * @param state - The row's state.
+ * @returns The workspace, its owner and the ex-payer's address.
+ */
+async function exPayerWorkspace(
+  state: 'active' | 'past_due'
+): Promise<{ tenantId: string; payerEmail: string }> {
+  const { tenantId, ownerId } = await paying('month', new Date(NOW.getTime() + 20 * DAY))
+  const payer = await createTrackedUser()
+  await sql`insert into user_memberships (user_id, tenant_id, role) values (${payer.id}, ${tenantId}, 'admin')`
+  await setBilling(tenantId, {
+    state,
+    payerUserId: payer.id,
+    billingEmail: payer.email,
+    ...(state === 'past_due' && { pastDueSince: NOW, haltedAt: NOW }),
+  })
+  await removeMember({ userId: ownerId }, tenantId, payer.id)
+  return { tenantId, payerEmail: payer.email }
+}
+
+/**
+ * Move a workspace's row to Free and send what that change calls for.
+ * @param tenantId - The workspace.
+ * @param source - What made the change.
+ * @param isStaffCancel - Whether it is a staff member's own cancel.
+ */
+async function moveToFree(
+  tenantId: string,
+  source: 'webhook' | 'staff' | 'job',
+  isStaffCancel = false
+): Promise<void> {
+  const before = await readBilling(tenantId)
+  await setBilling(tenantId, { state: 'free', planId: plans.freeId, priceId: null })
+  await emitBillingDiff(before, await readBilling(tenantId), source, { isStaffCancel })
+}
+
+describe('a removed payer and the move to Free', () => {
+  it.each([
+    ['cancelled', 'active'],
+    ['payment_failed', 'past_due'],
+  ] as const)('mails the ex-payer a move to Free caused by %s', async (cause, state) => {
+    const { tenantId, payerEmail } = await exPayerWorkspace(state)
+
+    await moveToFree(tenantId, 'webhook')
+
+    const moved = await mailsOf(tenantId, 'moved_to_free')
+    expect(moved.map((mail) => mail.recipient)).toContain(payerEmail)
+    expect(moved.map((mail) => mail.variables['downgradeCause'])).toContain(cause)
+  })
+
+  it("never mails the ex-payer a staff cancel's move to Free", async () => {
+    const { tenantId, payerEmail } = await exPayerWorkspace('active')
+
+    await moveToFree(tenantId, 'staff', true)
+
+    const moved = await mailsOf(tenantId, 'moved_to_free')
+    expect(moved.length).toBeGreaterThan(0)
+    expect(moved.map((mail) => mail.variables['downgradeCause'])).toContain('staff')
+    expect(moved.map((mail) => mail.recipient)).not.toContain(payerEmail)
+  })
+
+  it("never mails the ex-payer a suspended workspace's move to Free", async () => {
+    const { tenantId, payerEmail } = await exPayerWorkspace('active')
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
+
+    await moveToFree(tenantId, 'job')
+
+    const moved = await mailsOf(tenantId, 'moved_to_free')
+    expect(moved.map((mail) => mail.recipient)).not.toContain(payerEmail)
+  })
+
+  it('never mails the ex-payer a trial reminder', async () => {
+    const { tenantId } = await trial(
+      new Date(NOW.getTime() - 10 * DAY),
+      new Date(NOW.getTime() + 2 * DAY)
+    )
+    const payer = await createTrackedUser()
+    await setBilling(tenantId, { payerUserId: payer.id, billingEmail: payer.email })
+
+    await runFrequentBilling(NOW)
+
+    // The owners are reminded; the ex-payer's address is not.
+    expect(await noticesOf(tenantId)).toHaveLength(1)
+    const mails = await mailsOf(tenantId, 'trial_ending')
+    expect(mails.map((mail) => mail.recipient)).not.toContain(payer.email)
   })
 })
 
