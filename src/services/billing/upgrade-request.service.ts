@@ -21,6 +21,7 @@ import {
 } from '@/constants/billing.constants'
 import type { EntitlementKey } from '@/constants/entitlements.constants'
 import type { UpgradeRequest } from '@/database/models/billing.model'
+import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { displayName } from '@/presenters/billing.presenter'
@@ -155,22 +156,24 @@ export async function listUpgradeRequests(
     throw new HttpError(UPGRADE_REQUESTS_OWNER_ONLY_MESSAGE, 403)
   }
   const requests = await billingRepository.listOpenUpgradeRequests(tenantId)
-  const views: UpgradeRequestView[] = []
-  for (const request of requests) {
-    const view = await viewOf(request)
-    if (view !== undefined) views.push(view)
-  }
-  return views
+  // One read for every requester; a deleted account is left out of it.
+  const users = await userRepository.findManyByIds([
+    ...new Set(requests.map((request) => request.requestedBy)),
+  ])
+  const byId = new Map(users.map((user) => [user.id, user]))
+  return requests.flatMap((request) => {
+    const user = byId.get(request.requestedBy)
+    return user === undefined ? [] : [viewOf(request, user)]
+  })
 }
 
 /**
  * One request as an owner sees it.
  * @param request - The request.
- * @returns The view, or undefined when the requester's account is gone.
+ * @param user - The requester's account.
+ * @returns The view.
  */
-async function viewOf(request: UpgradeRequest): Promise<UpgradeRequestView | undefined> {
-  const user = await userRepository.findById(request.requestedBy)
-  if (user === undefined) return undefined
+function viewOf(request: UpgradeRequest, user: User): UpgradeRequestView {
   return {
     id: request.id,
     requestedBy: { userId: user.id, name: displayName(user) },

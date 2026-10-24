@@ -1,7 +1,8 @@
 /**
  * @file The Worker for the "billing" queue: handles each stored Razorpay
  * webhook event, syncs a workspace on request, cancels for a workspace just
- * suspended or archived, and runs the frequent and
+ * suspended or archived, pushes a staff plan or grace edit to the open apps
+ * of the workspaces it changed, and runs the frequent and
  * daily scheduler runs, two jobs at a time.
  * A retryable provider error or a sync that kept meeting a concurrent write
  * throws for BullMQ's backoff; a provider refusal that a retry cannot change
@@ -12,11 +13,13 @@ import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
   BILLING_LIFECYCLE_CANCEL_JOB,
+  BILLING_PUBLISH_ENTITLEMENTS_JOB,
   BILLING_SCHEDULER_DAILY_JOB,
   BILLING_SCHEDULER_FREQUENT_JOB,
   BILLING_SYNC_TENANT_JOB,
   BILLING_WEBHOOK_JOB,
   type BillingLifecycleCancelJobData,
+  type BillingPublishEntitlementsJobData,
   type BillingSyncTenantJobData,
   type BillingWebhookJobData,
 } from '@/jobs/billing.job'
@@ -36,6 +39,7 @@ import {
   recordWebhookJobFailure,
 } from '@/services/billing/billing-webhook.service'
 import { logger } from '@/services/logger.service'
+import { publishEntitlementsChange } from '@/services/platform-billing.service'
 import { getQueueConnection } from '@/services/queue.service'
 import { redisKey } from '@/services/redis.service'
 
@@ -62,7 +66,7 @@ async function withRetryPolicy(work: () => Promise<unknown>): Promise<void> {
 
 /**
  * Process one billing job. Exported for testing.
- * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant` or `lifecycle-cancel` job a workspace, a scheduler job nothing.
+ * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant` or `lifecycle-cancel` job a workspace, a `publish-entitlements` job a staff edit, a scheduler job nothing.
  * @returns Resolves once the job's work is done.
  * @throws {UnrecoverableError} For a job name this worker has no handler for, or a provider refusal.
  * @throws {Error} A retryable failure, so BullMQ retries.
@@ -86,6 +90,10 @@ export async function processBillingJob(job: Job): Promise<void> {
     case BILLING_LIFECYCLE_CANCEL_JOB: {
       const data = job.data as BillingLifecycleCancelJobData
       await withRetryPolicy(() => runLifecycleCancelFor(data.tenantId))
+      return
+    }
+    case BILLING_PUBLISH_ENTITLEMENTS_JOB: {
+      await publishEntitlementsChange(job.data as BillingPublishEntitlementsJobData)
       return
     }
     case BILLING_SCHEDULER_FREQUENT_JOB: {

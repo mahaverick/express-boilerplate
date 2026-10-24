@@ -58,6 +58,10 @@ import type { BillingSettingsRecord, EntitlementGrant, Plan } from '@/database/m
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
+import {
+  addBillingPublishEntitlementsJob,
+  type BillingPublishEntitlementsJobData,
+} from '@/jobs/billing.job'
 import { displayName } from '@/presenters/billing.presenter'
 import {
   toBillingAlertView,
@@ -756,28 +760,60 @@ export async function previewPlanChange(
 
 /**
  * Tell the open apps of every live customer tenant a predicate picks, a
- * page of billing records at a time. Never rejects: the change is
- * committed, and a missed push only delays an app until its next read.
+ * page of `PUBLISH_BATCH_SIZE` billing records at a time. One tenant's
+ * failed push is logged and the rest go on.
  * @param shouldTell - Whether a tenant's record calls for a push.
- * @param context - Ids for the log line when a page cannot be read.
+ * @throws {Error} When a page cannot be read, so the job retries.
  */
-async function publishWhere(
-  shouldTell: (row: TenantBillingStateRow) => boolean,
-  context: Record<string, string>
-): Promise<void> {
+async function publishWhere(shouldTell: (row: TenantBillingStateRow) => boolean): Promise<void> {
   let after: string | undefined
+  for (;;) {
+    const page = await platformBillingRepository.pageBillingStates(after, PUBLISH_BATCH_SIZE)
+    for (const row of page) if (shouldTell(row)) await publishQuietly(row.tenantId)
+    if (page.length < PUBLISH_BATCH_SIZE) return
+    after = page.at(-1)?.tenantId
+  }
+}
+
+/**
+ * Push a staff plan or grace edit to the open apps of the workspaces it
+ * changed, the body of the billing queue's `publish-entitlements` job. A
+ * plan edit reaches every workspace whose effective plan is the plan; a
+ * grace change every one whose effective state differs between the old and
+ * the new grace, a lapsed active period's included. Both are read at the
+ * edit's time.
+ * @param data - What the edit changed, and when.
+ * @throws {Error} When the settings or a page cannot be read, so the job retries.
+ */
+export async function publishEntitlementsChange(
+  data: BillingPublishEntitlementsJobData
+): Promise<void> {
+  const at = new Date(data.at)
+  if (data.change === 'grace') {
+    await publishWhere(
+      (row) =>
+        effectiveBillingState(row, at, data.fromDays) !==
+        effectiveBillingState(row, at, data.toDays)
+    )
+    return
+  }
+  const settings = await planRepository.getSettings()
+  await publishWhere(
+    (row) =>
+      planKeyForState(effectiveBillingState(row, at, settings.pastDueGraceDays)) === data.planKey
+  )
+}
+
+/**
+ * Queue the push of a committed staff edit. Never rejects: the edit stands,
+ * and a missed push only delays an app until its next read.
+ * @param data - What the edit changed, and when.
+ */
+async function queuePublish(data: BillingPublishEntitlementsJobData): Promise<void> {
   try {
-    for (;;) {
-      const page = await platformBillingRepository.pageBillingStates(after, PUBLISH_BATCH_SIZE)
-      for (const row of page) if (shouldTell(row)) await publishQuietly(row.tenantId)
-      if (page.length < PUBLISH_BATCH_SIZE) return
-      after = page.at(-1)?.tenantId
-    }
+    await addBillingPublishEntitlementsJob(data)
   } catch (error) {
-    logger.error('Could not push an entitlements change to every tenant', {
-      error,
-      ...context,
-    })
+    logger.error('Could not queue an entitlements push', { error, change: data.change })
   }
 }
 
@@ -798,9 +834,10 @@ function planSnapshot(plan: Plan) {
  * Edit a plan's name, description or entitlements. The edit applies to every
  * tenant on the plan at once; a lowered limit deletes nothing. Sent
  * entitlements replace those keys' values, as the preview showed. After the
- * commit, every tenant whose effective plan is this one is told: trialing
- * ones for Paid, and for Free the free ones and those whose trial or period
- * lapsed before the billing job ran.
+ * commit, every tenant whose effective plan is this one is told, by a queued
+ * billing job so the edit answers at once (`publishEntitlementsChange`):
+ * trialing ones for Paid, and for Free the free ones and those whose trial
+ * or period lapsed before the billing job ran.
  * @param actor - The staff member (a platform admin or above).
  * @param planId - The plan.
  * @param body - The version read, the changes and the reason (the body schema checked them).
@@ -859,20 +896,14 @@ export async function updatePlan(
     )
     return after
   })
-  const settings = await planRepository.getSettings()
-  const now = new Date()
-  await publishWhere(
-    (row) =>
-      planKeyForState(effectiveBillingState(row, now, settings.pastDueGraceDays)) === updated.key,
-    { planId }
-  )
+  await queuePublish({ change: 'plan', planKey: updated.key, at: new Date().toISOString() })
   return staffPlanView(updated)
 }
 
 /**
  * Add a price to Paid for an interval. In the same transaction the active
- * price of that interval is retired; a tenant paying it keeps it, and new
- * checkouts get the new one. No provider call: the provider plan is made at
+ * price of that interval is retired; a tenant paying it keeps it, a checkout
+ * already open at it completes at it, and new checkouts get the new one. No provider call: the provider plan is made at
  * the first checkout on the price. A price above `PRICE_WARNING_ABOVE_MINOR`
  * is allowed; Apex asks staff to confirm it first.
  * @param actor - The staff member (a platform admin or above).
@@ -947,8 +978,8 @@ export async function getBillingSettings(): Promise<BillingSettingsView> {
  * Change the trial switch, the trial length or the past-due grace. Trial
  * settings apply to trials that start after the change. The grace applies
  * at once to every past-due tenant, since its end is computed on each read;
- * the tenants whose effective state the change moves are told after the
- * commit.
+ * the tenants whose effective state the change moves, a lapsed active
+ * period's included, are told after the commit by a queued billing job.
  * @param actor - The staff member (a platform admin or above).
  * @param body - The version read, the changes and the reason (the body schema checked them).
  * @returns The settings after the change.
@@ -993,13 +1024,12 @@ export async function updateBillingSettings(
     return { before: locked, after: written }
   })
   if (before.pastDueGraceDays !== after.pastDueGraceDays) {
-    const now = new Date()
-    await publishWhere(
-      (row) =>
-        effectiveBillingState(row, now, before.pastDueGraceDays) !==
-        effectiveBillingState(row, now, after.pastDueGraceDays),
-      { change: 'pastDueGraceDays' }
-    )
+    await queuePublish({
+      change: 'grace',
+      fromDays: before.pastDueGraceDays,
+      toDays: after.pastDueGraceDays,
+      at: new Date().toISOString(),
+    })
   }
   return settingsView(after)
 }

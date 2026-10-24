@@ -1,6 +1,7 @@
 /**
  * @file The billing queue's jobs: one per Razorpay webhook event, a sync of
- * one workspace, and the two scheduler runs: the frequent one every 15
+ * one workspace, the push of an entitlements change after a staff plan or
+ * grace edit, and the two scheduler runs: the frequent one every 15
  * minutes and the daily one at 03:30 UTC. Each job carries ids only, never a
  * payload body, an address or card details. A webhook job's id is derived
  * from its stored event, so a second delivery of the same event queues
@@ -9,6 +10,7 @@
  * shares one schedule.
  */
 import type { JobSchedulerTemplateOptions, JobsOptions } from 'bullmq'
+import type { PlanKey } from '@/constants/billing.constants'
 import { addJob, getBillingQueue } from '@/services/queue.service'
 
 /**
@@ -26,6 +28,12 @@ export const BILLING_SYNC_TENANT_JOB = 'sync-tenant'
  * now, instead of on the next frequent run.
  */
 export const BILLING_LIFECYCLE_CANCEL_JOB = 'lifecycle-cancel'
+
+/**
+ * The job that tells the open apps of every workspace a staff plan or grace
+ * edit changed, a page at a time, after the edit answered.
+ */
+export const BILLING_PUBLISH_ENTITLEMENTS_JOB = 'publish-entitlements'
 
 /**
  * The frequent billing run's job name, and the id of its scheduler.
@@ -98,6 +106,37 @@ export interface BillingLifecycleCancelJobData {
 }
 
 /**
+ * An entitlements push's payload: what the staff edit changed, and when.
+ * Which workspaces it reaches is read when the job runs, by their effective
+ * state at `at`.
+ */
+export type BillingPublishEntitlementsJobData =
+  | {
+      /**
+       * A plan edit: every workspace whose effective plan is `planKey`.
+       */
+      change: 'plan'
+      planKey: PlanKey
+      /**
+       * When the edit committed, as an ISO time.
+       */
+      at: string
+    }
+  | {
+      /**
+       * A grace change: every workspace whose effective state differs
+       * between `fromDays` and `toDays` of grace.
+       */
+      change: 'grace'
+      fromDays: number
+      toDays: number
+      /**
+       * When the change committed, as an ISO time.
+       */
+      at: string
+    }
+
+/**
  * Options for every billing job. A failed sync changes nothing, so a retry
  * is always safe: eight attempts with backoff doubling from 30 s span about
  * an hour of a provider outage (30 s × 127). Failed jobs are kept a week.
@@ -143,6 +182,19 @@ export async function addBillingLifecycleCancelJob(
   data: BillingLifecycleCancelJobData
 ): Promise<void> {
   await addJob(getBillingQueue(), BILLING_LIFECYCLE_CANCEL_JOB, data, BILLING_JOB_OPTIONS)
+}
+
+/**
+ * Queue the push of a staff plan or grace edit to the workspaces it changed.
+ * It carries no job id, for the reason a sync carries none. A retry pushes
+ * again, which only makes an open app read its entitlements once more.
+ * @param data - What the edit changed, and when.
+ * @returns Resolves once the job is in Redis.
+ */
+export async function addBillingPublishEntitlementsJob(
+  data: BillingPublishEntitlementsJobData
+): Promise<void> {
+  await addJob(getBillingQueue(), BILLING_PUBLISH_ENTITLEMENTS_JOB, data, BILLING_JOB_OPTIONS)
 }
 
 /**

@@ -125,12 +125,19 @@ export const staffCancelBodySchema = z.strictObject({
  * A plan's entitlements as staff send them: any of the registry's keys, each
  * with a value of its kind. A limit takes what a grant takes; a feature
  * takes `true` or `false`, since a plan may leave a feature out. Every bad
- * key is reported, one message each.
+ * key is reported, one message each, and an empty object is refused: it
+ * would change nothing.
  */
 const planEntitlementsSchema = z
   .record(z.string(), z.unknown(), { error: 'Send entitlements as an object of keys and values.' })
   .superRefine((entitlements, context) => {
     const known = Object.keys(ENTITLEMENTS).join(', ')
+    if (Object.keys(entitlements).length === 0) {
+      context.addIssue({
+        code: 'custom',
+        message: `Send at least one entitlement to change. This product has: ${known}.`,
+      })
+    }
     for (const [key, value] of Object.entries(entitlements)) {
       if (!Object.hasOwn(ENTITLEMENTS, key)) {
         context.addIssue({

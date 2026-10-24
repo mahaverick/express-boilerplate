@@ -408,12 +408,16 @@ and every write re-checks it under lock.
 Staff plan and settings edits take effect as follows. A plan edit applies to
 every tenant on the plan at once, trialing tenants included for Paid; a lowered
 limit deletes nothing, and a tenant over it keeps its members but can add
-none. A new price retires the active price of its interval; a subscriber keeps
-the price it pays, and the provider plan is made at the first checkout on the
-new one. Trial settings (`trialEnabled`, `trialDays`) apply to trials that
-start after the change. `pastDueGraceDays` applies at once to every past-due
-tenant, since its grace end is computed on each read; the tenants whose
-effective state it moves are told. The staff tenant list's `billingState` and
+none. An edit that sends `entitlements` must send at least one key. A new
+price retires the active price of its interval; a subscriber keeps the price
+it pays, a checkout already open at the old price completes at that price,
+and the provider plan is made at the first checkout on the new one. Trial
+settings (`trialEnabled`, `trialDays`) apply to trials that start after the
+change. `pastDueGraceDays` applies at once to every past-due tenant, and to
+an active one whose paid period lapsed before the billing job ran, since the
+grace end is computed on each read. The tenants a plan edit or a grace change
+reaches are told by one queued `publish-entitlements` billing job, which
+reads their records 500 at a time, so the edit answers at once. The staff tenant list's `billingState` and
 `planKey` are the stored values, which trail a lapsed trial or period until the
 billing job's next run (at most 15 minutes); the platform tenant has neither.
 

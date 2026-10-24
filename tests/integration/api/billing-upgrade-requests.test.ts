@@ -19,6 +19,7 @@ import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.mode
 import type { User } from '@/database/models/user.model'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { BillingRepository } from '@/repositories/billing.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -370,6 +371,34 @@ describe('GET /api/v1/tenants/:slug/upgrade-requests', () => {
 
     expect(response.status).toBe(200)
     expect((response.body as { data: unknown }).data).toEqual([])
+  })
+
+  it('reads every requester in one query, and leaves out the one whose account was deleted', async () => {
+    const { slug, tenantId, owner, viewer } = await team()
+    const editor = await createTrackedUser({ firstName: 'Ada' })
+    const gone = await createTrackedUser()
+    await sql`insert into user_memberships (user_id, tenant_id, role) values (${editor.id}, ${tenantId}, 'editor'), (${gone.id}, ${tenantId}, 'viewer')`
+    for (const member of [viewer, editor, gone]) {
+      await postAs(member, `${slug}/upgrade-requests`, { surface: 'banner' })
+    }
+    await sql`update users set deleted_at = now() where id = ${gone.id}`
+    const findMany = vi.spyOn(UserRepository.prototype, 'findManyByIds')
+    const findOne = vi.spyOn(UserRepository.prototype, 'findById')
+
+    const response = await getAs(owner, `${slug}/upgrade-requests`)
+
+    expect(response.status).toBe(200)
+    const listed = (response.body as { data: { requestedBy: { userId: string } }[] }).data
+    expect(listed.map((item) => item.requestedBy.userId).toSorted()).toStrictEqual(
+      [viewer.id, editor.id].toSorted()
+    )
+    const lookups = findMany.mock.calls.filter(([ids]) => ids.includes(viewer.id))
+    expect(lookups).toHaveLength(1)
+    const [[ids] = [[]]] = lookups
+    expect([...ids].toSorted()).toStrictEqual([viewer.id, editor.id, gone.id].toSorted())
+    expect(findOne.mock.calls.filter(([id]) => id === editor.id)).toStrictEqual([])
+    findMany.mockRestore()
+    findOne.mockRestore()
   })
 
   it('refuses anyone but an owner with 403, staff included', async () => {

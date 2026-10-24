@@ -1,3 +1,4 @@
+import type { Job } from 'bullmq'
 /**
  * @file The staff plan, price, billing settings and alert routes, end to end
  * against the real database and Redis: the plan list with prices, subscriber
@@ -12,10 +13,20 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
+import {
+  BILLING_PUBLISH_ENTITLEMENTS_JOB,
+  type BillingPublishEntitlementsJobData,
+} from '@/jobs/billing.job'
 import { sql } from '@/services/database.service'
 import { emitEntitlementsChanged } from '@/services/notification-emitter.service'
-import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import {
+  closeQueue,
+  getBillingQueue,
+  getEmailQueue,
+  getNotificationQueue,
+} from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
+import { processBillingJob } from '@/workers/billing.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   deleteTrackedTenants,
@@ -34,6 +45,7 @@ import {
   deleteTrackedUsers,
   recentAuthTokenFor,
 } from '../../helpers/platform-users'
+import { queuedJobs } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
@@ -98,6 +110,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   vi.mocked(emitEntitlementsChanged).mockClear()
+  await getBillingQueue().obliterate({ force: true })
   await getEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await truncateAuditLogs()
@@ -108,10 +121,22 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  await getBillingQueue().obliterate({ force: true })
   await forgetProviderPlans()
   await closeQueue()
   await closeRedis()
 })
+
+/**
+ * Run the queued entitlements pushes, as the billing worker would.
+ * @returns The jobs that ran.
+ */
+async function runPublishJobs(): Promise<Job<BillingPublishEntitlementsJobData>[]> {
+  const jobs = await queuedJobs<BillingPublishEntitlementsJobData>(getBillingQueue())
+  const publishes = jobs.filter((job) => job.name === BILLING_PUBLISH_ENTITLEMENTS_JOB)
+  for (const job of publishes) await processBillingJob(job)
+  return publishes
+}
 
 /**
  * The `data` of a success response.
@@ -383,6 +408,7 @@ describe('plan entitlement validation', () => {
     ['a limit given as text', { members: '5' }],
     ['a feature given as a number', { advanced_example: 1 }],
     ['a feature given as null', { advanced_example: null }],
+    ['no entitlement at all', {}],
   ])('refuses %s on the preview and the edit', async (_label, entitlements) => {
     const token = await adminToken()
     const version = await versionOf(plans.freeId)
@@ -482,6 +508,12 @@ describe('PATCH /api/v1/platform/plans/:id', () => {
     expect(
       dataOf<{ limits: { members: { limit: number } } }>(entitlements.body).limits.members.limit
     ).toBe(5)
+    // The answer comes first: the push is one queued billing job carrying the plan key alone.
+    expect(vi.mocked(emitEntitlementsChanged)).not.toHaveBeenCalled()
+    const jobs = await runPublishJobs()
+    expect(jobs.map((job) => job.data)).toStrictEqual([
+      { change: 'plan', planKey: 'free', at: ANY_STRING },
+    ])
     expect(vi.mocked(emitEntitlementsChanged)).toHaveBeenCalledWith(owner.id, {
       tenantId: tenant.id,
       slug: tenant.slug,
@@ -532,6 +564,7 @@ describe('PATCH /api/v1/platform/plans/:id', () => {
     })
 
     expect(response.status).toBe(200)
+    await runPublishJobs()
     const told = vi.mocked(emitEntitlementsChanged).mock.calls.map(([userId]) => userId)
     expect(told).toContain(trial.owner.id)
     expect(told).not.toContain(free.owner.id)
@@ -552,6 +585,7 @@ describe('PATCH /api/v1/platform/plans/:id', () => {
       reason: REASON,
     })
 
+    await runPublishJobs()
     const told = vi.mocked(emitEntitlementsChanged).mock.calls.map(([userId]) => userId)
     expect(told).toContain(lapsed.owner.id)
   })
@@ -736,6 +770,34 @@ describe('/api/v1/platform/billing-settings', () => {
     const [settings] = await sql<{ trialDays: number }[]>`
       select trial_days as "trialDays" from billing_settings`
     expect(settings?.trialDays).toBe(21)
+  })
+
+  it('tells a past-due tenant whose grace a change ends, by a queued job, after answering', async () => {
+    const lapsing = await workspace()
+    const halted = new Date(Date.now() - 3 * DAY_MS)
+    await setBilling(lapsing.tenant.id, {
+      state: 'past_due',
+      planId: plans.paidId,
+      pastDueSince: halted,
+      haltedAt: halted,
+    })
+    const untouched = await workspace()
+
+    const response = await send('patch', await adminToken(), '/billing-settings', {
+      version: await settingsVersion(),
+      pastDueGraceDays: 1,
+      reason: REASON,
+    })
+
+    expect(response.status).toBe(200)
+    expect(vi.mocked(emitEntitlementsChanged)).not.toHaveBeenCalled()
+    const jobs = await runPublishJobs()
+    expect(jobs.map((job) => job.data)).toStrictEqual([
+      { change: 'grace', fromDays: 7, toDays: 1, at: ANY_STRING },
+    ])
+    const told = vi.mocked(emitEntitlementsChanged).mock.calls.map(([userId]) => userId)
+    expect(told).toContain(lapsing.owner.id)
+    expect(told).not.toContain(untouched.owner.id)
   })
 
   it('refuses a body that changes nothing', async () => {
