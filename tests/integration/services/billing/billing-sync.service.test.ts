@@ -37,7 +37,7 @@ import {
   type EntitlementsChange,
 } from '@/services/notification-emitter.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
-import type { ProviderSubscription } from '@/types/billing'
+import type { ProviderRefundOutcome, ProviderSubscription } from '@/types/billing'
 import { withMutatedMethod, withMutatedModule } from '../../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../../helpers/notification-subscriber'
 import { waitUntil } from '../../../helpers/timing'
@@ -522,7 +522,9 @@ describe('syncTenantBilling', () => {
         }
       )
 
-      expect(refunds.filter((answer) => answer !== null)).toHaveLength(1)
+      expect(
+        refunds.filter((answer) => (answer as { status: string }).status === 'refunded')
+      ).toHaveLength(1)
       const alerts = await alertsOf(tenantId)
       expect(alerts.map((alert) => alert.kind)).toStrictEqual(['duplicate_refunded'])
     }
@@ -565,9 +567,99 @@ describe('syncTenantBilling', () => {
     )
 
     expect(refunds).toHaveLength(2)
-    expect(refunds.filter((answer) => answer !== null)).toHaveLength(1)
+    expect(
+      refunds.filter((answer) => (answer as { status: string }).status === 'refunded')
+    ).toHaveLength(1)
     const alerts = await alertsOf(tenantId)
     expect(alerts.map((alert) => alert.kind)).toStrictEqual(['duplicate_refunded'])
+  })
+
+  it('alerts staff when a duplicate is only partly refunded', async () => {
+    const { tenantId } = await createPayingWorkspace()
+    const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(duplicateId, 'active')
+    await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
+    const partly: ProviderRefundOutcome = { status: 'partly_refunded' }
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'refundLatestPayment',
+      () => Promise.resolve(partly),
+      async () => {
+        await syncTenantBilling(tenantId, 'confirm')
+      }
+    )
+
+    const alerts = await alertsOf(tenantId)
+    expect(alerts).toStrictEqual([
+      {
+        kind: 'reconcile_repair',
+        message: `Duplicate subscription ${duplicateId} is only partly refunded. Refund the rest at the provider.`,
+      },
+    ])
+  })
+
+  it('cancels the lapsed subscription of a Free workspace, and raises no alert when it had already ended', async () => {
+    const { tenantId, subscriptionId } = await createPayingWorkspace()
+    const halted = await fake.fakeAdvance(subscriptionId, 'halted')
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    await setBilling(tenantId, { state: 'free', planId: plans.freeId })
+    const original = FakeBillingProvider.prototype.fetchSubscription
+    const reads = { count: 0 }
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'fetchSubscription',
+      async function (this: FakeBillingProvider, id: string): Promise<ProviderSubscription> {
+        reads.count += 1
+        // The first read still sees it halted; the provider has ended it since, so the cancel answers 400.
+        return reads.count === 1 ? halted : original.call(this, id)
+      },
+      async () => {
+        await syncTenantBilling(tenantId, 'webhook')
+        await syncTenantBilling(tenantId, 'reconcile')
+      }
+    )
+
+    expect(await alertsOf(tenantId)).toStrictEqual([])
+    const after = await readBilling(tenantId)
+    expect(after).toMatchObject({ state: 'free', haltedAt: null, pastDueSince: null })
+  })
+
+  it('alerts once when the cancel of a lapsed subscription keeps failing', async () => {
+    const { tenantId, subscriptionId } = await createPayingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenantId, { state: 'free', planId: plans.freeId })
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'cancelSubscription',
+      () => Promise.reject(new ProviderError('POST /subscriptions/x/cancel', 502)),
+      async () => {
+        await syncTenantBilling(tenantId, 'webhook')
+        await syncTenantBilling(tenantId, 'reconcile')
+      }
+    )
+
+    expect(await alertsOf(tenantId)).toStrictEqual([
+      {
+        kind: 'reconcile_repair',
+        message: `Could not cancel subscription ${subscriptionId}. Cancel it at the provider.`,
+      },
+    ])
+    const after = await readBilling(tenantId)
+    expect(after.state).toBe('free')
+  })
+
+  it('fetches and writes nothing for a row of another provider', async () => {
+    const { tenantId } = await createPayingWorkspace()
+    await setBilling(tenantId, { provider: 'razorpay', providerMode: 'test' })
+    const before = await readBilling(tenantId)
+
+    const result = await syncTenantBilling(tenantId, 'reconcile')
+
+    expect(result).toMatchObject({ outcome: 'provider_mismatch', changed: false })
+    expect(await readBilling(tenantId)).toStrictEqual(before)
   })
 
   it('raises the alert for an ignored subscription once across syncs', async () => {

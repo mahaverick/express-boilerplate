@@ -22,7 +22,7 @@ import type {
   InvoiceView,
   ProviderInvoicePage,
   ProviderPlanPrice,
-  ProviderRefund,
+  ProviderRefundOutcome,
   ProviderSubscription,
   ProviderSubscriptionStatus,
 } from '@/types/billing'
@@ -506,33 +506,38 @@ export class RazorpayProvider implements BillingProviderClient {
 
   /**
    * Refund the payment of the subscription's newest paid invoice in full,
-   * unless that payment already has a refund (`amount_refunded` or
-   * `refund_status`). Calls for one subscription run one at a time, so two
-   * callers in this process cannot both refund it.
+   * unless that payment already has a refund: `already_refunded` when
+   * `amount_refunded` covers the amount or `refund_status` is `full`,
+   * `partly_refunded` for any other refund. Calls for one subscription run
+   * one at a time, so two callers in this process cannot both refund it.
    * @param subscriptionId - The subscription id.
-   * @returns The refund, or null when no invoice is paid or the payment already has a refund.
+   * @returns What the refund did.
    */
-  async refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null> {
+  async refundLatestPayment(subscriptionId: string): Promise<ProviderRefundOutcome> {
     return this.#serialised(subscriptionId, async () => {
       const invoices = await this.#recentInvoices(subscriptionId)
       const paid = invoices
         .filter((invoice) => invoice.status === 'paid' && typeof invoice.payment_id === 'string')
         .toSorted((a, b) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0))[0]
-      if (paid === undefined) return null
+      if (paid === undefined) return { status: 'nothing_paid' as const }
       const paymentId = String(paid.payment_id)
       const payment = asRecord(
         await this.#call('GET', `/payments/${encodeURIComponent(paymentId)}`)
       )
       const refunded = typeof payment.amount_refunded === 'number' ? payment.amount_refunded : 0
-      const hasRefund = refunded > 0 || (payment.refund_status ?? null) !== null
-      if (hasRefund) return null
+      const amount = typeof payment.amount === 'number' ? payment.amount : null
+      const refundStatus = payment.refund_status ?? null
+      if (refundStatus === 'full' || (amount !== null && refunded >= amount && refunded > 0)) {
+        return { status: 'already_refunded' as const }
+      }
+      if (refunded > 0 || refundStatus !== null) return { status: 'partly_refunded' as const }
       const json = asRecord(
         await this.#call('POST', `/payments/${encodeURIComponent(paymentId)}/refund`, { body: {} })
       )
       if (typeof json.id !== 'string' || typeof json.amount !== 'number') {
         throw new ProviderError('refund answer', 200, { code: 'UNEXPECTED_ANSWER' })
       }
-      return { refundId: json.id, amountMinor: json.amount }
+      return { status: 'refunded' as const, refundId: json.id, amountMinor: json.amount }
     })
   }
 

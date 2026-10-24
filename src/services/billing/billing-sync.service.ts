@@ -27,7 +27,11 @@ import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
-import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import type {
+  BillingProviderClient,
+  ProviderRefundOutcome,
+  ProviderSubscription,
+} from '@/types/billing'
 import {
   isRunning,
   nextBillingRow,
@@ -90,8 +94,8 @@ interface PendingAlert {
   kind: BillingAlertKind
   message: string
   /**
-   * The subscription the alert names. An alert of the same kind already
-   * naming it is not raised again.
+   * The subscription the alert names. Set on an alert a repeated sync would
+   * raise again: one of the same kind with the same message is not inserted twice.
    */
   subscriptionId?: string
 }
@@ -147,23 +151,25 @@ interface SyncRun {
 }
 
 /**
- * Insert a staff alert, unless one of its kind already names its
- * subscription; a failure is logged, since the change it reports is committed.
+ * Insert a staff alert, unless it names a subscription and the workspace
+ * already has the same alert; a failure is logged, since the change it
+ * reports is committed.
  * @param tenantId - The workspace.
  * @param alert - The alert.
  */
 async function insertAlert(tenantId: string, alert: PendingAlert): Promise<void> {
+  const message = alert.message.slice(0, ALERT_MESSAGE_MAX_LENGTH)
   try {
     if (
       alert.subscriptionId !== undefined &&
-      (await billingRepository.hasAlertNaming(tenantId, alert.kind, alert.subscriptionId))
+      (await billingRepository.hasAlertNaming(tenantId, alert.kind, message))
     ) {
       return
     }
     await billingRepository.insertAlert({
       kind: alert.kind,
       tenantId,
-      message: alert.message.slice(0, ALERT_MESSAGE_MAX_LENGTH),
+      message,
     })
   } catch (error) {
     logger.error('Could not record a billing alert', { error, tenantId, kind: alert.kind })
@@ -336,12 +342,43 @@ async function commitSync(
 }
 
 /**
- * Cancel a subscription now, after its grace ended. The move to Free waits
- * for the follow-up sync to read it cancelled.
+ * Statuses after which a subscription can no longer be cancelled.
+ */
+const ENDED_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
+  'cancelled',
+  'completed',
+  'expired',
+])
+
+/**
+ * A subscription read again after a cancel failed, when it has ended: another
+ * sync, the payer or the provider ended it first.
+ * @param provider - The payment provider.
+ * @param subscriptionId - The subscription.
+ * @returns The ended subscription, or undefined when it still runs or cannot be read.
+ */
+async function endedSubscription(
+  provider: BillingProviderClient,
+  subscriptionId: string
+): Promise<ProviderSubscription | undefined> {
+  try {
+    const sub = await provider.fetchSubscription(subscriptionId)
+    return ENDED_STATUSES.has(sub.status) ? sub : undefined
+  } catch (error) {
+    logger.warn('Could not read a subscription after its cancel failed', { error, subscriptionId })
+    return undefined
+  }
+}
+
+/**
+ * Cancel a subscription now: after its grace ended, or because the workspace
+ * is already on Free. A cancel that fails because the subscription has
+ * already ended is not an error. Any move to Free waits for the follow-up
+ * sync to read it ended.
  * @param provider - The payment provider.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription.
- * @returns True when the provider cancelled it.
+ * @returns True when the subscription is cancelled or had already ended.
  */
 async function didCancelNow(
   provider: BillingProviderClient,
@@ -352,14 +389,15 @@ async function didCancelNow(
     await provider.cancelSubscription(subscriptionId, false)
     return true
   } catch (error) {
-    logger.error('Could not cancel a subscription after its grace ended', {
-      error,
-      tenantId,
-      subscriptionId,
-    })
+    if ((await endedSubscription(provider, subscriptionId)) !== undefined) {
+      logger.debug('A subscription to cancel had already ended', { tenantId, subscriptionId })
+      return true
+    }
+    logger.error('Could not cancel a subscription', { error, tenantId, subscriptionId })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
-      message: `Could not cancel subscription ${subscriptionId} after its grace ended. The workspace stays past due until it is cancelled.`,
+      message: `Could not cancel subscription ${subscriptionId}. Cancel it at the provider.`,
+      subscriptionId,
     })
     return false
   }
@@ -390,6 +428,7 @@ async function cancelAtCycleEnd(
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
       message: `Could not cancel subscription ${subscriptionId} at its cycle end for an interval switch. Both subscriptions may charge until it is cancelled.`,
+      subscriptionId,
     })
     return
   }
@@ -417,39 +456,11 @@ async function cancelAtCycleEnd(
 }
 
 /**
- * Statuses after which a subscription can no longer be cancelled.
- */
-const ENDED_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
-  'cancelled',
-  'completed',
-  'expired',
-])
-
-/**
- * A subscription read again after a cancel failed, when it has ended: another
- * sync, the payer or the provider ended it first.
- * @param provider - The payment provider.
- * @param subscriptionId - The subscription.
- * @returns The ended subscription, or undefined when it still runs or cannot be read.
- */
-async function endedSubscription(
-  provider: BillingProviderClient,
-  subscriptionId: string
-): Promise<ProviderSubscription | undefined> {
-  try {
-    const sub = await provider.fetchSubscription(subscriptionId)
-    return ENDED_STATUSES.has(sub.status) ? sub : undefined
-  } catch (error) {
-    logger.warn('Could not read a subscription after its cancel failed', { error, subscriptionId })
-    return undefined
-  }
-}
-
-/**
  * Cancel a duplicate subscription now and refund its latest payment in full.
  * Safe to run twice at once: a cancel that fails because the subscription has
  * already ended is not an error, and the provider refunds a payment once, so
- * only the caller that refunded alerts.
+ * only the caller that refunded raises the refund alert. A payment refunded
+ * only in part is alerted, so staff refund the rest.
  * @param provider - The payment provider.
  * @param tenantId - The workspace.
  * @param subscriptionId - The duplicate.
@@ -459,47 +470,60 @@ async function refundDuplicate(
   tenantId: string,
   subscriptionId: string
 ): Promise<void> {
-  let wasPaid: boolean
   try {
-    const cancelled = await provider.cancelSubscription(subscriptionId, false)
-    wasPaid = cancelled.paidCount > 0
+    await provider.cancelSubscription(subscriptionId, false)
   } catch (error) {
-    const ended = await endedSubscription(provider, subscriptionId)
-    if (ended === undefined) {
+    if ((await endedSubscription(provider, subscriptionId)) === undefined) {
       logger.error('Could not cancel a duplicate subscription', { error, tenantId, subscriptionId })
       await insertAlert(tenantId, {
         kind: 'reconcile_repair',
         message: `Could not cancel duplicate subscription ${subscriptionId}. Cancel and refund it at the provider.`,
+        subscriptionId,
       })
       return
     }
     logger.debug('A duplicate subscription had already ended', { tenantId, subscriptionId })
-    wasPaid = ended.paidCount > 0
   }
+  let outcome: ProviderRefundOutcome
   try {
-    const refund = await provider.refundLatestPayment(subscriptionId)
-    if (refund !== null) {
-      await insertAlert(tenantId, {
-        kind: 'duplicate_refunded',
-        message: `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(refund.amountMinor)} paise in ${refund.refundId}.`,
-      })
-      return
-    }
-    if (wasPaid) {
-      logger.debug('A duplicate subscription was refunded already', { tenantId, subscriptionId })
-      return
-    }
-    await insertAlert(tenantId, {
-      kind: 'duplicate_refunded',
-      message: `Cancelled duplicate subscription ${subscriptionId}. It had no payment to refund.`,
-      subscriptionId,
-    })
+    outcome = await provider.refundLatestPayment(subscriptionId)
   } catch (error) {
     logger.error('Could not refund a duplicate subscription', { error, tenantId, subscriptionId })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
       message: `Cancelled duplicate subscription ${subscriptionId}, but its refund did not go through. Refund it at the provider.`,
+      subscriptionId,
     })
+    return
+  }
+  switch (outcome.status) {
+    case 'refunded': {
+      await insertAlert(tenantId, {
+        kind: 'duplicate_refunded',
+        message: `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(outcome.amountMinor)} paise in ${outcome.refundId}.`,
+      })
+      return
+    }
+    case 'nothing_paid': {
+      await insertAlert(tenantId, {
+        kind: 'duplicate_refunded',
+        message: `Cancelled duplicate subscription ${subscriptionId}. It had no payment to refund.`,
+        subscriptionId,
+      })
+      return
+    }
+    case 'already_refunded': {
+      logger.debug('A duplicate subscription was refunded already', { tenantId, subscriptionId })
+      return
+    }
+    case 'partly_refunded': {
+      await insertAlert(tenantId, {
+        kind: 'reconcile_repair',
+        message: `Duplicate subscription ${subscriptionId} is only partly refunded. Refund the rest at the provider.`,
+        subscriptionId,
+      })
+      break
+    }
   }
 }
 

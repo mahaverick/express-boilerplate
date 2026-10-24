@@ -289,18 +289,26 @@ export type ProviderPlanPrice = Pick<
 >
 
 /**
- * A refund the provider accepted.
+ * What a refund of a subscription's latest payment did: `refunded` with the
+ * refund the provider accepted; `nothing_paid` when no payment exists;
+ * `already_refunded` when the payment was refunded in full before;
+ * `partly_refunded` when part of it was, so nothing more was refunded.
  */
-export interface ProviderRefund {
-  /**
-   * The provider's refund id.
-   */
-  refundId: string
-  /**
-   * The amount refunded, in the currency's minor unit.
-   */
-  amountMinor: number
-}
+export type ProviderRefundOutcome =
+  | {
+      status: 'refunded'
+      /**
+       * The provider's refund id.
+       */
+      refundId: string
+      /**
+       * The amount refunded, in the currency's minor unit.
+       */
+      amountMinor: number
+    }
+  | { status: 'nothing_paid' }
+  | { status: 'already_refunded' }
+  | { status: 'partly_refunded' }
 
 /**
  * One page of invoices.
@@ -368,11 +376,11 @@ export interface BillingProviderClient {
   cancelSubscription(id: string, isAtCycleEnd: boolean): Promise<ProviderSubscription>
   /**
    * Refund the subscription's latest paid payment in full, once: a payment
-   * that already has a refund is not refunded again.
+   * that already has a refund, in full or in part, is not refunded again.
    * @param subscriptionId - The provider's subscription id.
-   * @returns The refund, or null when nothing has been paid or the latest payment already has a refund.
+   * @returns What the refund did.
    */
-  refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null>
+  refundLatestPayment(subscriptionId: string): Promise<ProviderRefundOutcome>
   /**
    * One page of the invoices of some subscriptions, in the order given.
    * @param subscriptionIds - The subscriptions, newest first.

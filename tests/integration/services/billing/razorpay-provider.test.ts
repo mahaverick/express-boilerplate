@@ -379,28 +379,37 @@ describe('refundLatestPayment', () => {
     })
     fake.reply('POST', '/payments/pay_Traz18reMgTm3F/refund', 200, fixture('api-refund').json)
     expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toStrictEqual({
+      status: 'refunded',
       refundId: 'rfnd_Trb9vbIbmrD1wK',
       amountMinor: 99_900,
     })
   })
 
   it.each([
-    ['an amount refunded', { amount_refunded: 99_900, refund_status: 'full' }],
-    ['a refund status alone', { amount_refunded: 0, refund_status: 'partial' }],
-  ])('answers null and refunds nothing when the payment has %s', async (_label, state) => {
+    ['a full refund', { amount_refunded: 99_900, refund_status: 'full' }, 'already_refunded'],
+    [
+      'the whole amount refunded',
+      { amount_refunded: 99_900, refund_status: null },
+      'already_refunded',
+    ],
+    ['a partial refund', { amount_refunded: 10_000, refund_status: 'partial' }, 'partly_refunded'],
+    ['a refund status alone', { amount_refunded: 0, refund_status: 'partial' }, 'partly_refunded'],
+  ])('refunds nothing when the payment has %s', async (_label, state, status) => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)
     fake.reply('GET', '/payments/pay_Traz18reMgTm3F', 200, {
       id: 'pay_Traz18reMgTm3F',
       amount: 99_900,
       ...state,
     })
-    expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toBeNull()
+    expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toStrictEqual({ status })
     expect(fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0)
   })
 
   it('answers null when nothing has been paid', async () => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-deferred-empty').json)
-    expect(await provider.refundLatestPayment('sub_Trax8W0l3PHuDR')).toBeNull()
+    expect(await provider.refundLatestPayment('sub_Trax8W0l3PHuDR')).toStrictEqual({
+      status: 'nothing_paid',
+    })
     expect(fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0)
   })
 })

@@ -165,13 +165,15 @@ describe('FakeBillingProvider', () => {
     expect(ended.endedAt).not.toBeNull()
   })
 
-  it('refunds the latest payment, or answers null when nothing was paid', async () => {
+  it('refunds the latest payment, or answers nothing_paid when nothing was paid', async () => {
     const id = await createOne()
-    expect(await provider.refundLatestPayment(id)).toBeNull()
+    expect(await provider.refundLatestPayment(id)).toStrictEqual({ status: 'nothing_paid' })
     await provider.fakeAdvance(id, 'active')
-    const refund = await provider.refundLatestPayment(id)
-    expect(refund?.refundId).toMatch(/^rfnd_FAKE/)
-    expect(refund?.amountMinor).toBe(99_900)
+    expect(await provider.refundLatestPayment(id)).toStrictEqual({
+      status: 'refunded',
+      refundId: expect.stringMatching(/^rfnd_FAKE/) as unknown,
+      amountMinor: 99_900,
+    })
   })
 
   it('refunds a payment once, even when two callers refund it at once', async () => {
@@ -182,8 +184,11 @@ describe('FakeBillingProvider', () => {
       provider.refundLatestPayment(id),
       other.refundLatestPayment(id),
     ])
-    expect(refunds.filter((refund) => refund !== null)).toHaveLength(1)
-    expect(await provider.refundLatestPayment(id)).toBeNull()
+    expect(refunds.map((refund) => refund.status).toSorted()).toStrictEqual([
+      'already_refunded',
+      'refunded',
+    ])
+    expect(await provider.refundLatestPayment(id)).toStrictEqual({ status: 'already_refunded' })
   })
 
   it('lists subscriptions created since a time', async () => {

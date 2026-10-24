@@ -21,7 +21,7 @@ import type {
   InvoiceView,
   ProviderInvoicePage,
   ProviderPlanPrice,
-  ProviderRefund,
+  ProviderRefundOutcome,
   ProviderSubscription,
   ProviderSubscriptionStatus,
 } from '@/types/billing'
@@ -299,19 +299,20 @@ export class FakeBillingProvider implements BillingProviderClient {
    * Refund the newest payment in full, once. The claim is one `HSETNX` on
    * the payment, so two callers at once cannot both refund it.
    * @param subscriptionId - The subscription id.
-   * @returns The refund, or null when nothing was paid or the payment already has a refund.
+   * The fake refunds in full only, so it never answers `partly_refunded`.
+   * @returns What the refund did.
    */
-  async refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null> {
+  async refundLatestPayment(subscriptionId: string): Promise<ProviderRefundOutcome> {
     const record = await this.#subscription(subscriptionId)
     const latest = record.payments.at(-1)
-    if (latest === undefined) return null
+    if (latest === undefined) return { status: 'nothing_paid' }
     const refundId = fakeId('rfnd')
     const isClaimed = await withRedisDeadline(async () => {
       const redis = await getRedis()
       return redis.hSetNX(redisKey('billing-fake'), `refund:${latest.paymentId}`, refundId)
     }, 'fake billing refund')
-    if (!isClaimed) return null
-    return { refundId, amountMinor: latest.amountMinor }
+    if (!isClaimed) return { status: 'already_refunded' }
+    return { status: 'refunded', refundId, amountMinor: latest.amountMinor }
   }
 
   /**
