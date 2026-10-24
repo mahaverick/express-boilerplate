@@ -915,7 +915,9 @@ nothing. It runs with payments
 off too, skipping the provider steps. `scheduler-daily` is the reconcile: it queues
 a `sync-tenant` job for every row that holds a subscription (rows of another
 provider or mode, and Free rows whose only subscription has ended, are skipped
-and counted), for each running subscription of the last three days whose
+and counted; a Free row whose current subscription a failed cancel left
+running, which a staff alert names, is synced so the cancel is tried again),
+for each running subscription of the last three days whose
 notes name a workspace whose row does not hold it, and for each workspace
 whose webhook event failed in the last three days. It also sends the yearly
 renewal reminder a week before the period ends and the win-back emails on days
@@ -925,9 +927,21 @@ workspace is never claimed. Two overlapping runs act
 once: each step claims its rows, re-checks them under the row lock, or leaves
 them to the sync's versioned write. A run occupies one of the billing
 Worker's two slots while it lasts, so webhook and sync jobs share the other;
-the daily run only queues jobs and ends quickly. A suspend followed by an
+the daily run only queues jobs and ends quickly. The lifecycle cancel claims
+a suspended or archived workspace's row once, and cancels every subscription
+id it holds whatever the row's state: the current one at its cycle end for a
+suspended workspace that pays, else now; a checkout and a switch now. A
+checkout or switch that reads as paid is brought in by a sync first, so a
+paid checkout is adopted (and cancelled as the current one) or refunded as a
+duplicate, never discarded. The claim is released when the workspace is
+reactivated, when a sync gives a suspended or archived workspace a
+subscription id it did not hold (an adoption or a handover, which also queues
+the prompt cancel), and once a day for a cancel that failed and alerted
+staff more than a day ago. A suspend followed by an
 archive replaces the suspension's cycle-end cancel with an immediate one: the
-claim taken before the archive is released. Each suspend and archive also
+claim taken before the archive is released, since the archive stamps
+`deleted_at` with its statement's time; a claim taken after that statement
+but before the archive commits keeps the cycle-end cancel. Each suspend and archive also
 queues a `lifecycle-cancel` job after its commit, which runs the same step
 for that workspace alone (`runLifecycleCancelFor`) through the same claim,
 so the cancel goes out at once and the frequent run is only the fallback. A

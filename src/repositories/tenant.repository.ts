@@ -251,7 +251,8 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .set({
         lifecycleState: to,
         updatedAt: sql`now()`,
-        ...(to === 'archived' && { deletedAt: sql`now()` }),
+        // The statement's time, not the transaction's start: a billing cancel claim taken before this statement, while the transaction was open, then reads as older, so it is released and the archive cancels now.
+        ...(to === 'archived' && { deletedAt: sql`clock_timestamp()` }),
       })
       .where(
         and(

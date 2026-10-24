@@ -178,3 +178,19 @@ export function isOtherProvider(
     (row.providerMode !== null && row.providerMode !== running.mode)
   )
 }
+
+/**
+ * Every subscription id a billing row holds, whatever its state: the
+ * current one, the checkout and the scheduled switch or resubscribe.
+ * @param row - The row.
+ * @returns The ids, current first.
+ */
+export function heldSubscriptionIds(row: {
+  providerSubscriptionId: string | null
+  pendingSubscriptionId: string | null
+  nextSubscriptionId: string | null
+}): string[] {
+  return [row.providerSubscriptionId, row.pendingSubscriptionId, row.nextSubscriptionId].filter(
+    (id) => id !== null
+  )
+}

@@ -8,6 +8,7 @@ import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { addBillingLifecycleCancelJob } from '@/jobs/billing.job'
+import { BillingRepository } from '@/repositories/billing.repository'
 import {
   PlatformTenantRepository,
   type PlatformTenantDetailRow,
@@ -38,6 +39,7 @@ import type {
   PlatformTenantListQuery,
 } from '@/validators/platform.validators'
 
+const billingRepository = new BillingRepository()
 const platformTenantRepository = new PlatformTenantRepository()
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -214,13 +216,24 @@ type LifecycleAction = 'tenant.suspended' | 'tenant.reactivated' | 'tenant.archi
  * The billing follow-up of a committed lifecycle change. A suspend or
  * archive queues the prompt cancel job, so the subscription is cancelled
  * now rather than on the next frequent run, which stays the fallback when
- * the queue can't be reached. A reactivation sends the billing warnings the
- * suspension held back. Never rejects: the change has committed.
+ * the queue can't be reached. A reactivation releases the suspension's
+ * cancel claim, so a later suspension cancels whatever the workspace holds
+ * then, and sends the billing warnings the suspension held back. Never
+ * rejects: the change has committed.
  * @param tenantId - The tenant.
  * @param to - The state it moved to.
  */
 async function afterLifecycleChange(tenantId: string, to: TenantLifecycleState): Promise<void> {
   if (to === 'active') {
+    try {
+      // Releases only while the tenant is still active, so a suspension committed since keeps its claim.
+      await billingRepository.releaseLifecycleCancelClaims(undefined, tenantId)
+    } catch (error) {
+      logger.warn('Could not release the billing cancel claim of a reactivated tenant', {
+        error,
+        tenantId,
+      })
+    }
     await sendHeldBackWarnings(tenantId)
     return
   }

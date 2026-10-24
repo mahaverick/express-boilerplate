@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { Job } from 'bullmq'
+import { sql as drizzleSql } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { ProviderError } from '@/errors/billing-provider-errors'
@@ -20,13 +21,15 @@ import {
 } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import {
   runDailyBilling,
   runFrequentBilling,
+  runLifecycleCancelFor,
   type BillingRunReport,
 } from '@/services/billing/billing-scheduler.service'
 import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.service'
-import { sql } from '@/services/database.service'
+import { sql, withTransaction } from '@/services/database.service'
 import {
   closeNotificationSubscriber,
   offEntitlementsChanged,
@@ -76,6 +79,7 @@ vi.mock('@/services/billing/billing-provider.service', async (importOriginal) =>
 const DAY = 24 * 60 * 60 * 1000
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
+const tenantRepository = new TenantRepository()
 
 /**
  * Alert texts this file raised with no workspace, deleted after each test.
@@ -712,6 +716,62 @@ describe('runFrequentBilling', () => {
     expect(await lifecycleClaimOf(tenant.id)).not.toBeNull()
   })
 
+  it('retries once a day a suspended workspace cancel that failed and alerted staff, and never one that went through', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await setLifecycle(tenant.id, 'suspended')
+    const { tenant: done } = await workspace()
+    const { subscriptionId: doneId } = await makePaying(done.id)
+    await setLifecycle(done.id, 'suspended')
+    const original = FakeBillingProvider.prototype.fetchSubscription
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'fetchSubscription',
+      async function (this: FakeBillingProvider, id: string) {
+        if (id === subscriptionId) throw new ProviderError('GET /subscriptions/x', 502)
+        return original.call(this, id)
+      },
+      async () => {
+        await runFrequentBilling(now)
+      }
+    )
+    expect(await statusOf(subscriptionId)).toBe('active')
+
+    const cancels = await recordingCancels(async () => {
+      // Within the day the claim stands.
+      await runFrequentBilling(new Date(now.getTime() + 12 * 60 * 60 * 1000))
+      await runFrequentBilling(new Date(now.getTime() + 25 * 60 * 60 * 1000))
+    })
+
+    expect(cancels).toStrictEqual([[subscriptionId, true]])
+    expect(await readBilling(tenant.id)).toMatchObject({ cancelAtPeriodEnd: true })
+    expect(await lifecycleClaimOf(tenant.id)).not.toBeNull()
+    expect(cancels).not.toContainEqual([doneId, true])
+  })
+
+  it('cancels now when a suspension claim was taken while the archive transaction was open', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await setLifecycle(tenant.id, 'suspended')
+
+    const cancels = await recordingCancels(async () => {
+      await withTransaction(async (tx) => {
+        // Fix the archive transaction's start, then let the frequent run claim the suspension on another connection.
+        await tx.execute(drizzleSql`select now()`)
+        await runFrequentBilling(new Date())
+        await tenantRepository.transitionLifecycle(tenant.id, ['suspended'], 'archived', tx)
+      })
+      await runLifecycleCancelFor(tenant.id)
+    })
+
+    expect(cancels).toStrictEqual([
+      [subscriptionId, true],
+      [subscriptionId, false],
+    ])
+    expect(await statusOf(subscriptionId)).toBe('cancelled')
+  })
+
   it('releases the lifecycle claim of a workspace that is active again', async () => {
     const now = new Date()
     const { tenant } = await workspace()
@@ -886,6 +946,24 @@ describe('runDailyBilling', () => {
 
     expect(await syncJobsFor(tenant.id)).toStrictEqual([])
     expect(report.reconcile?.skipped).toBeGreaterThanOrEqual(1)
+  })
+
+  it('syncs a Free row whose current subscription a failed cancel left running, so the cancel is tried again', async () => {
+    const now = new Date()
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+    await billingRepository.insertAlert({
+      kind: 'reconcile_repair',
+      tenantId: tenant.id,
+      message: `Could not cancel subscription ${subscriptionId}. Cancel it at the provider.`,
+    })
+
+    await runDailyBilling(now)
+    await runSyncJobsFor(tenant.id)
+
+    expect(await statusOf(subscriptionId)).toBe('cancelled')
   })
 
   it('skips and counts a fake-provider row when the running provider is Razorpay', async () => {

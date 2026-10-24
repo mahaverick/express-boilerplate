@@ -38,7 +38,7 @@ import { platformTenantOrThrow } from '@/services/platform-user.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import type { Actor } from '@/types/actor'
 import type { ProviderSubscription } from '@/types/billing'
-import { isOtherProvider } from '@/utilities/billing-rules.utilities'
+import { heldSubscriptionIds, isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
 const auditLogRepository = new AuditLogRepository()
@@ -82,17 +82,6 @@ const PURGE_CHECK_REFUSED_MESSAGE =
   "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in a few minutes. If it fails again, check the provider keys."
 
 /**
- * Every subscription id a billing row holds: current, checkout and scheduled switch.
- * @param row - The billing row.
- * @returns The ids.
- */
-function heldIds(row: TenantBillingRecord): string[] {
-  return [row.providerSubscriptionId, row.pendingSubscriptionId, row.nextSubscriptionId].filter(
-    (id) => id !== null
-  )
-}
-
-/**
  * Refuse the purge of a workspace whose subscription may still charge a
  * card. Every id the row holds is read, whatever the row's state (a failed
  * cancel can leave a Free row holding a halted subscription, which can
@@ -108,7 +97,7 @@ function heldIds(row: TenantBillingRecord): string[] {
  * @throws {HttpError} 409 while a subscription runs; 502 for an unknown subscription or a row this server can't check; 503 or 502 when the provider fails.
  */
 async function assertNoLiveSubscription(row: TenantBillingRecord): Promise<ReadonlySet<string>> {
-  const ids = heldIds(row)
+  const ids = heldSubscriptionIds(row)
   if (ids.length === 0) return new Set()
   const provider = getBillingProvider()
   if (provider === null || isOtherProvider(row, provider)) {
@@ -282,7 +271,7 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
     await assertStillPlatformRole(actor, 'owner', tx)
     // The seat lock's place: a webhook's sync may have brought a subscription in since the check.
     const locked = await billingRepository.lockByTenantId(tenantId, tx)
-    if (locked !== undefined && heldIds(locked).some((id) => !checked.has(id))) {
+    if (locked !== undefined && heldSubscriptionIds(locked).some((id) => !checked.has(id))) {
       throw new HttpError(LIVE_SUBSCRIPTION_MESSAGE, 409)
     }
     const members = await userMembershipRepository.listByTenant(tenantId, tx)

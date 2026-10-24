@@ -16,6 +16,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   or,
   sql,
@@ -1084,11 +1085,12 @@ export class BillingRepository {
   }
 
   /**
-   * Claim the records of suspended or archived workspaces that still have a
-   * subscription to cancel: a current one not yet cancelling (for an archived
-   * workspace, cancelling too, since an archive cancels now), a scheduled
-   * switch or a checkout. The workspace row is only read, so the claim takes
-   * no lock on it.
+   * Claim the records of suspended or archived workspaces that still hold a
+   * subscription to cancel: a current one not yet cancelling, whatever the
+   * row's state (a Free row can hold a halted one after a failed cancel; for
+   * an archived workspace, cancelling too, since an archive cancels now), a
+   * scheduled switch or a checkout. The workspace row is only read, so the
+   * claim takes no lock on it.
    * @param scope - The running provider and mode.
    * @param limit - The most rows to claim.
    * @param tx - The open transaction; the claim holds until it ends.
@@ -1103,13 +1105,12 @@ export class BillingRepository {
   ): Promise<TenantBillingRecord[]> {
     const isSuspendedOrArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} in ('suspended', 'archived'))`
     const isArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} = 'archived')`
-    const hasRunningCurrent = and(
-      inArray(tenantBillingModel.state, ['active', 'past_due']),
+    const holdsCurrent = and(
       isNotNull(tenantBillingModel.providerSubscriptionId),
       or(eq(tenantBillingModel.cancelAtPeriodEnd, false), isArchived)
     )
     const holdsSubscription = or(
-      hasRunningCurrent,
+      holdsCurrent,
       isNotNull(tenantBillingModel.nextSubscriptionId),
       isNotNull(tenantBillingModel.pendingSubscriptionId)
     )
@@ -1145,6 +1146,38 @@ export class BillingRepository {
           isNotNull(tenantBillingModel.lifecycleCancelSentAt),
           tenantId === undefined ? undefined : eq(tenantBillingModel.tenantId, tenantId),
           sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and (${tenantModel.lifecycleState} = 'active' or (${tenantModel.lifecycleState} = 'archived' and ${tenantModel.deletedAt} > ${tenantBillingModel.lifecycleCancelSentAt})))`
+        )
+      )
+      .returning({ tenantId: tenantBillingModel.tenantId })
+    return released.length
+  }
+
+  /**
+   * Clear the lifecycle cancel claims of suspended or archived workspaces
+   * whose cancel failed and alerted staff more than a day ago, so the
+   * frequent run tries again once a day: the claim is older than a day, and
+   * the workspace has a repair alert with `alertText` in its message that is
+   * older than a day too. A claim that went through raises no such alert,
+   * so it is never retried.
+   * @param now - The run's time.
+   * @param alertText - The text every lifecycle cancel failure alert carries.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns How many claims were cleared.
+   */
+  async releaseFailedLifecycleCancelClaims(
+    now: Date,
+    alertText: string,
+    executor: DbExecutor = db
+  ): Promise<number> {
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const released = await executor
+      .update(tenantBillingModel)
+      .set({ lifecycleCancelSentAt: null })
+      .where(
+        and(
+          lt(tenantBillingModel.lifecycleCancelSentAt, dayAgo),
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} in ('suspended', 'archived'))`,
+          sql`exists (select 1 from ${billingAlertModel} where ${billingAlertModel.tenantId} = ${tenantBillingModel.tenantId} and ${billingAlertModel.kind} = 'reconcile_repair' and strpos(${billingAlertModel.message}, ${alertText}) > 0 and ${billingAlertModel.at} < ${at(dayAgo)})`
         )
       )
       .returning({ tenantId: tenantBillingModel.tenantId })

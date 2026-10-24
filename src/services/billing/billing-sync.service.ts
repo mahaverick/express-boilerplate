@@ -9,12 +9,15 @@
  *    writes it with the version check, adding a history row for a state change
  *    and fulfilling upgrade requests when it becomes active. A row that changed
  *    between the read and the lock was mapped from stale ids, so the whole sync
- *    runs again once, then gives up for the caller to retry;
+ *    runs again once, then gives up for the caller to retry. A write that gives
+ *    a suspended or archived workspace a subscription id it did not hold also
+ *    releases its lifecycle cancel claim;
  * 4. after the commit, inserts alerts, runs the follow-up provider calls
  *    (cancel, refund, the switch's cycle-end cancel), pushes the change to
  *    members and sends its emails (`emitBillingDiff`, which also tells each
- *    member whose upgrade request the write fulfilled), and syncs once more
- *    after a handover or a cancel so the new provider state lands at once.
+ *    member whose upgrade request the write fulfilled), syncs once more
+ *    after a handover or a cancel so the new provider state lands at once,
+ *    and queues the prompt lifecycle cancel when it released the claim.
  *
  * A subscription whose notes name another workspace is never adopted, and one
  * whose notes name an unknown price is never made current: both are ignored
@@ -26,8 +29,10 @@ import type {
   TenantBillingRecord,
   UpgradeRequest,
 } from '@/database/models/billing.model'
+import { addBillingLifecycleCancelJob } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
@@ -39,7 +44,7 @@ import type {
   ProviderRefundOutcome,
   ProviderSubscription,
 } from '@/types/billing'
-import { isOtherProvider } from '@/utilities/billing-rules.utilities'
+import { heldSubscriptionIds, isOtherProvider } from '@/utilities/billing-rules.utilities'
 import {
   isRunning,
   nextBillingRow,
@@ -49,6 +54,7 @@ import {
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
+const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 
 /**
@@ -147,6 +153,12 @@ interface CommittedSync {
    * The upgrade requests the write fulfilled, so their requesters are told.
    */
   fulfilledRequests: UpgradeRequest[]
+  /**
+   * The write gave a suspended or archived workspace a subscription id it
+   * did not hold and released its lifecycle cancel claim, so the prompt
+   * cancel job is queued after the commit.
+   */
+  needsLifecycleCancel: boolean
 }
 
 /**
@@ -295,8 +307,43 @@ async function fetchState(
 }
 
 /**
+ * Whether a write gives the row a subscription id it did not hold: an
+ * adoption, a handover or a new checkout.
+ * @param before - The row before the write.
+ * @param after - The row's held ids after it.
+ * @returns True when any id after the write is new.
+ */
+function hasNewHeldId(
+  before: TenantBillingRecord,
+  after: Parameters<typeof heldSubscriptionIds>[0]
+): boolean {
+  const held = new Set(heldSubscriptionIds(before))
+  return heldSubscriptionIds(after).some((id) => !held.has(id))
+}
+
+/**
+ * Queue the prompt lifecycle cancel for a suspended or archived workspace
+ * that a sync gave a new subscription. A failure is logged: the frequent run
+ * claims the workspace anyway, since the sync released its claim.
+ * @param tenantId - The workspace.
+ */
+async function queueLifecycleCancel(tenantId: string): Promise<void> {
+  try {
+    await addBillingLifecycleCancelJob({ tenantId })
+  } catch (error) {
+    logger.warn('Could not queue the lifecycle cancel of a subscription a sync brought in', {
+      error,
+      tenantId,
+    })
+  }
+}
+
+/**
  * Lock the row, map it and write it, unless it changed since it was read. A
  * subscription that becomes current records the running provider and mode.
+ * When the workspace is suspended or archived and the write gives it a
+ * subscription id it did not hold, the lifecycle cancel claim is released
+ * in the same write, so the new subscription is cancelled too.
  * @param provider - The payment provider.
  * @param run - The sync call.
  * @param readVersion - The version the fetch was based on.
@@ -340,6 +387,30 @@ async function commitSync(
       }
     }
 
+    // A plain read of the workspace row, which takes no lock, so the lock order holds.
+    const tenant = await tenantRepository.findByIdIncludingDeleted(run.tenantId, tx)
+    const isNeedsLifecycleCancel =
+      tenant !== undefined &&
+      tenant.lifecycleState !== 'active' &&
+      hasNewHeldId(locked, {
+        providerSubscriptionId:
+          patch.providerSubscriptionId === undefined
+            ? locked.providerSubscriptionId
+            : patch.providerSubscriptionId,
+        pendingSubscriptionId:
+          patch.pendingSubscriptionId === undefined
+            ? locked.pendingSubscriptionId
+            : patch.pendingSubscriptionId,
+        nextSubscriptionId:
+          patch.nextSubscriptionId === undefined
+            ? locked.nextSubscriptionId
+            : patch.nextSubscriptionId,
+      })
+    // A claim spent on the ids held before must not keep the new one from its cancel.
+    if (isNeedsLifecycleCancel && locked.lifecycleCancelSentAt !== null) {
+      patch.lifecycleCancelSentAt = null
+    }
+
     const after = await billingRepository.updateVersioned(run.tenantId, locked.version, patch, tx)
     if (after === undefined) return
     if (mapped.cause !== null) {
@@ -364,6 +435,7 @@ async function commitSync(
       actions: mapped.actions,
       changed: Object.keys(patch).some((key) => key !== 'syncedAt'),
       fulfilledRequests,
+      needsLifecycleCancel: isNeedsLifecycleCancel,
     }
   })
 }
@@ -652,6 +724,7 @@ async function runSync(run: SyncRun): Promise<SyncResult> {
     const committed = await commitSync(provider, run, row.version, fetched)
     if (committed === undefined) continue
     const { shouldResync } = await runFollowUps(provider, run, committed, fetched.alerts)
+    if (committed.needsLifecycleCancel) await queueLifecycleCancel(tenantId)
     const result: SyncResult = {
       outcome: 'synced',
       changed: committed.changed,

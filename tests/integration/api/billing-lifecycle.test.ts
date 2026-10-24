@@ -38,6 +38,7 @@ import { changeRole, leaveTenant } from '@/services/tenant-membership.service'
 import { processBillingJob } from '@/workers/billing.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
+  billingColumn,
   confirmBody,
   deleteTrackedTenants,
   fake,
@@ -307,6 +308,135 @@ describe('the prompt cancel after a suspend or archive', () => {
     await reactivateTenant(staff, tenant.id, 'Support ticket 43')
 
     expect(await lifecycleJobs()).toStrictEqual([])
+  })
+})
+
+describe('a subscription that reaches a suspended or archived workspace later', () => {
+  it('releases the claim on reactivation, so a resubscribe is cancelled when the workspace is suspended again', async () => {
+    const { tenant } = await workspace()
+    const { periodEnd } = await makePaying(tenant.id)
+    const staff = await staffAdmin()
+    await suspendTenant(staff, tenant.id, 'Support ticket 42')
+    await runLifecycleJobs()
+    expect(await billingColumn(tenant.id, 'lifecycleCancelSentAt')).not.toBeNull()
+
+    await reactivateTenant(staff, tenant.id, 'Support ticket 43')
+    expect(await billingColumn(tenant.id, 'lifecycleCancelSentAt')).toBeNull()
+    // The owner resubscribes while the suspension's cycle-end cancel runs out.
+    const nextId = await fakeSubscription(
+      { tenantId: tenant.id, priceId: plans.monthPriceId },
+      'month',
+      periodEnd
+    )
+    await fake.fakeAdvance(nextId, 'authenticated')
+    await setBilling(tenant.id, { nextSubscriptionId: nextId, nextPriceId: plans.monthPriceId })
+    await suspendTenant(staff, tenant.id, 'Support ticket 44')
+
+    const cancels = await recordingCancels(runLifecycleJobs)
+
+    expect(cancels).toContainEqual([nextId, false])
+    expect(await subscriptionStatus(nextId)).toBe('cancelled')
+  })
+
+  it('cancels now a paid checkout the sweep brings to an archived workspace whose claim was spent', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await archiveTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    await runLifecycleJobs()
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+    const stale = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(stale, 'active')
+
+    await syncTenantBilling(tenant.id, 'reconcile', { extraSubscriptionIds: [stale] })
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: stale,
+      lifecycleCancelSentAt: null,
+    })
+    const queued = await lifecycleJobs()
+    expect(queued.map((job) => job.data)).toStrictEqual([{ tenantId: tenant.id }])
+    const cancels = await recordingCancels(runLifecycleJobs)
+
+    expect(cancels).toStrictEqual([[stale, false]])
+    expect(await subscriptionStatus(stale)).toBe('cancelled')
+  })
+
+  it('queues no cancel when a sync changes no subscription id of a suspended workspace', async () => {
+    const { tenant } = await workspace()
+    await makePaying(tenant.id)
+    await suspendTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    await runLifecycleJobs()
+
+    await syncTenantBilling(tenant.id, 'reconcile')
+
+    expect(await lifecycleJobs()).toStrictEqual([])
+    expect(await billingColumn(tenant.id, 'lifecycleCancelSentAt')).not.toBeNull()
+  })
+
+  it('cancels now the halted subscription a Free row still holds when the workspace is archived', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+
+    await archiveTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    const cancels = await recordingCancels(runLifecycleJobs)
+
+    expect(cancels).toStrictEqual([[subscriptionId, false]])
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+  })
+
+  it('cancels now, not at a cycle end, the halted subscription a Free row holds when the workspace is suspended', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+
+    await suspendTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    const cancels = await recordingCancels(runLifecycleJobs)
+
+    expect(cancels).toStrictEqual([[subscriptionId, false]])
+  })
+
+  it('brings in a paid checkout before a suspension cancels it, so it ends at its cycle end and is never discarded', async () => {
+    const { tenant } = await workspace()
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, {
+      pendingSubscriptionId: pending,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+
+    await suspendTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    const cancels = await recordingCancels(async () => {
+      await runLifecycleJobs()
+      await runLifecycleJobs()
+    })
+
+    expect(cancels).toStrictEqual([[pending, true]])
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: pending,
+      pendingSubscriptionId: null,
+      cancelAtPeriodEnd: true,
+    })
+  })
+
+  it('refunds a paid checkout as a duplicate before an archive cancels the current subscription now', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    const pending = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pending, 'active')
+    await setBilling(tenant.id, { pendingSubscriptionId: pending })
+    const refund = vi.spyOn(fake, 'refundLatestPayment')
+
+    await archiveTenant(await staffAdmin(), tenant.id, 'Support ticket 42')
+    const cancels = await recordingCancels(runLifecycleJobs)
+
+    expect(cancels).toContainEqual([pending, false])
+    expect(cancels).toContainEqual([subscriptionId, false])
+    expect(refund.mock.calls).toStrictEqual([[pending]])
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
   })
 })
 
