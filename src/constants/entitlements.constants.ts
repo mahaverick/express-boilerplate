@@ -8,7 +8,7 @@
  * What an entitlement holds: a feature switch, a numeric limit, or `null`
  * for a limit with no cap.
  */
-type EntitlementValue = boolean | number | null
+export type EntitlementValue = boolean | number | null
 
 /**
  * Whether an entitlement is an on/off feature or a counted limit.
