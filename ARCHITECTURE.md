@@ -323,7 +323,9 @@ in this order:
    invitation verify or confirm (after the user-row step). It comes before
    any invitation or membership-row write, so two such writes queue here and
    never both take the last seat. The platform tenant has no billing row and
-   takes no seat lock;
+   takes no seat lock. The billing sync (`syncTenantBilling`,
+   `src/services/billing/billing-sync.service.ts`) locks only this row, and
+   calls the payment provider only before or after its transaction;
 6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
 7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
@@ -946,6 +948,13 @@ every replica with an open stream: one subscriber ── local emitter ── ea
   while streams are open, every open stream is closed so its client replays
   the gap. A publish that fails is delivered locally instead, and one whose
   reply is lost may arrive twice.
+- **Entitlements.** The same channel carries a second message kind,
+  `{ kind: 'entitlements_changed', userId, tenantId, slug }`, published once
+  per member of a workspace whose plan, billing state or grants changed
+  (`publishEntitlementsChanged`, `src/services/billing/billing-events.service.ts`).
+  The stream writes it as `event: entitlements_changed` with `{ tenantId, slug }`
+  and no `id:` line, so `Last-Event-ID` stays a notification id; nothing
+  replays it, since the client reads fresh entitlements on its next load.
 - **Shutdown.** The stream registry (`src/services/lifecycle.service.ts`)
   lets `gracefulShutdown` end every stream first.
 

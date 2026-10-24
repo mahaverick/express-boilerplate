@@ -1,7 +1,9 @@
 /**
  * @file `GET /api/v1/notifications/stream`: a Server-Sent Events connection
  * that pushes the authenticated user's notifications live, via
- * notification-emitter.service.ts's Redis pub/sub, behind `requireAuth`.
+ * notification-emitter.service.ts's Redis pub/sub, behind `requireAuth`. It
+ * also sends `entitlements_changed` when a workspace the user belongs to
+ * changes plan, state or grants, so an open app reads its entitlements again.
  * Every rejection (503 shutting down, 401, 429 `too_many_streams`) is thrown
  * before `writeHead`, so `errorHandler` answers it with the ordinary JSON
  * error envelope, not an event stream that closes at once. The exception is
@@ -23,7 +25,13 @@ import {
   registerStream,
 } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
-import { offNotification, onNotification } from '@/services/notification-emitter.service'
+import {
+  offEntitlementsChanged,
+  offNotification,
+  onEntitlementsChanged,
+  onNotification,
+  type EntitlementsChange,
+} from '@/services/notification-emitter.service'
 import { fetchMissedNotifications } from '@/services/notification.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import { formatWait } from '@/utilities/duration.utilities'
@@ -123,6 +131,19 @@ function formatNotificationFrame(notification: Notification): string {
 function writeNotificationEvent(response: Response, notification: Notification): void {
   if (response.writableEnded || response.destroyed) return
   response.write(formatNotificationFrame(notification))
+}
+
+/**
+ * Write one entitlements change to an open SSE response, doing nothing when
+ * the connection has already ended. The frame has no `id:` line, so a
+ * reconnect's `Last-Event-ID` stays the last notification's id.
+ * @param response - The open SSE response.
+ * @param change - The workspace whose entitlements changed: its id and slug only.
+ */
+function writeEntitlementsEvent(response: Response, change: EntitlementsChange): void {
+  if (response.writableEnded || response.destroyed) return
+  const payload = { tenantId: change.tenantId, slug: change.slug }
+  response.write(`event: entitlements_changed\ndata: ${JSON.stringify(payload)}\n\n`)
 }
 
 /**
@@ -237,6 +258,15 @@ class NotificationStreamController extends BaseController {
       }
       onNotification(userId, handleNotification)
 
+      /**
+       * Deliver an entitlements change at once: it has no replay to wait for.
+       */
+      const handleEntitlementsChanged = (change: EntitlementsChange): void => {
+        writeEntitlementsEvent(response, change)
+        dropIfStalled()
+      }
+      onEntitlementsChanged(userId, handleEntitlementsChanged)
+
       const heartbeat = setInterval(() => {
         if (response.writableEnded || response.destroyed) return
         void (async () => {
@@ -266,6 +296,7 @@ class NotificationStreamController extends BaseController {
         clearInterval(heartbeat)
         clearTimeout(expiryTimer)
         offNotification(userId, handleNotification)
+        offEntitlementsChanged(userId, handleEntitlementsChanged)
         if (!response.writableEnded && !response.destroyed) response.end()
       }
       const unregisterStream = registerStream(userId, closeStream)

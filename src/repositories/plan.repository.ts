@@ -4,7 +4,7 @@
  * requires a `deletedAt` column these tables have no use for. Consumers create
  * their own instance at module scope.
  */
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type {
   BillingInterval,
   BillingProvider,
@@ -111,6 +111,20 @@ export class PlanRepository {
       .from(planPriceModel)
       .where(eq(planPriceModel.planId, planId))
       .orderBy(desc(planPriceModel.active), desc(planPriceModel.createdAt), desc(planPriceModel.id))
+  }
+
+  /**
+   * The prices with these ids, active or retired.
+   * @param ids - The price ids.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The rows found, in no particular order; none for an empty list.
+   */
+  async findPricesByIds(ids: readonly string[], executor: DbExecutor = db): Promise<PlanPrice[]> {
+    if (ids.length === 0) return []
+    return executor
+      .select()
+      .from(planPriceModel)
+      .where(inArray(planPriceModel.id, [...ids]))
   }
 
   /**

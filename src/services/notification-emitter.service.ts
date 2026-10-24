@@ -4,6 +4,12 @@
  * copy once (twice if a publish's reply is lost and it also delivers locally).
  * Best effort, not durable: after an outage open streams are closed and clients
  * replay the gap from the database via `Last-Event-ID`.
+ *
+ * The channel carries two kinds of message: a notification
+ * (`{ userId, notification }`) and a workspace's entitlements change
+ * (`{ kind: 'entitlements_changed', userId, tenantId, slug }`), which tells a
+ * member's open app to read its entitlements again. The second has no row to
+ * replay: a client that missed it reads fresh entitlements on its next load.
  */
 import { EventEmitter } from 'node:events'
 import type { RedisClientType } from 'redis'
@@ -24,6 +30,30 @@ function eventNameFor(userId: string): string {
 }
 
 /**
+ * The event name one user's entitlements changes are delivered under locally.
+ * @param userId - The member's id.
+ * @returns The per-user event name.
+ */
+function entitlementsEventNameFor(userId: string): string {
+  return `entitlements:${userId}`
+}
+
+/**
+ * A workspace whose entitlements changed, as a member's stream receives it:
+ * ids and the slug only.
+ */
+export interface EntitlementsChange {
+  /**
+   * The workspace id.
+   */
+  tenantId: string
+  /**
+   * The workspace slug, for the client's routes.
+   */
+  slug: string
+}
+
+/**
  * The Redis channel every replica publishes and subscribes on.
  * @returns The channel name, namespaced by `REDIS_KEY_PREFIX`.
  */
@@ -37,7 +67,7 @@ function channelName(): string {
 const isoDate = z.iso.datetime().transform((value) => new Date(value))
 const metadataSchema = z.record(z.string(), z.unknown())
 
-const messageSchema = z.object({
+const notificationMessageSchema = z.object({
   userId: z.string().min(1),
   notification: z.object({
     id: z.string(),
@@ -51,6 +81,19 @@ const messageSchema = z.object({
     dedupeKey: z.string().nullable(),
   }),
 })
+
+const entitlementsMessageSchema = z.object({
+  kind: z.literal('entitlements_changed'),
+  userId: z.string().min(1),
+  tenantId: z.string().min(1),
+  slug: z.string().min(1),
+})
+
+/**
+ * Either kind of channel message. A notification message has no `kind`, so
+ * one published before the second kind existed still parses.
+ */
+const messageSchema = z.union([entitlementsMessageSchema, notificationMessageSchema])
 
 /**
  * A failed start is retried after this delay, doubling up to `RETRY_MAX_MS`, while any listener
@@ -131,6 +174,24 @@ function deliverLocally(userId: string, notification: Notification): void {
 }
 
 /**
+ * Hand one entitlements change to each of this process's listeners for a member.
+ * @param userId - The member.
+ * @param change - The workspace whose entitlements changed.
+ */
+function deliverEntitlementsLocally(userId: string, change: EntitlementsChange): void {
+  const listeners = getEmitter().listeners(entitlementsEventNameFor(userId)) as ((
+    change: EntitlementsChange
+  ) => void)[]
+  for (const listener of listeners) {
+    try {
+      listener(change)
+    } catch (error) {
+      logger.error('An entitlements listener threw', { error, tenantId: change.tenantId })
+    }
+  }
+}
+
+/**
  * Validate one channel message and deliver it locally; a malformed one is logged and dropped.
  * @param message - The raw message from the channel.
  */
@@ -149,8 +210,13 @@ function handleMessage(message: string): void {
     })
     return
   }
-  const notification: Notification = parsed.data.notification
-  deliverLocally(parsed.data.userId, notification)
+  const { data } = parsed
+  if ('kind' in data) {
+    deliverEntitlementsLocally(data.userId, { tenantId: data.tenantId, slug: data.slug })
+    return
+  }
+  const notification: Notification = data.notification
+  deliverLocally(data.userId, notification)
 }
 
 /**
@@ -255,16 +321,11 @@ function ensureSubscriber(): void {
 
 /**
  * Publish one message; when that fails, deliver it to this process's listeners only.
- * @param userId - The notification's owner.
- * @param notification - The notification, for the local fallback.
  * @param message - The serialised channel message.
+ * @param deliverHere - The local fallback.
  * @returns Resolves once published or delivered locally; never rejects.
  */
-async function publishOrDeliverLocally(
-  userId: string,
-  notification: Notification,
-  message: string
-): Promise<void> {
+async function publishOrDeliverLocally(message: string, deliverHere: () => void): Promise<void> {
   try {
     const client = await getRedis()
     await client.publish(channelName(), message)
@@ -277,7 +338,7 @@ async function publishOrDeliverLocally(
         { error }
       )
     }
-    deliverLocally(userId, notification)
+    deliverHere()
   }
 }
 
@@ -293,7 +354,54 @@ async function publishOrDeliverLocally(
  */
 export function emitNotification(userId: string, notification: Notification): void {
   const message = JSON.stringify({ userId, notification })
-  void publishOrDeliverLocally(userId, notification, message)
+  void publishOrDeliverLocally(message, () => deliverLocally(userId, notification))
+}
+
+/**
+ * Publish one workspace's entitlements change to every replica's SSE
+ * connections for one member.
+ * @param userId - The member. Only listeners subscribed to this exact id are told.
+ * @param change - The workspace whose entitlements changed.
+ * @returns Resolves once published or delivered locally; never rejects.
+ */
+export async function emitEntitlementsChanged(
+  userId: string,
+  change: EntitlementsChange
+): Promise<void> {
+  const message = JSON.stringify({
+    kind: 'entitlements_changed',
+    userId,
+    tenantId: change.tenantId,
+    slug: change.slug,
+  })
+  await publishOrDeliverLocally(message, () => deliverEntitlementsLocally(userId, change))
+}
+
+/**
+ * Subscribe to one user's entitlements changes, opening this process's subscriber on first use.
+ * @param userId - The user to subscribe to.
+ * @param handler - Called once per change.
+ */
+export function onEntitlementsChanged(
+  userId: string,
+  handler: (change: EntitlementsChange) => void
+): void {
+  getEmitter().on(entitlementsEventNameFor(userId), handler)
+  ensureSubscriber()
+}
+
+/**
+ * Unsubscribe a handler previously passed to `onEntitlementsChanged`, by
+ * reference. Once the last listener is gone, a pending subscriber retry is dropped.
+ * @param userId - The user this handler was subscribed to.
+ * @param handler - The exact function reference passed to `onEntitlementsChanged`.
+ */
+export function offEntitlementsChanged(
+  userId: string,
+  handler: (change: EntitlementsChange) => void
+): void {
+  getEmitter().off(entitlementsEventNameFor(userId), handler)
+  dropRetryWhenIdle()
 }
 
 /**
@@ -323,6 +431,13 @@ export function offNotification(
   handler: (notification: Notification) => void
 ): void {
   getEmitter().off(eventNameFor(userId), handler)
+  dropRetryWhenIdle()
+}
+
+/**
+ * Once no listener of either kind is left, drop a pending subscriber retry.
+ */
+function dropRetryWhenIdle(): void {
   if (hasLocalListeners()) return
   cancelRetry()
   state.hasMissedMessages = false
