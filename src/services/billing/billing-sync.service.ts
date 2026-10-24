@@ -524,6 +524,10 @@ async function refundDuplicate(
       })
       break
     }
+    default: {
+      const unhandled: never = outcome
+      throw new Error(`Unhandled refund outcome ${String(unhandled)}`)
+    }
   }
 }
 

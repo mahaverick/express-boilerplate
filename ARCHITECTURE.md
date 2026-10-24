@@ -325,7 +325,9 @@ in this order:
    never both take the last seat. The platform tenant has no billing row and
    takes no seat lock. The billing sync (`syncTenantBilling`,
    `src/services/billing/billing-sync.service.ts`) locks only this row, and
-   calls the payment provider only before or after its transaction;
+   calls the payment provider only before or after its transaction; so do the
+   billing scheduler's writes. A suspend or archive never touches it: the
+   scheduler cancels for them;
 6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
 7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
@@ -825,14 +827,14 @@ missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                   | Worker concurrency   | Job options                                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                 | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                               | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
-| `maintenance`  | The retention purge                                                                                                                                       | 1                    | 3 attempts, backoff from 60 s                                      |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
-| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, and a sync of one workspace (`src/jobs/billing.job.ts`)        | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days                |
+| Queue          | Carries                                                                                                                                                                         | Worker concurrency   | Job options                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------- |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                       | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                       | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                     | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                          |
+| `maintenance`  | The retention purge                                                                                                                                                             | 1                    | 3 attempts, backoff from 60 s                                         |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                      | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept    |
+| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days; a run: 1 attempt |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
@@ -864,6 +866,8 @@ on one Worker):
 | Scheduler             | Queue         | When                                | Registered when                         |
 | --------------------- | ------------- | ----------------------------------- | --------------------------------------- |
 | `retention-purge`     | `maintenance` | daily at 03:00 UTC                  | always                                  |
+| `scheduler-frequent`  | `billing`     | every 15 min                        | always                                  |
+| `scheduler-daily`     | `billing`     | daily at 03:30 UTC                  | always                                  |
 | `analytics-drain`     | `analytics`   | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
 | `analytics-deletions` | `analytics`   | every 60 s                          | the personal key and project id are set |
 | `flag-definitions`    | `analytics`   | every 30 s                          | flags are configured                    |
@@ -872,6 +876,21 @@ A failed registration logs a `warn` and is retried with the next generation. A
 new generation starts only when the Worker connection gives up before its first
 `ready`, so a registration that fails while the Workers stay healthy waits for
 the next restart; a scheduler stored earlier keeps running meanwhile.
+
+The billing runs (`src/services/billing/billing-scheduler.service.ts`) are
+lists of independent named steps; a step that fails is logged and the rest
+still run. `scheduler-frequent` moves lapsed trials to Free, syncs workspaces
+whose grace, cancelling period (plus the 3-day buffer) or interval switch is
+due, cancels the subscriptions of suspended (at cycle end) and archived (now)
+workspaces, and lapses grants and upgrade requests; it runs with payments off
+too, skipping the provider steps. `scheduler-daily` is the reconcile: it queues
+a `sync-tenant` job for every row that holds a subscription (rows of another
+provider or mode, and Free rows whose only subscription has ended, are skipped
+and counted), for each running subscription of the last three days whose
+notes name a workspace whose row does not hold it, and for each workspace
+whose webhook event failed in the last three days. Two overlapping runs act
+once: each step claims its rows, re-checks them under the row lock, or leaves
+them to the sync's versioned write.
 
 The analytics Worker runs one job at a time, so this process never has two of
 its jobs talking to PostHog at once. Two replicas may; the drain and the

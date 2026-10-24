@@ -1,6 +1,7 @@
 /**
  * @file The Worker for the "billing" queue: handles each stored Razorpay
- * webhook event and syncs a workspace on request, two jobs at a time.
+ * webhook event, syncs a workspace on request, and runs the frequent and
+ * daily scheduler runs, two jobs at a time.
  * A retryable provider error or a sync that kept meeting a concurrent write
  * throws for BullMQ's backoff; a provider refusal that a retry cannot change
  * fails the job at once. A webhook job that fails for good marks its event
@@ -9,6 +10,8 @@
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
+  BILLING_SCHEDULER_DAILY_JOB,
+  BILLING_SCHEDULER_FREQUENT_JOB,
   BILLING_SYNC_TENANT_JOB,
   BILLING_WEBHOOK_JOB,
   type BillingSyncTenantJobData,
@@ -19,6 +22,7 @@ import {
   recordPermanentFailure,
   reportFinalJobFailure,
 } from '@/jobs/job-failure.job'
+import { runDailyBilling, runFrequentBilling } from '@/services/billing/billing-scheduler.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import {
   processBillingWebhookEvent,
@@ -51,7 +55,7 @@ async function withRetryPolicy(work: () => Promise<unknown>): Promise<void> {
 
 /**
  * Process one billing job. Exported for testing.
- * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant` job a workspace.
+ * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant` job a workspace, a scheduler job nothing.
  * @returns Resolves once the job's work is done.
  * @throws {UnrecoverableError} For a job name this worker has no handler for, or a provider refusal.
  * @throws {Error} A retryable failure, so BullMQ retries.
@@ -65,7 +69,19 @@ export async function processBillingJob(job: Job): Promise<void> {
     }
     case BILLING_SYNC_TENANT_JOB: {
       const data = job.data as BillingSyncTenantJobData
-      await withRetryPolicy(() => syncTenantBilling(data.tenantId, 'job'))
+      await withRetryPolicy(() =>
+        syncTenantBilling(data.tenantId, data.source ?? 'job', {
+          extraSubscriptionIds: data.extraSubscriptionIds ?? [],
+        })
+      )
+      return
+    }
+    case BILLING_SCHEDULER_FREQUENT_JOB: {
+      await runFrequentBilling()
+      return
+    }
+    case BILLING_SCHEDULER_DAILY_JOB: {
+      await runDailyBilling()
       return
     }
     default: {

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
+import { ensureBillingSchedules } from '@/jobs/billing.job'
 import { ensureFlagDefinitionsSchedule } from '@/jobs/flag-definitions.job'
 import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
 import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
@@ -34,6 +35,7 @@ vi.mock('@/workers/email.worker', () => ({ startEmailWorker: vi.fn() }))
 vi.mock('@/workers/notification.worker', () => ({ startNotificationWorker: vi.fn() }))
 vi.mock('@/workers/maintenance.worker', () => ({ startMaintenanceWorker: vi.fn() }))
 vi.mock('@/jobs/maintenance.job', () => ({ ensureRetentionSchedule: vi.fn() }))
+vi.mock('@/jobs/billing.job', () => ({ ensureBillingSchedules: vi.fn() }))
 vi.mock('@/workers/analytics.worker', () => ({ startAnalyticsWorker: vi.fn() }))
 vi.mock('@/workers/billing.worker', () => ({ startBillingWorker: vi.fn() }))
 vi.mock('@/jobs/analytics.job', () => ({ ensureAnalyticsDrainSchedule: vi.fn() }))
@@ -104,6 +106,7 @@ function wireMocks(): {
   vi.mocked(startAnalyticsWorker).mockImplementation(start)
   vi.mocked(startBillingWorker).mockImplementation(start)
   vi.mocked(ensureRetentionSchedule).mockResolvedValue(undefined)
+  vi.mocked(ensureBillingSchedules).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDrainSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDeletionSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureFlagDefinitionsSchedule).mockResolvedValue(undefined)
@@ -309,6 +312,15 @@ describe('startWorkers', () => {
 
     mocks.lose(mocks.connections[0] as IORedis)
     expect(ensureRetentionSchedule).toHaveBeenCalledTimes(2)
+  })
+
+  it('registers the billing schedules once per generation', () => {
+    const mocks = wireMocks()
+    startWorkers()
+    expect(ensureBillingSchedules).toHaveBeenCalledOnce()
+
+    mocks.lose(mocks.connections[0] as IORedis)
+    expect(ensureBillingSchedules).toHaveBeenCalledTimes(2)
   })
 
   it('logs a failed schedule registration at warn, and keeps the Workers running', async () => {

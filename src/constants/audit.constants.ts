@@ -263,6 +263,11 @@ export const AUDIT_ACTIONS = {
     metadata: z.strictObject({ interval: z.enum(BILLING_INTERVALS) }),
   },
   'billing.card_change_started': { target: 'billing', metadata: z.strictObject({}) },
+  // The billing job marked a staff grant lapsed at its expiry; the actor is the system.
+  'billing.grant_expired': {
+    target: 'billing',
+    metadata: z.strictObject({ grantId: id, key: z.string().min(1).max(64) }),
+  },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {
     target: 'user',

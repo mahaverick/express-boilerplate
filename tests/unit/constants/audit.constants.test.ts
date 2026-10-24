@@ -76,6 +76,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'billing.cancel_scheduled': {},
   'billing.interval_switch_scheduled': { interval: 'year' },
   'billing.card_change_started': {},
+  'billing.grant_expired': { grantId: 'grant-1', key: 'members' },
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
     from: 'off',
@@ -101,6 +102,7 @@ describe('AUDIT_ACTIONS', () => {
       'billing.cancel_scheduled',
       'billing.card_change_started',
       'billing.checkout_started',
+      'billing.grant_expired',
       'billing.interval_switch_scheduled',
       'email.resent',
       'email.suppression_lifted',

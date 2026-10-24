@@ -9,6 +9,7 @@ import type IORedis from 'ioredis'
 import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
+import { ensureBillingSchedules } from '@/jobs/billing.job'
 import { ensureFlagDefinitionsSchedule } from '@/jobs/flag-definitions.job'
 import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
 import { isShuttingDown } from '@/services/lifecycle.service'
@@ -80,7 +81,9 @@ async function registerInBackground(
  * (feature flags need the project key, so `isFlagsEnabled()` implies the
  * first), replacing
  * them whenever their connection gives up before its first ready. Each
- * generation registers the retention schedule, the analytics drain schedule
+ * generation registers the retention schedule, the two billing schedules
+ * (always: trials, grants and upgrade requests lapse with payments off too),
+ * the analytics drain schedule
  * when `isAnalyticsEnabled()`, the PostHog deletion schedule when
  * `isPosthogApiEnabled()`, and the flag definitions schedule when
  * `isFlagsEnabled()`.
@@ -150,6 +153,7 @@ export function startWorkers(): SupervisedWorkers {
         ensureRetentionSchedule,
         'Registering the retention schedule failed'
       )
+      void registerInBackground(ensureBillingSchedules, 'Registering the billing schedules failed')
       if (isAnalyticsEnabled()) {
         void registerInBackground(
           ensureAnalyticsDrainSchedule,

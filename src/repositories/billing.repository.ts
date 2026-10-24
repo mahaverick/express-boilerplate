@@ -5,8 +5,27 @@
  * `BaseRepository`, which requires a `deletedAt` column these tables have no
  * use for. Consumers create their own instance at module scope.
  */
-import { and, asc, desc, eq, getTableColumns, isNull, or, sql, type SQL } from 'drizzle-orm'
-import type { BillingState } from '@/constants/billing.constants'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm'
+import type {
+  BillingProvider,
+  BillingProviderMode,
+  BillingState,
+} from '@/constants/billing.constants'
 import {
   billingAlertModel,
   billingEventModel,
@@ -26,6 +45,7 @@ import {
   type TenantBillingRecord,
   type UpgradeRequest,
 } from '@/database/models/billing.model'
+import { tenantModel } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
@@ -52,6 +72,37 @@ type ReminderColumn =
   | typeof tenantBillingModel.winback7dSentAt
   | typeof tenantBillingModel.winback30dSentAt
   | typeof tenantBillingModel.lifecycleCancelSentAt
+
+/**
+ * The running payment provider and mode. A scheduled query keeps the rows
+ * whose provider and mode are unset or match, since this provider cannot
+ * read another's subscription ids.
+ */
+export interface ProviderScope {
+  kind: BillingProvider
+  mode: BillingProviderMode
+}
+
+/**
+ * The condition that a row's provider and mode are unset or match the scope.
+ * @param scope - The running provider and mode.
+ * @returns The condition over `tenant_billing`.
+ */
+function ofProvider(scope: ProviderScope): SQL | undefined {
+  return and(
+    or(isNull(tenantBillingModel.provider), eq(tenantBillingModel.provider, scope.kind)),
+    or(isNull(tenantBillingModel.providerMode), eq(tenantBillingModel.providerMode, scope.mode))
+  )
+}
+
+/**
+ * A timestamp bound for raw `sql`.
+ * @param date - The time.
+ * @returns The bound value, cast.
+ */
+function at(date: Date): SQL {
+  return sql`${date.toISOString()}::timestamptz`
+}
 
 /**
  * The columns a versioned update may change: everything but the key, the
@@ -576,6 +627,267 @@ export class BillingRepository {
         )
       )
       .returning()
+  }
+
+  /**
+   * One page of records that meet `where`, by workspace id after a cursor,
+   * for a scheduled job to walk every due row.
+   * @param where - The condition over `tenant_billing`.
+   * @param afterTenantId - The last workspace id of the previous page, or null for the first.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async #listPage(
+    where: SQL | undefined,
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    return db
+      .select()
+      .from(tenantBillingModel)
+      .where(
+        and(
+          where,
+          afterTenantId === null ? undefined : gt(tenantBillingModel.tenantId, afterTenantId)
+        )
+      )
+      .orderBy(asc(tenantBillingModel.tenantId))
+      .limit(limit)
+  }
+
+  /**
+   * Trials that ended at or before `now`.
+   * @param now - The run's time.
+   * @param afterTenantId - The previous page's last workspace id, or null.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async listEndedTrials(
+    now: Date,
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    return this.#listPage(
+      and(eq(tenantBillingModel.state, 'trialing'), lte(tenantBillingModel.trialEndsAt, now)),
+      afterTenantId,
+      limit
+    )
+  }
+
+  /**
+   * Past-due records whose grace after a halt or pause ended at or before `now`.
+   * @param now - The run's time.
+   * @param graceDays - Days of grace.
+   * @param scope - The running provider and mode.
+   * @param afterTenantId - The previous page's last workspace id, or null.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async listGraceEnded(
+    now: Date,
+    graceDays: number,
+    scope: ProviderScope,
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    const since = sql`coalesce(${tenantBillingModel.haltedAt}, ${tenantBillingModel.pausedAt})`
+    return this.#listPage(
+      and(
+        eq(tenantBillingModel.state, 'past_due'),
+        sql`${since} + ${graceDays}::int * interval '1 day' <= ${at(now)}`,
+        ofProvider(scope)
+      ),
+      afterTenantId,
+      limit
+    )
+  }
+
+  /**
+   * Active, cancelling records whose period end plus the buffer passed before `now`.
+   * @param now - The run's time.
+   * @param bufferDays - Days Paid lasts past the period end of a cancelling subscription.
+   * @param scope - The running provider and mode.
+   * @param afterTenantId - The previous page's last workspace id, or null.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async listCancellingEnded(
+    now: Date,
+    bufferDays: number,
+    scope: ProviderScope,
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    return this.#listPage(
+      and(
+        eq(tenantBillingModel.state, 'active'),
+        eq(tenantBillingModel.cancelAtPeriodEnd, true),
+        sql`${tenantBillingModel.currentPeriodEnd} + ${bufferDays}::int * interval '1 day' < ${at(now)}`,
+        ofProvider(scope)
+      ),
+      afterTenantId,
+      limit
+    )
+  }
+
+  /**
+   * Records with a scheduled interval switch whose current period ended at or before `now`.
+   * @param now - The run's time.
+   * @param scope - The running provider and mode.
+   * @param afterTenantId - The previous page's last workspace id, or null.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async listSwitchesDue(
+    now: Date,
+    scope: ProviderScope,
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    return this.#listPage(
+      and(
+        inArray(tenantBillingModel.state, ['active', 'past_due']),
+        isNotNull(tenantBillingModel.nextSubscriptionId),
+        lte(tenantBillingModel.currentPeriodEnd, now),
+        ofProvider(scope)
+      ),
+      afterTenantId,
+      limit
+    )
+  }
+
+  /**
+   * Records that hold any subscription, for the daily reconcile.
+   * @param afterTenantId - The previous page's last workspace id, or null.
+   * @param limit - The page size.
+   * @returns The rows.
+   */
+  async listWithSubscriptions(
+    afterTenantId: string | null,
+    limit: number
+  ): Promise<TenantBillingRecord[]> {
+    return this.#listPage(
+      or(
+        isNotNull(tenantBillingModel.providerSubscriptionId),
+        isNotNull(tenantBillingModel.pendingSubscriptionId),
+        isNotNull(tenantBillingModel.nextSubscriptionId)
+      ),
+      afterTenantId,
+      limit
+    )
+  }
+
+  /**
+   * Claim the records of suspended or archived workspaces that still have a
+   * subscription to cancel: a running current one not yet cancelling, a
+   * scheduled switch or a checkout. The workspace row is only read, so the
+   * claim takes no lock on it.
+   * @param scope - The running provider and mode.
+   * @param limit - The most rows to claim.
+   * @param tx - The open transaction; the claim holds until it ends.
+   * @returns The claimed rows, with the workspace's lifecycle state.
+   */
+  async claimLifecycleCancels(
+    scope: ProviderScope,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<(TenantBillingRecord & { lifecycleState: 'suspended' | 'archived' })[]> {
+    const isSuspendedOrArchived = sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} in ('suspended', 'archived'))`
+    const hasRunningCurrent = and(
+      inArray(tenantBillingModel.state, ['active', 'past_due']),
+      isNotNull(tenantBillingModel.providerSubscriptionId),
+      eq(tenantBillingModel.cancelAtPeriodEnd, false)
+    )
+    const holdsSubscription = or(
+      hasRunningCurrent,
+      isNotNull(tenantBillingModel.nextSubscriptionId),
+      isNotNull(tenantBillingModel.pendingSubscriptionId)
+    )
+    const claimed = await this.claimDue(
+      tenantBillingModel.lifecycleCancelSentAt,
+      and(isSuspendedOrArchived, holdsSubscription, ofProvider(scope)) ?? isSuspendedOrArchived,
+      limit,
+      tx
+    )
+    if (claimed.length === 0) return []
+    const tenants = await tx
+      .select({ id: tenantModel.id, lifecycleState: tenantModel.lifecycleState })
+      .from(tenantModel)
+      .where(
+        inArray(
+          tenantModel.id,
+          claimed.map((row) => row.tenantId)
+        )
+      )
+    const stateById = new Map(tenants.map((tenant) => [tenant.id, tenant.lifecycleState]))
+    return claimed.map((row) => ({
+      ...row,
+      lifecycleState: stateById.get(row.tenantId) === 'archived' ? 'archived' : 'suspended',
+    }))
+  }
+
+  /**
+   * Clear the lifecycle cancel claim of workspaces that are active again, so
+   * a later suspension or archive cancels the subscription they hold then.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns How many claims were cleared.
+   */
+  async releaseLifecycleCancelClaims(executor: DbExecutor = db): Promise<number> {
+    const released = await executor
+      .update(tenantBillingModel)
+      .set({ lifecycleCancelSentAt: null })
+      .where(
+        and(
+          isNotNull(tenantBillingModel.lifecycleCancelSentAt),
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${tenantBillingModel.tenantId} and ${tenantModel.lifecycleState} = 'active')`
+        )
+      )
+      .returning({ tenantId: tenantBillingModel.tenantId })
+    return released.length
+  }
+
+  /**
+   * The workspaces of provider events received since a time that are still
+   * unhandled after a failed attempt.
+   * @param since - The earliest receipt time.
+   * @param scope - The running provider and mode.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The workspace ids, each once.
+   */
+  async listFailedEventTenantIds(
+    since: Date,
+    scope: ProviderScope,
+    executor: DbExecutor = db
+  ): Promise<string[]> {
+    const rows = await executor
+      .selectDistinct({ tenantId: billingEventModel.tenantId })
+      .from(billingEventModel)
+      .where(
+        and(
+          eq(billingEventModel.provider, scope.kind),
+          eq(billingEventModel.mode, scope.mode),
+          gte(billingEventModel.receivedAt, since),
+          isNull(billingEventModel.processedAt),
+          isNotNull(billingEventModel.error),
+          isNotNull(billingEventModel.tenantId)
+        )
+      )
+    return rows.flatMap((row) => (row.tenantId === null ? [] : [row.tenantId]))
+  }
+
+  /**
+   * Delete the open upgrade requests whose expiry passed at or before `now`.
+   * Fulfilled requests are kept.
+   * @param now - The run's time.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns How many were deleted.
+   */
+  async deleteExpiredUpgradeRequests(now: Date, executor: DbExecutor = db): Promise<number> {
+    const deleted = await executor
+      .delete(upgradeRequestModel)
+      .where(and(isNull(upgradeRequestModel.fulfilledAt), lte(upgradeRequestModel.expiresAt, now)))
+      .returning({ id: upgradeRequestModel.id })
+    return deleted.length
   }
 
   /**
