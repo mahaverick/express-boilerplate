@@ -242,6 +242,11 @@ marked by a comment in its file (0024's has none):
   after that backfill, to the end of the file. The `billing_alerts` and
   `billing_state_history` time indexes are ascending and end in `id`, so a
   backward scan serves the newest-first order with its id tiebreak and no Sort.
+- `0034` is generated whole. It adds three nullable `tenant_billing` columns:
+  `next_authenticated_at` (when a scheduled switch or resubscribe was first
+  read authenticated), and `card_change_started_at` with
+  `card_change_started_by` (who opened a card change, and when), with its
+  foreign key to `users`.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
@@ -650,6 +655,12 @@ as described so it does not build them a second time under the lock, then run
   order a request takes (`tenants` and `users`, then its audit row), so the
   migration never holds `audit_logs` while it waits on a request's tenant or
   user lock. Apply it in a quiet window.
+
+- **`0034` blocks writes to `users` until the batch commits.** Its three
+  nullable columns have no default, so adding them is a catalog change with no
+  rewrite (a brief `ACCESS EXCLUSIVE` on `tenant_billing`). The foreign key on
+  `card_change_started_by` takes `SHARE ROW EXCLUSIVE` on `users`; every row
+  is NULL, so its validation finds nothing to check.
 
 ## The test database
 

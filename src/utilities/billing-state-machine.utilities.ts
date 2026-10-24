@@ -12,6 +12,9 @@
  *   trial end is kept so a cancel before that charge can return it to the trial.
  * - A cancelled or expired checkout (the pending or next subscription) only
  *   clears its id.
+ * - The next subscription's first authenticated read is stamped in
+ *   `nextAuthenticatedAt`, which a scheduled switch or resubscribe shows from;
+ *   it clears when the next subscription ends or takes over.
  * - A cancel scheduled for the cycle end does not show at the provider, so
  *   `cancelAtPeriodEnd` is our own record: only a new current subscription
  *   resets it.
@@ -117,6 +120,7 @@ type Draft = Pick<
   | 'pendingSubscriptionId'
   | 'nextSubscriptionId'
   | 'nextPriceId'
+  | 'nextAuthenticatedAt'
 >
 
 /**
@@ -134,6 +138,7 @@ const DRAFT_KEYS = [
   'pendingSubscriptionId',
   'nextSubscriptionId',
   'nextPriceId',
+  'nextAuthenticatedAt',
 ] as const satisfies readonly (keyof Draft)[]
 
 /**
@@ -245,6 +250,7 @@ class BillingMapping {
       pendingSubscriptionId: row.pendingSubscriptionId,
       nextSubscriptionId: row.nextSubscriptionId,
       nextPriceId: row.nextPriceId,
+      nextAuthenticatedAt: row.nextAuthenticatedAt,
     }
   }
 
@@ -449,6 +455,7 @@ class BillingMapping {
       case 'ended': {
         draft.nextSubscriptionId = null
         draft.nextPriceId = null
+        draft.nextAuthenticatedAt = null
         return
       }
       case 'live': {
@@ -456,6 +463,8 @@ class BillingMapping {
       }
     }
     if (next.status !== 'authenticated' && next.status !== 'active') return
+    // The first read wins, so the switch shows from when it was first authenticated.
+    draft.nextAuthenticatedAt ??= this.now
     const hasPeriodEnded = draft.currentPeriodEnd !== null && this.now >= draft.currentPeriodEnd
     const isHandover =
       current === undefined ||
@@ -465,6 +474,7 @@ class BillingMapping {
       const priceId = draft.nextPriceId ?? next.notes.priceId ?? null
       draft.nextSubscriptionId = null
       draft.nextPriceId = null
+      draft.nextAuthenticatedAt = null
       this.takeOver(next, priceId)
       this.hasSwitched = true
       this.actions.push({ kind: 'promote_next' })

@@ -198,6 +198,11 @@ export const tenantBillingModel = pgTable(
     nextPriceId: varchar('next_price_id', { length: 36 }).references(() => planPriceModel.id, {
       onDelete: 'restrict',
     }),
+    /**
+     * When the next subscription was first read authenticated: a scheduled
+     * switch or resubscribe shows from then. Null while there is none or it is unpaid.
+     */
+    nextAuthenticatedAt: timestamp('next_authenticated_at', { withTimezone: true }),
     payerUserId: varchar('payer_user_id', { length: 36 }).references(() => userModel.id, {
       onDelete: 'set null',
     }),
@@ -206,6 +211,18 @@ export const tenantBillingModel = pgTable(
      * Who started the checkout, so a webhook-driven event is attributed to a person.
      */
     checkoutStartedBy: varchar('checkout_started_by', { length: 36 }).references(
+      () => userModel.id,
+      { onDelete: 'set null' }
+    ),
+    /**
+     * When an owner opened the current subscription for a card change; its
+     * confirm is accepted only within the checkout expiry after this.
+     */
+    cardChangeStartedAt: timestamp('card_change_started_at', { withTimezone: true }),
+    /**
+     * The owner who opened the card change; only they may confirm it.
+     */
+    cardChangeStartedBy: varchar('card_change_started_by', { length: 36 }).references(
       () => userModel.id,
       { onDelete: 'set null' }
     ),

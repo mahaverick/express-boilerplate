@@ -52,9 +52,12 @@ function row(overrides: Partial<TenantBillingRecord> = {}): TenantBillingRecord 
     pendingSubscriptionId: null,
     nextSubscriptionId: null,
     nextPriceId: null,
+    nextAuthenticatedAt: null,
     payerUserId: null,
     billingEmail: null,
     checkoutStartedBy: null,
+    cardChangeStartedAt: null,
+    cardChangeStartedBy: null,
     trialMidpointSentAt: null,
     trialReminder3dSentAt: null,
     trialReminderLastDaySentAt: null,
@@ -297,7 +300,7 @@ describe('nextBillingRow: the interval switch', () => {
       current: sub('sub_cur', 'active'),
       next: sub('sub_next', 'authenticated', { startAt: at(30) }),
     })
-    expect(result.patch).toStrictEqual({})
+    expect(result.patch).toStrictEqual({ nextAuthenticatedAt: at(1) })
     expect(result.cause).toBeNull()
     expect(result.actions).toStrictEqual([
       { kind: 'cancel_current_at_cycle_end', subscriptionId: 'sub_cur' },
@@ -305,11 +308,34 @@ describe('nextBillingRow: the interval switch', () => {
   })
 
   it('does not cancel again once the current one is cancelling', () => {
-    const result = map(switching({ cancelAtPeriodEnd: true }), {
+    const result = map(switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(0) }), {
       current: sub('sub_cur', 'active'),
       next: sub('sub_next', 'authenticated', { startAt: at(30) }),
     })
     expect(result).toStrictEqual({ patch: {}, cause: null, actions: [] })
+  })
+
+  it('stamps the first authenticated read of the next subscription, and keeps it after', () => {
+    const first = map(switching({ cancelAtPeriodEnd: true }), {
+      current: sub('sub_cur', 'active'),
+      next: sub('sub_next', 'authenticated', { startAt: at(30) }),
+    })
+    expect(first.patch).toStrictEqual({ nextAuthenticatedAt: at(1) })
+
+    const later = map(
+      switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(1) }),
+      { current: sub('sub_cur', 'active'), next: sub('sub_next', 'active') },
+      at(5)
+    )
+    expect(later.patch).not.toHaveProperty('nextAuthenticatedAt')
+  })
+
+  it('does not stamp a next subscription with a failed charge', () => {
+    const result = map(switching(), {
+      current: sub('sub_cur', 'active'),
+      next: sub('sub_next', 'halted', { customerId: 'cust_FAKE1' }),
+    })
+    expect(result.patch).not.toHaveProperty('nextAuthenticatedAt')
   })
 
   it('waits while the next subscription is still created', () => {
@@ -334,6 +360,34 @@ describe('nextBillingRow: the interval switch', () => {
       })
     }
   )
+
+  it('clears the stamp when an authenticated next subscription ends before the handover', () => {
+    const result = map(switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(0) }), {
+      current: sub('sub_cur', 'active'),
+      next: sub('sub_next', 'cancelled'),
+    })
+    expect(result.patch).toStrictEqual({
+      nextSubscriptionId: null,
+      nextPriceId: null,
+      nextAuthenticatedAt: null,
+    })
+  })
+
+  it('clears the stamp on the handover', () => {
+    const result = map(
+      switching({ cancelAtPeriodEnd: true, nextAuthenticatedAt: at(0) }),
+      {
+        current: sub('sub_cur', 'cancelled'),
+        next: sub('sub_next', 'authenticated', { startAt: at(30) }),
+      },
+      at(30)
+    )
+    expect(result.patch).toMatchObject({
+      providerSubscriptionId: 'sub_next',
+      nextSubscriptionId: null,
+      nextAuthenticatedAt: null,
+    })
+  })
 
   it('hands over when the current subscription has ended', () => {
     const result = map(

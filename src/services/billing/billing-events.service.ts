@@ -30,6 +30,7 @@ const VISIBLE_KEYS = [
   'haltedAt',
   'pausedAt',
   'nextPriceId',
+  'nextAuthenticatedAt',
 ] as const satisfies readonly (keyof TenantBillingRecord)[]
 
 /**
