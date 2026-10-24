@@ -378,6 +378,37 @@ in Apex. The rules behind them are in
   `apex-boilerplate/src/observability/flags/flag-keys.ts`, then run
   `pnpm flags:sync` in every environment ([README.md](README.md#feature-flags)).
 
+## Adding a plan-gated feature
+
+How a product feature or limit comes to depend on the workspace's plan. The
+rules behind it are under [Billing](ARCHITECTURE.md#billing).
+
+1. **Registry entry.** Add the key to `ENTITLEMENTS`
+   (`src/constants/entitlements.constants.ts`): `kind` `feature` or `limit`,
+   a `label` and a `description` people read, and `defaults` for Free and
+   Paid (`null` is a limit with no cap). A limit also takes `unit`, the name
+   of one counted thing (`{ one: 'project', other: 'projects' }`), which the
+   limit copy uses, and may take `softAt` for its warning (0.8 by default).
+2. **Enforce it in express.** A feature gates its route with
+   `requireFeature(key)` (`src/middlewares/entitlement.middleware.ts`) after
+   `resolveTenant()`; it answers 402 `PLAN_FEATURE_REQUIRED`. A limit needs a
+   counter in `LIMIT_COUNTERS` (`src/services/billing/entitlements.service.ts`;
+   the build fails until it has one), and every write that adds to it calls
+   `assertWithinLimit(tenantId, key, adding, tx)` under a lock that keeps the
+   count from changing before the write commits, as the members limit does
+   with `lockSeats`; it answers 402 `PLAN_LIMIT_REACHED` with `details`.
+   Never gate in the client only.
+3. **Show it in react.** Wrap the screen or control in react-boilerplate's
+   `FeatureGate`, which reads the workspace's entitlements and shows the
+   locked state with an upgrade or request-upgrade action instead of hiding
+   the feature. Treat a 402 from the API as that locked state, not as an
+   error.
+4. **Seed values.** Existing plans read the registry `defaults` for a key they
+   don't store, so nothing changes until staff save a value in Apex's plan
+   editor. To give a running environment other values, set them there; to
+   show the gated and ungated states locally, run `pnpm billing:seed`, whose
+   Free and Paid workspaces then cover both.
+
 ## Docs to update alongside a change
 
 - [README.md](README.md): a new script, requirement or quick-start step.

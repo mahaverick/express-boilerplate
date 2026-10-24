@@ -156,6 +156,15 @@ const billingSchedulerJobDefaults: JobSchedulerTemplateOptions = {
 }
 
 /**
+ * Queue one frequent run now, besides the scheduled ones, for
+ * `pnpm billing:time-travel`. Its options are a scheduled run's.
+ * @returns Resolves once the job is in Redis.
+ */
+export async function addBillingFrequentRunJob(): Promise<void> {
+  await addJob(getBillingQueue(), BILLING_SCHEDULER_FREQUENT_JOB, {}, billingSchedulerJobDefaults)
+}
+
+/**
  * Register the frequent run, every 15 minutes, and the daily run, at 03:30
  * UTC. Idempotent: every call upserts the same scheduler ids.
  * @returns Resolves once both schedulers and their next jobs are stored in Redis.

@@ -351,6 +351,22 @@ points at the code or doc that holds the detail. How things work is in
 - **`pnpm flags:sync` never edits or deletes a PostHog flag, and never prints
   a PostHog answer body:** the body names the flag's creator.
 
+## Billing
+
+The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
+[ARCHITECTURE.md](ARCHITECTURE.md#billing).
+
+- **Never read a provider error as a cancellation.** A 4xx, a 5xx or a
+  timeout from Razorpay says nothing about the subscription, so a sync that
+  cannot read one throws `ProviderError`, writes nothing, and its job retries
+  (`syncTenantBilling`, `src/services/billing/billing-sync.service.ts`). A
+  workspace moves to Free only on a status the provider returned, or on the
+  clock (`effectiveBillingState`). Mapping a failed read to `cancelled`
+  would take Paid away from a customer who paid.
+- **Never store a webhook or provider payload body.** `billing_events` holds
+  the event's ids, type and outcome only, and a billing job carries ids only:
+  the body names the payer's address, phone and card. Log ids, never the body.
+
 ## Maintenance mode
 
 - **Every new route needs a row in `MAINTENANCE_ROUTE_RULES`**

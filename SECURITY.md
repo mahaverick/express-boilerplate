@@ -1206,6 +1206,38 @@ streams are capped per process: `SSE_MAX_STREAMS_PER_USER` (default 5) answers
 `429 too_many_streams`, and `SSE_MAX_STREAMS_TOTAL` (default 2000) answers
 `503 stream_capacity`; a stream ends when its access token expires.
 
+## Billing
+
+The webhook's signature check and limiters, and the billing limiters, are under
+[Rate limits and abuse](#rate-limits-and-abuse); what staff can do to a
+workspace's billing is under [Platform staff](#platform-staff). The rest:
+
+- **One workspace's payment never activates another.** Every subscription
+  carries the workspace id in its provider notes, set by the server at
+  checkout. A checkout confirm accepts only the subscription id the row
+  stored for that checkout, a valid checkout signature for it, and notes that
+  name the path's workspace; anything else answers 400 `CHECKOUT_MISMATCH` and
+  changes nothing (`confirmCheckout`, `src/services/billing/checkout.service.ts`).
+  The sync ignores, and alerts staff about, a subscription whose notes name
+  another workspace, whichever path brought it (`syncTenantBilling`).
+- **The server sets the price.** A checkout names an interval; the plan, the
+  amount and the provider plan come from `plan_prices`. Only the provider's
+  state, read by the server, makes a workspace Paid.
+- **No card data is stored.** Card entry happens in the provider's checkout.
+  The database holds subscription, plan and event ids, states and
+  amounts, plus the payer's user id and billing address for the owner's
+  billing page. `billing_events` never stores a webhook's body, and job
+  payloads carry ids only.
+- **Owners pay; members ask.** Only a workspace owner by membership can start,
+  confirm, switch, change the card on or cancel a subscription; staff with
+  platform access cannot, and use the audited staff routes instead. A member's
+  upgrade request only notifies the owners.
+- **The fake provider and the dev tools stay local.** `BILLING_FAKE_PROVIDER`
+  is refused outside `APP_ENV=local` and beside Razorpay keys
+  ([Boot-time consistency checks](ARCHITECTURE.md#boot-time-consistency-checks)).
+  `pnpm billing:seed` and `pnpm billing:time-travel` refuse to run elsewhere,
+  and time travel refuses a workspace whose row names a real provider.
+
 ## Maintenance mode
 
 Maintenance mode is an availability control, not an access control. Its gate

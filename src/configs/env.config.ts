@@ -1009,6 +1009,17 @@ export function isFakeEmailWebhookAllowed(env: Pick<Env, 'APP_ENV'>): boolean {
 }
 
 /**
+ * Whether the billing dev tools may run (`pnpm billing:seed` and
+ * `pnpm billing:time-travel`): on local only, so neither ever rewrites a
+ * deployed workspace's billing.
+ * @param env - The APP_ENV slice of the validated environment.
+ * @returns True on APP_ENV `local` only.
+ */
+export function isBillingLocalToolAllowed(env: Pick<Env, 'APP_ENV'>): boolean {
+  return env.APP_ENV === 'local'
+}
+
+/**
  * The factor `createRateLimiter` multiplies every limiter's budget by:
  * `RATE_LIMIT_SCALE` on local, unset meaning 1, and 1 everywhere else. A
  * deployed limit therefore stays as `RATE_LIMITS` declares it even where

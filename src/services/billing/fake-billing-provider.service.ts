@@ -446,6 +446,44 @@ export class FakeBillingProvider implements BillingProviderClient {
   }
 
   /**
+   * Test hook: move every date of a subscription back, as if it had been
+   * created that much earlier, so `pnpm billing:time-travel` keeps the fake
+   * in step with the workspace's row. An unknown id is skipped.
+   * @param id - The subscription id.
+   * @param ms - How far back, in milliseconds.
+   */
+  async fakeShiftBack(id: string, ms: number): Promise<void> {
+    const record = await this.#read<FakeSubscriptionRecord>(`sub:${id}`)
+    if (record === undefined) return
+    /**
+     * A stored epoch time, moved back.
+     * @param value - The stored time, or null.
+     * @returns The moved time, or null.
+     */
+    const shift = (value: number | null): number | null => (value === null ? null : value - ms)
+    record.currentStart = shift(record.currentStart)
+    record.currentEnd = shift(record.currentEnd)
+    record.startAt = shift(record.startAt)
+    record.endedAt = shift(record.endedAt)
+    record.chargeAt = shift(record.chargeAt)
+    record.expireBy = shift(record.expireBy)
+    record.createdAt -= ms
+    /**
+     * A stored ISO time, moved back.
+     * @param value - The stored time, or null.
+     * @returns The moved time, or null.
+     */
+    const shiftIso = (value: string | null): string | null =>
+      value === null ? null : new Date(Date.parse(value) - ms).toISOString()
+    record.invoices = record.invoices.map((invoice) => ({
+      ...invoice,
+      issuedAt: shiftIso(invoice.issuedAt) ?? invoice.issuedAt,
+      paidAt: shiftIso(invoice.paidAt),
+    }))
+    await this.#write(`sub:${id}`, record)
+  }
+
+  /**
    * Test hook: the checkout signature the browser would post for a payment.
    * @param paymentId - The payment id.
    * @param subscriptionId - The subscription id.

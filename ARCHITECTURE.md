@@ -1382,6 +1382,63 @@ also go to Slack. Repeats of one `source` and message within 60 s are counted
 and summarised once, and the message, source, request id and stack are
 scrubbed with the error tracker's `scrubText` first.
 
+## Billing
+
+Every customer workspace is on a plan: Free, or Paid through a Razorpay
+subscription, with a trial of Paid when it is created. This section is the
+map; the detail lives in the sections it links.
+
+- **Tables.** `plans`, `plan_prices`, `tenant_billing` (one row per customer
+  workspace: state, plan, trial, paid period and provider ids),
+  `user_trials`, `tenant_entitlement_grants`, `billing_settings`,
+  `billing_events`, `billing_state_history`, `upgrade_requests`,
+  `user_banner_dismissals` and `billing_alerts`
+  ([DATABASE.md](DATABASE.md#models-and-tables)). The platform tenant has no
+  billing row.
+- **States and entitlements.** A row is `trialing`, `free`, `active` or
+  `past_due`. Reads act on the effective state, which the clock can move to
+  Free before a job writes it: a trial past its end, a cancelling period past
+  its end plus 3 days, a past-due grace past its end
+  (`effectiveBillingState`, `src/utilities/billing-rules.utilities.ts`).
+  The plan's values, filled from the registry
+  (`src/constants/entitlements.constants.ts`) and overridden by staff grants,
+  are the entitlements `requireFeature` and `assertWithinLimit` enforce
+  (`src/services/billing/entitlements.service.ts`). Adding one is a recipe in
+  [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-plan-gated-feature).
+- **Seats.** Every write that adds a member takes the seat lock, the billing
+  row, at its place in the [lock order](#layers).
+- **One sync path.** Only `syncTenantBilling`
+  (`src/services/billing/billing-sync.service.ts`) maps the provider's
+  subscriptions onto a row, under the row lock with a versioned write. A
+  checkout confirm, a webhook job, a staff resync, the frequent run and the
+  daily reconcile all call it; the mapping itself is pure
+  (`src/utilities/billing-state-machine.utilities.ts`). A failed provider read
+  writes nothing, and the job retries.
+- **Provider.** `getBillingProvider()`
+  (`src/services/billing/billing-provider.service.ts`) answers Razorpay when
+  its keys are set, the fake when `BILLING_FAKE_PROVIDER` is (local only), and
+  null otherwise: then plans, trials, limits, grants and staff tooling still
+  work, and every owner billing write and the webhook answer the unknown-route 404. The fake keeps its subscriptions in Redis so the API and the worker
+  agree.
+- **Jobs and schedulers.** The `billing` queue carries one job per webhook
+  event, workspace syncs, the prompt lifecycle cancel and the two runs
+  ([Queues and Workers](#queues-and-workers), [Schedulers](#schedulers)).
+- **Events and pushes.** Every change emits its product events
+  ([Billing events](#billing-events)) and tells the workspace's open apps over
+  SSE ([Realtime (SSE)](#realtime-sse)).
+- **Staff.** `platform-billing.service.ts` serves Apex's billing views and
+  writes ([Platform access](#platform-access)).
+- **Maintenance.** The billing routes have their rows in
+  `MAINTENANCE_ROUTE_RULES`: `read_only` refuses the owner writes, and
+  `full` lets only the public plan list and the Razorpay webhook through. The
+  webhook records each event, and `full` pauses the `billing` queue with the
+  others, so the events wait and run when it ends
+  ([Maintenance mode](#maintenance-mode)).
+- **Dev seed and time travel.** `pnpm billing:seed` (local, with
+  `BILLING_FAKE_PROVIDER=true`) creates 13 `billing-*` workspaces, one per
+  billing state, and `pnpm billing:time-travel` moves one back in time
+  ([README.md](README.md#billing-dev-seed)).
+
 ## Maintenance mode
 
 A platform owner puts the product into maintenance from Apex, without a
