@@ -174,6 +174,18 @@ describe('FakeBillingProvider', () => {
     expect(refund?.amountMinor).toBe(99_900)
   })
 
+  it('refunds a payment once, even when two callers refund it at once', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const other = new FakeBillingProvider(fakeConfig())
+    const refunds = await Promise.all([
+      provider.refundLatestPayment(id),
+      other.refundLatestPayment(id),
+    ])
+    expect(refunds.filter((refund) => refund !== null)).toHaveLength(1)
+    expect(await provider.refundLatestPayment(id)).toBeNull()
+  })
+
   it('lists subscriptions created since a time', async () => {
     const before = new Date(Date.now() - 1000)
     const id = await createOne()

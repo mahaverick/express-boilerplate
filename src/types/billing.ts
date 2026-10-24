@@ -367,9 +367,10 @@ export interface BillingProviderClient {
    */
   cancelSubscription(id: string, isAtCycleEnd: boolean): Promise<ProviderSubscription>
   /**
-   * Refund the subscription's latest paid payment in full.
+   * Refund the subscription's latest paid payment in full, once: a payment
+   * that already has a refund is not refunded again.
    * @param subscriptionId - The provider's subscription id.
-   * @returns The refund, or null when nothing has been paid.
+   * @returns The refund, or null when nothing has been paid or the latest payment already has a refund.
    */
   refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null>
   /**

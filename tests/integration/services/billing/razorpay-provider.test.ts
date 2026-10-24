@@ -371,11 +371,31 @@ describe('cancelSubscription', () => {
 describe('refundLatestPayment', () => {
   it('refunds the payment of the newest paid invoice in full', async () => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)
+    fake.reply('GET', '/payments/pay_Traz18reMgTm3F', 200, {
+      id: 'pay_Traz18reMgTm3F',
+      amount: 99_900,
+      amount_refunded: 0,
+      refund_status: null,
+    })
     fake.reply('POST', '/payments/pay_Traz18reMgTm3F/refund', 200, fixture('api-refund').json)
     expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toStrictEqual({
       refundId: 'rfnd_Trb9vbIbmrD1wK',
       amountMinor: 99_900,
     })
+  })
+
+  it.each([
+    ['an amount refunded', { amount_refunded: 99_900, refund_status: 'full' }],
+    ['a refund status alone', { amount_refunded: 0, refund_status: 'partial' }],
+  ])('answers null and refunds nothing when the payment has %s', async (_label, state) => {
+    fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)
+    fake.reply('GET', '/payments/pay_Traz18reMgTm3F', 200, {
+      id: 'pay_Traz18reMgTm3F',
+      amount: 99_900,
+      ...state,
+    })
+    expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toBeNull()
+    expect(fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0)
   })
 
   it('answers null when nothing has been paid', async () => {

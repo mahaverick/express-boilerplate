@@ -320,6 +320,35 @@ export class BillingRepository {
   }
 
   /**
+   * Whether a workspace already has an alert of a kind whose message names a
+   * text, such as a subscription id, so a repeated sync does not raise it again.
+   * @param tenantId - The workspace.
+   * @param kind - The alert kind.
+   * @param text - The text the message must contain, matched literally.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns True when such an alert exists.
+   */
+  async hasAlertNaming(
+    tenantId: string,
+    kind: BillingAlertRecord['kind'],
+    text: string,
+    executor: DbExecutor = db
+  ): Promise<boolean> {
+    const [row] = await executor
+      .select({ id: billingAlertModel.id })
+      .from(billingAlertModel)
+      .where(
+        and(
+          eq(billingAlertModel.tenantId, tenantId),
+          eq(billingAlertModel.kind, kind),
+          sql`strpos(${billingAlertModel.message}, ${text}) > 0`
+        )
+      )
+      .limit(1)
+    return row !== undefined
+  }
+
+  /**
    * Claim up to `limit` records for a reminder: set `column` to now on rows
    * where it is null and `where` holds, and return those rows. A row another
    * transaction holds locked is skipped, so each row is claimed once.

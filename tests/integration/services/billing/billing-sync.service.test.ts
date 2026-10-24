@@ -474,7 +474,164 @@ describe('syncTenantBilling', () => {
       planId: plans.paidId,
       priceId: plans.yearPriceId,
       providerSubscriptionId: foundId,
+      provider: 'fake',
+      providerMode: 'test',
     })
+  })
+
+  it('fetches and writes nothing for a row of another provider mode', async () => {
+    const { tenantId, subscriptionId } = await createPayingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenantId, { provider: 'fake', providerMode: 'live' })
+    const before = await readBilling(tenantId)
+    const fetch = vi.fn(() => Promise.reject(new Error('the sync must not fetch')))
+
+    await withMutatedMethod(FakeBillingProvider.prototype, 'fetchSubscription', fetch, async () => {
+      const result = await syncTenantBilling(tenantId, 'reconcile')
+      expect(result).toMatchObject({ outcome: 'provider_mismatch', changed: false })
+    })
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await readBilling(tenantId)).toStrictEqual(before)
+  })
+
+  it('refunds a duplicate once when two syncs handle it at the same time', async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const { tenantId } = await createPayingWorkspace()
+      const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+      await fake.fakeAdvance(duplicateId, 'active')
+      await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
+      const original = FakeBillingProvider.prototype.refundLatestPayment
+      const refunds: unknown[] = []
+      const refund = vi.fn(async function (this: FakeBillingProvider, id: string) {
+        const answer = await original.call(this, id)
+        refunds.push(answer)
+        return answer
+      })
+
+      await withMutatedMethod(
+        FakeBillingProvider.prototype,
+        'refundLatestPayment',
+        refund,
+        async () => {
+          const options = { extraSubscriptionIds: [duplicateId] }
+          await Promise.all([
+            syncTenantBilling(tenantId, 'confirm', options),
+            syncTenantBilling(tenantId, 'webhook', options),
+          ])
+        }
+      )
+
+      expect(refunds.filter((answer) => answer !== null)).toHaveLength(1)
+      const alerts = await alertsOf(tenantId)
+      expect(alerts.map((alert) => alert.kind)).toStrictEqual(['duplicate_refunded'])
+    }
+  })
+
+  it('refunds once and raises no cancel alert when a second sync reads the duplicate before its cancel shows', async () => {
+    const { tenantId } = await createPayingWorkspace()
+    const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+    const stale = await fake.fakeAdvance(duplicateId, 'active')
+    await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
+    const original = FakeBillingProvider.prototype.fetchSubscription
+    const reads = { duplicate: 0 }
+    const refunds: unknown[] = []
+    const originalRefund = FakeBillingProvider.prototype.refundLatestPayment
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'fetchSubscription',
+      async function (this: FakeBillingProvider, id: string): Promise<ProviderSubscription> {
+        if (id !== duplicateId) return original.call(this, id)
+        reads.duplicate += 1
+        // The first two reads (one per sync) still see it running, as a provider lagging behind the cancel would.
+        return reads.duplicate <= 2 ? stale : original.call(this, id)
+      },
+      async () => {
+        await withMutatedMethod(
+          FakeBillingProvider.prototype,
+          'refundLatestPayment',
+          async function (this: FakeBillingProvider, id: string) {
+            const answer = await originalRefund.call(this, id)
+            refunds.push(answer)
+            return answer
+          },
+          async () => {
+            await syncTenantBilling(tenantId, 'confirm')
+            await syncTenantBilling(tenantId, 'reconcile', { extraSubscriptionIds: [duplicateId] })
+          }
+        )
+      }
+    )
+
+    expect(refunds).toHaveLength(2)
+    expect(refunds.filter((answer) => answer !== null)).toHaveLength(1)
+    const alerts = await alertsOf(tenantId)
+    expect(alerts.map((alert) => alert.kind)).toStrictEqual(['duplicate_refunded'])
+  })
+
+  it('raises the alert for an ignored subscription once across syncs', async () => {
+    const { tenantId } = await createWorkspace()
+    const other = await createWorkspace()
+    const foreignId = await createSubscription({
+      tenantId: other.tenantId,
+      priceId: plans.monthPriceId,
+    })
+    await setBilling(tenantId, { pendingSubscriptionId: foreignId })
+
+    await syncTenantBilling(tenantId, 'reconcile')
+    await syncTenantBilling(tenantId, 'reconcile')
+
+    const alerts = await alertsOf(tenantId)
+    expect(alerts.map((alert) => alert.kind)).toStrictEqual(['reconcile_repair'])
+    const kept = await readBilling(tenantId)
+    expect(kept.pendingSubscriptionId).toBe(foreignId)
+  })
+
+  it('maps neither the switch nor the checkout when the current subscription is foreign', async () => {
+    const { tenantId } = await createWorkspace()
+    const other = await createWorkspace()
+    const foreignId = await createSubscription({
+      tenantId: other.tenantId,
+      priceId: plans.monthPriceId,
+    })
+    const charged = await fake.fakeAdvance(foreignId, 'active')
+    const nextId = await createSubscription({ tenantId, priceId: plans.yearPriceId }, 'year')
+    await fake.fakeAdvance(nextId, 'authenticated')
+    const pendingId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(pendingId, 'active')
+    await setBilling(tenantId, {
+      state: 'active',
+      planId: plans.paidId,
+      priceId: plans.monthPriceId,
+      providerSubscriptionId: foreignId,
+      currentPeriodEnd: charged.currentEnd,
+      nextSubscriptionId: nextId,
+      nextPriceId: plans.yearPriceId,
+      pendingSubscriptionId: pendingId,
+    })
+    const cancel = vi.fn(() => Promise.reject(new Error('the sync must not cancel')))
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'cancelSubscription',
+      cancel,
+      async () => {
+        await syncTenantBilling(tenantId, 'reconcile')
+      }
+    )
+
+    expect(cancel).not.toHaveBeenCalled()
+    expect(await readBilling(tenantId)).toMatchObject({
+      providerSubscriptionId: foreignId,
+      nextSubscriptionId: nextId,
+      pendingSubscriptionId: pendingId,
+      cancelAtPeriodEnd: false,
+    })
+    const alerts = await alertsOf(tenantId)
+    expect(alerts.map((alert) => alert.message)).toStrictEqual([
+      `Ignored subscription ${foreignId}: its notes name another workspace.`,
+    ])
   })
 
   it('cancels a halted subscription once grace ends, then moves the workspace to Free', async () => {

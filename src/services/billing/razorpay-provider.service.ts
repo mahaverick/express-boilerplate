@@ -505,9 +505,12 @@ export class RazorpayProvider implements BillingProviderClient {
   }
 
   /**
-   * Refund the payment of the subscription's newest paid invoice in full.
+   * Refund the payment of the subscription's newest paid invoice in full,
+   * unless that payment already has a refund (`amount_refunded` or
+   * `refund_status`). Calls for one subscription run one at a time, so two
+   * callers in this process cannot both refund it.
    * @param subscriptionId - The subscription id.
-   * @returns The refund, or null when no invoice is paid.
+   * @returns The refund, or null when no invoice is paid or the payment already has a refund.
    */
   async refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null> {
     return this.#serialised(subscriptionId, async () => {
@@ -517,6 +520,12 @@ export class RazorpayProvider implements BillingProviderClient {
         .toSorted((a, b) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0))[0]
       if (paid === undefined) return null
       const paymentId = String(paid.payment_id)
+      const payment = asRecord(
+        await this.#call('GET', `/payments/${encodeURIComponent(paymentId)}`)
+      )
+      const refunded = typeof payment.amount_refunded === 'number' ? payment.amount_refunded : 0
+      const hasRefund = refunded > 0 || (payment.refund_status ?? null) !== null
+      if (hasRefund) return null
       const json = asRecord(
         await this.#call('POST', `/payments/${encodeURIComponent(paymentId)}/refund`, { body: {} })
       )

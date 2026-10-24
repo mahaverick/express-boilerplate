@@ -296,15 +296,22 @@ export class FakeBillingProvider implements BillingProviderClient {
   }
 
   /**
-   * Refund the newest payment in full.
+   * Refund the newest payment in full, once. The claim is one `HSETNX` on
+   * the payment, so two callers at once cannot both refund it.
    * @param subscriptionId - The subscription id.
-   * @returns The refund, or null when nothing was paid.
+   * @returns The refund, or null when nothing was paid or the payment already has a refund.
    */
   async refundLatestPayment(subscriptionId: string): Promise<ProviderRefund | null> {
     const record = await this.#subscription(subscriptionId)
     const latest = record.payments.at(-1)
     if (latest === undefined) return null
-    return { refundId: fakeId('rfnd'), amountMinor: latest.amountMinor }
+    const refundId = fakeId('rfnd')
+    const isClaimed = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.hSetNX(redisKey('billing-fake'), `refund:${latest.paymentId}`, refundId)
+    }, 'fake billing refund')
+    if (!isClaimed) return null
+    return { refundId, amountMinor: latest.amountMinor }
   }
 
   /**

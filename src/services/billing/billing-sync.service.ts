@@ -69,9 +69,10 @@ export class BillingSyncConflictError extends Error {
 interface SyncResult {
   /**
    * `payments_off` when no provider is configured, `no_row` when the
-   * workspace has no billing row, else `synced`.
+   * workspace has no billing row, `provider_mismatch` when the row belongs to
+   * another provider or mode (nothing is fetched or written), else `synced`.
    */
-  outcome: 'payments_off' | 'no_row' | 'synced'
+  outcome: 'payments_off' | 'no_row' | 'provider_mismatch' | 'synced'
   /**
    * Whether any billing column other than the sync time changed.
    */
@@ -88,6 +89,11 @@ interface SyncResult {
 interface PendingAlert {
   kind: BillingAlertKind
   message: string
+  /**
+   * The subscription the alert names. An alert of the same kind already
+   * naming it is not raised again.
+   */
+  subscriptionId?: string
 }
 
 /**
@@ -141,12 +147,19 @@ interface SyncRun {
 }
 
 /**
- * Insert a staff alert; a failure is logged, since the change it reports is committed.
+ * Insert a staff alert, unless one of its kind already names its
+ * subscription; a failure is logged, since the change it reports is committed.
  * @param tenantId - The workspace.
  * @param alert - The alert.
  */
 async function insertAlert(tenantId: string, alert: PendingAlert): Promise<void> {
   try {
+    if (
+      alert.subscriptionId !== undefined &&
+      (await billingRepository.hasAlertNaming(tenantId, alert.kind, alert.subscriptionId))
+    ) {
+      return
+    }
     await billingRepository.insertAlert({
       kind: alert.kind,
       tenantId,
@@ -208,6 +221,7 @@ async function fetchState(
     alerts.push({
       kind: 'reconcile_repair',
       message: `Ignored subscription ${sub.id}: its notes name another workspace.`,
+      subscriptionId: sub.id,
     })
     return undefined
   }
@@ -223,24 +237,29 @@ async function fetchState(
     alerts.push({
       kind: 'reconcile_repair',
       message: `Did not make subscription ${sub.id} current: its notes name no known price.`,
+      subscriptionId: sub.id,
     })
     return undefined
   }
 
-  const ownPending = own(pending)
-  const ownNext = own(next)
   const subs: BillingSubscriptions = {}
   const currentSub = own(current)
   if (currentSub !== undefined) subs.current = currentSub
-  const pendingSub = priced(ownPending, ownPending?.notes.priceId)
-  if (pendingSub !== undefined) subs.pending = pendingSub
-  const nextSub = priced(ownNext, row.nextPriceId ?? ownNext?.notes.priceId)
-  if (nextSub !== undefined) subs.next = nextSub
-  const sweptSubs = swept.flatMap((sub) => {
-    const kept = priced(own(sub), sub.notes.priceId)
-    return kept === undefined ? [] : [kept]
-  })
-  if (sweptSubs.length > 0) subs.swept = sweptSubs
+  // A foreign current subscription would read as no current one, which looks like a handover or a free slot.
+  const isCurrentForeign = current !== undefined && currentSub === undefined
+  if (!isCurrentForeign) {
+    const ownPending = own(pending)
+    const pendingSub = priced(ownPending, ownPending?.notes.priceId)
+    if (pendingSub !== undefined) subs.pending = pendingSub
+    const ownNext = own(next)
+    const nextSub = priced(ownNext, row.nextPriceId ?? ownNext?.notes.priceId)
+    if (nextSub !== undefined) subs.next = nextSub
+    const sweptSubs = swept.flatMap((sub) => {
+      const kept = priced(own(sub), sub.notes.priceId)
+      return kept === undefined ? [] : [kept]
+    })
+    if (sweptSubs.length > 0) subs.swept = sweptSubs
+  }
 
   const [settings, free] = await Promise.all([
     planRepository.getSettings(),
@@ -257,13 +276,16 @@ async function fetchState(
 }
 
 /**
- * Lock the row, map it and write it, unless it changed since it was read.
+ * Lock the row, map it and write it, unless it changed since it was read. A
+ * subscription that becomes current records the running provider and mode.
+ * @param provider - The payment provider.
  * @param run - The sync call.
  * @param readVersion - The version the fetch was based on.
  * @param fetched - The provider's view and the plans.
  * @returns The committed write, or undefined when the row was stale.
  */
 async function commitSync(
+  provider: BillingProviderClient,
   run: SyncRun,
   readVersion: number,
   fetched: FetchedState
@@ -282,6 +304,10 @@ async function commitSync(
     }
     if (state === 'free') planId = fetched.freePlanId
     if (planId !== locked.planId) patch.planId = planId
+    if (patch.providerSubscriptionId !== undefined && patch.providerSubscriptionId !== null) {
+      if (locked.provider !== provider.kind) patch.provider = provider.kind
+      if (locked.providerMode !== provider.mode) patch.providerMode = provider.mode
+    }
 
     const after = await billingRepository.updateVersioned(run.tenantId, locked.version, patch, tx)
     if (after === undefined) return
@@ -367,22 +393,63 @@ async function cancelAtCycleEnd(
     })
     return
   }
-  const written = await withTransaction(async (tx) => {
-    const locked = await billingRepository.lockByTenantId(tenantId, tx)
-    if (locked?.providerSubscriptionId !== subscriptionId || locked.cancelAtPeriodEnd) return
-    const after = await billingRepository.updateVersioned(
-      tenantId,
-      locked.version,
-      { cancelAtPeriodEnd: true },
-      tx
-    )
-    return after === undefined ? undefined : { before: locked, after }
-  })
-  if (written !== undefined) await emitBillingDiff(written.before, written.after, run.source)
+  try {
+    const written = await withTransaction(async (tx) => {
+      const locked = await billingRepository.lockByTenantId(tenantId, tx)
+      if (locked?.providerSubscriptionId !== subscriptionId || locked.cancelAtPeriodEnd) return
+      const after = await billingRepository.updateVersioned(
+        tenantId,
+        locked.version,
+        { cancelAtPeriodEnd: true },
+        tx
+      )
+      return after === undefined ? undefined : { before: locked, after }
+    })
+    if (written !== undefined) await emitBillingDiff(written.before, written.after, run.source)
+  } catch (error) {
+    logger.error('Could not record a scheduled cancel', { error, tenantId, subscriptionId })
+    await insertAlert(tenantId, {
+      kind: 'reconcile_repair',
+      message: `Subscription ${subscriptionId} is cancelled at its cycle end for an interval switch, but the workspace does not show it as cancelling yet.`,
+      subscriptionId,
+    })
+  }
+}
+
+/**
+ * Statuses after which a subscription can no longer be cancelled.
+ */
+const ENDED_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
+  'cancelled',
+  'completed',
+  'expired',
+])
+
+/**
+ * A subscription read again after a cancel failed, when it has ended: another
+ * sync, the payer or the provider ended it first.
+ * @param provider - The payment provider.
+ * @param subscriptionId - The subscription.
+ * @returns The ended subscription, or undefined when it still runs or cannot be read.
+ */
+async function endedSubscription(
+  provider: BillingProviderClient,
+  subscriptionId: string
+): Promise<ProviderSubscription | undefined> {
+  try {
+    const sub = await provider.fetchSubscription(subscriptionId)
+    return ENDED_STATUSES.has(sub.status) ? sub : undefined
+  } catch (error) {
+    logger.warn('Could not read a subscription after its cancel failed', { error, subscriptionId })
+    return undefined
+  }
 }
 
 /**
  * Cancel a duplicate subscription now and refund its latest payment in full.
+ * Safe to run twice at once: a cancel that fails because the subscription has
+ * already ended is not an error, and the provider refunds a payment once, so
+ * only the caller that refunded alerts.
  * @param provider - The payment provider.
  * @param tenantId - The workspace.
  * @param subscriptionId - The duplicate.
@@ -392,24 +459,40 @@ async function refundDuplicate(
   tenantId: string,
   subscriptionId: string
 ): Promise<void> {
+  let wasPaid: boolean
   try {
-    await provider.cancelSubscription(subscriptionId, false)
+    const cancelled = await provider.cancelSubscription(subscriptionId, false)
+    wasPaid = cancelled.paidCount > 0
   } catch (error) {
-    logger.error('Could not cancel a duplicate subscription', { error, tenantId, subscriptionId })
-    await insertAlert(tenantId, {
-      kind: 'reconcile_repair',
-      message: `Could not cancel duplicate subscription ${subscriptionId}. Cancel and refund it at the provider.`,
-    })
-    return
+    const ended = await endedSubscription(provider, subscriptionId)
+    if (ended === undefined) {
+      logger.error('Could not cancel a duplicate subscription', { error, tenantId, subscriptionId })
+      await insertAlert(tenantId, {
+        kind: 'reconcile_repair',
+        message: `Could not cancel duplicate subscription ${subscriptionId}. Cancel and refund it at the provider.`,
+      })
+      return
+    }
+    logger.debug('A duplicate subscription had already ended', { tenantId, subscriptionId })
+    wasPaid = ended.paidCount > 0
   }
   try {
     const refund = await provider.refundLatestPayment(subscriptionId)
+    if (refund !== null) {
+      await insertAlert(tenantId, {
+        kind: 'duplicate_refunded',
+        message: `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(refund.amountMinor)} paise in ${refund.refundId}.`,
+      })
+      return
+    }
+    if (wasPaid) {
+      logger.debug('A duplicate subscription was refunded already', { tenantId, subscriptionId })
+      return
+    }
     await insertAlert(tenantId, {
       kind: 'duplicate_refunded',
-      message:
-        refund === null
-          ? `Cancelled duplicate subscription ${subscriptionId}. It had no payment to refund.`
-          : `Cancelled duplicate subscription ${subscriptionId} and refunded ${String(refund.amountMinor)} paise in ${refund.refundId}.`,
+      message: `Cancelled duplicate subscription ${subscriptionId}. It had no payment to refund.`,
+      subscriptionId,
     })
   } catch (error) {
     logger.error('Could not refund a duplicate subscription', { error, tenantId, subscriptionId })
@@ -440,7 +523,11 @@ async function runFollowUps(
   for (const alert of alerts) await insertAlert(tenantId, alert)
   for (const action of committed.actions) {
     if (action.kind === 'alert') {
-      await insertAlert(tenantId, { kind: action.alert, message: action.message })
+      await insertAlert(tenantId, {
+        kind: action.alert,
+        message: action.message,
+        ...(action.subscriptionId !== undefined && { subscriptionId: action.subscriptionId }),
+      })
     }
   }
   await emitBillingDiff(committed.before, committed.after, run.source)
@@ -472,6 +559,20 @@ async function runFollowUps(
 }
 
 /**
+ * Whether a row's subscriptions live with another provider or mode than the
+ * running one, whose ids this provider cannot read.
+ * @param row - The row.
+ * @param provider - The running provider.
+ * @returns True when the row names a different provider or mode.
+ */
+function isOtherProvider(row: TenantBillingRecord, provider: BillingProviderClient): boolean {
+  return (
+    (row.provider !== null && row.provider !== provider.kind) ||
+    (row.providerMode !== null && row.providerMode !== provider.mode)
+  )
+}
+
+/**
  * One sync call: read, fetch, commit, follow up.
  * @param run - The sync call.
  * @returns What the sync did.
@@ -491,8 +592,18 @@ async function runSync(run: SyncRun): Promise<SyncResult> {
       logger.warn('A billing sync found no billing row', { tenantId })
       return { outcome: 'no_row', changed: false, row: undefined }
     }
+    if (isOtherProvider(row, provider)) {
+      logger.warn('A billing sync skipped a row of another provider or mode', {
+        tenantId,
+        rowProvider: row.provider,
+        rowMode: row.providerMode,
+        provider: provider.kind,
+        mode: provider.mode,
+      })
+      return { outcome: 'provider_mismatch', changed: false, row }
+    }
     const fetched = await fetchState(provider, row, run.extraSubscriptionIds)
-    const committed = await commitSync(run, row.version, fetched)
+    const committed = await commitSync(provider, run, row.version, fetched)
     if (committed === undefined) continue
     const { shouldResync } = await runFollowUps(provider, run, committed, fetched.alerts)
     const result: SyncResult = {
@@ -517,8 +628,11 @@ async function runSync(run: SyncRun): Promise<SyncResult> {
 
 /**
  * Bring a workspace's billing row in line with its provider subscriptions.
- * The only writer of provider-driven billing state. With payments off it
- * changes nothing.
+ * The only writer of provider-driven billing state. With payments off, or for
+ * a row of another provider or mode, it changes nothing. Every sync that
+ * writes stamps `syncedAt`, so it moves the row's version; a concurrent writer
+ * can therefore make a sync give up with `BillingSyncConflictError`, which a
+ * job absorbs by retrying.
  * @param tenantId - The workspace.
  * @param source - What asked for the sync, for the history.
  * @param options - Optional inputs.
