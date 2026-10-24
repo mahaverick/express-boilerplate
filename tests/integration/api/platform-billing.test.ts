@@ -17,6 +17,7 @@ import { ProviderError } from '@/errors/billing-provider-errors'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
+import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { sql } from '@/services/database.service'
 import { emitEntitlementsChanged } from '@/services/notification-emitter.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -179,6 +180,21 @@ async function eventsOf(tenantId: string, event: string): Promise<AnalyticsOutbo
     from analytics_outbox
     where properties->'$groups'->>'tenant' = ${tenantId} and event = ${event}
     order by occurred_at, id`
+}
+
+/**
+ * The variables of a tenant's tracked mails of one template.
+ * @param tenantId - The tenant.
+ * @param templateKey - The template.
+ * @returns Each mail's variables.
+ */
+async function mailVariablesOf(
+  tenantId: string,
+  templateKey: string
+): Promise<Record<string, string>[]> {
+  const rows = await sql<{ variables: Record<string, string> }[]>`
+    select variables from email_messages where tenant_id = ${tenantId} and template_key = ${templateKey}`
+  return rows.map((row) => row.variables)
 }
 
 /**
@@ -589,6 +605,9 @@ describe('POST /api/v1/platform/tenants/:id/billing/grants', () => {
     [{ key: 'advanced_example', value: 5 }, 'value'],
     [{ key: 'advanced_example', value: null }, 'value'],
     [{ key: 'advanced_example', value: false }, 'value'],
+    [{ key: 'members', value: 1_000_001 }, 'value'],
+    [{ key: 'members', value: 1e15 }, 'value'],
+    [{ key: 'members', value: 2 ** 53 + 2 }, 'value'],
   ])('refuses %j with a field error on %s', async (fields, field) => {
     const { tenant } = await workspace()
     const { token } = await staff('manager')
@@ -602,6 +621,38 @@ describe('POST /api/v1/platform/tenants/:id/billing/grants', () => {
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({ errors: { [field]: ANY_ARRAY } })
     expect(await billingAudit(tenant.id)).toEqual([])
+  })
+
+  it('reports an unknown key and a past expiry together', async () => {
+    const { tenant } = await workspace()
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/grants', {
+      key: 'seats',
+      value: 10,
+      expiresAt: new Date(Date.now() - DAY_MS).toISOString(),
+      reason: REASON,
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ errors: { key: ANY_ARRAY, expiresAt: ANY_ARRAY } })
+  })
+
+  it('grants the largest limit allowed', async () => {
+    const { tenant } = await workspace()
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/grants', {
+      key: 'members',
+      value: 1_000_000,
+      expiresAt: null,
+      reason: REASON,
+    })
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body).entitlements).toMatchObject({
+      limits: { members: { limit: 1_000_000 } },
+    })
   })
 
   it('refuses an expiry in the past with a field error', async () => {
@@ -738,6 +789,26 @@ describe('POST /api/v1/platform/tenants/:id/billing/resync', () => {
     ])
   })
 
+  it("reports a resync's move to Free by the provider's cause, never as a staff cancel", async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    const longAgo = new Date(Date.now() - 30 * DAY_MS)
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/resync', { reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free' })
+    expect(await eventsOf(tenant.id, 'subscription_cancel_scheduled')).toEqual([])
+    const [downgrade] = await eventsOf(tenant.id, 'downgraded_to_free')
+    expect(downgrade?.properties).toMatchObject({ downgrade_cause: 'payment_failed' })
+    const mails = await mailVariablesOf(tenant.id, 'moved_to_free')
+    expect(mails.length).toBeGreaterThan(0)
+    expect(mails.map((mail) => mail.downgradeCause)).not.toContain('staff')
+    expect(mails[0]).toMatchObject({ downgradeCause: 'payment_failed' })
+  })
+
   it('answers 503 when the provider is down, and audits nothing', async () => {
     const { tenant } = await payingWorkspace()
     const { token } = await staff('manager')
@@ -850,6 +921,93 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
       where properties->'$groups'->>'tenant' = ${tenant.id} and event not like 'billing_%'
         and event <> '$groupidentify'`
     expect(productEvents.map((row) => row.distinctId)).not.toContain(user.id)
+  })
+
+  it('cancels a past-due tenant now: Free, with the failed-payment stamps cleared', async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    const since = new Date(Date.now() - DAY_MS)
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: since, haltedAt: since })
+    const { token } = await staff('admin')
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'free',
+      planId: plans.freeId,
+      pastDueSince: null,
+      haltedAt: null,
+      pausedAt: null,
+    })
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+  })
+
+  it('sends a staff cancel now as downgraded_to_free {staff} to the payer, and mails the staff cause', async () => {
+    const { tenant, owner } = await payingWorkspace()
+    const { token, user } = await staff('admin')
+
+    await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    const [downgrade] = await eventsOf(tenant.id, 'downgraded_to_free')
+    expect(downgrade?.distinctId).toBe(owner.id)
+    expect(downgrade?.distinctId).not.toBe(user.id)
+    expect(downgrade?.properties).toMatchObject({ downgrade_cause: 'staff' })
+    const [scheduled] = await eventsOf(tenant.id, 'subscription_cancel_scheduled')
+    expect(scheduled?.distinctId).toBe(owner.id)
+    expect(scheduled?.properties).toMatchObject({ by: 'staff' })
+    const mails = await mailVariablesOf(tenant.id, 'moved_to_free')
+    expect(mails.length).toBeGreaterThan(0)
+    expect(mails.every((mail) => mail.downgradeCause === 'staff')).toBe(true)
+  })
+
+  it("sends a staff cancel as by staff even when the provider's webhook lands it first", async () => {
+    const { tenant, owner } = await payingWorkspace()
+    const { token, user } = await staff('admin')
+    const original = fake.cancelSubscription.bind(fake)
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    await withMutatedMethod(
+      fake,
+      'cancelSubscription',
+      async (id: string, isAtCycleEnd: boolean) => {
+        const cancelled = await original(id, isAtCycleEnd)
+        // The provider's webhook is synced before the staff cancel's own write.
+        await fake.fakeAdvance(id, 'cancelled')
+        await syncTenantBilling(tenant.id, 'webhook')
+        return cancelled
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', {
+          when: 'cycle_end',
+          reason: REASON,
+        })
+      }
+    )
+
+    expect(response?.status).toBe(200)
+    const events = await eventsOf(tenant.id, 'subscription_cancel_scheduled')
+    expect(events).toHaveLength(1)
+    expect(events[0]?.distinctId).toBe(owner.id)
+    expect(events[0]?.distinctId).not.toBe(user.id)
+    expect(events[0]?.properties).toMatchObject({ by: 'staff' })
+  })
+
+  it('audits a cancel of a subscription that had already ended at the provider', async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    const { token, user } = await staff('admin')
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(await billingAudit(tenant.id)).toEqual([
+      {
+        action: 'billing.cancelled_by_staff',
+        access: 'platform',
+        actorId: user.id,
+        metadata: { when: 'now', reason: REASON },
+      },
+    ])
   })
 
   it('refuses a tenant with nothing to cancel with 409 NO_SUBSCRIPTION', async () => {

@@ -26,9 +26,10 @@
  * a Redis key claimed before the outbox write and released when the write
  * fails; when Redis fails, the event is skipped and the request goes on.
  *
- * An owner's cancel leaves a short-lived marker (`markOwnerCancel`) before it
- * calls the provider, so a cancel the provider's webhook brings in first is
- * still sent as the owner's (`by: owner`).
+ * An owner's or a staff cancel leaves a short-lived marker (`markCancel`)
+ * before it calls the provider, so a cancel the provider's webhook brings in
+ * first is still sent as theirs (`by: owner` as the owner, `by: staff` as the
+ * payer). A staff resync with no marker reads the provider's real cause.
  *
  * Every function here returns at once while analytics is off, and never
  * rejects: a failure is logged with ids only.
@@ -72,10 +73,10 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const THROTTLE_SECONDS = 60 * 60
 
 /**
- * How long an owner's cancel marker lives: past the provider call and its
+ * How long a cancel marker lives: past the provider call and its
  * webhook's arrival.
  */
-const OWNER_CANCEL_SECONDS = 15 * 60
+const CANCEL_MARKER_SECONDS = 15 * 60
 
 /**
  * Who an event is from, and the facts it carries besides its own fields.
@@ -162,61 +163,89 @@ async function attributedOf(
 }
 
 /**
- * An owner's cancel marker for one subscription.
+ * Who a cancel marker records: an owner by id, or staff, who are never named.
+ */
+type CancelMarker = { by: 'owner'; userId: string } | { by: 'staff' }
+
+/**
+ * The cancel marker for one subscription.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription.
  * @returns The Redis key.
  */
-function ownerCancelKey(tenantId: string, subscriptionId: string): string {
-  return redisKey('billing', 'owner-cancel', tenantId, subscriptionId)
+function cancelMarkerKey(tenantId: string, subscriptionId: string): string {
+  return redisKey('billing', 'cancel-marker', tenantId, subscriptionId)
 }
 
 /**
- * Record, before the provider is asked, that an owner is cancelling a
- * subscription, so whichever write lands the cancel first sends it as the
- * owner's. Lives `OWNER_CANCEL_SECONDS`. Never rejects; a failure leaves the
- * event to the usual rules.
+ * A marker as stored: `owner:<id>` or `staff`.
+ * @param marker - The marker.
+ * @returns The stored text.
+ */
+function markerText(marker: CancelMarker): string {
+  return marker.by === 'owner' ? `owner:${marker.userId}` : 'staff'
+}
+
+/**
+ * Read a stored marker.
+ * @param text - The stored text.
+ * @returns The marker, or null for text in no known shape.
+ */
+function parseMarker(text: string): CancelMarker | null {
+  if (text === 'staff') return { by: 'staff' }
+  if (text.startsWith('owner:') && text.length > 'owner:'.length) {
+    return { by: 'owner', userId: text.slice('owner:'.length) }
+  }
+  return null
+}
+
+/**
+ * Record, before the provider is asked, who is cancelling a subscription
+ * (an owner, or staff), so whichever write lands the cancel first sends it
+ * as theirs: `by: owner` as that owner, `by: staff` as the payer. Lives
+ * `CANCEL_MARKER_SECONDS`. Never rejects; a failure leaves the event to the
+ * usual rules.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription being cancelled.
- * @param ownerUserId - The owner.
+ * @param marker - Who is cancelling.
  */
-export async function markOwnerCancel(
+export async function markCancel(
   tenantId: string,
   subscriptionId: string,
-  ownerUserId: string
+  marker: CancelMarker
 ): Promise<void> {
   if (!isAnalyticsEnabled()) return
   try {
     await withRedisDeadline(async () => {
       const redis = await getRedis()
-      return redis.set(ownerCancelKey(tenantId, subscriptionId), ownerUserId, {
-        expiration: { type: 'EX', value: OWNER_CANCEL_SECONDS },
+      return redis.set(cancelMarkerKey(tenantId, subscriptionId), markerText(marker), {
+        expiration: { type: 'EX', value: CANCEL_MARKER_SECONDS },
       })
-    }, 'billing owner cancel marker')
+    }, 'billing cancel marker')
   } catch (error) {
-    logger.warn('Could not mark an owner cancel', { error: redactedForLog(error), tenantId })
+    logger.warn('Could not mark a cancel', { error: redactedForLog(error), tenantId })
   }
 }
 
 /**
- * Forget an owner's cancel marker when the cancel did not happen. Best
- * effort: a failure leaves the marker to expire.
+ * Forget a cancel marker when the cancel did not happen. Best effort: a
+ * failure leaves the marker to expire.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription.
  */
-export async function clearOwnerCancel(tenantId: string, subscriptionId: string): Promise<void> {
+export async function clearCancelMarker(tenantId: string, subscriptionId: string): Promise<void> {
   if (!isAnalyticsEnabled()) return
   try {
     await waitForRedisWrite(
       async () => {
         const redis = await getRedis()
-        return redis.del(ownerCancelKey(tenantId, subscriptionId))
+        return redis.del(cancelMarkerKey(tenantId, subscriptionId))
       },
-      'billing owner cancel marker release',
+      'billing cancel marker release',
       () => {}
     )
   } catch (error) {
-    logger.warn('Could not clear an owner cancel marker', {
+    logger.warn('Could not clear a cancel marker', {
       error: redactedForLog(error),
       tenantId,
     })
@@ -224,23 +253,24 @@ export async function clearOwnerCancel(tenantId: string, subscriptionId: string)
 }
 
 /**
- * The owner whose cancel of a subscription is on record.
+ * The cancel of a subscription on record, and who made it.
  * @param tenantId - The workspace.
  * @param subscriptionId - The subscription, or null.
- * @returns Their id, or null when none is on record or Redis failed.
+ * @returns The marker, or null when none is on record or Redis failed.
  */
-async function ownerCancelOf(
+async function cancelMarkerOf(
   tenantId: string,
   subscriptionId: string | null
-): Promise<string | null> {
+): Promise<CancelMarker | null> {
   if (subscriptionId === null) return null
   try {
-    return await withRedisDeadline(async () => {
+    const text = await withRedisDeadline(async () => {
       const redis = await getRedis()
-      return redis.get(ownerCancelKey(tenantId, subscriptionId))
-    }, 'billing owner cancel marker read')
+      return redis.get(cancelMarkerKey(tenantId, subscriptionId))
+    }, 'billing cancel marker read')
+    return text === null ? null : parseMarker(text)
   } catch (error) {
-    logger.warn('Could not read an owner cancel marker', { error: redactedForLog(error), tenantId })
+    logger.warn('Could not read a cancel marker', { error: redactedForLog(error), tenantId })
     return null
   }
 }
@@ -280,6 +310,11 @@ export interface BillingAnalyticsExtras {
    * The upgrade requests the change fulfilled.
    */
   fulfilledRequests?: readonly UpgradeRequest[]
+  /**
+   * The change is a staff member's own cancel, not a resync of the
+   * provider's: its events read `by: staff` and cause `staff`.
+   */
+  isStaffCancel?: boolean
 }
 
 /**
@@ -311,14 +346,15 @@ export async function emitBillingDiffAnalytics(
     const intervals = new Map<string, BillingInterval>(
       prices.map((price) => [price.id, price.interval])
     )
-    const cancellingOwner =
-      source === 'staff' || !canBeCancel(before, after)
-        ? null
-        : await ownerCancelOf(tenantId, before.providerSubscriptionId)
+    const marker = canBeCancel(before, after)
+      ? await cancelMarkerOf(tenantId, before.providerSubscriptionId)
+      : null
+    const cancellingOwner = marker?.by === 'owner' ? marker.userId : null
     const events = billingDiffEvents(before, after, source, {
       isWorkspaceActive: tenant.lifecycleState === 'active' && tenant.deletedAt === null,
       intervalOf: (priceId) => (priceId === null ? undefined : intervals.get(priceId)),
       isOwnerCancel: cancellingOwner !== null,
+      isStaffCancel: extras.isStaffCancel === true || marker?.by === 'staff',
     })
     let trialUser: string | null | undefined
     /**

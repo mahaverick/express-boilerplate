@@ -242,7 +242,8 @@ export const ALREADY_PAID_MESSAGE =
 export const TRIAL_NOT_EXTENDABLE_CODE = 'TRIAL_NOT_EXTENDABLE'
 
 /**
- * The most days a trial may be set to, or extended by at once.
+ * The most days a trial may be set to, or one staff extension may add. It
+ * caps each extension, not the trial's total length: extensions add up.
  */
 export const MAX_TRIAL_DAYS = 90
 

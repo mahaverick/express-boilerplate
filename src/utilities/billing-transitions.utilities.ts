@@ -20,7 +20,8 @@
  *   and bills another interval than the current one. A resubscribe on the
  *   same interval sends nothing.
  * - Moved to Free: the row becomes `free`. Its cause, first match wins:
- *   `staff` for a staff change; `trial_ended` from a trial; `payment_failed`
+ *   `staff` for a staff cancel (`isStaffCancel`; a staff resync that brings
+ *   in the provider's change reads the real cause); `trial_ended` from a trial; `payment_failed`
  *   from a past-due, halted or paused row; `cancelled` otherwise (a
  *   cancelled, completed or expired subscription).
  */
@@ -58,6 +59,12 @@ export interface TransitionContext {
    * The interval a price bills, or undefined for an unknown price.
    */
   intervalOf: (priceId: string | null) => BillingInterval | undefined
+  /**
+   * Whether the change is a staff member's own cancel (`cancelSubscriptions`
+   * on the staff path), as opposed to a staff resync that only brought in
+   * what the provider did.
+   */
+  isStaffCancel?: boolean
 }
 
 /**
@@ -68,14 +75,14 @@ const PAYING_STATES: ReadonlySet<BillingState> = new Set(['active', 'past_due'])
 /**
  * Why an active workspace moved to Free.
  * @param before - The row it left.
- * @param source - What made the change.
+ * @param isStaffCancel - Whether a staff member's own cancel made the move.
  * @returns The cause.
  */
 export function downgradeCauseOf(
   before: TenantBillingRecord,
-  source: BillingHistorySource
+  isStaffCancel: boolean
 ): DowngradeCause {
-  if (source === 'staff') return 'staff'
+  if (isStaffCancel) return 'staff'
   if (before.state === 'trialing') return 'trial_ended'
   if (before.state === 'past_due' || before.haltedAt !== null || before.pausedAt !== null) {
     return 'payment_failed'
@@ -155,7 +162,8 @@ export function billingTransitions(
     }
   }
   if (before.state !== 'free' && after.state === 'free') {
-    transitions.push({ kind: 'moved_to_free', cause: downgradeCauseOf(before, source) })
+    const isStaffCancel = source === 'staff' && context.isStaffCancel === true
+    transitions.push({ kind: 'moved_to_free', cause: downgradeCauseOf(before, isStaffCancel) })
   }
   return transitions
 }

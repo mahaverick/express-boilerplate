@@ -745,8 +745,11 @@ their role there is their platform role (`src/services/platform.service.ts`).
   staff member and tenant every ten minutes), never with the billing email
   or another owner-only field. A manager resyncs it, extends its trial and
   adds or revokes grants; an admin cancels its subscription. Staff never take
-  payment for a tenant or move it to Paid without payment: a grant covers a
-  comp, and it only ever adds access. The platform tenant has no billing and
+  payment for a tenant, and never make it pay or mark it paying: a grant
+  covers a comp, and it only ever adds access. A staff member whose role is
+  revoked between a cancel's provider call and its write is refused at the
+  write: the provider cancel stands, no audit entry is written, and the next
+  sync records it, as with an owner's cancel. The platform tenant has no billing and
   answers `tenant_billing_not_found`. A grant id from another tenant answers
   `grant_not_found`.
 - **Staff writes leave a log line.** Each successful `/platform` write the role

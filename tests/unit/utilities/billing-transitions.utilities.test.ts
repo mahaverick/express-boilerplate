@@ -196,9 +196,23 @@ describe('billingTransitions', () => {
     ],
     ['a paused subscription', paying({ pausedAt: NOW }), 'webhook', 'payment_failed'],
     ['a cancelled period', paying({ cancelAtPeriodEnd: true }), 'job', 'cancelled'],
-    ['a staff change', paying(), 'staff', 'staff'],
   ] as const)('names the cause of a move to Free after %s', (_name, before, source, cause) => {
     expect(kinds(before, row({ version: 9 }), source)).toEqual([`moved_to_free:${cause}`])
+  })
+
+  it('names staff the cause only for a staff cancel, never for a staff resync', () => {
+    const staffCancel = { ...CONTEXT, isStaffCancel: true }
+    expect(kinds(paying(), row({ version: 9 }), 'staff', staffCancel)).toEqual([
+      'moved_to_free:staff',
+    ])
+    expect(kinds(paying({ state: 'past_due', pastDueSince: NOW }), row(), 'staff')).toEqual([
+      'moved_to_free:payment_failed',
+    ])
+    expect(kinds(paying({ cancelAtPeriodEnd: true }), row(), 'staff')).toEqual([
+      'moved_to_free:cancelled',
+    ])
+    // The flag alone, from a source other than staff, is not a staff cancel.
+    expect(kinds(paying(), row(), 'webhook', staffCancel)).toEqual(['moved_to_free:cancelled'])
   })
 
   it('asks a suspended or archived workspace to act in Billing for nothing', () => {

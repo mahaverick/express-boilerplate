@@ -97,6 +97,12 @@ export interface BillingDiffExtras {
    * cancelled; its analytics events are theirs.
    */
   actorUserId?: string
+  /**
+   * The change is a staff member's own cancel: a move to Free reads cause
+   * `staff`. A staff resync that only brings in the provider's change does
+   * not set it, so its mail names the real cause.
+   */
+  isStaffCancel?: boolean
 }
 
 /**
@@ -583,6 +589,7 @@ export async function sendBillingDiffEmails(
     const transitions = billingTransitions(before, after, source, {
       isWorkspaceActive,
       intervalOf: (priceId) => (priceId === null ? undefined : prices.get(priceId)?.interval),
+      isStaffCancel: extras.isStaffCancel === true,
     })
     // A suspended or archived workspace's members are not told it went Paid.
     const fulfilled = isWorkspaceActive ? (extras.fulfilledRequests ?? []) : []

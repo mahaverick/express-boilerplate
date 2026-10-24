@@ -198,7 +198,7 @@ describe('billingDiffEvents', () => {
 
   it.each([
     ['owner', true, 'owner'],
-    ['staff', true, 'staff'],
+    ['staff', true, 'customer_bank'],
     ['webhook', true, 'customer_bank'],
     ['reconcile', true, 'customer_bank'],
     ['job', false, 'suspension'],
@@ -272,7 +272,7 @@ describe('billingDiffEvents', () => {
   it.each([
     [paying({ state: 'past_due', haltedAt: NOW }), 'job', true, 'payment_failed'],
     [paying({ cancelAtPeriodEnd: true }), 'job', true, 'cancelled'],
-    [paying(), 'staff', true, 'staff'],
+    [paying(), 'staff', true, 'cancelled'],
     [paying(), 'job', false, 'lifecycle'],
   ] as const)(
     'downgrades a paying workspace to Free with its cause (%#)',
@@ -327,9 +327,40 @@ describe('billingDiffEvents', () => {
         paying(),
         paying({ cancelAtPeriodEnd: true }),
         'staff',
-        context({ isOwnerCancel: true })
+        context({ isOwnerCancel: true, isStaffCancel: true })
       ).map((event) => event.detail)
     ).toContainEqual({ type: 'subscription_cancel_scheduled', by: 'staff' })
+  })
+
+  it('reads a staff cancel by its flag, and a staff resync by what the provider did', () => {
+    const cancelNow = billingDiffEvents(
+      paying(),
+      row({ payerUserId: 'payer-1' }),
+      'staff',
+      context({ isStaffCancel: true })
+    )
+    expect(cancelNow.map((event) => event.detail)).toEqual([
+      { type: 'subscription_cancel_scheduled', by: 'staff' },
+      { type: 'downgraded_to_free', downgradeCause: 'staff' },
+    ])
+    // A webhook that lands a staff cancel first carries the flag from the marker.
+    expect(
+      billingDiffEvents(
+        paying(),
+        paying({ cancelAtPeriodEnd: true }),
+        'webhook',
+        context({ isStaffCancel: true })
+      ).map((event) => event.detail)
+    ).toContainEqual({ type: 'subscription_cancel_scheduled', by: 'staff' })
+    const resync = billingDiffEvents(
+      paying({ state: 'past_due', pastDueSince: NOW, haltedAt: NOW }),
+      row({ payerUserId: 'payer-1' }),
+      'staff',
+      context()
+    )
+    expect(resync.map((event) => event.detail)).toEqual([
+      { type: 'downgraded_to_free', downgradeCause: 'payment_failed' },
+    ])
   })
 
   it("reads a suspended workspace's cancel as by suspension even with an owner cancel on record", () => {

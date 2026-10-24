@@ -57,8 +57,8 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import {
-  clearOwnerCancel,
-  markOwnerCancel,
+  clearCancelMarker,
+  markCancel,
   trackCheckoutConfirmed,
   trackCheckoutStarted,
 } from '@/services/billing/billing-analytics.service'
@@ -80,6 +80,7 @@ import type {
   CheckoutConfirm,
   InvoiceView,
   ProviderSubscription,
+  SourcedEntitlements,
 } from '@/types/billing'
 import { bindScope, listScope, signCursor, verifyCursor } from '@/utilities/list-cursor.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
@@ -1091,6 +1092,12 @@ export interface CancelRequest {
    * What the caller reads when the row belongs to another provider or mode.
    */
   otherProviderMessage: string
+  /**
+   * Record the audit entry even when the current subscription had already
+   * ended at the provider and only a sync was needed: a staff cancel is
+   * always on record, an owner's is not.
+   */
+  shouldAuditWhenEnded?: boolean
 }
 
 /**
@@ -1129,11 +1136,21 @@ export async function cancelSubscriptions(
     if (ENDED_STATUSES.has(current.status) && nextId === null) {
       // It ended at the provider already: the sync records that, and there is nothing to cancel.
       await syncOrRetry(tenantId, source)
+      if (request.shouldAuditWhenEnded === true) {
+        await withTransaction(async (tx) => {
+          await request.lock(tx)
+          await request.audit(tx)
+        })
+      }
       return
     }
     if (!ENDED_STATUSES.has(current.status)) {
-      // Before the provider call: its webhook may land before this write and must still read as the owner's cancel.
-      if (ownerUserId !== undefined) await markOwnerCancel(tenantId, currentId, ownerUserId)
+      // Before the provider call: its webhook may land before this write and must still read as this cancel.
+      await markCancel(
+        tenantId,
+        currentId,
+        ownerUserId === undefined ? { by: 'staff' } : { by: 'owner', userId: ownerUserId }
+      )
       currentCancel = request.when
       try {
         if (current.status === 'authenticated') {
@@ -1146,8 +1163,8 @@ export async function cancelSubscriptions(
         }
         await cancelOrEnded(provider, currentId, currentCancel === 'cycle_end')
       } catch (error) {
-        // The owner's cancel did not happen: a later cancel of this subscription is not theirs.
-        if (ownerUserId !== undefined) await clearOwnerCancel(tenantId, currentId)
+        // This cancel did not happen: a later cancel of this subscription is not its caller's.
+        await clearCancelMarker(tenantId, currentId)
         throw error
       }
     }
@@ -1210,7 +1227,7 @@ export async function cancelSubscriptions(
     written.before,
     written.after,
     source,
-    ownerUserId === undefined ? {} : { actorUserId: ownerUserId }
+    ownerUserId === undefined ? { isStaffCancel: true } : { actorUserId: ownerUserId }
   )
   if (nextFailure !== undefined) throw nextFailure
 }
@@ -1309,10 +1326,14 @@ export async function getTenantBilling(actor: Actor, tenantId: string): Promise<
  * reads, with the owner-only fields empty and no banner dismissals, even
  * for a staff member who is also an owner of the workspace.
  * @param tenantId - The customer workspace.
+ * @param entitlements - Its effective entitlements, read once by the caller.
  * @returns The billing view.
  */
-export async function getTenantBillingForStaff(tenantId: string): Promise<TenantBillingView> {
-  return billingView(tenantId, { isOwner: false, dismissedBanners: [] })
+export async function getTenantBillingForStaff(
+  tenantId: string,
+  entitlements: SourcedEntitlements
+): Promise<TenantBillingView> {
+  return billingView(tenantId, { isOwner: false, dismissedBanners: [] }, entitlements)
 }
 
 /**
@@ -1321,19 +1342,21 @@ export async function getTenantBillingForStaff(tenantId: string): Promise<Tenant
  * @param viewer - What the reader may see: the billing email when an owner, and their own banner dismissals.
  * @param viewer.isOwner - Whether the reader is an owner by membership.
  * @param viewer.dismissedBanners - The reader's dismissed banners.
+ * @param read - The effective entitlements when the caller already read them.
  * @returns The view.
  * @throws {HttpError} The unknown-route 404 for the platform workspace.
  */
 async function billingView(
   tenantId: string,
-  viewer: { isOwner: boolean; dismissedBanners: string[] }
+  viewer: { isOwner: boolean; dismissedBanners: string[] },
+  read?: SourcedEntitlements
 ): Promise<TenantBillingView> {
   const row = await billingRepository.findByTenantId(tenantId)
   if (row === undefined) {
     await assertCustomerTenant(tenantId)
     logger.error('A customer workspace has no billing row; serving it Free', { tenantId })
   }
-  const entitlements = await getEffectiveEntitlements(tenantId)
+  const entitlements = read ?? (await getEffectiveEntitlements(tenantId))
   const price = await priceById(row?.priceId ?? null)
   let nextSwitch: TenantBillingView['nextSwitch'] = null
   if (

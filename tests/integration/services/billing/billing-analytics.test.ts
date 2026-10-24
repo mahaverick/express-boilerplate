@@ -521,6 +521,7 @@ describe('attribution across payers and owners', () => {
 
     await emitBillingDiff(before, await readBilling(tenantId), 'staff', {
       actorUserId: staffMember.id,
+      isStaffCancel: true,
     })
 
     const cancel = await oneEvent(tenantId, 'subscription_cancel_scheduled')
@@ -621,9 +622,9 @@ describe('a failed owner cancel', () => {
       }
     )
     const client = await getRedis()
-    expect(await client.exists(redisKey('billing', 'owner-cancel', tenantId, subscriptionId))).toBe(
-      0
-    )
+    expect(
+      await client.exists(redisKey('billing', 'cancel-marker', tenantId, subscriptionId))
+    ).toBe(0)
     await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenantId}`
     await fake.fakeAdvance(subscriptionId, 'cancelled')
     await syncTenantBilling(tenantId, 'job')

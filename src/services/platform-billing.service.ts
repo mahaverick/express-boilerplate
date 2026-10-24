@@ -27,6 +27,7 @@ import {
   TRIAL_NOT_EXTENDABLE_CODE,
   type StaffCancelWhen,
 } from '@/constants/billing.constants'
+import type { EntitlementGrant } from '@/database/models/billing.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
@@ -110,14 +111,17 @@ async function lockStaffAndBilling(
 }
 
 /**
- * The staff member who granted a grant, soft-deleted accounts included.
- * @param userId - The granting user, or null.
- * @returns Their id and name, or null when no account is on record.
+ * The staff members who granted a tenant's grants, soft-deleted accounts
+ * included, read in one query.
+ * @param grants - The grants.
+ * @returns Each granting user's id and name, by id; an account no longer on record is absent.
  */
-async function grantedByOf(userId: string | null): Promise<GrantView['grantedBy']> {
-  if (userId === null) return null
-  const user = await userRepository.findById(userId, { includeDeleted: true })
-  return user === undefined ? null : { userId: user.id, name: displayName(user) }
+async function grantersOf(
+  grants: readonly EntitlementGrant[]
+): Promise<Map<string, NonNullable<GrantView['grantedBy']>>> {
+  const ids = [...new Set(grants.map((grant) => grant.grantedBy).filter((id) => id !== null))]
+  const users = await userRepository.findManyByIds(ids, { includeDeleted: true })
+  return new Map(users.map((user) => [user.id, { userId: user.id, name: displayName(user) }]))
 }
 
 /**
@@ -126,11 +130,13 @@ async function grantedByOf(userId: string | null): Promise<GrantView['grantedBy'
  * @returns The view.
  */
 async function staffView(tenantId: string): Promise<StaffTenantBillingView> {
-  const base = await getTenantBillingForStaff(tenantId)
+  const read = await getEffectiveEntitlements(tenantId)
+  const base = await getTenantBillingForStaff(tenantId, read)
   const row = await billingRepository.findByTenantId(tenantId)
-  const { sources, ...entitlements } = await getEffectiveEntitlements(tenantId)
+  const { sources, ...entitlements } = read
   const now = new Date()
   const grants = await planRepository.listGrants(tenantId)
+  const granters = await grantersOf(grants)
   const history = await billingRepository.listHistory(tenantId, STAFF_BILLING_LIST_LIMIT)
   const events = await billingRepository.listEvents(tenantId, STAFF_BILLING_LIST_LIMIT)
   return {
@@ -144,8 +150,12 @@ async function staffView(tenantId: string): Promise<StaffTenantBillingView> {
     disputeOpen: row?.disputeOpen ?? false,
     entitlements,
     sources,
-    grants: await Promise.all(
-      grants.map(async (grant) => toGrantView(grant, await grantedByOf(grant.grantedBy), now))
+    grants: grants.map((grant) =>
+      toGrantView(
+        grant,
+        grant.grantedBy === null ? null : (granters.get(grant.grantedBy) ?? null),
+        now
+      )
     ),
     history: history.map((entry) => toHistoryView(entry)),
     events: events.map((event) => toEventView(event)),
@@ -154,7 +164,8 @@ async function staffView(tenantId: string): Promise<StaffTenantBillingView> {
 
 /**
  * A customer tenant's billing as staff read it, audited at most once per
- * staff member and tenant in the view-audit throttle window.
+ * staff member and tenant in the view-audit throttle window, and only once
+ * the read succeeded.
  * @param actor - The staff member (a platform viewer or above; the route checked).
  * @param tenantId - The tenant.
  * @returns The staff billing view.
@@ -165,6 +176,7 @@ export async function getStaffTenantBilling(
   tenantId: string
 ): Promise<StaffTenantBillingView> {
   await customerTenant(tenantId)
+  const view = await staffView(tenantId)
   await auditThrottledView({
     key: redisKey(
       'billing',
@@ -193,7 +205,7 @@ export async function getStaffTenantBilling(
       })
     },
   })
-  return staffView(tenantId)
+  return view
 }
 
 /**
@@ -212,7 +224,7 @@ export async function resyncTenantBilling(
   reason: string
 ): Promise<StaffTenantBillingView> {
   await customerTenant(tenantId)
-  await withTransaction((tx) => assertStillPlatformRole(actor, 'manager', tx))
+  // No role re-check before the sync: it changes nothing a caller chose, and the audit below re-checks under lock.
   await syncOrRetry(tenantId, 'staff')
   await withTransaction(async (tx) => {
     await assertStillPlatformRole(actor, 'manager', tx)
@@ -425,7 +437,14 @@ export async function revokeGrant(
  * has not charged yet is always cancelled now and goes back to its trial,
  * or to Free when the trial is over. A scheduled switch or resubscribe is
  * cancelled too. A sync follows, so the row matches the provider; its
- * failure is logged, since the cancel itself is done.
+ * failure is logged, since the cancel itself is done. A subscription that
+ * had already ended is only synced, and the cancel is still audited.
+ *
+ * A staff member whose role is revoked after the provider call and before
+ * the write is refused at the write's lock with the route's 404: the
+ * provider cancel stands, no audit entry is written, and the next sync
+ * records the cancel. The owner's cancel has the same shape (its refusal is
+ * the role 403).
  * @param actor - The staff member (a platform admin or above).
  * @param tenantId - The tenant.
  * @param when - When the subscription ends.
@@ -476,6 +495,7 @@ export async function cancelByStaff(
         tx
       )
     },
+    shouldAuditWhenEnded: true,
     nothingToCancel: (row) =>
       Promise.resolve(
         row.cancelAtPeriodEnd

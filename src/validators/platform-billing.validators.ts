@@ -11,6 +11,16 @@ import { ENTITLEMENTS, type EntitlementDefinition } from '@/constants/entitlemen
 import { reasonSchema } from '@/validators/platform.validators'
 
 /**
+ * The largest limit a grant may set; null grants no cap at all.
+ */
+const MAX_GRANT_LIMIT = 1_000_000
+
+/**
+ * `MAX_GRANT_LIMIT` as people read it.
+ */
+const MAX_GRANT_LIMIT_TEXT = '1,000,000'
+
+/**
  * `POST /tenants/:id/billing/extend-trial`: how many days to add, and why.
  */
 export const extendTrialBodySchema = z.strictObject({
@@ -25,8 +35,9 @@ export const extendTrialBodySchema = z.strictObject({
 /**
  * `POST /tenants/:id/billing/grants`: the entitlement, its value, when it
  * lapses (null for never), and why. A limit takes a whole number of at least
- * 1, or null for no cap; a feature takes `true`, since a grant only ever
- * adds access. The expiry must be in the future.
+ * 1 up to `MAX_GRANT_LIMIT`, or null for no cap; a feature takes `true`,
+ * since a grant only ever adds access. The expiry must be in the future.
+ * Every field's error is reported at once.
  */
 export const grantBodySchema = z
   .strictObject({
@@ -46,10 +57,11 @@ export const grantBodySchema = z
         path: ['key'],
         message: 'Choose a limit or feature this product has.',
       })
-      return
     }
-    const definition = ENTITLEMENTS[body.key as keyof typeof ENTITLEMENTS] as EntitlementDefinition
-    if (definition.kind === 'feature' && body.value !== true) {
+    const definition = Object.hasOwn(ENTITLEMENTS, body.key)
+      ? (ENTITLEMENTS[body.key as keyof typeof ENTITLEMENTS] as EntitlementDefinition)
+      : undefined
+    if (definition?.kind === 'feature' && body.value !== true) {
       context.addIssue({
         code: 'custom',
         path: ['value'],
@@ -57,14 +69,17 @@ export const grantBodySchema = z
       })
     }
     if (
-      definition.kind === 'limit' &&
+      definition?.kind === 'limit' &&
       body.value !== null &&
-      (typeof body.value !== 'number' || !Number.isInteger(body.value) || body.value < 1)
+      (typeof body.value !== 'number' ||
+        !Number.isSafeInteger(body.value) ||
+        body.value < 1 ||
+        body.value > MAX_GRANT_LIMIT)
     ) {
       context.addIssue({
         code: 'custom',
         path: ['value'],
-        message: 'Enter a whole number of at least 1 for a limit, or null for no cap.',
+        message: `Enter a whole number from 1 to ${MAX_GRANT_LIMIT_TEXT} for a limit, or null for no cap.`,
       })
     }
     if (body.expiresAt !== null && new Date(body.expiresAt).getTime() <= Date.now()) {

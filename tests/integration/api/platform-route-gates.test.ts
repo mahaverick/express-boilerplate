@@ -459,7 +459,7 @@ describe('/api/v1/platform route gates', () => {
     tenantIds.push(tenant.id)
     ids.user = target.id
     ids.tenant = tenant.id
-    // A grant on the tenant, so an admitted revoke reaches body validation rather than the unknown-grant 404.
+    // A real grant id, so the revoke path names one; the controller parses the body first, so an admitted call answers its validation 400 either way.
     await grantSeats(tenant.id, 10)
     const [grant] = await sql<{ id: string }[]>`
       select id from tenant_entitlement_grants where tenant_id = ${tenant.id}`

@@ -21,7 +21,8 @@
  *   switch or resubscribe continues Paid, or an owner cancels a subscription
  *   before its first charge, or staff cancel one now (the row leaves Paid at
  *   once). `by` comes from
- *   the source, from an owner's cancel on record (`isOwnerCancel`), and from
+ *   the source, from an owner's or staff cancel on record (`isOwnerCancel`,
+ *   `isStaffCancel`), and from
  *   the lifecycle for a suspended or archived workspace.
  * - `subscription_interval_change_scheduled`: the next subscription is first
  *   authenticated on another interval than the current one.
@@ -74,6 +75,13 @@ export interface BillingAnalyticsContext {
    * cancel the provider's webhook brings in first is still the owner's.
    */
   isOwnerCancel?: boolean
+  /**
+   * Whether the change is a staff member's own cancel: the staff cancel
+   * passes it, and a cancel the provider's webhook brings in first carries
+   * it from the staff cancel marker. A staff resync without it reads the
+   * provider's real cause.
+   */
+  isStaffCancel?: boolean
 }
 
 /**
@@ -113,18 +121,23 @@ function isSameValue(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Who scheduled a cancel.
+ * Who scheduled a cancel. A staff source alone is not a staff cancel: a
+ * staff resync only brings in what the provider did.
  * @param source - What made the change.
  * @param isWorkspaceActive - Whether the workspace is active.
+ * @param marker - Whether an owner's or a staff member's own cancel is on record.
+ * @param marker.isOwnerCancel - An owner's cancel is on record.
+ * @param marker.isStaffCancel - The change is a staff member's own cancel.
  * @returns The `by` value.
  */
 function cancelledBy(
   source: BillingHistorySource,
   isWorkspaceActive: boolean,
-  isOwnerCancel: boolean
+  marker: { isOwnerCancel: boolean; isStaffCancel: boolean }
 ): CancelScheduledBy {
+  const { isOwnerCancel, isStaffCancel } = marker
   if (source === 'owner') return 'owner'
-  if (source === 'staff') return 'staff'
+  if (isStaffCancel) return 'staff'
   // A suspension's cancel wins over an owner's marker: the marker may outlive a cancel that failed.
   if (!isWorkspaceActive) return 'suspension'
   return isOwnerCancel ? 'owner' : 'customer_bank'
@@ -167,16 +180,18 @@ export function billingActorOf(
  * @param before - The row before.
  * @param after - The row after.
  * @param source - What made the change.
+ * @param isStaffCancel - Whether the change is a staff member's own cancel.
  * @returns True when a cancel was scheduled.
  */
 function isCancelScheduled(
   before: TenantBillingRecord,
   after: TenantBillingRecord,
-  source: BillingHistorySource
+  source: BillingHistorySource,
+  isStaffCancel: boolean
 ): boolean {
   if (!before.cancelAtPeriodEnd && after.cancelAtPeriodEnd) return !isContinued(after)
   return (
-    (source === 'owner' || source === 'staff') &&
+    (source === 'owner' || isStaffCancel) &&
     isPaying(before.state) &&
     !isPaying(after.state) &&
     !before.cancelAtPeriodEnd
@@ -241,10 +256,14 @@ export function billingDiffEvents(
   if (before.haltedAt === null && after.haltedAt !== null) {
     add({ type: 'subscription_halted' }, chargeAttribution)
   }
-  if (isCancelScheduled(before, after, source)) {
+  const isStaffCancel = context.isStaffCancel === true
+  if (isCancelScheduled(before, after, source, isStaffCancel)) {
     add({
       type: 'subscription_cancel_scheduled',
-      by: cancelledBy(source, context.isWorkspaceActive, context.isOwnerCancel === true),
+      by: cancelledBy(source, context.isWorkspaceActive, {
+        isOwnerCancel: context.isOwnerCancel === true,
+        isStaffCancel,
+      }),
     })
   }
   if (before.nextAuthenticatedAt === null && after.nextAuthenticatedAt !== null) {
@@ -258,7 +277,7 @@ export function billingDiffEvents(
     const cause: DowngradeCause =
       !context.isWorkspaceActive && isPaying(before.state)
         ? 'lifecycle'
-        : downgradeCauseOf(before, source)
+        : downgradeCauseOf(before, isStaffCancel)
     const attribution = cause === 'trial_ended' ? 'trial' : 'payer'
     if (cause === 'trial_ended') add({ type: 'trial_ended' }, 'trial')
     add({ type: 'downgraded_to_free', downgradeCause: cause }, attribution)

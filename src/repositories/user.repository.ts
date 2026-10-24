@@ -1,7 +1,7 @@
 /**
  * @file Query access to `users`, on `BaseRepository`.
  */
-import { and, eq, isNotNull, sql, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, sql, type SQL } from 'drizzle-orm'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import {
@@ -45,6 +45,23 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
       this.scope(sql`lower(${userModel.email}) = lower(${email})`, options),
       executor
     )
+  }
+
+  /**
+   * Find several users by id in one query, in no particular order.
+   * @param ids - The ids; an empty list reads nothing.
+   * @param options - Soft-delete visibility options.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The users found; an id with no visible row is left out.
+   */
+  async findManyByIds(
+    ids: readonly string[],
+    options: SoftDeleteOptions = {},
+    executor: DbExecutor = db
+  ): Promise<User[]> {
+    if (ids.length === 0) return []
+    const condition = this.scope(inArray(userModel.id, [...ids]), options)
+    return executor.select().from(userModel).where(condition)
   }
 
   /**
