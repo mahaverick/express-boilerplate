@@ -459,7 +459,7 @@ describe('billing email templates', () => {
 })
 
 describe('billing email variants', () => {
-  it('confirms a cancel before the first charge: no charge, the trial end and how to keep Paid', () => {
+  it('confirms a cancel before the first charge in words true for any canceller: the workspace, no charge, the trial end, how to keep Paid', () => {
     const rendered = renderPaidCancelledTemplate({
       appName: 'Acme',
       tenantName: 'Rocket Co',
@@ -469,7 +469,7 @@ describe('billing email variants', () => {
     })
     expect(rendered.subject).toBe('Your Acme Paid plan is cancelled')
     for (const sentence of [
-      "You cancelled Paid before your first charge, so you weren't charged.",
+      'Paid for Rocket Co was cancelled before its first charge, so no payment was taken.',
       'Your trial continues until 7 November 2026.',
       'To keep Paid after that, upgrade again in Billing.',
     ]) {
@@ -477,6 +477,8 @@ describe('billing email variants', () => {
       expect(rendered.html).toContain(sentence.replaceAll("'", '&#39;'))
     }
     expect(rendered.text).not.toContain('moves to Free')
+    expect(rendered.text).not.toContain('You cancelled')
+    expect(rendered.subject).not.toContain('Rocket Co')
     expect(rendered.html).toContain(
       `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Open Billing</a>`
     )

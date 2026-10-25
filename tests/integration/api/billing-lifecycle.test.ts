@@ -227,6 +227,17 @@ async function noticeJobsOf(tenantId: string, type: string): Promise<Job<Notific
 }
 
 /**
+ * The owners told by notification, which carries the email, that Paid was
+ * cancelled.
+ * @param tenantId - The workspace.
+ * @returns Their user ids.
+ */
+async function cancelNoticeUsersOf(tenantId: string): Promise<string[]> {
+  const jobs = await noticeJobsOf(tenantId, 'billing_paid_cancelled')
+  return jobs.map((job) => job.data.userId)
+}
+
+/**
  * The recipients of one workspace's mail of one template.
  * @param tenantId - The workspace.
  * @param templateKey - The template.
@@ -845,28 +856,28 @@ describe('the warnings a suspension held back', () => {
     const staff = await staffAdmin()
     await suspendTenant(staff, tenant.id, 'Support ticket 42')
     await runLifecycleJobs()
-    expect(await mailsOf(tenant.id, 'paid_cancelled')).toStrictEqual([])
+    expect(await cancelNoticeUsersOf(tenant.id)).toStrictEqual([])
 
     await reactivateTenant(staff, tenant.id, 'Support ticket 43')
     await suspendTenant(staff, tenant.id, 'Support ticket 44')
     await runLifecycleJobs()
     await reactivateTenant(staff, tenant.id, 'Support ticket 45')
 
-    expect(await mailsOf(tenant.id, 'paid_cancelled')).toStrictEqual([owner.email])
+    expect(await cancelNoticeUsersOf(tenant.id)).toStrictEqual([owner.id])
   })
 
   it('does not repeat the cancel email an owner already got before the suspension', async () => {
     const { tenant, owner } = await workspace()
     await makePaying(tenant.id)
     await cancelPaid({ userId: owner.id }, tenant.id)
-    expect(await mailsOf(tenant.id, 'paid_cancelled')).toStrictEqual([owner.email])
+    expect(await cancelNoticeUsersOf(tenant.id)).toStrictEqual([owner.id])
     const staff = await staffAdmin()
     await suspendTenant(staff, tenant.id, 'Support ticket 42')
     await runLifecycleJobs()
 
     await reactivateTenant(staff, tenant.id, 'Support ticket 43')
 
-    expect(await mailsOf(tenant.id, 'paid_cancelled')).toStrictEqual([owner.email])
+    expect(await cancelNoticeUsersOf(tenant.id)).toStrictEqual([owner.id])
     expect(await noticeJobsOf(tenant.id, 'billing_payment_failed')).toStrictEqual([])
   })
 })

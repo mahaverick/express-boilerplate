@@ -418,13 +418,90 @@ describe('billing emails', () => {
   })
 
   it("confirms an owner's cancel through the checkout service's own write", async () => {
-    const { tenantId, owner } = await team()
+    const { tenantId, owner, coOwner } = await team()
     await makePaying(tenantId)
 
     await cancelPaid({ userId: owner.id }, tenantId)
 
     expect(await readBilling(tenantId)).toHaveProperty('cancelAtPeriodEnd', true)
-    expect(await mailsOf(tenantId, 'paid_cancelled')).toHaveLength(3)
+    expect(await recipientsOf(tenantId, 'paid_cancelled')).toEqual(['accounts@example.test'])
+    const notices = await queuedJobs<NotificationJobData>(getNotificationQueue())
+    expect(
+      notices
+        .filter((job) => job.data.type === 'billing_paid_cancelled')
+        .map((job) => job.data.userId)
+        .toSorted()
+    ).toEqual([owner.id, coOwner.id].toSorted())
+  })
+
+  it('tells owners of a cancel at the period end by notification carrying the email, once', async () => {
+    const { tenantId, owner, coOwner, row } = await team()
+    const paid = paidFrom(row)
+    const cancelling = { ...paid, cancelAtPeriodEnd: true, version: paid.version + 1 }
+
+    await emitBillingDiff(paid, cancelling, 'owner')
+    await emitBillingDiff(paid, cancelling, 'webhook')
+
+    // The billing address has no account, so it gets the email directly; owners get it through the notification.
+    const direct = await mailsOf(tenantId, 'paid_cancelled')
+    expect(direct.map((mail) => mail.recipient)).toEqual(['accounts@example.test'])
+    expect(direct[0]?.variables).toMatchObject({
+      endsOn: '1 November 2026',
+      beforeFirstCharge: 'false',
+    })
+    const notices = await queuedJobs<NotificationJobData>(getNotificationQueue())
+    expect(notices.map((job) => job.data.userId).toSorted()).toEqual(
+      [owner.id, coOwner.id].toSorted()
+    )
+    expect(notices[0]?.data).toMatchObject({
+      type: 'billing_paid_cancelled',
+      title: 'Paid ends on 1 November 2026',
+      email: { templateKey: 'paid_cancelled' },
+    })
+    expect(notices[0]?.data.body).toContain('keeps Paid until 1 November 2026, then moves to Free.')
+
+    for (const job of notices) await processNotificationJob(job)
+    expect(await recipientsOf(tenantId, 'paid_cancelled')).toEqual(
+      ['accounts@example.test', owner.email, coOwner.email].toSorted()
+    )
+    const inApp =
+      await sql`select id from notifications where user_id = any(${[owner.id, coOwner.id]}) and type = 'billing_paid_cancelled'`
+    expect(inApp).toHaveLength(2)
+    await sql`delete from notifications where user_id = any(${[owner.id, coOwner.id]})`
+  })
+
+  it('tells owners of a cancel before the first charge in the same way, naming the workspace and the trial end', async () => {
+    const { tenantId, owner, coOwner, row } = await team()
+    const deferred = { ...paidFrom(row), trialEndsAt: PERIOD_END }
+    const backToTrial = {
+      ...deferred,
+      state: 'trialing' as const,
+      priceId: null,
+      currentPeriodEnd: null,
+      version: deferred.version + 1,
+    }
+
+    await emitBillingDiff(deferred, backToTrial, 'staff', { isStaffCancel: true })
+
+    const direct = await mailsOf(tenantId, 'paid_cancelled')
+    expect(direct.map((mail) => mail.recipient)).toEqual(['accounts@example.test'])
+    expect(direct[0]?.variables).toMatchObject({
+      endsOn: '1 November 2026',
+      beforeFirstCharge: 'true',
+    })
+    const notices = await queuedJobs<NotificationJobData>(getNotificationQueue())
+    expect(notices.map((job) => job.data.userId).toSorted()).toEqual(
+      [owner.id, coOwner.id].toSorted()
+    )
+    expect(notices[0]?.data).toMatchObject({
+      type: 'billing_paid_cancelled',
+      title: 'Your Paid plan is cancelled',
+      email: { templateKey: 'paid_cancelled' },
+    })
+    expect(notices[0]?.data.body).toContain(
+      'was cancelled before its first charge, so no payment was taken. Your trial continues until 1 November 2026.'
+    )
+    expect(notices[0]?.data.body).not.toContain('You cancelled')
   })
 
   it('sends the trial summary when the scheduler ends a lapsed trial', async () => {

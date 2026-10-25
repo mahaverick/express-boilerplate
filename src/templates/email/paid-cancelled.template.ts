@@ -88,7 +88,7 @@ export function renderPaidCancelledTemplate(variables: PaidCancelledVariables): 
       subject: `Your ${appName} Paid plan is cancelled`,
       appName,
       paragraphs: [
-        "You cancelled Paid before your first charge, so you weren't charged.",
+        `Paid for ${tenantName} was cancelled before its first charge, so no payment was taken.`,
         `Your trial continues until ${endsOn}.`,
         'To keep Paid after that, upgrade again in Billing.',
       ],
