@@ -849,6 +849,20 @@ describe('POST /api/v1/tenants/:slug/billing/cancel before the first charge', ()
   })
 })
 
+/**
+ * Start a paid subscription for a workspace on the fake and let a sync adopt
+ * it as the current one, as a confirmed checkout's webhook does.
+ * @param tenantId - The workspace.
+ * @returns The subscription id.
+ */
+async function adoptActive(tenantId: string): Promise<string> {
+  const id = await fakeSubscription({ tenantId, priceId: plans.monthPriceId })
+  await fake.fakeAdvance(id, 'active')
+  await setBilling(tenantId, { pendingSubscriptionId: id })
+  await syncTenantBilling(tenantId, 'webhook')
+  return id
+}
+
 describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
   it('lists the paid invoices for the owner', async () => {
     const { tenant, owner } = await workspace()
@@ -862,6 +876,46 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
       expect.objectContaining({ amountMinor: 99_900, currency: 'INR', status: 'paid' }),
     ])
     expect(page.page).toMatchObject({ nextCursor: null, hasNext: false, hasPrev: false })
+  })
+
+  it("keeps listing an earlier subscription's invoices after a resubscribe, newest first", async () => {
+    const { tenant, owner } = await workspace()
+    const first = await adoptActive(tenant.id)
+    await fake.fakeAdvance(first, 'halted')
+    await fake.fakeAdvance(first, 'cancelled')
+    // The paid period ran out long ago: the sync moves the workspace to Free.
+    await fake.fakeShiftBack(first, 60 * DAY_MS)
+    await setBilling(tenant.id, { currentPeriodEnd: new Date(Date.now() - 30 * DAY_MS) })
+    await syncTenantBilling(tenant.id, 'webhook')
+    expect(await billingColumn(tenant.id, 'state')).toBe('free')
+    const second = await adoptActive(tenant.id)
+    expect(await billingColumn(tenant.id, 'providerSubscriptionId')).toBe(second)
+
+    const response = await getAs(owner, `${tenant.slug}/billing/invoices`)
+
+    expect(response.status).toBe(200)
+    const page = dataOf(response.body) as { items: { id: string }[] }
+    const newer = await fake.listInvoices([second], null)
+    const older = await fake.listInvoices([first], null)
+    const expected = [...newer.items, ...older.items]
+    expect(expected).toHaveLength(2)
+    expect(page.items.map((item) => item.id)).toStrictEqual(expected.map((item) => item.id))
+  })
+
+  it("never lists another workspace's subscriptions", async () => {
+    const mine = await workspace()
+    const theirs = await workspace()
+    await adoptActive(mine.tenant.id)
+    const other = await adoptActive(theirs.tenant.id)
+    const otherPage = await fake.listInvoices([other], null)
+    const otherInvoices = otherPage.items.map((item) => item.id)
+
+    const response = await getAs(mine.owner, `${mine.tenant.slug}/billing/invoices`)
+
+    expect(response.status).toBe(200)
+    const page = dataOf(response.body) as { items: { id: string }[] }
+    expect(page.items).toHaveLength(1)
+    expect(page.items.map((item) => item.id)).not.toContain(otherInvoices[0])
   })
 
   it('hides the invoices from an admin with the role 403', async () => {

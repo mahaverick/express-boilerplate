@@ -41,38 +41,39 @@ sometimes sharing one file. The `*.model.ts` suffix is enforced by `check-file`
 ([ARCHITECTURE.md](ARCHITECTURE.md#directory-rules)). A model file under that
 glob is picked up by `drizzle.config.ts` with no config change.
 
-| Table                       | Model file                        | Holds                                                                                                                                           |
-| --------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`                     | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
-| `user_tokens`               | `user-token.model.ts`             | Refresh tokens and emailed sign-in, step-up and invitation confirm links, as hashes; see below.                                                 |
-| `auth_providers`            | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                  |
-| `user_passkeys`             | `user-passkey.model.ts`           | One row per passkey a user has registered: the public key, counters and a name. No private key exists server-side.                              |
-| `tenants`                   | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
-| `tenant_settings`           | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
-| `user_memberships`          | `user-membership.model.ts`        | One row per (user, tenant) pair, with the user's role in it.                                                                                    |
-| `tenant_invitations`        | `tenant-invitation.model.ts`      | Offers of a role in a tenant to an email address; only the token's SHA-256 hash is stored.                                                      |
-| `audit_logs`                | `audit-log.model.ts`              | The append-only audit trail, guarded by the `audit_logs_immutable` trigger ([SECURITY.md](SECURITY.md#the-audit-log)).                          |
-| `email_messages`            | `email-message.model.ts`          | One row per logical email; no column holds a rendered body or a token.                                                                          |
-| `email_logs`                | `email-log.model.ts`              | One row per send attempt, pointing at its message through `message_id`.                                                                         |
-| `email_events`              | `email-event.model.ts`            | Provider events (delivered, bounced, opened, …) matched to a message.                                                                           |
-| `email_suppressions`        | `email-suppression.model.ts`      | Addresses that hard-bounced or complained, which no email may be sent to. Lifting one keeps the row as history; retention never deletes one.    |
-| `notifications`             | `notification.model.ts`           | In-app notification history.                                                                                                                    |
-| `notification_preferences`  | `notification.model.ts`           | Per-user, per-type channel opt-outs.                                                                                                            |
-| `onboarding_completions`    | `onboarding-completion.model.ts`  | One append-only row per completed onboarding step, per tenant or per member.                                                                    |
-| `maintenance_mode_state`    | `maintenance-mode-state.model.ts` | The single row holding the platform's maintenance mode. A CHECK pins `id` to 1; migration 0024 inserts the row; no code inserts or deletes one. |
-| `analytics_outbox`          | `analytics-outbox.model.ts`       | Server analytics events waiting to reach PostHog. It holds ids and no PII, and has no foreign key.                                              |
-| `analytics_deletions`       | `analytics-deletion.model.ts`     | Purged users whose PostHog data is still to be deleted; see below.                                                                              |
-| `plans`                     | `billing.model.ts`                | The Free and Paid plans and their entitlements; migration 0033 seeds both. Staff edit them; no code creates or deletes one.                     |
-| `plan_prices`               | `billing.model.ts`                | What a plan costs per currency, country and interval. A price change retires the row and inserts a new one; one active row per combination.     |
-| `tenant_billing`            | `billing.model.ts`                | One row per customer tenant: billing state, plan, trial, paid period and provider ids. Deleted with its tenant; the platform tenant has none.   |
-| `user_trials`               | `billing.model.ts`                | One row per person who has had a trial, so each person gets one.                                                                                |
-| `tenant_entitlement_grants` | `billing.model.ts`                | Staff overrides of one entitlement for one tenant, kept as history after they lapse or are revoked.                                             |
-| `billing_settings`          | `billing.model.ts`                | The single row of trial and grace settings. A CHECK pins `id` to 1; migration 0033 inserts the row; no code inserts or deletes one.             |
-| `billing_events`            | `billing.model.ts`                | One row per provider webhook event, for deduplication and retries: ids, type and outcome, never the payload body.                               |
-| `billing_state_history`     | `billing.model.ts`                | One append-only row per billing state change of a tenant.                                                                                       |
-| `upgrade_requests`          | `billing.model.ts`                | A member's request that an owner upgrade the tenant; one open request per member and tenant.                                                    |
-| `user_banner_dismissals`    | `billing.model.ts`                | The dismissible billing banners a member has closed in a tenant.                                                                                |
-| `billing_alerts`            | `billing.model.ts`                | Billing events staff must look at, such as a refunded duplicate charge or a failing webhook.                                                    |
+| Table                          | Model file                        | Holds                                                                                                                                           |
+| ------------------------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`                        | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
+| `user_tokens`                  | `user-token.model.ts`             | Refresh tokens and emailed sign-in, step-up and invitation confirm links, as hashes; see below.                                                 |
+| `auth_providers`               | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                  |
+| `user_passkeys`                | `user-passkey.model.ts`           | One row per passkey a user has registered: the public key, counters and a name. No private key exists server-side.                              |
+| `tenants`                      | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
+| `tenant_settings`              | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
+| `user_memberships`             | `user-membership.model.ts`        | One row per (user, tenant) pair, with the user's role in it.                                                                                    |
+| `tenant_invitations`           | `tenant-invitation.model.ts`      | Offers of a role in a tenant to an email address; only the token's SHA-256 hash is stored.                                                      |
+| `audit_logs`                   | `audit-log.model.ts`              | The append-only audit trail, guarded by the `audit_logs_immutable` trigger ([SECURITY.md](SECURITY.md#the-audit-log)).                          |
+| `email_messages`               | `email-message.model.ts`          | One row per logical email; no column holds a rendered body or a token.                                                                          |
+| `email_logs`                   | `email-log.model.ts`              | One row per send attempt, pointing at its message through `message_id`.                                                                         |
+| `email_events`                 | `email-event.model.ts`            | Provider events (delivered, bounced, opened, …) matched to a message.                                                                           |
+| `email_suppressions`           | `email-suppression.model.ts`      | Addresses that hard-bounced or complained, which no email may be sent to. Lifting one keeps the row as history; retention never deletes one.    |
+| `notifications`                | `notification.model.ts`           | In-app notification history.                                                                                                                    |
+| `notification_preferences`     | `notification.model.ts`           | Per-user, per-type channel opt-outs.                                                                                                            |
+| `onboarding_completions`       | `onboarding-completion.model.ts`  | One append-only row per completed onboarding step, per tenant or per member.                                                                    |
+| `maintenance_mode_state`       | `maintenance-mode-state.model.ts` | The single row holding the platform's maintenance mode. A CHECK pins `id` to 1; migration 0024 inserts the row; no code inserts or deletes one. |
+| `analytics_outbox`             | `analytics-outbox.model.ts`       | Server analytics events waiting to reach PostHog. It holds ids and no PII, and has no foreign key.                                              |
+| `analytics_deletions`          | `analytics-deletion.model.ts`     | Purged users whose PostHog data is still to be deleted; see below.                                                                              |
+| `plans`                        | `billing.model.ts`                | The Free and Paid plans and their entitlements; migration 0033 seeds both. Staff edit them; no code creates or deletes one.                     |
+| `plan_prices`                  | `billing.model.ts`                | What a plan costs per currency, country and interval. A price change retires the row and inserts a new one; one active row per combination.     |
+| `tenant_billing`               | `billing.model.ts`                | One row per customer tenant: billing state, plan, trial, paid period and provider ids. Deleted with its tenant; the platform tenant has none.   |
+| `user_trials`                  | `billing.model.ts`                | One row per person who has had a trial, so each person gets one.                                                                                |
+| `tenant_entitlement_grants`    | `billing.model.ts`                | Staff overrides of one entitlement for one tenant, kept as history after they lapse or are revoked.                                             |
+| `billing_settings`             | `billing.model.ts`                | The single row of trial and grace settings. A CHECK pins `id` to 1; migration 0033 inserts the row; no code inserts or deletes one.             |
+| `billing_events`               | `billing.model.ts`                | One row per provider webhook event, for deduplication and retries: ids, type and outcome, never the payload body.                               |
+| `tenant_billing_subscriptions` | `billing.model.ts`                | Every subscription a tenant has held as its current one, so its invoices stay listed once replaced. Deleted with its tenant.                    |
+| `billing_state_history`        | `billing.model.ts`                | One append-only row per billing state change of a tenant.                                                                                       |
+| `upgrade_requests`             | `billing.model.ts`                | A member's request that an owner upgrade the tenant; one open request per member and tenant.                                                    |
+| `user_banner_dismissals`       | `billing.model.ts`                | The dismissible billing banners a member has closed in a tenant.                                                                                |
+| `billing_alerts`               | `billing.model.ts`                | Billing events staff must look at, such as a refunded duplicate charge or a failing webhook.                                                    |
 
 Drizzle's own bookkeeping table is separate from these.
 

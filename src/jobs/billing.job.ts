@@ -137,13 +137,81 @@ export type BillingPublishEntitlementsJobData =
     }
 
 /**
+ * The name of the billing queue's backoff, which the billing Worker
+ * implements with `billingRetryDelay`.
+ */
+export const BILLING_BACKOFF_TYPE = 'billing-capped-exponential'
+
+/**
+ * The first retry's wait; each later one doubles it.
+ */
+const BILLING_RETRY_BASE_MS = 30_000
+
+/**
+ * The longest wait between two attempts, so retries stay an hour apart at most.
+ */
+export const BILLING_RETRY_MAX_DELAY_MS = 3_600_000
+
+/**
+ * How many attempts a billing job gets while the provider times out, drops
+ * the connection or answers 5xx or 429: the waits between them
+ * (`billingRetryDelay`) add up to just over 24 hours, the time Razorpay
+ * itself retries a webhook for.
+ */
+export const BILLING_JOB_ATTEMPTS = 31
+
+/**
+ * How many failures other than a provider outage a billing job may have,
+ * such as a sync that kept meeting a concurrent write or a database error,
+ * counted on their own in the job's `otherFailures`: the eighth stops it, so
+ * a fault an outage does not explain reaches staff within about an hour
+ * (30 s × 127 of waits) of its first failure, however many outage
+ * attempts came before.
+ */
+export const BILLING_OTHER_FAILURE_ATTEMPTS = 8
+
+/**
+ * The provider-outage failure, counted in the job's `outageFailures`, at
+ * which staff get one "still retrying" alert: about an hour in, where a job
+ * used to fail for good. The job keeps retrying.
+ */
+export const BILLING_OUTAGE_ALERT_FAILURES = 8
+
+/**
+ * The failure counts the billing Worker keeps in a job's data across its
+ * attempts. Absent until the first failure of each kind.
+ */
+export interface BillingRetryCounts {
+  /**
+   * Failures that were not a provider outage.
+   */
+  otherFailures?: number
+  /**
+   * Failures that were a provider timeout, network failure, 5xx or 429.
+   */
+  outageFailures?: number
+}
+
+/**
+ * The wait before the next attempt of a billing job: 30 s doubling with
+ * each failed attempt, capped at an hour.
+ * @param attemptsMade - The attempts made so far, the one that just failed included (1 after the first).
+ * @returns The wait in milliseconds.
+ */
+export function billingRetryDelay(attemptsMade: number): number {
+  const doublings = Math.max(0, attemptsMade - 1)
+  return Math.min(BILLING_RETRY_BASE_MS * 2 ** doublings, BILLING_RETRY_MAX_DELAY_MS)
+}
+
+/**
  * Options for every billing job. A failed sync changes nothing, so a retry
- * is always safe: eight attempts with backoff doubling from 30 s span about
- * an hour of a provider outage (30 s × 127). Failed jobs are kept a week.
+ * is always safe. A provider outage gets `BILLING_JOB_ATTEMPTS` with waits
+ * from `billingRetryDelay`, about 24 hours; the Worker stops a job at its
+ * `BILLING_OTHER_FAILURE_ATTEMPTS`th other failure. Failed jobs are kept a week.
  */
 const BILLING_JOB_OPTIONS = {
-  attempts: 8,
-  backoff: { type: 'exponential', delay: 30_000 },
+  attempts: BILLING_JOB_ATTEMPTS,
+  backoff: { type: BILLING_BACKOFF_TYPE },
   removeOnComplete: true,
   removeOnFail: { age: 7 * 24 * 3600 },
 } as const satisfies JobsOptions

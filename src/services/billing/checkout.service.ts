@@ -107,6 +107,11 @@ const WRITE_ATTEMPTS = 3
 const INVOICE_LIST = 'tenant-billing-invoices'
 
 /**
+ * The most subscriptions the invoice list reads, newest first.
+ */
+const MAX_INVOICE_SUBSCRIPTIONS = 50
+
+/**
  * The longest provider page cursor an invoice cursor may carry.
  */
 const MAX_PROVIDER_CURSOR_LENGTH = 64
@@ -1556,8 +1561,10 @@ function invoiceScope(tenantId: string, subscriptionIds: readonly string[]): str
 }
 
 /**
- * One page of a workspace's invoices, newest subscription first, for an
- * owner by membership. The provider's own page cursor travels signed.
+ * One page of a workspace's invoices, for an owner by membership: the
+ * scheduled next subscription, the current one, then every earlier
+ * subscription the workspace held with this provider and mode, newest
+ * first. The provider's own page cursor travels signed.
  * @param actor - The signed-in owner.
  * @param tenantId - The workspace.
  * @param cursor - The previous page's `nextCursor`, if any.
@@ -1575,12 +1582,19 @@ export async function listInvoices(
     throw new HttpError(INVOICES_OWNER_ONLY_MESSAGE, 403)
   }
   const row = await billingRepository.findByTenantId(tenantId)
-  const subscriptionIds =
+  const live =
     row === undefined || isOtherProvider(row, provider)
       ? []
       : [row.nextSubscriptionId, row.providerSubscriptionId].filter(
           (id): id is string => id !== null
         )
+  // Only ids recorded for this workspace (its current subscriptions, and before 0036 its resolved charge events), so another workspace's subscription is never listed.
+  const held = await billingRepository.listHeldSubscriptionIds(
+    tenantId,
+    { kind: provider.kind, mode: provider.mode },
+    MAX_INVOICE_SUBSCRIPTIONS
+  )
+  const subscriptionIds = [...new Set([...live, ...held])].slice(0, MAX_INVOICE_SUBSCRIPTIONS)
   const scope = invoiceScope(tenantId, subscriptionIds)
   let providerCursor: string | null = null
   if (cursor !== undefined) {

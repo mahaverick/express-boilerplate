@@ -860,14 +860,14 @@ missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                                                                                       | Worker concurrency   | Job options                                                           |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------- |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                          |
-| `maintenance`  | The retention purge                                                                                                                                                                                                           | 1                    | 3 attempts, backoff from 60 s                                         |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept    |
-| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days; a run: 1 attempt |
+| Queue          | Carries                                                                                                                                                                                                                       | Worker concurrency   | Job options                                                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
+| `maintenance`  | The retention purge                                                                                                                                                                                                           | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
+| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
@@ -877,7 +877,11 @@ one `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
 payload, marks an email's message `failed`, and logs `job failed permanently`
 once. A billing webhook job's final failure also marks its `billing_events`
 row failed and raises one `webhook_failing` staff alert per event; a provider
-refusal a retry cannot change fails it at once. What a job payload may hold, and for how long, is in
+refusal a retry cannot change fails it at once. The billing Worker counts a
+job's provider-outage failures and its other failures apart in the job's data
+(`outageFailures`, `otherFailures`): the eighth outage failure, about an hour
+in, raises one "still retrying" staff alert and the job keeps retrying; the
+eighth other failure stops the job, however many outage attempts came before. What a job payload may hold, and for how long, is in
 [SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a
 `warn`: a failed tick loses nothing. No handler rejects, since an unhandled
 rejection exits the process.
@@ -1444,8 +1448,9 @@ map; the detail lives in the sections it links.
 - **Tables.** `plans`, `plan_prices`, `tenant_billing` (one row per customer
   workspace: state, plan, trial, paid period and provider ids),
   `user_trials`, `tenant_entitlement_grants`, `billing_settings`,
-  `billing_events`, `billing_state_history`, `upgrade_requests`,
-  `user_banner_dismissals` and `billing_alerts`
+  `billing_events`, `tenant_billing_subscriptions` (every subscription a
+  workspace has held, for the invoice list), `billing_state_history`,
+  `upgrade_requests`, `user_banner_dismissals` and `billing_alerts`
   ([DATABASE.md](DATABASE.md#models-and-tables)). The platform tenant has no
   billing row.
 - **States and entitlements.** A row is `trialing`, `free`, `active` or

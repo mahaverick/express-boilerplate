@@ -253,6 +253,13 @@
       "when": 1792880310995,
       "tag": "0035_billing_cancel_marker",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792958227586,
+      "tag": "0036_billing_subscription_history",
+      "breakpoints": true
     }
   ]
 }

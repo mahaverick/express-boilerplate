@@ -1,8 +1,8 @@
 /**
  * @file The billing tables: plans and their prices, each customer workspace's
  * billing record, trials, staff grants, the settings singleton, provider
- * events, state history, upgrade requests, banner dismissals and staff
- * alerts. Migration 0033 seeds the Free and Paid plans, the two Paid prices
+ * events, the subscriptions each workspace has held, state history, upgrade
+ * requests, banner dismissals and staff alerts. Migration 0033 seeds the Free and Paid plans, the two Paid prices
  * and the settings row, and gives every existing customer workspace a Free
  * record. The platform tenant never has a billing record.
  */
@@ -413,6 +413,55 @@ export const billingEventModel = pgTable(
       table.providerEventId
     ),
     index('billing_events_tenant_received_idx').on(table.tenantId, table.receivedAt),
+  ]
+)
+
+/**
+ * The `tenant_billing_subscriptions` table: the subscriptions a workspace
+ * has held as its current one, so the invoice list still reaches the
+ * invoices of a subscription the row has since replaced. One row per
+ * subscription id, written when a billing row write first makes it current,
+ * and deleted with the workspace. Migration 0036 backfilled it from each
+ * row's current subscription and from the charge and activation events
+ * resolved to a workspace, less the duplicates a refund alert names; a
+ * subscription replaced before 0036 whose events never arrived is missing.
+ */
+export const tenantBillingSubscriptionModel = pgTable(
+  'tenant_billing_subscriptions',
+  {
+    id: varchar('id', { length: 36 })
+      .primaryKey()
+      .default(sql`uuidv7()`),
+    tenantId: varchar('tenant_id', { length: 36 })
+      .notNull()
+      .references(() => tenantModel.id, { onDelete: 'cascade' }),
+    provider: varchar('provider', { length: 16 }).$type<BillingProvider>().notNull(),
+    mode: varchar('mode', { length: 8 }).$type<BillingProviderMode>().notNull(),
+    subscriptionId: varchar('subscription_id', { length: PROVIDER_ID_LENGTH }).notNull(),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
+    check(
+      'tenant_billing_subscriptions_provider_check',
+      sql`${table.provider} in (${sql.raw(sqlValueList(BILLING_PROVIDERS))})`
+    ),
+    check(
+      'tenant_billing_subscriptions_mode_check',
+      sql`${table.mode} in (${sql.raw(sqlValueList(BILLING_PROVIDER_MODES))})`
+    ),
+    unique('tenant_billing_subscriptions_subscription_unique').on(
+      table.provider,
+      table.mode,
+      table.subscriptionId
+    ),
+    index('tenant_billing_subscriptions_tenant_seen_idx').on(
+      table.tenantId,
+      table.firstSeenAt,
+      table.id
+    ),
   ]
 )
 
