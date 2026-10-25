@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.0.1](https://github.com/mahaverick/express-boilerplate/compare/v9.0.0...v9.0.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **billing:** invoice history across subscriptions and 24-hour outage retries ([#152](https://github.com/mahaverick/express-boilerplate/issues/152)) ([dcac852](https://github.com/mahaverick/express-boilerplate/commit/dcac85202b4e6eefb3ae14164ea34db705697b0d))
+
 ## [9.0.0](https://github.com/mahaverick/express-boilerplate/compare/v8.0.2...v9.0.0) (2026-10-25)
 
 
