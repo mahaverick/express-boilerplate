@@ -155,7 +155,8 @@ type TenantBillingPatch = Partial<Omit<NewTenantBilling, 'tenantId' | 'version' 
  */
 export class BillingRepository {
   /**
-   * Insert a workspace's billing record.
+   * Insert a workspace's billing record, recording its current subscription
+   * when it names one, as `updateVersioned` does.
    * @param row - The row's column values.
    * @param tx - The open transaction.
    * @returns The inserted row.
@@ -163,16 +164,23 @@ export class BillingRepository {
   async insertForTenant(row: NewTenantBilling, tx: DbTransaction): Promise<TenantBillingRecord> {
     const [created] = await tx.insert(tenantBillingModel).values(row).returning()
     if (created === undefined) throw new HttpError('Insert returned no row', 500)
+    await this.#recordCurrentOf(created, tx)
     return created
   }
 
   /**
-   * Insert a workspace's billing record unless it has one.
+   * Insert a workspace's billing record unless it has one, recording its
+   * current subscription when the inserted row names one.
    * @param row - The row's column values.
    * @param tx - The open transaction.
    */
   async insertIfAbsent(row: NewTenantBilling, tx: DbTransaction): Promise<void> {
-    await tx.insert(tenantBillingModel).values(row).onConflictDoNothing()
+    const [created] = await tx
+      .insert(tenantBillingModel)
+      .values(row)
+      .onConflictDoNothing()
+      .returning()
+    if (created !== undefined) await this.#recordCurrentOf(created, tx)
   }
 
   /**
@@ -244,23 +252,75 @@ export class BillingRepository {
       )
       .returning()
     // Every write that makes a subscription current records it, so its invoices stay listed once replaced.
-    if (
-      row !== undefined &&
-      typeof patch.providerSubscriptionId === 'string' &&
-      row.provider !== null &&
-      row.providerMode !== null
-    ) {
-      await tx
-        .insert(tenantBillingSubscriptionModel)
-        .values({
-          tenantId,
-          provider: row.provider,
-          mode: row.providerMode,
-          subscriptionId: patch.providerSubscriptionId,
-        })
-        .onConflictDoNothing()
+    if (row !== undefined && typeof patch.providerSubscriptionId === 'string') {
+      await this.#recordCurrentOf(row, tx)
     }
     return row
+  }
+
+  /**
+   * Record a written row's current subscription, when it has one and a
+   * provider and mode, for the invoice list. Every write that can set
+   * `provider_subscription_id` calls it in its own transaction.
+   * @param row - The row as written.
+   * @param tx - The write's transaction.
+   */
+  async #recordCurrentOf(row: TenantBillingRecord, tx: DbTransaction): Promise<void> {
+    if (row.providerSubscriptionId === null || row.provider === null || row.providerMode === null) {
+      return
+    }
+    await this.#recordHeldSubscription(
+      row.tenantId,
+      { kind: row.provider, mode: row.providerMode },
+      row.providerSubscriptionId,
+      tx
+    )
+  }
+
+  /**
+   * Record that a workspace holds a subscription as its current one. An id
+   * already recorded for another workspace stays theirs: the write is
+   * skipped and one `reconcile_repair` staff alert names the ids (no
+   * address or name), so staff can look into how two workspaces came to
+   * hold one subscription.
+   * @param tenantId - The workspace.
+   * @param scope - The provider and mode the subscription belongs to.
+   * @param subscriptionId - The subscription.
+   * @param tx - The write's transaction.
+   */
+  async #recordHeldSubscription(
+    tenantId: string,
+    scope: ProviderScope,
+    subscriptionId: string,
+    tx: DbTransaction
+  ): Promise<void> {
+    const [recorded] = await tx
+      .insert(tenantBillingSubscriptionModel)
+      .values({ tenantId, provider: scope.kind, mode: scope.mode, subscriptionId })
+      .onConflictDoNothing({
+        target: [
+          tenantBillingSubscriptionModel.provider,
+          tenantBillingSubscriptionModel.mode,
+          tenantBillingSubscriptionModel.subscriptionId,
+        ],
+      })
+      .returning({ id: tenantBillingSubscriptionModel.id })
+    if (recorded !== undefined) return
+    const [holder] = await tx
+      .select({ tenantId: tenantBillingSubscriptionModel.tenantId })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId)
+        )
+      )
+    if (holder === undefined || holder.tenantId === tenantId) return
+    // A repository cannot log; a staff alert, raised once per pair, names the ids instead.
+    const message = `Subscription ${subscriptionId} became current for workspace ${tenantId} but is recorded for workspace ${holder.tenantId}. Check which workspace pays for it.`
+    if (await this.hasAlertNaming(tenantId, 'reconcile_repair', message, tx)) return
+    await this.insertAlert({ kind: 'reconcile_repair', tenantId, message }, tx)
   }
 
   /**

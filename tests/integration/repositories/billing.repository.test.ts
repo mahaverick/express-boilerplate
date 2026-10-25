@@ -27,6 +27,25 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: () => signal.release?.() }
 }
 
+/**
+ * The workspace each recorded copy of a subscription id belongs to.
+ * @param subscriptionId - The id.
+ * @returns One tenant id per row.
+ */
+async function heldBy(subscriptionId: string): Promise<string[]> {
+  const rows = await sql<{ tenant_id: string }[]>`
+    select tenant_id from tenant_billing_subscriptions where subscription_id = ${subscriptionId}`
+  return rows.map((row) => row.tenant_id)
+}
+
+/**
+ * A fresh subscription id.
+ * @returns The id.
+ */
+function subscriptionId(): string {
+  return `sub_REPO${randomUUID().replaceAll('-', '').slice(0, 12)}`
+}
+
 describe('BillingRepository', () => {
   const tenantIds: string[] = []
   const userIds: string[] = []
@@ -338,5 +357,122 @@ describe('BillingRepository', () => {
     await withTransaction((tx) => repository.setFirstTrialTenant(userId, tenantId, tx))
     const [row] = await sql`select first_trial_tenant_id from user_trials where user_id = ${userId}`
     expect(row?.['first_trial_tenant_id']).toBe(tenantId)
+  })
+
+  describe('the subscriptions a workspace held', () => {
+    const razorpayTest = { provider: 'razorpay', providerMode: 'test' } as const
+
+    it('records a subscription a versioned write makes current', async () => {
+      const tenantId = await billedTenant()
+      const id = subscriptionId()
+      await withTransaction((tx) =>
+        repository.updateVersioned(tenantId, 1, { ...razorpayTest, providerSubscriptionId: id }, tx)
+      )
+      expect(await heldBy(id)).toStrictEqual([tenantId])
+      expect(
+        await repository.listHeldSubscriptionIds(tenantId, { kind: 'razorpay', mode: 'test' }, 10)
+      ).toStrictEqual([id])
+    })
+
+    it('records nothing for a stale write', async () => {
+      const tenantId = await billedTenant()
+      const id = subscriptionId()
+      const updated = await withTransaction((tx) =>
+        repository.updateVersioned(
+          tenantId,
+          99,
+          { ...razorpayTest, providerSubscriptionId: id },
+          tx
+        )
+      )
+      expect(updated).toBeUndefined()
+      expect(await heldBy(id)).toStrictEqual([])
+    })
+
+    it('records nothing when the write rolls back', async () => {
+      const tenantId = await billedTenant()
+      const id = subscriptionId()
+      await expect(
+        withTransaction(async (tx) => {
+          await repository.updateVersioned(
+            tenantId,
+            1,
+            { ...razorpayTest, providerSubscriptionId: id },
+            tx
+          )
+          throw new Error('the sync failed after its write')
+        })
+      ).rejects.toThrow('the sync failed after its write')
+      expect(await heldBy(id)).toStrictEqual([])
+    })
+
+    it('records the subscription of an inserted row', async () => {
+      const tenantId = await billedTenant()
+      const free = await sql<{ id: string }[]>`select id from plans where key = 'free'`
+      const id = subscriptionId()
+      await sql`delete from tenant_billing where tenant_id = ${tenantId}`
+      await withTransaction((tx) =>
+        repository.insertForTenant(
+          {
+            tenantId,
+            state: 'active',
+            planId: free[0]?.id ?? '',
+            ...razorpayTest,
+            providerSubscriptionId: id,
+          },
+          tx
+        )
+      )
+      expect(await heldBy(id)).toStrictEqual([tenantId])
+
+      const other = await billedTenant()
+      const otherId = subscriptionId()
+      await sql`delete from tenant_billing where tenant_id = ${other}`
+      await withTransaction((tx) =>
+        repository.insertIfAbsent(
+          {
+            tenantId: other,
+            state: 'active',
+            planId: free[0]?.id ?? '',
+            ...razorpayTest,
+            providerSubscriptionId: otherId,
+          },
+          tx
+        )
+      )
+      expect(await heldBy(otherId)).toStrictEqual([other])
+    })
+
+    it('leaves an id with the workspace that recorded it first, and alerts staff once', async () => {
+      const first = await billedTenant()
+      const second = await billedTenant()
+      const id = subscriptionId()
+      await withTransaction((tx) =>
+        repository.updateVersioned(first, 1, { ...razorpayTest, providerSubscriptionId: id }, tx)
+      )
+      // The first workspace moves on, so the second may hold the id on its row.
+      await withTransaction((tx) =>
+        repository.updateVersioned(first, 2, { providerSubscriptionId: subscriptionId() }, tx)
+      )
+      await withTransaction((tx) =>
+        repository.updateVersioned(second, 1, { ...razorpayTest, providerSubscriptionId: id }, tx)
+      )
+      await withTransaction((tx) =>
+        repository.updateVersioned(second, 2, { providerSubscriptionId: subscriptionId() }, tx)
+      )
+      await sql`update tenant_billing set provider_subscription_id = null where tenant_id = ${first}`
+      await withTransaction((tx) =>
+        repository.updateVersioned(second, 3, { providerSubscriptionId: id }, tx)
+      )
+
+      expect(await heldBy(id)).toStrictEqual([first])
+      const alerts = await sql<{ id: string; message: string }[]>`
+        select id, message from billing_alerts
+        where kind = 'reconcile_repair' and tenant_id = ${second} and strpos(message, ${id}) > 0`
+      alertIds.push(...alerts.map((alert) => alert.id))
+      expect(alerts.map((alert) => alert.message)).toStrictEqual([
+        `Subscription ${id} became current for workspace ${second} but is recorded for workspace ${first}. Check which workspace pays for it.`,
+      ])
+    })
   })
 })
