@@ -33,6 +33,7 @@ import {
   billingStateHistoryModel,
   planPriceModel,
   tenantBillingModel,
+  tenantBillingSubscriptionModel,
   upgradeRequestModel,
   userBannerDismissalModel,
   userTrialModel,
@@ -242,7 +243,57 @@ export class BillingRepository {
         )
       )
       .returning()
+    // Every write that makes a subscription current records it, so its invoices stay listed once replaced.
+    if (
+      row !== undefined &&
+      typeof patch.providerSubscriptionId === 'string' &&
+      row.provider !== null &&
+      row.providerMode !== null
+    ) {
+      await tx
+        .insert(tenantBillingSubscriptionModel)
+        .values({
+          tenantId,
+          provider: row.provider,
+          mode: row.providerMode,
+          subscriptionId: patch.providerSubscriptionId,
+        })
+        .onConflictDoNothing()
+    }
     return row
+  }
+
+  /**
+   * The subscriptions a workspace has held as its current one with a
+   * provider and mode, newest first.
+   * @param tenantId - The workspace.
+   * @param scope - The running provider and mode.
+   * @param limit - The most ids to answer.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The subscription ids.
+   */
+  async listHeldSubscriptionIds(
+    tenantId: string,
+    scope: ProviderScope,
+    limit: number,
+    executor: DbExecutor = db
+  ): Promise<string[]> {
+    const rows = await executor
+      .select({ subscriptionId: tenantBillingSubscriptionModel.subscriptionId })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.tenantId, tenantId),
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode)
+        )
+      )
+      .orderBy(
+        desc(tenantBillingSubscriptionModel.firstSeenAt),
+        desc(tenantBillingSubscriptionModel.id)
+      )
+      .limit(limit)
+    return rows.map((row) => row.subscriptionId)
   }
 
   /**
