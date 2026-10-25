@@ -305,6 +305,32 @@ describe('startWorkers', () => {
     expect(vi.mocked(startEmailWorker).mock.calls).toEqual([['email'], ['auth-email']])
   })
 
+  it('names the Workers it started, in start order, billing included', () => {
+    wireMocks()
+
+    expect(startWorkers().names).toEqual([
+      'email',
+      'auth-email',
+      'notification',
+      'maintenance',
+      'billing',
+    ])
+  })
+
+  it('names the analytics Worker too when it starts one', () => {
+    vi.mocked(isPosthogApiEnabled).mockReturnValue(true)
+    wireMocks()
+
+    expect(startWorkers().names).toEqual([
+      'email',
+      'auth-email',
+      'notification',
+      'maintenance',
+      'billing',
+      'analytics',
+    ])
+  })
+
   it('registers the retention schedule once per generation', () => {
     const mocks = wireMocks()
     startWorkers()

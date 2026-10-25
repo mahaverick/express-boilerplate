@@ -3,7 +3,7 @@
  * signal handling and workers. Excluded from coverage as signal wiring;
  * tests/unit/index.test.ts spawns it to prove boot refuses a bad environment.
  */
-import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
+import { isFlagsEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 import { applyNetworkDefaults } from '@/configs/network.config'
@@ -109,11 +109,7 @@ async function boot(): Promise<void> {
   if (isShuttingDown()) return
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
-  logger.info(
-    isAnalyticsEnabled() || isPosthogApiEnabled()
-      ? 'Workers started (email, auth-email, notification, maintenance, analytics)'
-      : 'Workers started (email, auth-email, notification, maintenance)'
-  )
+  logger.info(`Workers started (${workers.supervised.names.join(', ')})`)
 }
 
 /**

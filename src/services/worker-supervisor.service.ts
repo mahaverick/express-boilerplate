@@ -30,9 +30,41 @@ import { startNotificationWorker } from '@/workers/notification.worker'
  */
 export interface SupervisedWorkers {
   /**
+   * The Workers the first start started, in start order, such as `email`
+   * or `billing`: what the boot log names.
+   */
+  names: readonly string[]
+  /**
    * Stop replacing Workers, then close the current ones and any still closing.
    */
   close: () => Promise<void>
+}
+
+/**
+ * One Worker to start, by the name the boot log gives it.
+ */
+interface WorkerStarter {
+  name: string
+  start: () => Worker
+}
+
+/**
+ * The Workers each generation starts, in order: the analytics Worker only
+ * when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`.
+ * @returns The starters.
+ */
+function workerStarters(): WorkerStarter[] {
+  const starters: WorkerStarter[] = [
+    { name: 'email', start: () => startEmailWorker('email') },
+    { name: 'auth-email', start: () => startEmailWorker('auth-email') },
+    { name: 'notification', start: startNotificationWorker },
+    { name: 'maintenance', start: startMaintenanceWorker },
+    { name: 'billing', start: startBillingWorker },
+  ]
+  if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
+    starters.push({ name: 'analytics', start: startAnalyticsWorker })
+  }
+  return starters
 }
 
 /**
@@ -99,7 +131,7 @@ async function registerInBackground(
  * A failed first start throws. A failed restart cannot throw from inside
  * 'end', so it calls `setWorkersFailed(true)` and readiness stays red until a
  * later restart succeeds or the process restarts.
- * @returns A handle whose `close()` closes whichever Workers are current.
+ * @returns A handle naming the Workers, whose `close()` closes whichever are current.
  * @throws {Error} Whatever starting a Worker throws at first start, after closing any already started.
  */
 export function startWorkers(): SupervisedWorkers {
@@ -108,6 +140,7 @@ export function startWorkers(): SupervisedWorkers {
     isClosed: false,
   }
   const retiring = new Set<Promise<void>>()
+  const firstNames: string[] = []
 
   /**
    * Close discarded Workers in the background, tracked until they settle so
@@ -134,20 +167,12 @@ export function startWorkers(): SupervisedWorkers {
     supervisor.generation = generation
     try {
       generation.connection = getQueueConnection()
-      const starters = [
-        () => startEmailWorker('email'),
-        () => startEmailWorker('auth-email'),
-        startNotificationWorker,
-        startMaintenanceWorker,
-        startBillingWorker,
-      ]
-      if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
-        starters.push(startAnalyticsWorker)
-      }
+      const starters = workerStarters()
       // One at a time, so a throw leaves the ones already started in `workers`.
-      for (const start of starters) {
+      for (const { start } of starters) {
         generation.workers.push(start())
       }
+      if (firstNames.length === 0) firstNames.push(...starters.map(({ name }) => name))
       // Each generation retries, so a Redis outage at boot can't leave the purge unscheduled.
       void registerInBackground(
         ensureRetentionSchedule,
@@ -198,6 +223,7 @@ export function startWorkers(): SupervisedWorkers {
   })
 
   return {
+    names: firstNames,
     close: async () => {
       supervisor.isClosed = true
       unsubscribe()
