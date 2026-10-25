@@ -50,11 +50,13 @@ const KNOWN_MOUNTS = [
   '/platform',
   '/flags',
   '/status',
+  '/plans',
   '/users',
   '/emails',
   '/email-suppressions',
   '/onboarding',
   '/tenants/:id/onboarding',
+  '/tenants/:id/billing',
 ] as const
 
 /**

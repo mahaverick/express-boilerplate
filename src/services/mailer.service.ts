@@ -13,6 +13,11 @@ import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
+  INTERVAL_SWITCH_SCHEDULED_TEMPLATE_KEY,
+  renderIntervalSwitchScheduledTemplate,
+  type IntervalSwitchScheduledVariables,
+} from '@/templates/email/interval-switch-scheduled.template'
+import {
   INVITATION_CONFIRM_TEMPLATE_KEY,
   renderInvitationConfirmTemplate,
   type InvitationConfirmVariables,
@@ -23,10 +28,25 @@ import {
   type MaintenanceModeChangedVariables,
 } from '@/templates/email/maintenance-mode-changed.template'
 import {
+  MOVED_TO_FREE_TEMPLATE_KEY,
+  renderMovedToFreeTemplate,
+  type MovedToFreeVariables,
+} from '@/templates/email/moved-to-free.template'
+import {
   ONBOARDING_REMINDER_TEMPLATE_KEY,
   renderOnboardingReminderTemplate,
   type OnboardingReminderVariables,
 } from '@/templates/email/onboarding-reminder.template'
+import {
+  PAID_CANCELLED_TEMPLATE_KEY,
+  renderPaidCancelledTemplate,
+  type PaidCancelledVariables,
+} from '@/templates/email/paid-cancelled.template'
+import {
+  PAID_WELCOME_TEMPLATE_KEY,
+  renderPaidWelcomeTemplate,
+  type PaidWelcomeVariables,
+} from '@/templates/email/paid-welcome.template'
 import {
   PASSKEY_CREATED_TEMPLATE_KEY,
   renderPasskeyCreatedTemplate,
@@ -36,6 +56,21 @@ import {
   PASSKEY_DELETED_TEMPLATE_KEY,
   renderPasskeyDeletedTemplate,
 } from '@/templates/email/passkey-deleted.template'
+import {
+  PAYER_LEFT_TEMPLATE_KEY,
+  renderPayerLeftTemplate,
+  type PayerLeftVariables,
+} from '@/templates/email/payer-left.template'
+import {
+  PAYMENT_FAILED_TEMPLATE_KEY,
+  renderPaymentFailedTemplate,
+  type PaymentFailedVariables,
+} from '@/templates/email/payment-failed.template'
+import {
+  RENEWAL_UPCOMING_TEMPLATE_KEY,
+  renderRenewalUpcomingTemplate,
+  type RenewalUpcomingVariables,
+} from '@/templates/email/renewal-upcoming.template'
 import {
   renderSignInLinkTemplate,
   SIGN_IN_LINK_TEMPLATE_KEY,
@@ -52,10 +87,50 @@ import {
   type TenantInvitationVariables,
 } from '@/templates/email/tenant-invitation.template'
 import {
+  TRIAL_ENDED_TEMPLATE_KEY,
+  renderTrialEndedTemplate,
+  type TrialEndedVariables,
+} from '@/templates/email/trial-ended.template'
+import {
+  TRIAL_ENDING_TEMPLATE_KEY,
+  renderTrialEndingTemplate,
+  type TrialEndingVariables,
+} from '@/templates/email/trial-ending.template'
+import {
+  TRIAL_ENDS_TODAY_TEMPLATE_KEY,
+  renderTrialEndsTodayTemplate,
+  type TrialEndsTodayVariables,
+} from '@/templates/email/trial-ends-today.template'
+import {
+  TRIAL_MIDPOINT_TEMPLATE_KEY,
+  renderTrialMidpointTemplate,
+  type TrialMidpointVariables,
+} from '@/templates/email/trial-midpoint.template'
+import {
+  TRIAL_STARTED_TEMPLATE_KEY,
+  renderTrialStartedTemplate,
+  type TrialStartedVariables,
+} from '@/templates/email/trial-started.template'
+import {
+  UPGRADE_REQUEST_FULFILLED_TEMPLATE_KEY,
+  renderUpgradeRequestFulfilledTemplate,
+  type UpgradeRequestFulfilledVariables,
+} from '@/templates/email/upgrade-request-fulfilled.template'
+import {
+  UPGRADE_REQUESTED_TEMPLATE_KEY,
+  renderUpgradeRequestedTemplate,
+  type UpgradeRequestedVariables,
+} from '@/templates/email/upgrade-requested.template'
+import {
   renderWelcomeTemplate,
   WELCOME_TEMPLATE_KEY,
   type WelcomeVariables,
 } from '@/templates/email/welcome.template'
+import {
+  WINBACK_TEMPLATE_KEY,
+  renderWinbackTemplate,
+  type WinbackVariables,
+} from '@/templates/email/winback.template'
 import { senderFor } from '@/utilities/email-sender.utilities'
 import type { RenderedEmail } from '@/utilities/email-template.utilities'
 
@@ -118,6 +193,81 @@ export type MailMessage =
       templateKey: typeof PASSKEY_DELETED_TEMPLATE_KEY
       variables: PasskeySecurityVariables
     }
+  | {
+      to: string
+      templateKey: typeof TRIAL_STARTED_TEMPLATE_KEY
+      variables: TrialStartedVariables
+    }
+  | {
+      to: string
+      templateKey: typeof TRIAL_MIDPOINT_TEMPLATE_KEY
+      variables: TrialMidpointVariables
+    }
+  | {
+      to: string
+      templateKey: typeof TRIAL_ENDING_TEMPLATE_KEY
+      variables: TrialEndingVariables
+    }
+  | {
+      to: string
+      templateKey: typeof TRIAL_ENDS_TODAY_TEMPLATE_KEY
+      variables: TrialEndsTodayVariables
+    }
+  | {
+      to: string
+      templateKey: typeof TRIAL_ENDED_TEMPLATE_KEY
+      variables: TrialEndedVariables
+    }
+  | {
+      to: string
+      templateKey: typeof PAID_WELCOME_TEMPLATE_KEY
+      variables: PaidWelcomeVariables
+    }
+  | {
+      to: string
+      templateKey: typeof RENEWAL_UPCOMING_TEMPLATE_KEY
+      variables: RenewalUpcomingVariables
+    }
+  | {
+      to: string
+      templateKey: typeof PAYMENT_FAILED_TEMPLATE_KEY
+      variables: PaymentFailedVariables
+    }
+  | {
+      to: string
+      templateKey: typeof MOVED_TO_FREE_TEMPLATE_KEY
+      variables: MovedToFreeVariables
+    }
+  | {
+      to: string
+      templateKey: typeof PAID_CANCELLED_TEMPLATE_KEY
+      variables: PaidCancelledVariables
+    }
+  | {
+      to: string
+      templateKey: typeof INTERVAL_SWITCH_SCHEDULED_TEMPLATE_KEY
+      variables: IntervalSwitchScheduledVariables
+    }
+  | {
+      to: string
+      templateKey: typeof PAYER_LEFT_TEMPLATE_KEY
+      variables: PayerLeftVariables
+    }
+  | {
+      to: string
+      templateKey: typeof UPGRADE_REQUESTED_TEMPLATE_KEY
+      variables: UpgradeRequestedVariables
+    }
+  | {
+      to: string
+      templateKey: typeof UPGRADE_REQUEST_FULFILLED_TEMPLATE_KEY
+      variables: UpgradeRequestFulfilledVariables
+    }
+  | {
+      to: string
+      templateKey: typeof WINBACK_TEMPLATE_KEY
+      variables: WinbackVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -171,6 +321,51 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case PASSKEY_DELETED_TEMPLATE_KEY: {
       return renderPasskeyDeletedTemplate(message.variables)
+    }
+    case TRIAL_STARTED_TEMPLATE_KEY: {
+      return renderTrialStartedTemplate(message.variables)
+    }
+    case TRIAL_MIDPOINT_TEMPLATE_KEY: {
+      return renderTrialMidpointTemplate(message.variables)
+    }
+    case TRIAL_ENDING_TEMPLATE_KEY: {
+      return renderTrialEndingTemplate(message.variables)
+    }
+    case TRIAL_ENDS_TODAY_TEMPLATE_KEY: {
+      return renderTrialEndsTodayTemplate(message.variables)
+    }
+    case TRIAL_ENDED_TEMPLATE_KEY: {
+      return renderTrialEndedTemplate(message.variables)
+    }
+    case PAID_WELCOME_TEMPLATE_KEY: {
+      return renderPaidWelcomeTemplate(message.variables)
+    }
+    case RENEWAL_UPCOMING_TEMPLATE_KEY: {
+      return renderRenewalUpcomingTemplate(message.variables)
+    }
+    case PAYMENT_FAILED_TEMPLATE_KEY: {
+      return renderPaymentFailedTemplate(message.variables)
+    }
+    case MOVED_TO_FREE_TEMPLATE_KEY: {
+      return renderMovedToFreeTemplate(message.variables)
+    }
+    case PAID_CANCELLED_TEMPLATE_KEY: {
+      return renderPaidCancelledTemplate(message.variables)
+    }
+    case INTERVAL_SWITCH_SCHEDULED_TEMPLATE_KEY: {
+      return renderIntervalSwitchScheduledTemplate(message.variables)
+    }
+    case PAYER_LEFT_TEMPLATE_KEY: {
+      return renderPayerLeftTemplate(message.variables)
+    }
+    case UPGRADE_REQUESTED_TEMPLATE_KEY: {
+      return renderUpgradeRequestedTemplate(message.variables)
+    }
+    case UPGRADE_REQUEST_FULFILLED_TEMPLATE_KEY: {
+      return renderUpgradeRequestFulfilledTemplate(message.variables)
+    }
+    case WINBACK_TEMPLATE_KEY: {
+      return renderWinbackTemplate(message.variables)
     }
     default: {
       throw new Error(

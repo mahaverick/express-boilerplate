@@ -5,8 +5,9 @@
  * usable; on the pool it is a plain insert. Either way a failure is logged
  * at warn and swallowed. The exception is `enqueueAnalyticsOrThrow`, for a
  * caller that handles the failure itself: the groups backfill, which runs
- * in no user's action and reports whether it queued every row, and
- * experiment exposure. Nothing here calls PostHog; the drainer does.
+ * in no user's action and reports whether it queued every row, experiment
+ * exposure, and the throttled billing events. Nothing here calls PostHog;
+ * the drainer does.
  */
 import { PgTransaction } from 'drizzle-orm/pg-core'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
@@ -133,9 +134,10 @@ export async function enqueueAnalytics(
 
 /**
  * Write built rows to the outbox on the pool and let a failure throw. Only
- * for a caller that handles the failure itself: the groups backfill, and
+ * for a caller that handles the failure itself: the groups backfill,
  * experiment exposure, which releases its dedupe key and never throws to
- * the request. Every other writer goes through `enqueueAnalytics`. The
+ * the request, and the throttled billing events, which release their
+ * throttle key. Every other writer goes through `enqueueAnalytics`. The
  * caller checks `isAnalyticsEnabled()` first. A no-op for an empty list.
  * @param rows - The built events.
  * @returns Resolves once the rows are written.

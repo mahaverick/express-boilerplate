@@ -11,6 +11,7 @@
  * `$groupidentify` is a marker with no `$group_set`: the drainer fills that
  * in at send time (analytics-group-marker.service.ts).
  */
+import { createHash } from 'node:crypto'
 import {
   AUDIT_EVENT_RENAMES,
   EMAIL_EVENT_PREFIX,
@@ -33,7 +34,11 @@ import type {
   StaffStatusSnapshot,
   TenantGroupSnapshot,
 } from '@/types/analytics'
-import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event'
+import type {
+  BillingDomainEvent,
+  DomainEventAccess,
+  ProductDomainEvent,
+} from '@/types/domain-event'
 import type { ExposureOrigin } from '@/types/flags'
 
 /**
@@ -47,9 +52,17 @@ export type AnalyticsSource = 'audit' | 'product' | 'email' | 'backfill' | 'flag
  * The audit metadata keys never copied onto an event: `reason` becomes
  * `has_reason`, `name` (a tenant's name) reaches PostHog only through the
  * tenant group's `$group_set`, which the drainer reads from the tenant row,
- * and `slug` is dropped because it is usually derived from the tenant's name.
+ * `slug` is dropped because it is usually derived from the tenant's name, and
+ * a plan edit's `before` and `after` stay in the audit log, since a plan's
+ * description is free text and the scrub below is shallow.
  */
-const AUDIT_METADATA_OMITTED_KEYS: ReadonlySet<string> = new Set(['reason', 'name', 'slug'])
+const AUDIT_METADATA_OMITTED_KEYS: ReadonlySet<string> = new Set([
+  'reason',
+  'name',
+  'slug',
+  'before',
+  'after',
+])
 
 const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
 
@@ -200,7 +213,8 @@ export function auditEventName(action: AuditAction): string {
 
 /**
  * The event-specific properties of an audit row: its target, its metadata
- * in snake_case without `reason` (as `has_reason`), `name` and `slug`, and,
+ * in snake_case without `reason` (as `has_reason`), `name`, `slug`,
+ * `before` and `after`, and,
  * for a staff onboarding completion, the `how` and `required` every
  * `onboarding_step_completed` carries.
  * @param entry - The inserted audit row.
@@ -335,8 +349,76 @@ export function buildAuditEvents(
 }
 
 /**
+ * Whether a product event is a billing event: every billing event carries
+ * the workspace's billing state.
+ * @param event - The product event.
+ * @returns True for a billing event.
+ */
+export function isBillingEvent(event: ProductDomainEvent): event is BillingDomainEvent {
+  return 'billingState' in event
+}
+
+/**
+ * A billing event's own fields, in snake_case.
+ * @param event - The billing event.
+ * @returns Its own properties, without `plan` and `billing_state`.
+ */
+function billingOwnProperties(event: BillingDomainEvent): Record<string, unknown> {
+  switch (event.type) {
+    case 'trial_reminder_sent': {
+      return { days_left: event.daysLeft }
+    }
+    case 'trial_extended': {
+      return { days: event.days }
+    }
+    case 'plan_limit_approaching': {
+      return { key: event.key, used: event.used, limit: event.limit }
+    }
+    case 'plan_limit_reached': {
+      return { key: event.key, ...event.usage }
+    }
+    case 'plan_feature_blocked': {
+      return { key: event.key }
+    }
+    case 'upgrade_requested': {
+      return { key: event.key, surface: event.surface }
+    }
+    case 'checkout_started': {
+      return {
+        interval: event.interval,
+        amount_minor: event.amountMinor,
+        currency: event.currency,
+        during_trial: event.duringTrial,
+      }
+    }
+    case 'subscription_activated': {
+      return { interval: event.interval }
+    }
+    case 'payment_failed': {
+      return { failure_code: event.failureCode }
+    }
+    case 'subscription_cancel_scheduled': {
+      return { by: event.by }
+    }
+    case 'downgraded_to_free': {
+      return { downgrade_cause: event.downgradeCause }
+    }
+    case 'billing_reconciled': {
+      return { field: event.field }
+    }
+    case 'duplicate_subscription_refunded': {
+      return { refund_cause: event.refundCause }
+    }
+    default: {
+      return {}
+    }
+  }
+}
+
+/**
  * The event-specific properties of a product event: only its typed fields,
- * in snake_case.
+ * in snake_case. A billing event adds the workspace's `plan` and
+ * `billing_state` after the change.
  * @param event - The product event.
  * @param isViaInvitation - For a sign-up, whether an invitation was waiting.
  * @returns The properties, not yet scrubbed.
@@ -345,6 +427,9 @@ function productProperties(
   event: ProductDomainEvent,
   isViaInvitation: boolean
 ): Record<string, unknown> {
+  if (isBillingEvent(event)) {
+    return { ...billingOwnProperties(event), plan: event.plan, billing_state: event.billingState }
+  }
   switch (event.type) {
     case 'user_signed_up': {
       return { method: event.method, via_invitation: isViaInvitation }
@@ -359,6 +444,26 @@ function productProperties(
       return {}
     }
   }
+}
+
+/**
+ * A row id fixed by a dedupe key: a UUID (version 8, RFC 9562's custom
+ * layout) made from the key's SHA-256, so the same occurrence always gets
+ * the same outbox row id and PostHog `uuid`.
+ * @param dedupeKey - What fixes the occurrence.
+ * @returns The UUID.
+ */
+export function dedupedRowId(dedupeKey: string): string {
+  const hex = createHash('sha256').update(dedupeKey).digest('hex')
+  // The variant's two high bits are 10: one of 8, 9, a or b.
+  const variant = ((Number.parseInt(hex.charAt(16), 16) % 4) + 8).toString(16)
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `8${hex.slice(13, 16)}`,
+    `${variant}${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join('-')
 }
 
 /**
@@ -380,8 +485,11 @@ function personProperties(person: ServerPersonProperties): Record<string, unknow
 
 /**
  * The outbox row for one product domain event. A user-level event belongs
- * to its user and joins no group; an onboarding completion joins its
- * tenant, and one with no user (the reconcile) is a system event.
+ * to its user and joins no group; an event with a tenant joins it. The
+ * distinct id is the member who acted, else the person a billing event is
+ * attributed to, else the system; an event no member acted in is sent with
+ * `access: 'system'`. A billing event with a dedupe key gets the row id
+ * that key fixes (`dedupedRowId`).
  * @param event - The product event, as emitted after commit.
  * @param context - The trace and session it happened in.
  * @param access - How the actor reached the tenant (`member` for a user-level event).
@@ -394,11 +502,15 @@ export function buildProductEvent(
   access: DomainEventAccess = 'member',
   extras: ProductEventExtras = {}
 ): NewAnalyticsOutboxRow {
-  const distinctId = event.userId ?? SYSTEM_DISTINCT_ID
-  const tenantId = event.type === 'onboarding_step_completed' ? event.tenantId : undefined
+  const isBilling = isBillingEvent(event)
+  const distinctId =
+    event.userId ?? (isBilling ? event.attributedUserId : null) ?? SYSTEM_DISTINCT_ID
+  const tenantId = 'tenantId' in event ? event.tenantId : undefined
   const isPersonEvent = event.type === 'user_signed_up' || event.type === 'user_signed_in'
   const isOwnSessionEvent = isPersonEvent || event.type === 'user_signed_out'
+  const dedupeKey = isBilling ? event.dedupeKey : undefined
   return {
+    ...(dedupeKey !== undefined && { id: dedupedRowId(dedupeKey) }),
     event: event.type,
     distinctId,
     occurredAt: event.at,
@@ -407,7 +519,7 @@ export function buildProductEvent(
       ...(isPersonEvent && extras.person && personProperties(extras.person)),
       ...commonProperties({
         source: 'product',
-        access: distinctId === SYSTEM_DISTINCT_ID ? 'system' : access,
+        access: event.userId === null ? 'system' : access,
         distinctId,
         tenantId,
         isOwnSessionEvent,

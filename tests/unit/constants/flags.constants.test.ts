@@ -175,13 +175,15 @@ describe('FLAGS', () => {
 })
 
 describe('FLAG_TRAITS', () => {
-  it('is the closed set of five traits, with no app trait', () => {
+  it('is the closed set of seven traits, with no app trait', () => {
     expect(FLAG_TRAITS.map((trait) => [trait.name, trait.where])).toEqual([
       ['platform_role', 'person'],
       ['tenant_role', 'person'],
       ['app_env', 'person'],
       ['account_created_days', 'person'],
       ['tenant_created_days', 'group'],
+      ['plan', 'group'],
+      ['billing_state', 'group'],
     ])
     for (const trait of FLAG_TRAITS) {
       expect(trait.description.length).toBeGreaterThan(0)
@@ -197,6 +199,11 @@ describe('FLAG_TRAITS', () => {
       'account_created_days',
       'distinct_id',
     ])
-    expect([...FLAG_GROUP_PROPERTY_KEYS]).toEqual(['tenant_created_days', '$group_key'])
+    expect([...FLAG_GROUP_PROPERTY_KEYS]).toEqual([
+      'tenant_created_days',
+      'plan',
+      'billing_state',
+      '$group_key',
+    ])
   })
 })

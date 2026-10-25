@@ -200,6 +200,8 @@ describe('PlatformTenantRepository.list', () => {
         lifecycleState: 'active',
         memberCount: 2,
         createdAt: expect.any(Date) as Date,
+        billingState: 'free',
+        planKey: 'free',
       },
     ])
   })

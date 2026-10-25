@@ -41,6 +41,7 @@ import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { invitationListSchema } from '@/validators/tenant.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
+import { putTenantOnPaid } from '../../helpers/billing'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
@@ -413,6 +414,8 @@ describe('invitations API', () => {
 
     it('lets an owner offer admin, and an admin offer a non-elevated role', async () => {
       const { ownerToken, tenant } = await setup()
+      // Owner, admin and two invitations are four seats: past Free's three.
+      await putTenantOnPaid(tenant.id)
       const { user: admin, token: adminToken } = await createUser()
       await userMembershipRepository.create({
         userId: admin.id,
@@ -881,6 +884,7 @@ describe('invitations API', () => {
 
     it('invites twelve distinct addresses back to back', async () => {
       const { ownerToken, tenant } = await setup()
+      await putTenantOnPaid(tenant.id)
 
       for (let index = 0; index < 12; index += 1) {
         const invited = await inviteVia(tenant.slug, ownerToken, {

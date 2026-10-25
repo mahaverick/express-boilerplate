@@ -12,6 +12,7 @@ import {
   MEMBERSHIP_ROLES,
   REASON_REQUIRED_CODE,
   REASON_REQUIRED_MESSAGE,
+  ROLE_REFUSAL_MESSAGE,
   type MembershipRole,
 } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
@@ -24,10 +25,12 @@ import {
   canPlatformActorModifyTarget,
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import { sendPayerLeft } from '@/services/billing/billing-emails.service'
 import { db, type DbTransaction } from '@/services/database.service'
 import {
   lockTenantAccess,
@@ -39,6 +42,7 @@ import type { Actor, StaffReasonOption, TenantAccess } from '@/types/actor'
 import type { RowLockMode } from '@/types/lock-mode'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
+const billingRepository = new BillingRepository()
 const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
@@ -198,10 +202,7 @@ export async function revokeInvitationsBeyondAuthorityElsewhere(
  */
 function assertRoleAtLeast(access: ActorAccess, minimum: MembershipRole): void {
   if (!isRoleAtLeast(access.role, minimum)) {
-    throw new HttpError(
-      "Your role in this workspace doesn't allow this. Ask a workspace owner or admin.",
-      403
-    )
+    throw new HttpError(ROLE_REFUSAL_MESSAGE, 403)
   }
 }
 
@@ -380,6 +381,8 @@ async function assertOwnerRemainsFor(
  * A promotion to owner also locks the target's user row `FOR SHARE`
  * (`lockUserForOwnership`) after the membership locks, so a concurrent staff
  * delete of the target either sees the new ownership or wins first.
+ * A payer demoted from owner stays the payer and no one is told they left:
+ * the mandate is theirs, and they are still a member.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
@@ -455,7 +458,9 @@ export async function changeRole(
  * removal of an owner. The member's pending invitations in this tenant are
  * revoked in the same transaction, including ones the remover could not
  * revoke directly; on the platform tenant, so are those they sent in
- * customer tenants that a membership there cannot grant.
+ * customer tenants that a membership there cannot grant. When the member
+ * was the payer of a live subscription, the remaining owners are told after
+ * the commit (`sendPayerLeft`).
  * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
@@ -493,6 +498,7 @@ export async function removeMember(
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
     if (!wasDeleted) throw notFoundError('member')
+    await billingRepository.closeOpenUpgradeRequests(tenantId, targetUserId, tx)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, options, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, undefined, tx)
@@ -514,6 +520,7 @@ export async function removeMember(
       tx
     )
   })
+  await sendPayerLeft(tenantId, targetUserId, new Date())
 }
 
 /**
@@ -524,7 +531,9 @@ export async function removeMember(
  * platform role, or a member removed since `resolveTenant`) has nothing to
  * leave. The leaver's pending invitations there are revoked in the same
  * transaction; on the platform tenant, so are those they sent in customer
- * tenants that a membership there cannot grant, as for a removal.
+ * tenants that a membership there cannot grant, as for a removal. A payer
+ * leaving a live subscription is told to the remaining owners after the
+ * commit, as for a removal.
  * @param actor - The signed-in member leaving.
  * @param tenantId - The tenant.
  * @param options - Pass isPlatformTenant for the platform tenant: the active-owner guard and the customer-tenant revoke.
@@ -557,6 +566,7 @@ export async function leaveTenant(
     }
     const wasDeleted = await userMembershipRepository.delete(own.id, tx)
     if (!wasDeleted) throw notFoundError('tenant')
+    await billingRepository.closeOpenUpgradeRequests(tenantId, actor.userId, tx)
     await revokeInvitationsSentIn(actor, 'member', tenantId, actor.userId, undefined, {}, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, actor.userId, undefined, tx)
@@ -573,4 +583,5 @@ export async function leaveTenant(
       tx
     )
   })
+  await sendPayerLeft(tenantId, actor.userId, new Date())
 }

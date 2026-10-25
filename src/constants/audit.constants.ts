@@ -3,6 +3,7 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
+import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
@@ -35,7 +36,8 @@ export type AuditAccess = (typeof AUDIT_ACCESS_KINDS)[number]
 
 /**
  * The kinds of record an audit entry can point at. `platform` is the
- * platform as a whole (maintenance mode), its id the platform tenant's.
+ * platform as a whole (maintenance mode), its id the platform tenant's;
+ * `plan` is a plan row and `billing` a workspace's billing record.
  */
 export const AUDIT_TARGET_TYPES = [
   'tenant',
@@ -46,6 +48,8 @@ export const AUDIT_TARGET_TYPES = [
   'email_message',
   'email_suppression',
   'platform',
+  'plan',
+  'billing',
 ] as const
 
 /**
@@ -74,6 +78,28 @@ const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(3
  * this re-checks only the bounds.
  */
 const reason = z.string().min(1).max(500)
+
+/**
+ * A plan's columns staff can edit, as a plan edit's entry records them
+ * before and after: no personal data, only the plan's own text and values.
+ */
+const entitlementKey = z.string().min(1).max(64)
+const entitlementValue = z.union([z.boolean(), z.number().int(), z.null()])
+const planSnapshot = z.strictObject({
+  name: z.string().max(64),
+  description: z.string().max(280),
+  entitlements: z.record(entitlementKey, entitlementValue),
+})
+
+/**
+ * Live customer tenants by billing state.
+ */
+const tenantStateCounts = z.strictObject({
+  trialing: z.number().int().min(0),
+  active: z.number().int().min(0),
+  past_due: z.number().int().min(0),
+  free: z.number().int().min(0),
+})
 
 /**
  * The reason on a member or invitation write: present when staff acted
@@ -246,6 +272,78 @@ export const AUDIT_ACTIONS = {
       emailDomains: z.array(emailDomain).max(MAX_REMINDER_RECIPIENTS),
       messageIds: z.array(id).max(MAX_REMINDER_RECIPIENTS),
     }),
+  },
+  // An owner started a checkout for Paid: a new subscription, or a resubscribe while cancelling.
+  'billing.checkout_started': {
+    target: 'billing',
+    metadata: z.strictObject({ interval: z.enum(BILLING_INTERVALS) }),
+  },
+  // An owner cancelled Paid: at the period end, or at once for a first charge still to come.
+  'billing.cancel_scheduled': { target: 'billing', metadata: z.strictObject({}) },
+  'billing.interval_switch_scheduled': {
+    target: 'billing',
+    metadata: z.strictObject({ interval: z.enum(BILLING_INTERVALS) }),
+  },
+  'billing.card_change_started': { target: 'billing', metadata: z.strictObject({}) },
+  // The billing job marked a staff grant lapsed at its expiry; the actor is the system.
+  'billing.grant_expired': {
+    target: 'billing',
+    metadata: z.strictObject({ grantId: id, key: z.string().min(1).max(64) }),
+  },
+  // A staff member read a tenant's billing in Apex; platform-billing.service.ts throttles it.
+  'billing.viewed': { target: 'billing', metadata: z.strictObject({}) },
+  // Staff synced a tenant's billing with the payment provider.
+  'billing.resynced': { target: 'billing', metadata: z.strictObject({ reason }) },
+  // Staff extended a tenant's trial, or put a Free tenant back on one; `trialEndsAt` is the new end.
+  'billing.trial_extended': {
+    target: 'billing',
+    metadata: z.strictObject({
+      days: z.number().int().min(1).max(MAX_TRIAL_DAYS),
+      reason,
+      trialEndsAt: z.iso.datetime(),
+    }),
+  },
+  'billing.grant_added': {
+    target: 'billing',
+    metadata: z.strictObject({
+      key: z.string().min(1).max(64),
+      value: z.union([z.boolean(), z.number().int().min(1), z.null()]),
+      expiresAt: z.iso.datetime().nullable(),
+      reason,
+    }),
+  },
+  'billing.grant_revoked': {
+    target: 'billing',
+    metadata: z.strictObject({ key: z.string().min(1).max(64), reason }),
+  },
+  // Staff cancelled a tenant's subscription: at its cycle end, or now.
+  'billing.cancelled_by_staff': {
+    target: 'billing',
+    metadata: z.strictObject({ when: z.enum(STAFF_CANCEL_WHEN), reason }),
+  },
+  // Staff edited a plan's name, description or entitlements; `affected` counts the tenants on it by stored state.
+  'plan.updated': {
+    target: 'plan',
+    metadata: z.strictObject({
+      before: planSnapshot,
+      after: planSnapshot,
+      affected: tenantStateCounts,
+      reason,
+    }),
+  },
+  // Staff added a price to a plan, which retired the active price of its interval.
+  'plan.price_created': {
+    target: 'plan',
+    metadata: z.strictObject({
+      interval: z.enum(BILLING_INTERVALS),
+      amountMinor: z.number().int().positive(),
+      reason,
+    }),
+  },
+  // Staff changed the platform-wide trial or grace settings; the field names only.
+  'billing.settings_updated': {
+    target: 'platform',
+    metadata: z.strictObject({ changedFields, reason }),
   },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {

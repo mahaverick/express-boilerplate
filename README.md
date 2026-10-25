@@ -173,38 +173,40 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 
 ## Available scripts
 
-| Script                              | What it does                                                                                        |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.        |
-| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias` on `tsconfig.build.json`, and copies the migrations.    |
-| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                           |
-| `pnpm lint`                         | `vp check` (Oxlint, Oxfmt), the untyped ESLint, then `tsc --noEmit` (`tsconfig.json`).              |
-| `pnpm lint:fix`                     | `vp check --fix`, then `eslint . --fix`.                                                            |
-| `pnpm typecheck`                    | `tsc --noEmit` over `src/`, `tests/` and `drizzle.config.ts` (`tsconfig.json`).                     |
-| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                               |
-| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                       |
-| `pnpm format`                       | `vp fmt .` (Oxfmt) over the whole repo.                                                             |
-| `pnpm format:check`                 | `vp fmt --check .`.                                                                                 |
-| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                     |
-| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                     |
-| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                             |
-| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                  |
-| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                        |
-| `pnpm platform:grant -- <e> <role>` | Gives an address a role in the platform tenant, creating its account; see below.                    |
-| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).          |
-| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).              |
-| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).      |
-| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags).         |
-| `pnpm test`                         | `vp test run`: both Vitest projects. Needs the compose stack.                                       |
-| `pnpm test:unit`                    | The `unit` project: every test but `tests/integration/**`, no global setup; runs with Docker down.  |
-| `pnpm test:integration`             | The `integration` project: `tests/integration/**`, with the per-worker databases. Needs the stack.  |
-| `pnpm test:watch`                   | `vp test watch`.                                                                                    |
-| `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                |
-| `pnpm gate`                         | The pre-push gate: lint, docs, knip, domain terms, coverage, build. Needs the compose stack.        |
-| `pnpm push [args]`                  | Runs `pnpm gate`, then `git push --no-verify` with your arguments.                                  |
-| `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`). |
-| `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                      |
-| `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                 |
+| Script                              | What it does                                                                                          |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.          |
+| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias` on `tsconfig.build.json`, and copies the migrations.      |
+| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                             |
+| `pnpm lint`                         | `vp check` (Oxlint, Oxfmt), the untyped ESLint, then `tsc --noEmit` (`tsconfig.json`).                |
+| `pnpm lint:fix`                     | `vp check --fix`, then `eslint . --fix`.                                                              |
+| `pnpm typecheck`                    | `tsc --noEmit` over `src/`, `tests/` and `drizzle.config.ts` (`tsconfig.json`).                       |
+| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                                 |
+| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                         |
+| `pnpm format`                       | `vp fmt .` (Oxfmt) over the whole repo.                                                               |
+| `pnpm format:check`                 | `vp fmt --check .`.                                                                                   |
+| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                       |
+| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                       |
+| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                               |
+| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                    |
+| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                          |
+| `pnpm platform:grant -- <e> <role>` | Gives an address a role in the platform tenant, creating its account; see below.                      |
+| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).            |
+| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).                |
+| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).        |
+| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags).           |
+| `pnpm billing:seed`                 | Creates 13 workspaces, one per billing state (local only); see [Billing dev seed](#billing-dev-seed). |
+| `pnpm billing:time-travel -- …`     | Moves one workspace's billing dates back (local only); see [Billing dev seed](#billing-dev-seed).     |
+| `pnpm test`                         | `vp test run`: both Vitest projects. Needs the compose stack.                                         |
+| `pnpm test:unit`                    | The `unit` project: every test but `tests/integration/**`, no global setup; runs with Docker down.    |
+| `pnpm test:integration`             | The `integration` project: `tests/integration/**`, with the per-worker databases. Needs the stack.    |
+| `pnpm test:watch`                   | `vp test watch`.                                                                                      |
+| `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                  |
+| `pnpm gate`                         | The pre-push gate: lint, docs, knip, domain terms, coverage, build. Needs the compose stack.          |
+| `pnpm push [args]`                  | Runs `pnpm gate`, then `git push --no-verify` with your arguments.                                    |
+| `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`).   |
+| `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                        |
+| `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                   |
 
 `pnpm platform:grant -- <email> <role>` gives the account at an address a role
 (`owner` to `viewer`) in the platform tenant, audited as
@@ -213,6 +215,52 @@ audited as `user.created`; an unverified account is claimed as a sign-in link
 claims it: its federated links are removed, its sessions end and the
 address is verified. Nobody can invite staff before a platform owner exists, so this is how
 the first one is made.
+
+### Billing dev seed
+
+`pnpm billing:seed` runs on `APP_ENV=local` with `BILLING_FAKE_PROVIDER=true`
+only, and refuses anything else. It creates 13 workspaces with `billing-*`
+slugs, all owned by `billing-owner@example.test` (sign in with a link from
+Mailpit), with members `billing-member-1@example.test` to
+`billing-member-4@example.test`:
+
+| Slug                         | State                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `billing-trial-10-days`      | Trialing, 10 days left                                                    |
+| `billing-trial-1-day`        | Trialing, 1 day left                                                      |
+| `billing-trial-ended`        | Free after its trial ended 2 days ago                                     |
+| `billing-free-under-limit`   | Free, 2 of 3 members                                                      |
+| `billing-free-over-limit`    | Free with 5 members, after a paid plan was cancelled                      |
+| `billing-active-monthly`     | Paid monthly; staff see a refunded duplicate subscription alert           |
+| `billing-yearly-cancelling`  | Paid yearly, cancelling at the period end                                 |
+| `billing-past-due-pending`   | Past due: the renewal failed and the provider is retrying                 |
+| `billing-past-due-halted`    | Past due: the provider halted it, about 2 days of grace left              |
+| `billing-customer-cancelled` | Paid until the period end: the payer cancelled from their bank or UPI app |
+| `billing-interval-switch`    | Paid monthly, switching to yearly at the period end                       |
+| `billing-free-grant`         | Free with 4 members on a 10-member grant that ends in 3 days              |
+| `billing-upgrade-request`    | Free and full, with a member's open upgrade request                       |
+
+Paid workspaces get subscriptions on the fake provider in the matching
+status, so a sync keeps each one where the seed put it. The seed writes rows
+directly and sends no email, notification or analytics event. Run it again to
+put every workspace back: it keeps their ids, restores each one's name and
+makes a suspended one active again, resets their billing, members, grants,
+requests, alerts and history, and ends the fake subscriptions it replaces. It
+prints each slug, id and state.
+
+`pnpm billing:time-travel -- --tenant <slug> --days <n>` (local only) moves
+one workspace's trial start and end, period end, past-due, halt and pause
+dates back `n` days, with the period end its renewal reminder was sent for,
+its state history (so the win-back emails count from the moved move to Free)
+and its fake subscriptions' dates, then queues a sync of it and one billing
+run, which a running worker (`pnpm dev`) takes within seconds: a trial moved
+past its end goes to Free. The fake never charges a subscription by itself,
+so after a scheduled switch hands over, the new subscription stays unpaid on
+the fake. The other reminder and notice stamps do not move: one already sent
+stays sent, and one not yet sent goes out on the next run once its time has
+come.
+It refuses a workspace on a real provider, so a real subscription's dates
+never move.
 
 The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -394,7 +442,8 @@ sent it. The rules live in `analytics-event-builder.service.ts` and
    it the drain does not run there, so rows accumulate and retention prunes
    them with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
-   existed before carry their name, status and creation date. It queues one
+   existed before carry their name, status, creation date and plan
+   properties. It queues one
    `$groupidentify` marker per tenant and exits 1 if a batch could not be
    queued; a second run is harmless.
 4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`,

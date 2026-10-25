@@ -38,13 +38,20 @@ export const notificationIdSchema = z.object({
  * delivery; `updatePreferencesSchemaFor` refuses to store `emailEnabled:
  * false` for them, so the settings UI never shows a toggle the repository
  * would ignore. `maintenance_mode_changed` must reach every
- * platform owner and admin; `tenant_invitation` has no email on the
+ * platform owner and admin, and each billing notice with an email every owner
+ * of the workspace (`workspace_full` is in-app only, so it is not listed);
+ * `tenant_invitation` has no email on the
  * notification path and is listed only to keep the two sets the same. Their
  * in-app channel stays switchable.
  */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'tenant_invitation',
   'maintenance_mode_changed',
+  'billing_trial_ending',
+  'billing_payment_failed',
+  'billing_paid_cancelled',
+  'billing_upgrade_requested',
+  'billing_payer_left',
 ])
 
 /**
@@ -63,7 +70,7 @@ function notificationTypesFor(isStaff: boolean): readonly string[] {
  * `PUT /api/v1/notifications/preferences` request body for one caller: one or
  * more per-type channel toggles to upsert. Any type the caller can see may
  * switch `inAppEnabled` either way. `emailEnabled` must be `true` for a type in
- * `NON_DISABLEABLE_NOTIFICATION_TYPES` (all of them today); `false` is a
+ * `NON_DISABLEABLE_NOTIFICATION_TYPES` (every type but `workspace_full`); `false` is a
  * field-scoped 400 (`preferences.<index>.emailEnabled`), so no body, whatever
  * its extra keys or entry order, can store a disabled email channel. A type
  * the caller cannot see (a staff-only one for a non-staff caller) fails on

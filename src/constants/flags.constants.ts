@@ -259,6 +259,8 @@ type TraitName =
   | 'app_env'
   | 'account_created_days'
   | 'tenant_created_days'
+  | 'plan'
+  | 'billing_state'
 
 /**
  * One trait: where PostHog reads it (a person or the tenant group), what it
@@ -272,9 +274,10 @@ export interface FlagTrait {
 }
 
 /**
- * The closed set of traits, passed at evaluation time only and never stored
- * as PostHog person or group properties. There is no app trait: a gate and
- * a page evaluated with different apps would disagree.
+ * The closed set of traits, passed at evaluation time. Only `plan` and
+ * `billing_state` are also stored, as tenant group properties, so PostHog's
+ * own insights can target by plan; the rest are never stored. There is no
+ * app trait: a gate and a page evaluated with different apps would disagree.
  */
 export const FLAG_TRAITS: readonly FlagTrait[] = [
   {
@@ -308,6 +311,20 @@ export const FLAG_TRAITS: readonly FlagTrait[] = [
     description:
       'Whole days since the tenant was created, an integer of at least 0; absent with no tenant.',
     examples: ['0', '90', '365'],
+  },
+  {
+    name: 'plan',
+    where: 'group',
+    description:
+      "The tenant's effective plan: paid while a trial or a subscription runs, else free; absent with no tenant or no billing.",
+    examples: ['free', 'paid'],
+  },
+  {
+    name: 'billing_state',
+    where: 'group',
+    description:
+      "The tenant's effective billing state, read with the clock; absent with no tenant or no billing.",
+    examples: ['trialing', 'free', 'active', 'past_due'],
   },
 ]
 

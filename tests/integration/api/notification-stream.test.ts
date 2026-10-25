@@ -21,6 +21,7 @@ import type { User } from '@/database/models/user.model'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { publishEntitlementsChanged } from '@/services/billing/billing-events.service'
 import { sql } from '@/services/database.service'
 import {
   countAllStreams,
@@ -465,6 +466,69 @@ describe('GET /api/v1/notifications/stream', () => {
     } finally {
       await worker.close()
       await truncateAuditLogs()
+      await sql`delete from tenants where id = ${tenant.id}`
+    }
+  })
+
+  it('sends entitlements_changed with the workspace id and slug to a member, and not to a non-member', async () => {
+    const { user: member, token: memberToken } = await createAuthenticatedUser()
+    const { user: outsider, token: outsiderToken } = await createAuthenticatedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Acme Inc',
+      slug: `tenant-${randomUUID()}`,
+      ownerId: member.id,
+    })
+    try {
+      const memberStream = openStream({ header: `Bearer ${memberToken}` })
+      const outsiderStream = openStream({ header: `Bearer ${outsiderToken}` })
+      await memberStream.waitForResponse()
+      await outsiderStream.waitForResponse()
+
+      await publishEntitlementsChanged(tenant.id)
+
+      const frame = await waitUntil(
+        () => memberStream.frames.find((candidate) => candidate.event === 'entitlements_changed'),
+        { message: 'the member gets entitlements_changed' }
+      )
+      expect(JSON.parse(frame.data ?? 'null')).toStrictEqual({
+        tenantId: tenant.id,
+        slug: tenant.slug,
+      })
+      // No id: a reconnect's Last-Event-ID must stay a notification id.
+      expect(frame.id).toBeUndefined()
+
+      // The sentinel travels the same channel after the publish, so anything for the outsider would precede it.
+      await framesBeforeSentinel(outsiderStream, outsider.id)
+      expect(outsiderStream.frames.some((each) => each.event === 'entitlements_changed')).toBe(
+        false
+      )
+    } finally {
+      await sql`delete from tenants where id = ${tenant.id}`
+    }
+  })
+
+  it('keeps delivering notifications to a stream after an entitlements_changed frame', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Acme Inc',
+      slug: `tenant-${randomUUID()}`,
+      ownerId: user.id,
+    })
+    try {
+      const connection = openStream({ header: `Bearer ${token}` })
+      await connection.waitForResponse()
+      await publishEntitlementsChanged(tenant.id)
+      const notification = await seedNotification(user.id)
+      emitNotification(user.id, notification)
+
+      const frame = await waitUntil(
+        () => connection.frames.find((candidate) => candidate.event === 'notification'),
+        { message: 'the notification frame arrives' }
+      )
+      expect(frame.id).toBe(notification.id)
+      const events = connection.frames.flatMap((each) => (each.event ? [each.event] : []))
+      expect(events).toStrictEqual(['entitlements_changed', 'notification'])
+    } finally {
       await sql`delete from tenants where id = ${tenant.id}`
     }
   })

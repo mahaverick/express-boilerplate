@@ -6,16 +6,23 @@
  * sign-up whether a redeemable invitation was waiting for the address.
  * Every subscriber returns at once while analytics is disabled, so an
  * unconfigured deployment runs no extra query. The four tenant domain
- * events are not forwarded here: their audit entries already are.
+ * events are not forwarded here: their audit entries already are. A
+ * billing event also queues its workspace's group marker.
  */
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
 import { PRODUCT_EVENTS } from '@/constants/analytics.constants'
+import type { NewAnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
-import { buildProductEvent } from '@/services/analytics/analytics-event-builder.service'
+import {
+  buildProductEvent,
+  buildTenantGroupIdentify,
+  dedupedRowId,
+  isBillingEvent,
+} from '@/services/analytics/analytics-event-builder.service'
 import { enqueueAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { db } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
@@ -73,11 +80,45 @@ async function readSignInExtras(
 }
 
 /**
- * Forward one product event: build its row, with the extras of a sign-up
- * or sign-in, and insert it on the pool. `enqueueAnalytics` never throws.
+ * The outbox rows of one product event: its row, and for a billing event
+ * its workspace's `$groupidentify` marker, since the event changed the
+ * workspace's plan, billing state or limit hits. A deduplicated event's
+ * marker gets a row id fixed by the same key, so a repeat writes neither.
+ * @param event - The product event.
+ * @param access - How the actor reached the tenant.
+ * @param extras - Person properties and the invitation flag, for a sign-up or sign-in.
+ * @returns The rows, the event first.
+ */
+export function productEventRows(
+  event: ProductDomainEvent,
+  access: DomainEventContext['access'],
+  extras: ProductEventExtras = {}
+): NewAnalyticsOutboxRow[] {
+  const analyticsContext = currentAnalyticsContext()
+  const rows: NewAnalyticsOutboxRow[] = [buildProductEvent(event, analyticsContext, access, extras)]
+  if (isBillingEvent(event)) {
+    const marker = buildTenantGroupIdentify(
+      { id: event.tenantId },
+      analyticsContext,
+      'product',
+      event.at
+    )
+    rows.push(
+      event.dedupeKey === undefined
+        ? marker
+        : { ...marker, id: dedupedRowId(`${event.dedupeKey}:group`) }
+    )
+  }
+  return rows
+}
+
+/**
+ * Forward one product event: build its rows (`productEventRows`), with the
+ * extras of a sign-up or sign-in, and insert them on the pool.
+ * `enqueueAnalytics` never throws.
  * @param event - The product event.
  * @param context - Its domain-event context.
- * @returns Resolves once the row is written, skipped or its failure logged.
+ * @returns Resolves once the rows are written, skipped or their failure logged.
  */
 async function forwardProductEvent(
   event: DomainEventOf<ProductDomainEvent['type']>,
@@ -88,8 +129,7 @@ async function forwardProductEvent(
     event.type === 'user_signed_up' || event.type === 'user_signed_in'
       ? await readSignInExtras(event.userId, event.method, event.type === 'user_signed_up')
       : {}
-  const row = buildProductEvent(event, currentAnalyticsContext(), context.access, extras)
-  await enqueueAnalytics([row], db)
+  await enqueueAnalytics(productEventRows(event, context.access, extras), db)
 }
 
 /**

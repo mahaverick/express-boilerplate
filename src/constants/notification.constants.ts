@@ -9,9 +9,24 @@
  * `'tenant_invitation'` (to an existing, verified invitee; in-app only,
  * because the mailed link is the only way to accept), and
  * `'maintenance_mode_changed'`, which goes to every other platform owner and
- * admin when maintenance mode is switched on, escalated or switched off.
+ * admin when maintenance mode is switched on, escalated or switched off. The
+ * billing types go to a workspace's owners: its trial ends in a few days, its
+ * payment failed, Paid was cancelled, a member asked
+ * to upgrade, the owner who paid left, or a join was refused because the
+ * workspace is full. Each billing type carries
+ * its email when it has one, so the email is never sent twice. Every type
+ * starts with both channels on: a user's preference row only turns one off.
  */
-export const NOTIFICATION_TYPES = ['tenant_invitation', 'maintenance_mode_changed'] as const
+export const NOTIFICATION_TYPES = [
+  'tenant_invitation',
+  'maintenance_mode_changed',
+  'billing_trial_ending',
+  'billing_payment_failed',
+  'billing_paid_cancelled',
+  'billing_upgrade_requested',
+  'billing_payer_left',
+  'workspace_full',
+] as const
 
 /**
  * The notification types only platform staff see: a user with no platform

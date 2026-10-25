@@ -2,6 +2,7 @@
  * @file The inputs of the analytics event builder
  * (analytics-event-builder.service.ts) that no table row already describes.
  */
+import type { BillingInterval, BillingState } from '@/constants/billing.constants'
 import type { BounceKind, EmailEventType } from '@/constants/email.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { SignInMethod } from '@/types/domain-event'
@@ -37,6 +38,37 @@ export interface TenantGroupSnapshot {
   status: string
   createdAt: Date
   isPlatform: boolean
+  /**
+   * The billing behind the group's plan properties; null for a tenant with
+   * no billing row (the platform tenant). Absent where only the id is used,
+   * as on an audit entry's marker.
+   */
+  billing?: TenantGroupBilling | null
+}
+
+/**
+ * The billing facts of a tenant group, read when its marker is sent.
+ */
+export interface TenantGroupBilling {
+  state: BillingState
+  /**
+   * The interval of the current price; null with none.
+   */
+  interval: BillingInterval | null
+  trialStartedAt: Date | null
+  trialEndsAt: Date | null
+  /**
+   * The name of the plan a trial gives (Paid), for a tenant that had a trial.
+   */
+  trialPlanName: string | null
+  /**
+   * Upgrade requests neither fulfilled nor expired.
+   */
+  openUpgradeRequests: number
+  /**
+   * When the tenant last started paying, for a paying tenant; else null.
+   */
+  paidSince: Date | null
 }
 
 /**

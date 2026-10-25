@@ -11,6 +11,14 @@ import {
   type TenantLifecycleState,
 } from '@/constants/tenant.constants'
 import {
+  billingStateHistoryModel,
+  planModel,
+  planPriceModel,
+  tenantBillingModel,
+  upgradeRequestModel,
+  type NewTenantBilling,
+} from '@/database/models/billing.model'
+import {
   tenantModel,
   tenantSettingsModel,
   type NewTenant,
@@ -24,6 +32,7 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
+import { PlanRepository } from '@/repositories/plan.repository'
 import type { RoleFilters } from '@/repositories/user-membership.repository'
 import {
   db,
@@ -56,6 +65,13 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
      */
     ownerId: string
   }
+
+/**
+ * A new tenant's billing row before the tenant has an id.
+ */
+export type TenantBillingInit = Omit<NewTenantBilling, 'tenantId'>
+
+const planRepository = new PlanRepository()
 
 /**
  * The tenants one user belongs to, searched by name. Its cursors are bound
@@ -125,12 +141,14 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * @param onboarding - Whether the onboarding clock starts at creation.
    * @param onboarding.isStarted - True when the tenant is created with its owner.
    * @param tx - The transaction.
+   * @param billing - The tenant's billing row; a Free row when omitted.
    * @returns The new tenant.
    */
   private async insertTenantAndSettings(
     input: Omit<CreateTenantInput, 'ownerId'>,
     onboarding: { isStarted: boolean },
-    tx: DbTransaction
+    tx: DbTransaction,
+    billing?: TenantBillingInit
   ): Promise<Tenant> {
     const [tenant] = await tx
       .insert(tenantModel)
@@ -147,7 +165,22 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .returning()
     if (!tenant) throw new HttpError('Insert returned no row', 500)
     await tx.insert(tenantSettingsModel).values({ tenantId: tenant.id })
+    await tx
+      .insert(tenantBillingModel)
+      .values({ ...(billing ?? (await this.freeBilling(tx))), tenantId: tenant.id })
     return tenant
+  }
+
+  /**
+   * The billing row a tenant gets when its creator names none: Free.
+   * @param tx - The transaction.
+   * @returns The row without its tenant id.
+   * @throws {HttpError} 500 when the seeded Free plan is missing.
+   */
+  private async freeBilling(tx: DbTransaction): Promise<TenantBillingInit> {
+    const free = await planRepository.findPlanByKey('free', tx)
+    if (free === undefined) throw new HttpError('The free plan is missing', 500)
+    return { state: 'free', planId: free.id }
   }
 
   /**
@@ -218,7 +251,8 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .set({
         lifecycleState: to,
         updatedAt: sql`now()`,
-        ...(to === 'archived' && { deletedAt: sql`now()` }),
+        // The statement's time, not the transaction's start: a billing cancel claim taken before this statement, while the transaction was open, then reads as older, so it is released and the archive cancels now.
+        ...(to === 'archived' && { deletedAt: sql`clock_timestamp()` }),
       })
       .where(
         and(
@@ -333,6 +367,10 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * archived and soft-deleted ones included. Cross-tenant on purpose: only
    * the analytics drainer calls it, to fill in `$groupidentify` markers at
    * send time. A purged tenant has no row, so it is missing from the result.
+   * Each carries its billing (null with no billing row): the state, the
+   * current price's interval while paying, the trial's dates and plan name,
+   * the open upgrade requests, and when it last started paying (the latest
+   * move to `active` from a state that does not pay).
    * @param ids - Tenant ids; an empty list runs no query.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One snapshot per tenant found, in no particular order.
@@ -342,16 +380,49 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
     executor: DbExecutor = db
   ): Promise<TenantGroupSnapshot[]> {
     if (ids.length === 0) return []
-    return executor
+    const billing = tenantBillingModel
+    const rows = await executor
       .select({
         id: tenantModel.id,
         name: tenantModel.name,
         status: tenantModel.lifecycleState,
         createdAt: tenantModel.createdAt,
         isPlatform: tenantModel.isPlatform,
+        state: billing.state,
+        interval: planPriceModel.interval,
+        trialStartedAt: billing.trialStartedAt,
+        trialEndsAt: billing.trialEndsAt,
+        trialPlanName: sql<
+          string | null
+        >`case when ${billing.trialStartedAt} is not null then (select ${planModel.name} from ${planModel} where ${planModel.key} = 'paid') end`,
+        openUpgradeRequests: sql<number>`(select count(*)::int from ${upgradeRequestModel} where ${upgradeRequestModel.tenantId} = ${tenantModel.id} and ${upgradeRequestModel.fulfilledAt} is null and ${upgradeRequestModel.expiresAt} > now())`,
+        paidSince: sql<
+          string | null
+        >`case when ${billing.state} in ('active', 'past_due') then (select max(${billingStateHistoryModel.at}) from ${billingStateHistoryModel} where ${billingStateHistoryModel.tenantId} = ${tenantModel.id} and ${billingStateHistoryModel.toState} = 'active' and (${billingStateHistoryModel.fromState} is null or ${billingStateHistoryModel.fromState} not in ('active', 'past_due'))) end`,
       })
       .from(tenantModel)
+      .leftJoin(billing, eq(billing.tenantId, tenantModel.id))
+      .leftJoin(planPriceModel, eq(planPriceModel.id, billing.priceId))
       .where(inArray(tenantModel.id, ids))
+    return rows.map(({ state, interval, trialStartedAt, trialEndsAt, ...row }) => ({
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      createdAt: row.createdAt,
+      isPlatform: row.isPlatform,
+      billing:
+        state === null
+          ? null
+          : {
+              state,
+              interval: state === 'active' || state === 'past_due' ? interval : null,
+              trialStartedAt,
+              trialEndsAt,
+              trialPlanName: row.trialPlanName,
+              openUpgradeRequests: row.openUpgradeRequests,
+              paidSince: row.paidSince === null ? null : new Date(row.paidSince),
+            },
+    }))
   }
 
   /**
@@ -362,13 +433,18 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * stays one atomic unit.
    * @param input - The tenant's initial columns, plus `ownerId` — the user whose owner membership is created alongside it.
    * @param executor - An existing transaction to compose into, or the pool (default) to open a new transaction in.
+   * @param billing - The tenant's billing row; a Free row when omitted.
    * @returns The newly created tenant row (not the settings or membership rows — fetch those separately via `TenantSettingsRepository.findByTenantId`/`UserMembershipRepository.findByUserAndTenant` if needed).
    * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
    */
-  async create(input: CreateTenantInput, executor: DbExecutor = db): Promise<Tenant> {
+  async create(
+    input: CreateTenantInput,
+    executor: DbExecutor = db,
+    billing?: TenantBillingInit
+  ): Promise<Tenant> {
     return this.withSlugConflict(() =>
       withTransaction(async (tx) => {
-        const tenant = await this.insertTenantAndSettings(input, { isStarted: true }, tx)
+        const tenant = await this.insertTenantAndSettings(input, { isStarted: true }, tx, billing)
         await tx.insert(userMembershipModel).values({
           userId: input.ownerId,
           tenantId: tenant.id,
@@ -384,16 +460,18 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * a tenant whose owner is then invited (platform-tenant.service.ts).
    * @param input - The tenant's initial columns.
    * @param executor - An existing transaction to compose into, or the pool (default).
+   * @param billing - The tenant's billing row; a Free row when omitted.
    * @returns The new tenant.
    * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
    */
   async createWithoutOwner(
     input: Omit<CreateTenantInput, 'ownerId'>,
-    executor: DbExecutor = db
+    executor: DbExecutor = db,
+    billing?: TenantBillingInit
   ): Promise<Tenant> {
     return this.withSlugConflict(() =>
       withTransaction(
-        (tx) => this.insertTenantAndSettings(input, { isStarted: false }, tx),
+        (tx) => this.insertTenantAndSettings(input, { isStarted: false }, tx, billing),
         executor
       )
     )

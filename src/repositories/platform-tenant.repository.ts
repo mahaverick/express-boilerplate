@@ -1,11 +1,14 @@
 /**
  * @file Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
  * import this file (an eslint rule); every query excludes the platform tenant.
- * `list` lists soft-deleted tenants only when archived and asked for;
- * `findDetail` returns a tenant in any lifecycle state.
+ * `list` lists soft-deleted tenants only when archived and asked for, with
+ * each tenant's stored billing state and plan; `findDetail` returns a tenant
+ * in any lifecycle state.
  */
 import { and, count, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import type { BillingState, PlanKey } from '@/constants/billing.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
+import { planModel, tenantBillingModel } from '@/database/models/billing.model'
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { tenantModel, tenantSettingsModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
@@ -32,6 +35,15 @@ export interface PlatformTenantRow {
   lifecycleState: TenantLifecycleState
   memberCount: number
   createdAt: Date
+  /**
+   * The stored billing state, which the billing job moves on a lapsed trial
+   * or period up to its next run; null for a tenant with no billing record.
+   */
+  billingState: BillingState | null
+  /**
+   * The stored plan: Paid for a trialing tenant, as the record keeps it.
+   */
+  planKey: PlanKey | null
 }
 
 /**
@@ -39,6 +51,10 @@ export interface PlatformTenantRow {
  */
 export interface PlatformTenantFilters {
   state: TenantLifecycleState[]
+  /**
+   * Stored billing states to keep; a tenant with no billing record matches none.
+   */
+  billingState?: BillingState[] | undefined
 }
 
 /**
@@ -74,11 +90,12 @@ export interface PlatformTenantDetailRow {
 const tenantSortName = sql<string>`lower(${tenantModel.name})`
 
 /**
- * The staff tenant list: customer tenants in the asked states, searched by
- * name or slug. Archived tenants are soft-deleted, so `deleted_at` is
- * ignored for them only. Member counts include live members only.
+ * The staff tenant list: customer tenants in the asked lifecycle and stored
+ * billing states, searched by name or slug. Archived tenants are
+ * soft-deleted, so `deleted_at` is ignored for them only. Member counts
+ * include live members only.
  * @param search - The parsed search, or undefined.
- * @param filters - The states.
+ * @param filters - The lifecycle and billing states.
  * @returns The list definition.
  */
 export function platformTenantList(search: string | undefined, filters: PlatformTenantFilters) {
@@ -99,14 +116,21 @@ export function platformTenantList(search: string | undefined, filters: Platform
           lifecycleState: tenantModel.lifecycleState,
           memberCount: sql<number>`(${liveMembers})`.mapWith(Number),
           createdAt: tenantModel.createdAt,
+          billingState: tenantBillingModel.state,
+          planKey: planModel.key,
           sortName: tenantSortName,
           sortCreated: timestampKey(tenantModel.createdAt),
         })
         .from(tenantModel)
+        .leftJoin(tenantBillingModel, eq(tenantBillingModel.tenantId, tenantModel.id))
+        .leftJoin(planModel, eq(planModel.id, tenantBillingModel.planId))
         .where(
           and(
             eq(tenantModel.isPlatform, false),
             inArray(tenantModel.lifecycleState, filters.state),
+            filters.billingState === undefined
+              ? undefined
+              : inArray(tenantBillingModel.state, filters.billingState),
             // Only an archived row may be soft-deleted and still listed.
             sql`(${tenantModel.deletedAt} is null or ${tenantModel.lifecycleState} = 'archived')`,
             searchCondition(search, [sql`lower(${tenantModel.name})`, sql`${tenantModel.slug}`]),
@@ -132,7 +156,7 @@ export class PlatformTenantRepository {
   /**
    * One page of the staff tenant list.
    * @param params - The parsed shared list params.
-   * @param filters - The states.
+   * @param filters - The lifecycle and billing states.
    * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The page.
    * @throws {InvalidCursorError} When the cursor does not verify.

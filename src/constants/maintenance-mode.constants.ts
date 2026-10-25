@@ -217,6 +217,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('GET', '/health'),
   letThrough('GET', '/health/ready'),
   letThrough('*', '/api/v1/webhooks/email', 'prefix'),
+  letThrough('*', '/api/v1/webhooks/razorpay', 'prefix'),
   letThrough('*', '/api/v1/collect', 'prefix'),
   letThrough('GET', '/api/v1/status/maintenance'),
   letThrough('*', '/api/v1/platform', 'prefix'),
@@ -243,6 +244,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('POST', '/api/v1/auth/passkeys/step-up/verify'),
   // Both frontends read the profile after every token refresh and sign-in; without it no session is restored.
   letThrough('GET', '/api/v1/profile'),
+  // The public plan list: pricing pages read it signed out, and it changes nothing.
+  letThrough('GET', '/api/v1/plans'),
   // Account writes: refused in both modes.
   write('POST', '/api/v1/auth/sessions/revoke-others'),
   read('/api/v1/auth/passkeys'),
@@ -281,6 +284,18 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // Flag exposure recording: telemetry, on the read-only allowlist.
   readOnlyWrite('POST', '/api/v1/tenants/:slug/flags/exposures'),
   read('/api/v1/tenants/:slug/beta'),
+  read('/api/v1/tenants/:slug/entitlements'),
+  read('/api/v1/tenants/:slug/insights'),
+  read('/api/v1/tenants/:slug/billing'),
+  write('POST', '/api/v1/tenants/:slug/billing/checkout'),
+  write('POST', '/api/v1/tenants/:slug/billing/checkout/confirm'),
+  write('POST', '/api/v1/tenants/:slug/billing/interval'),
+  write('POST', '/api/v1/tenants/:slug/billing/payment-method'),
+  write('POST', '/api/v1/tenants/:slug/billing/cancel'),
+  read('/api/v1/tenants/:slug/billing/invoices'),
+  write('POST', '/api/v1/tenants/:slug/upgrade-requests'),
+  read('/api/v1/tenants/:slug/upgrade-requests'),
+  write('POST', '/api/v1/tenants/:slug/banner-dismissals'),
   // Token lookup sent as POST to keep the token out of the URL; it writes nothing.
   readOnlyWrite('POST', '/api/v1/invitations/preview'),
   write('POST', '/api/v1/invitations/accept'),

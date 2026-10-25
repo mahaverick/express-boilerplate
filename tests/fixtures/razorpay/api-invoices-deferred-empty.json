@@ -1,0 +1,10 @@
+{
+  "method": "GET",
+  "path": "/invoices?subscription_id=sub_FIXTURE",
+  "status": 200,
+  "json": {
+    "entity": "collection",
+    "count": 0,
+    "items": []
+  }
+}

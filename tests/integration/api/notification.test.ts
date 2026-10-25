@@ -654,7 +654,23 @@ describe('/api/v1/notifications', () => {
       expect(response.status).toBe(200)
     })
 
-    it.each(NOTIFICATION_TYPES)(
+    it('stores emailEnabled false for workspace_full, an in-app notice', async () => {
+      const { user, token } = await createTrackedStaff('admin')
+
+      const response = await request(app)
+        .put('/api/v1/notifications/preferences')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          preferences: [
+            { notificationType: 'workspace_full', emailEnabled: false, inAppEnabled: true },
+          ],
+        })
+
+      expect(response.status).toBe(200)
+      expect(await storedEmailFlags(user.id)).toEqual([false])
+    })
+
+    it.each(NOTIFICATION_TYPES.filter((type) => type !== 'workspace_full'))(
       'rejects emailEnabled false for %s with a field-scoped message and stores nothing',
       async (type) => {
         const { user, token } = await createTrackedStaff('admin')

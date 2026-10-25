@@ -1,12 +1,18 @@
 /**
  * @file The preferences update schema's two guards on their own: a staff-only
  * type is refused for a caller with no platform role and accepted for staff,
- * and `emailEnabled: false` is refused for every notification type however
- * the body is crafted (the schema is the only gate before `upsert`).
+ * and `emailEnabled: false` is refused for every notification type but the
+ * in-app-only `workspace_full`, however the body is crafted (the schema is the
+ * only gate before `upsert`).
  */
 import { describe, expect, it } from 'vite-plus/test'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
 import { updatePreferencesSchemaFor } from '@/validators/notification.validators'
+
+/**
+ * The types whose email can't be switched off: all but `workspace_full`.
+ */
+const EMAIL_LOCKED_TYPES = NOTIFICATION_TYPES.filter((type) => type !== 'workspace_full')
 
 const EMAIL_OFF_MESSAGE =
   "You can't turn off email for this notification type. You can turn off its in-app notifications."
@@ -44,7 +50,14 @@ describe('updatePreferencesSchemaFor in-app toggles', () => {
 })
 
 describe('updatePreferencesSchemaFor never admits emailEnabled false', () => {
-  it.each(NOTIFICATION_TYPES)('refuses emailEnabled false for %s with a field message', (type) => {
+  it('accepts emailEnabled false for workspace_full, an in-app notice', () => {
+    const result = updatePreferencesSchemaFor(false).safeParse({
+      preferences: [entry('workspace_full', false, true)],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it.each(EMAIL_LOCKED_TYPES)('refuses emailEnabled false for %s with a field message', (type) => {
     const result = updatePreferencesSchemaFor(true).safeParse({
       preferences: [entry(type, false, true)],
     })

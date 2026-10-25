@@ -74,7 +74,20 @@ describe('NotificationPreferenceRepository', () => {
       expect(row.inAppEnabled).toBe(false)
     })
 
-    it.each(NOTIFICATION_TYPES)(
+    it('stores emailEnabled false for workspace_full, an in-app notice, and honours it', async () => {
+      const userId = await createUser()
+
+      await preferenceRepository.upsert(userId, 'workspace_full', {
+        emailEnabled: false,
+        inAppEnabled: true,
+      })
+
+      expect(await preferenceRepository.isChannelEnabled(userId, 'workspace_full', 'email')).toBe(
+        false
+      )
+    })
+
+    it.each(NOTIFICATION_TYPES.filter((type) => type !== 'workspace_full'))(
       'refuses emailEnabled false for %s with a 400 and writes nothing',
       async (type) => {
         const userId = await createUser()

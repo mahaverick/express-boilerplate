@@ -19,15 +19,30 @@ import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vite-plus/test'
+import { renderIntervalSwitchScheduledTemplate } from '@/templates/email/interval-switch-scheduled.template'
 import { renderInvitationConfirmTemplate } from '@/templates/email/invitation-confirm.template'
 import { renderMaintenanceModeChangedTemplate } from '@/templates/email/maintenance-mode-changed.template'
+import { renderMovedToFreeTemplate } from '@/templates/email/moved-to-free.template'
 import { renderOnboardingReminderTemplate } from '@/templates/email/onboarding-reminder.template'
+import { renderPaidCancelledTemplate } from '@/templates/email/paid-cancelled.template'
+import { renderPaidWelcomeTemplate } from '@/templates/email/paid-welcome.template'
 import { renderPasskeyCreatedTemplate } from '@/templates/email/passkey-created.template'
 import { renderPasskeyDeletedTemplate } from '@/templates/email/passkey-deleted.template'
+import { renderPayerLeftTemplate } from '@/templates/email/payer-left.template'
+import { renderPaymentFailedTemplate } from '@/templates/email/payment-failed.template'
+import { renderRenewalUpcomingTemplate } from '@/templates/email/renewal-upcoming.template'
 import { renderSignInLinkTemplate } from '@/templates/email/sign-in-link.template'
 import { renderStepUpLinkTemplate } from '@/templates/email/step-up-link.template'
 import { renderTenantInvitationTemplate } from '@/templates/email/tenant-invitation.template'
+import { renderTrialEndedTemplate } from '@/templates/email/trial-ended.template'
+import { renderTrialEndingTemplate } from '@/templates/email/trial-ending.template'
+import { renderTrialEndsTodayTemplate } from '@/templates/email/trial-ends-today.template'
+import { renderTrialMidpointTemplate } from '@/templates/email/trial-midpoint.template'
+import { renderTrialStartedTemplate } from '@/templates/email/trial-started.template'
+import { renderUpgradeRequestFulfilledTemplate } from '@/templates/email/upgrade-request-fulfilled.template'
+import { renderUpgradeRequestedTemplate } from '@/templates/email/upgrade-requested.template'
 import { renderWelcomeTemplate } from '@/templates/email/welcome.template'
+import { renderWinbackTemplate } from '@/templates/email/winback.template'
 import type { EmailTemplateKey, RenderedEmail } from '@/utilities/email-template.utilities'
 
 const SOURCE_ROOT = path.resolve(process.cwd(), 'src')
@@ -39,6 +54,8 @@ const MACHINE_FACING = new Set([
   'src/routes/analytics-proxy.routes.ts',
   'src/services/email-webhook.service.ts',
   'src/controllers/email-webhook.controller.ts',
+  'src/services/billing/billing-webhook.service.ts',
+  'src/controllers/billing-webhook.controller.ts',
 ])
 
 /**
@@ -413,6 +430,162 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       actorName: 'Grace Hopper',
       reason: 'Database upgrade',
       changedAt: EXPIRES_AT,
+    }),
+  ],
+  trial_started: [
+    renderTrialStartedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      trialEndsOn: '7 November 2026',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  trial_midpoint: ['1', '7'].map((daysLeft) =>
+    renderTrialMidpointTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      daysLeft,
+      trialEndsOn: '7 November 2026',
+      usageSummary: '5 members\n12 invitations sent\nWorkspace insights opened 4 times',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    })
+  ),
+  trial_ending: ['1', '7'].map((memberLimit) =>
+    renderTrialEndingTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      trialEndsOn: '7 November 2026',
+      memberLimit,
+      membersUsed: '5',
+      monthlyPrice: '999',
+      yearlyPrice: '9,990',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    })
+  ),
+  trial_ends_today: [
+    renderTrialEndsTodayTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      memberLimit: '3',
+      membersUsed: '5',
+      monthlyPrice: '999',
+      yearlyPrice: '9,990',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  trial_ended: [
+    renderTrialEndedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      summary:
+        'Free allows 3 members, and Acme Robotics has 5. No one new can join while it has 3 or more.\nThese Paid features are off: Workspace insights.',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  paid_welcome: [
+    renderPaidWelcomeTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      amount: '999',
+      interval: 'month',
+      nextChargeOn: '7 November 2026',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  renewal_upcoming: [
+    renderRenewalUpcomingTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      renewsOn: '7 November 2026',
+      amount: '999',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  payment_failed: (['halted', 'paused'] as const).map((stoppedBy) =>
+    renderPaymentFailedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      amount: '999',
+      stoppedBy,
+      graceEndsOn: '7 November 2026',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    })
+  ),
+  moved_to_free: (['payment_failed', 'cancelled', 'staff', 'lifecycle'] as const).map(
+    (downgradeCause) =>
+      renderMovedToFreeTemplate({
+        appName: 'Acme',
+        tenantName: 'Acme Robotics',
+        downgradeCause,
+        billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+      })
+  ),
+  paid_cancelled: (['false', 'true'] as const).map((beforeFirstCharge) =>
+    renderPaidCancelledTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      endsOn: '7 November 2026',
+      beforeFirstCharge,
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    })
+  ),
+  interval_switch_scheduled: (['month', 'year'] as const).map((interval) =>
+    renderIntervalSwitchScheduledTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      interval,
+      switchOn: '7 November 2026',
+      amount: '999',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    })
+  ),
+  payer_left: [
+    ...(['active', 'past_due'] as const).map((billingState) =>
+      renderPayerLeftTemplate({
+        appName: 'Acme',
+        tenantName: 'Acme Robotics',
+        payerName: 'Grace Hopper',
+        leftOn: '1 November 2026',
+        billingState,
+        periodEndsOn: '7 November 2026',
+        billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+      })
+    ),
+    // An active subscription with no real renewal date to state.
+    renderPayerLeftTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      payerName: 'Grace Hopper',
+      leftOn: '1 November 2026',
+      billingState: 'active',
+      periodEndsOn: '',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  upgrade_requested: [
+    renderUpgradeRequestedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      requesterName: 'Grace Hopper',
+      monthlyPrice: '999',
+      yearlyPrice: '9,990',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  upgrade_request_fulfilled: [
+    renderUpgradeRequestFulfilledTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      tenantLink: 'https://app.example.test/tenants/acme',
+    }),
+  ],
+  winback: [
+    renderWinbackTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      memberLimit: '3',
+      monthlyPrice: '999',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
   ],
 }

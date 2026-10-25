@@ -248,6 +248,56 @@ function cursorSecretProblems(env: Env): string[] {
 }
 
 /**
+ * Billing settings that contradict each other or the deployment: a partial
+ * Razorpay set, a key whose mode does not suit APP_ENV, a rotated-away secret
+ * with no current one, and the fake provider anywhere but local or beside keys.
+ * @param env - The validated environment.
+ * @returns One message per rule that fails, or none.
+ */
+function billingProblems(env: Env): string[] {
+  const problems: string[] = []
+  const set = [
+    ['RAZORPAY_KEY_ID', env.RAZORPAY_KEY_ID],
+    ['RAZORPAY_KEY_SECRET', env.RAZORPAY_KEY_SECRET],
+    ['RAZORPAY_WEBHOOK_SECRET', env.RAZORPAY_WEBHOOK_SECRET],
+  ] as const
+  const missing = set.filter(([, value]) => value === undefined).map(([name]) => name)
+  const hasKeys = missing.length < set.length
+  if (hasKeys && missing.length > 0) {
+    problems.push(
+      `Razorpay is half set: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing. Set all three, or unset them all.`
+    )
+  }
+  if (env.RAZORPAY_KEY_ID?.startsWith('rzp_live_') === true && env.APP_ENV !== 'prod') {
+    problems.push(
+      `RAZORPAY_KEY_ID is a live key, but APP_ENV is ${env.APP_ENV}. Use a rzp_test_ key outside prod.`
+    )
+  }
+  if (env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') === true && env.APP_ENV === 'prod') {
+    problems.push('RAZORPAY_KEY_ID is a test key, but APP_ENV is prod. Use a rzp_live_ key.')
+  }
+  if (
+    env.RAZORPAY_WEBHOOK_SECRET_PREVIOUS !== undefined &&
+    env.RAZORPAY_WEBHOOK_SECRET === undefined
+  ) {
+    problems.push(
+      'RAZORPAY_WEBHOOK_SECRET_PREVIOUS is set but RAZORPAY_WEBHOOK_SECRET is not. Set the current secret too, or unset the previous one.'
+    )
+  }
+  if (env.BILLING_FAKE_PROVIDER && env.APP_ENV !== 'local') {
+    problems.push(
+      `BILLING_FAKE_PROVIDER is true, but APP_ENV is ${env.APP_ENV}. Only APP_ENV=local may use the fake provider: unset it.`
+    )
+  }
+  if (env.BILLING_FAKE_PROVIDER && hasKeys) {
+    problems.push(
+      'BILLING_FAKE_PROVIDER is true and Razorpay keys are set. Unset one of them: the fake replaces Razorpay.'
+    )
+  }
+  return problems
+}
+
+/**
  * Refuses unsafe or inconsistent configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -307,7 +357,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
     )
   }
 
-  problems.push(...flagsKeyProblems(env), ...rateLimitScaleProblems(env))
+  problems.push(...flagsKeyProblems(env), ...rateLimitScaleProblems(env), ...billingProblems(env))
   warnOnUntrustedProxyForAnalytics(env, warn)
   warnOnHalfPosthogApiConfig(env, warn)
 

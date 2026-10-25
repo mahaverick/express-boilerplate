@@ -135,7 +135,7 @@ describe('addEmailJob', () => {
 })
 
 describe('emailQueueFor', () => {
-  it('routes sign_in_link, step_up_link, welcome, tenant_invitation, invitation_confirm, passkey_created and passkey_deleted to auth-email and everything else to email', () => {
+  it('routes sign_in_link, step_up_link, welcome, tenant_invitation, invitation_confirm, passkey_created and passkey_deleted to auth-email and everything else, billing mail included, to email', () => {
     const routed = Object.fromEntries(
       EMAIL_TEMPLATE_KEYS.map((key) => [key, (emailQueueFor(key) as { name: string }).name])
     )
@@ -150,6 +150,21 @@ describe('emailQueueFor', () => {
       passkey_deleted: 'auth-email',
       onboarding_reminder: 'email',
       maintenance_mode_changed: 'email',
+      trial_started: 'email',
+      trial_midpoint: 'email',
+      trial_ending: 'email',
+      trial_ends_today: 'email',
+      trial_ended: 'email',
+      paid_welcome: 'email',
+      renewal_upcoming: 'email',
+      payment_failed: 'email',
+      moved_to_free: 'email',
+      paid_cancelled: 'email',
+      interval_switch_scheduled: 'email',
+      payer_left: 'email',
+      upgrade_requested: 'email',
+      upgrade_request_fulfilled: 'email',
+      winback: 'email',
     })
     expect(AUTH_EMAIL_TEMPLATE_KEYS).toEqual([
       'sign_in_link',

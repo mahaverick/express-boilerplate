@@ -429,6 +429,43 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     })
   })
 
+  describe('no-restricted-imports: repositories/platform-billing.repository', () => {
+    const fixture = 'tests/fixtures/lint-zones/service-imports-platform-billing-repository.ts'
+    const fixtureSource = readFixture(fixture)
+    const relativeSource =
+      "import { PlatformBillingRepository } from './platform-billing.repository'\n\n" +
+      'export const repository = PlatformBillingRepository\n'
+    const rejectPaths = [
+      'src/services/tenant.service.ts',
+      'src/services/audit.service.ts',
+      'src/middlewares/probe.middleware.ts',
+      'src/repositories/probe-billing.repository.ts',
+    ]
+    for (const syntheticPath of rejectPaths) registerOxlintProbe(syntheticPath, fixtureSource)
+    registerOxlintProbe('src/repositories/probe-billing.repository.ts', relativeSource)
+    registerOxlintProbe('src/services/platform-billing.service.ts', fixtureSource)
+
+    it.each(rejectPaths)('rejects an import from %s', async (syntheticPath) => {
+      const messages = await oxlintMessagesFor(syntheticPath, fixtureSource)
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
+      expect(restricted?.severity).toBe(2)
+    })
+
+    it('rejects a relative import of the same module', async () => {
+      const messages = await oxlintMessagesFor(
+        'src/repositories/probe-billing.repository.ts',
+        relativeSource
+      )
+      const restricted = messages.find((message) => message.ruleId === RESTRICTED_IMPORTS)
+      expect(restricted?.severity).toBe(2)
+    })
+
+    it('allows services/platform-*.service.ts', async () => {
+      const ids = await oxlintRuleIdsFor('src/services/platform-billing.service.ts', fixtureSource)
+      expect(ids).not.toContain(RESTRICTED_IMPORTS)
+    })
+  })
+
   describe('no-restricted-imports: repositories/platform-user.repository', () => {
     const fixture = 'tests/fixtures/lint-zones/service-imports-platform-user-repository.ts'
     const fixtureSource = readFixture(fixture)

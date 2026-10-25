@@ -72,6 +72,34 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     emailDomains: ['example.test', 'acme.example'],
     messageIds: ['message-1', 'message-2'],
   },
+  'billing.checkout_started': { interval: 'month' },
+  'billing.cancel_scheduled': {},
+  'billing.interval_switch_scheduled': { interval: 'year' },
+  'billing.card_change_started': {},
+  'billing.grant_expired': { grantId: 'grant-1', key: 'members' },
+  'billing.viewed': {},
+  'billing.resynced': { reason: 'Owner says they paid' },
+  'billing.trial_extended': {
+    days: 7,
+    reason: 'Sales call ran long',
+    trialEndsAt: '2026-11-02T10:00:00.000Z',
+  },
+  'billing.grant_added': {
+    key: 'members',
+    value: 10,
+    expiresAt: '2026-12-01T00:00:00.000Z',
+    reason: 'Pilot extension',
+  },
+  'billing.grant_revoked': { key: 'members', reason: 'Pilot ended' },
+  'billing.cancelled_by_staff': { when: 'now', reason: 'Fraud review, ticket 77' },
+  'plan.updated': {
+    before: { name: 'Free', description: '', entitlements: { members: 3 } },
+    after: { name: 'Free', description: '', entitlements: { members: 5 } },
+    affected: { trialing: 0, active: 0, past_due: 0, free: 12 },
+    reason: 'Pricing review',
+  },
+  'plan.price_created': { interval: 'month', amountMinor: 129_900, reason: 'Price rise' },
+  'billing.settings_updated': { changedFields: ['trialDays'], reason: 'Longer trials' },
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
     from: 'off',
@@ -94,6 +122,18 @@ describe('AUDIT_ACTIONS', () => {
     expect(ACTIONS.toSorted((a, b) => a.localeCompare(b))).toEqual([
       'auth.step_up_confirmed',
       'auth.step_up_refused',
+      'billing.cancel_scheduled',
+      'billing.cancelled_by_staff',
+      'billing.card_change_started',
+      'billing.checkout_started',
+      'billing.grant_added',
+      'billing.grant_expired',
+      'billing.grant_revoked',
+      'billing.interval_switch_scheduled',
+      'billing.resynced',
+      'billing.settings_updated',
+      'billing.trial_extended',
+      'billing.viewed',
       'email.resent',
       'email.suppression_lifted',
       'invitation.accepted',
@@ -107,6 +147,8 @@ describe('AUDIT_ACTIONS', () => {
       'onboarding.reminder_sent',
       'onboarding.step_completed',
       'onboarding.undismissed',
+      'plan.price_created',
+      'plan.updated',
       'platform.maintenance_mode_changed',
       'platform.member.granted',
       'tenant.accessed_by_platform',
@@ -137,6 +179,13 @@ describe('AUDIT_ACTIONS', () => {
     expect(action).toMatch(/^[a-z]+(\.[a-z_]+)+$/)
     expect(action.length).toBeLessThanOrEqual(64)
   })
+
+  it.each(['billing.checkout_started', 'billing.interval_switch_scheduled'] as const)(
+    '%s accepts only a billing interval',
+    (action) => {
+      expect(AUDIT_ACTIONS[action].metadata.safeParse({ interval: 'week' }).success).toBe(false)
+    }
+  )
 
   it.each(ACTIONS)('%s targets a known target type', (action) => {
     expect(AUDIT_TARGET_TYPES).toContain(AUDIT_ACTIONS[action].target)
@@ -353,6 +402,8 @@ describe('audit value sets', () => {
       'email_message',
       'email_suppression',
       'platform',
+      'plan',
+      'billing',
     ])
   })
 

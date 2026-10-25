@@ -227,8 +227,9 @@ regularly passes 300 ms trips the cooldown. What each caller then does is in
 - `@typescript-eslint/no-restricted-imports`: controllers import
   `database/models` for types only.
 - `no-restricted-imports` over `src/**`, with `src/services/platform-*.service.ts`
-  exempt: the five cross-tenant repositories (`platform-tenant`,
-  `platform-stats`, `platform-user`, `platform-email`, `platform-onboarding`)
+  exempt: the six cross-tenant repositories (`platform-tenant`,
+  `platform-stats`, `platform-user`, `platform-email`, `platform-onboarding`,
+  `platform-billing`)
   stay out of every other module, so "your tenants" is never served from a
   query that sees every tenant.
 - `import-x/no-cycle` over relative and `@/` imports.
@@ -293,30 +294,60 @@ in this order:
    tenant creation, and an owner invitation's or any platform-tenant
    invitation's accept (`lockUserForOwnership`,
    `tenant-membership.service.ts`, before the claim);
-   none of these goes on to lock a membership or tenant row. One that also
+   none of these goes on to lock a membership or tenant row, and a customer
+   invitation's accept, verify or confirm goes on only to the seat lock
+   (5 below), before its claims. One that also
    locks token rows takes the user row, then the link row, then the refresh
    rows: a step-up confirm locks the user row, claims its link and then moves
    the session's refresh rows (`confirmStepUpLink`, `step-up.service.ts`); an
    invitation confirm locks the invitee's row `FOR SHARE` (or inserts the new
-   account), then claims its link, then claims the invitation
+   account), then takes the seat lock on a customer tenant, then claims its
+   link, then claims the invitation
    (`claimForAcceptById`), inserts the membership and inserts the refresh row
    (`confirmInvitation`, `tenant-invitation.service.ts`). A deactivation, a
    staff sign-out and a sign-out of the other sessions take the user row and
    then revoke the address's links (`revokeSignInLinksOf`), so a confirm that
    claimed its link before the user row would deadlock against them
    (`tests/integration/services/invitation-confirm-race.test.ts`). A one-click
-   invitation verify inserts the new account before it claims the invitation
-   and inserts the refresh row;
+   invitation verify inserts the new account and takes the seat lock before it
+   claims the invitation and inserts the refresh row;
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);
 4. when the actor has no membership there, the actor's platform-tenant
    membership `FOR SHARE` (`lockPlatformRole`, through `lockTenantAccess` in
    `tenant-access.service.ts`);
-5. the tenant or settings row a write changes (`lockById` in
+5. a customer tenant's billing row, the seat lock (`lockSeats`,
+   `src/services/billing/seats.service.ts`, `FOR NO KEY UPDATE`), taken by
+   every write that adds a seat on the members limit: an invite (after
+   `lockActorRole`), the resend of an expired invitation, and an accept,
+   invitation verify or confirm (after the user-row step). It comes before
+   any invitation or membership-row write, so two such writes queue here and
+   never both take the last seat. The platform tenant has no billing row and
+   takes no seat lock. The billing sync (`syncTenantBilling`,
+   `src/services/billing/billing-sync.service.ts`) locks only this row, and
+   calls the payment provider only before or after its transaction; so do the
+   billing scheduler's writes. A suspend or archive never touches it: after
+   its commit it queues a prompt cancel job, and the scheduler's lifecycle
+   step, which takes the same claim, is the fallback. A user's delete takes
+   it after the user row, and a user's purge after the memberships and the
+   platform-role row and before the user row's delete, to clear them as payer
+   (`clearPayer`); a tenant purge takes it after the platform-role row to
+   check that no subscription arrived since its provider check. The cancel
+   marker (`markCancel`, `cancel-marker.service.ts`), written in its own
+   transaction before the provider call, takes the cancelling owner's user
+   row `FOR KEY SHARE` first, so its foreign key never locks that row after
+   the billing row;
+6. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
-6. a user's notification preference rows, in `NOTIFICATION_TYPES` order
+7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
    (`updatePreferences`, `notification.service.ts`); that transaction locks
    nothing else (its foreign key takes `FOR KEY SHARE` on the user row).
+
+A staff plan, price or billing settings edit locks the actor's platform-role
+and user rows (`assertStillPlatformRole`), then the plan row (`lockPlan`) or
+the settings row (`lockSettings`, `plan.repository.ts`), and nothing else. No
+tenant write locks either row, so neither joins a cycle; the tenants a plan
+edit reaches are told after its commit.
 
 Three writes take a user row later. Staff writes lock owner rows and platform
 memberships first, then the actor's user row `FOR SHARE`
@@ -342,7 +373,9 @@ membership rows in both a customer tenant and the platform tenant locks the
 customer tenant's first. Postgres cannot enforce an application lock order;
 the JSDoc of each lock method states its place, and deadlock regression tests
 (`tests/integration/services/tenant-membership.service.test.ts`,
-`tests/integration/api/platform-user-race.test.ts`) hold it.
+`tests/integration/services/billing/cancel-marker.service.test.ts`,
+`tests/integration/api/platform-user-race.test.ts`,
+`tests/integration/services/billing/seat-lock-order.test.ts`) hold it.
 
 **Lock modes.** A lock that only guards a read-then-write takes
 `FOR NO KEY UPDATE`, because `FOR UPDATE` conflicts with the `FOR KEY SHARE`
@@ -362,19 +395,36 @@ Staff are the members of the one tenant with `is_platform` set. These services
 carry staff access; the routes in front of them check the platform role first,
 and every write re-checks it under lock.
 
-| Service                          | Job                                                                                                                                                                                                                                                              |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tenant-access.service.ts`       | `lockTenantAccess`: locks owners, memberships and, when the actor has no membership, the platform membership, and returns the actor's access. Membership wins; the platform tenant is members-only.                                                              |
-| `platform.service.ts`            | Reads a user's platform role (one indexed read, no cache), `assertStillPlatformRole` inside a staff write, and the grant behind `pnpm platform:grant`.                                                                                                           |
-| `platform-tenant.service.ts`     | Staff tenant search and detail, create with an owner invitation, owner re-invitation, and the suspend, reactivate and archive transitions (`transitionLifecycle`).                                                                                               |
-| `platform-user.service.ts`       | The staff user directory and user actions (create with a welcome sign-in link, edit, staff-sent sign-in link, deactivate, reactivate, sign out, soft delete). Edits and state changes lock through `lockStaffPair`; the sign-in link checks rank without a lock. |
-| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard delete of a user or a tenant. With `retention.service.ts`, the only code that names the audit trigger's purge settings, and the only code that names `app.audit_redact`.                                            |
-| `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                                         |
-| `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                                             |
-| `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                                |
-| `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                                          |
-| `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                                          |
-| `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                                      |
+| Service                          | Job                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant-access.service.ts`       | `lockTenantAccess`: locks owners, memberships and, when the actor has no membership, the platform membership, and returns the actor's access. Membership wins; the platform tenant is members-only.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `platform.service.ts`            | Reads a user's platform role (one indexed read, no cache), `assertStillPlatformRole` inside a staff write, and the grant behind `pnpm platform:grant`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `platform-tenant.service.ts`     | Staff tenant search and detail, create with an owner invitation, owner re-invitation, and the suspend, reactivate and archive transitions (`transitionLifecycle`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `platform-user.service.ts`       | The staff user directory and user actions (create with a welcome sign-in link, edit, staff-sent sign-in link, deactivate, reactivate, sign out, soft delete). Edits and state changes lock through `lockStaffPair`; the sign-in link checks rank without a lock.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard delete of a user or a tenant. With `retention.service.ts`, the only code that names the audit trigger's purge settings, and the only code that names `app.audit_redact`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `platform-stats.service.ts`      | The staff Overview: totals and zero-filled daily series.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `platform-email.service.ts`      | Message tracking: search, detail, masked preview, health, suppressions and resend, which runs the action that sent the mail, with that action's own gates and audit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `platform-onboarding.service.ts` | The staff funnel, tenant list and tab, the Overview's stuck count, manual completion, reminders, and `pnpm onboarding:reconcile`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `platform-flags.service.ts`      | The flag inspector and evaluate view ([Feature flags](#feature-flags)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `platform-billing.service.ts`    | One tenant's billing for staff: the read (provider ids, sources, grants, the newest 20 state changes and provider events, never the owner-only fields), resync, trial extension, grants and their revocation, and the staff cancel (`cancelSubscriptions`, shared with the owner's cancel). Each write locks the platform-role row, then the billing row. Platform-wide: the plans with prices and tenant counts, a plan change's preview, the plan edit (applied to every tenant on the plan at once, then pushed to their open apps), a new price (retiring the active one; subscribers keep theirs), the billing settings and the alerts list. |
+| `platform-system.service.ts`     | `GET /platform/system/status`: the release, error tracking's counts, the flags' snapshot and the maintenance mode. An open object, one key per section.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `audit.service.ts`               | `record(entry, tx)` in the caller's transaction with strict per-action metadata; the hourly platform-access entry; the tenant and platform audit-log reads.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+Staff plan and settings edits take effect as follows. A plan edit applies to
+every tenant on the plan at once, trialing tenants included for Paid; a lowered
+limit deletes nothing, and a tenant over it keeps its members but can add
+none. An edit that sends `entitlements` must send at least one key. A new
+price retires the active price of its interval; a subscriber keeps the price
+it pays, a checkout already open at the old price completes at that price,
+and the provider plan is made at the first checkout on the new one. Trial
+settings (`trialEnabled`, `trialDays`) apply to trials that start after the
+change. `pastDueGraceDays` applies at once to every past-due tenant, and to
+an active one whose paid period lapsed before the billing job ran, since the
+grace end is computed on each read. The tenants a plan edit or a grace change
+reaches are told by one queued `publish-entitlements` billing job, which
+reads their records 500 at a time, so the edit answers at once. The staff tenant list's `billingState` and
+`planKey` are the stored values, which trail a lapsed trial or period until the
+billing job's next run (at most 15 minutes); the platform tenant has neither.
 
 Each cross-tenant repository is imported by its own `platform-*` service only;
 `platform-user.repository.ts` also by `platform-purge.service.ts`. What staff may do, and the gates on it, are in
@@ -458,6 +508,7 @@ order:
 | `maintenanceModeGate`                        | After `cors`, so a refusal carries the grant; before every router, the webhooks, the proxy and the body parsers ([Maintenance mode](#maintenance-mode)).        |
 | `posthogSession`                             | Copies `X-POSTHOG-SESSION-ID` into the request context, for server events.                                                                                      |
 | `/api/v1/webhooks/email`                     | Before the body parsers: a provider's signature covers the exact bytes, so the route reads them with its own `express.raw` ([Email tracking](#email-tracking)). |
+| `/api/v1/webhooks/razorpay`                  | Before the body parsers for the same reason: Razorpay signs the exact bytes. It verifies, records and queues on the `billing` queue.                            |
 | `/api/v1/collect`                            | Before the body parsers too: replay bodies stream to PostHog unread ([Analytics](#analytics)).                                                                  |
 | `express.json` (1 MB), `urlencoded` (100 KB) | The body parsers.                                                                                                                                               |
 | `GET /health`, `GET /health/ready`           | [Health checks](#health-checks).                                                                                                                                |
@@ -565,6 +616,15 @@ success with no payload goes through `messageResponse`, which always sends
 `data: null`. Every 5xx `errorHandler` writes, except a maintenance refusal,
 also carries `errorId`. `/health`, `/health/ready` and the SSE stream-capacity
 503 write their own bodies.
+
+A refusal a client can act on also carries `details`, structured facts next
+to `code`: a plan limit's 402 `PLAN_LIMIT_REACHED` sends
+`{ key, used, limit }` and a plan feature's 402 `PLAN_FEATURE_REQUIRED` sends
+`{ key }`. `errorHandler` writes an `HttpError`'s `details` on a 4xx only,
+never on a masked 5xx, and a response without them has no `details` key. A
+full workspace refusing an invitee's join sends none, since the invitee is
+not a member.
+
 The envelope is not RFC 9457 `problem+json`: switching would change what every
 client parses on every response.
 
@@ -793,34 +853,37 @@ are under "Two senders" in [README.md](README.md#email-tracking).
 
 ### Queues and Workers
 
-Five BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
+Six BullMQ queues share the prefix `redisKey('bull')`. `getAllQueues()`
 returns every one, and is what the staff status lists;
 `tests/integration/services/queue-registry.test.ts` fails when a queue is
 missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                   | Worker concurrency   | Job options                                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                 | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                       |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                               | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                       |
-| `maintenance`  | The retention purge                                                                                                                                       | 1                    | 3 attempts, backoff from 60 s                                      |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept |
+| Queue          | Carries                                                                                                                                                                                                                       | Worker concurrency   | Job options                                                           |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------- |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                          |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                          |
+| `maintenance`  | The retention purge                                                                                                                                                                                                           | 1                    | 3 attempts, backoff from 60 s                                         |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept    |
+| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 8 attempts, backoff from 30 s; failures kept 7 days; a run: 1 attempt |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
-`UnrecoverableError`) to error tracking. The email, auth-email, notification
-and maintenance handlers then log a retryable attempt at `warn`; on the final
+`UnrecoverableError`) to error tracking. The email, auth-email, notification,
+maintenance and billing handlers then log a retryable attempt at `warn`; on the final
 one `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
 payload, marks an email's message `failed`, and logs `job failed permanently`
-once. What a job payload may hold, and for how long, is in
+once. A billing webhook job's final failure also marks its `billing_events`
+row failed and raises one `webhook_failing` staff alert per event; a provider
+refusal a retry cannot change fails it at once. What a job payload may hold, and for how long, is in
 [SECURITY.md](SECURITY.md#mail-at-rest). The analytics handler only logs a
 `warn`: a failed tick loses nothing. No handler rejects, since an unhandled
 rejection exits the process.
 
-`startWorkers()` starts the email, auth-email, notification and maintenance
-Workers, and the analytics Worker when analytics or PostHog's private API is
+`startWorkers()` starts the email, auth-email, notification, maintenance and
+billing Workers, and the analytics Worker when analytics or PostHog's private API is
 configured.
 `WORKER_ENABLED` (default `true`) runs them in the API process. To split them,
 set it to `false` on API-only pods and `true` on a worker deployment that
@@ -836,6 +899,8 @@ on one Worker):
 | Scheduler             | Queue         | When                                | Registered when                         |
 | --------------------- | ------------- | ----------------------------------- | --------------------------------------- |
 | `retention-purge`     | `maintenance` | daily at 03:00 UTC                  | always                                  |
+| `scheduler-frequent`  | `billing`     | every 15 min                        | always                                  |
+| `scheduler-daily`     | `billing`     | daily at 03:30 UTC                  | always                                  |
 | `analytics-drain`     | `analytics`   | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
 | `analytics-deletions` | `analytics`   | every 60 s                          | the personal key and project id are set |
 | `flag-definitions`    | `analytics`   | every 30 s                          | flags are configured                    |
@@ -844,6 +909,76 @@ A failed registration logs a `warn` and is retried with the next generation. A
 new generation starts only when the Worker connection gives up before its first
 `ready`, so a registration that fails while the Workers stay healthy waits for
 the next restart; a scheduler stored earlier keeps running meanwhile.
+
+The billing runs (`src/services/billing/billing-scheduler.service.ts`) are
+lists of independent named steps; a step that fails is logged and the rest
+still run. `scheduler-frequent` moves lapsed trials to Free, syncs workspaces
+whose grace, cancelling period (plus the 3-day buffer) or interval switch is
+due, cancels the subscriptions of suspended (at cycle end) and archived (now)
+workspaces, lapses grants and upgrade requests, and sends the trial
+reminders: three days before the end (not for a trial of three days or
+less), on the last day in the workspace's time zone, and halfway through a
+trial longer than six days. A reminder re-reads its row before it sends, and a
+workspace that left the trial or Free, or was suspended, since the claim gets
+nothing. It runs with payments
+off too, skipping the provider steps. `scheduler-daily` is the reconcile: it queues
+a `sync-tenant` job for every row that holds a subscription (rows of another
+provider or mode, and Free rows whose only subscription has ended, are skipped
+and counted; a Free row whose current subscription a failed cancel left
+running, which a staff alert names, is synced so the cancel is tried again),
+for each running subscription of the last three days whose
+notes name a workspace whose row does not hold it, and for each workspace
+whose webhook event failed in the last three days. It also sends the yearly
+renewal reminder a week before the period ends (never for a stand-in period
+end, one no later than the row's last sync, which an adoption of an unpaid
+cycle stores) and the win-back emails on days
+7 and 30 after a trial or paid plan fell to Free. A reminder is claimed in its
+`tenant_billing` column before it is sent, and a suspended or archived
+workspace is never claimed. Two overlapping runs act
+once: each step claims its rows, re-checks them under the row lock, or leaves
+them to the sync's versioned write. A run occupies one of the billing
+Worker's two slots while it lasts, so webhook and sync jobs share the other;
+the daily run only queues jobs and ends quickly. The lifecycle cancel claims
+a suspended or archived workspace's row once, and cancels every subscription
+id it holds whatever the row's state: the current one at its cycle end for a
+suspended workspace that pays, else now; a checkout and a switch now. A
+checkout or switch that reads as paid is brought in by a sync first, so a
+paid checkout is adopted (and cancelled as the current one) or refunded as a
+duplicate, never discarded. After that sync the cancel reads the lifecycle
+state again (a reactivated workspace is skipped and released) and holds the
+claim again, since the sync released it when it adopted the checkout: when
+another job took the claim first, that job cancels and this one does
+nothing, so no cancel goes out twice. A sync that has an archived workspace
+adopt a paid checkout or a found subscription (it had no running one, or the
+checkout would be refunded as a duplicate) cancels it now and refunds it:
+nothing an archived workspace can use was bought. One staff alert follows,
+raised once the refund's outcome is known and worded for it (refunded,
+nothing paid, refunded in part, or a cancel or refund that failed and what
+staff do at the provider). The claim is released when the workspace is
+reactivated, when a sync gives a suspended or archived workspace a new
+current subscription (an adoption or a handover) or an id it did not hold,
+which also queues the prompt cancel, and once a day for a cancel that failed and alerted
+staff more than a day ago. A suspend followed by an
+archive replaces the suspension's cycle-end cancel with an immediate one: the
+claim taken before the archive is released, since the archive stamps
+`deleted_at` with its statement's time; a claim taken after that statement
+but before the archive commits keeps the cycle-end cancel. Each suspend and archive also
+queues a `lifecycle-cancel` job after its commit, which runs the same step
+for that workspace alone (`runLifecycleCancelFor`) through the same claim,
+so the cancel goes out at once and the frequent run is only the fallback. A
+reactivation sends the warnings the suspension held back: a payment that
+stopped and a Paid that ends at the cycle end (an owner's cancel or the
+suspension's own, which the provider can't undo), each under the stamp it had,
+so none goes twice (`sendHeldBackWarnings`). The stamps live in the email and
+notification rows, which the retention purge deletes, so a suspension longer
+than their retention can send a warning again on reactivation. A tenant purge reads every
+subscription id the row holds, whatever its state, and is refused with 409
+while the provider shows any as running, with 502 when the provider doesn't
+know one (keys of another account), and with 503 or 502 when it can't be read.
+With payments off, or a row of another provider or mode, it is refused with
+502 while the row holds any subscription id: a halted subscription on a Free
+row can resume at the provider. A row with no id purges. The billing row then
+goes with the tenant.
 
 The analytics Worker runs one job at a time, so this process never has two of
 its jobs talking to PostHog at once. Two replicas may; the drain and the
@@ -924,6 +1059,13 @@ every replica with an open stream: one subscriber ── local emitter ── ea
   while streams are open, every open stream is closed so its client replays
   the gap. A publish that fails is delivered locally instead, and one whose
   reply is lost may arrive twice.
+- **Entitlements.** The same channel carries a second message kind,
+  `{ kind: 'entitlements_changed', userId, tenantId, slug }`, published once
+  per member of a workspace whose plan, billing state or grants changed
+  (`publishEntitlementsChanged`, `src/services/billing/billing-events.service.ts`).
+  The stream writes it as `event: entitlements_changed` with `{ tenantId, slug }`
+  and no `id:` line, so `Last-Event-ID` stays a notification id; nothing
+  replays it, since the client reads fresh entitlements on its next load.
 - **Shutdown.** The stream registry (`src/services/lifecycle.service.ts`)
   lets `gracefulShutdown` end every stream first.
 
@@ -970,7 +1112,8 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   email events from the webhook transaction. The event builder
   (`analytics-event-builder.service.ts`) holds every PII rule.
   `enqueueAnalyticsOrThrow` is for a caller that handles the failure itself:
-  the groups backfill and flag exposure. A passkey sign-in emits the same
+  the groups backfill, flag exposure, and the throttled billing events, which
+  release their throttle key when the write fails. A passkey sign-in emits the same
   `user_signed_in` event as a link, with `method: 'passkey'`; creating and
   deleting a passkey send `passkey_created` and `passkey_deleted`
   (`AUDIT_EVENT_RENAMES`), with the provider name and never a credential ID;
@@ -1001,7 +1144,19 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   so on one Worker whichever marker reaches PostHog last carries the latest
   committed state; two Worker replicas whose drains overlap can deliver an
   older one after a newer one, and the next marker for that tenant corrects
-  it. `pnpm analytics:backfill-groups` queues one marker per tenant.
+  it. `pnpm analytics:backfill-groups` queues one marker per tenant. A tenant
+  with a billing row also gets its plan properties: `plan`, `billing_state`,
+  `billing_interval` (while paying), `trial_start_date`, `trial_end_date`,
+  `trial_plan_name` (the plan a trial gives, once it had one),
+  `limit_hits_30d`, `open_upgrade_requests` and `paid_since` (the latest move
+  to `active` from a state that does not pay). `limit_hits_30d` counts the
+  plan refusals of 30 days: every `plan_limit_reached`, and every feature
+  refusal, including those the hourly throttle kept from sending
+  `plan_feature_blocked`, from
+  a Redis sorted set per tenant (`plan-limit-hits.service.ts`), since the
+  outbox drops a row once it is sent; when Redis cannot answer, the key is
+  left out rather than sent as 0. Every billing event queues its tenant's
+  marker, so the properties follow each change.
 - **Purges and what stays in PostHog.** `purgeUser` writes an
   `analytics_deletions` row due an hour later (PostHog deletes only events it
   ingested before the request) and deletes the user's undelivered outbox rows,
@@ -1020,6 +1175,106 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   streaming bodies untouched. It sits ahead of the body parsers and has no
   `on.error` handler, which would make http-proxy-middleware skip its own error
   response. Without `POSTHOG_PROJECT_KEY` it answers 503.
+
+### Billing events
+
+The billing events are product domain events
+(`src/services/billing/billing-analytics.service.ts`), emitted after the
+change commits, or after a refused write rolls back, and never inside a
+transaction. Every one joins its tenant's group and carries `plan` and
+`billing_state` as they are after the change. A change made by the provider,
+a job or the reconcile is sent as the person it is attributed to, with
+`access: 'system'`: the owner who started the checkout, the payer, or the
+user whose trial it is, skipping a soft-deleted account; only when nobody is
+left is it a system event. A trial's events fall back to the payer, then the
+checkout's starter, when no one claimed the trial (one staff gave a
+workspace that paid before). The owner who started the checkout is
+`checkoutStartedBy`, the last owner who opened it: when one owner opens a
+checkout, another reopens it and the first pays and confirms,
+`checkout_confirmed` and `subscription_activated` name the second, while the
+payer on record is the first. Storing a new checkout clears the payer and the billing address, and when
+the new subscription becomes current with no payer on record the sync sets
+the owner who started the checkout; a payer the confirm recorded is never
+replaced, so an earlier payer is never named for it; that fill clears the
+billing address too, since it was the earlier payer's. Deleting or purging an
+account clears it as payer, with its billing address, wherever it paid; the
+subscription keeps running. A payer demoted from owner stays the payer, since
+the mandate is theirs, and no one is told they left. Staff are never named: a staff member's own
+action in a customer tenant sends no product event, since its audit entry is
+forwarded already, and a staff-made change goes to the person the rules name.
+An invitee refused at the door is not a member, so that refusal is a system
+event with no use or cap. The property `reason` is on the PII drop list, so
+a downgrade sends `downgrade_cause` and a failed payment `failure_code`.
+
+An event fixed by a stamp (the row version a change wrote, a subscription, a
+dispute, a trial's end) gets a row id derived from that stamp
+(`dedupedRowId`) and a time taken from the same data (the write's
+`updatedAt`, the subscription's first cycle, a fixed lead before the trial's
+end), never the clock, so a repeat before or after the drain is the same
+`uuid`, timestamp, event and `distinct_id`, which PostHog deduplicates. A
+refusal has no stamp and no repeat path; its time is when it happened.
+`plan_feature_blocked` and `plan_limit_approaching` are written with
+`enqueueAnalyticsOrThrow` after their hourly throttle key is claimed, and the
+key is released when the write fails, so a failure never silences them for the
+hour. An owner's cancel writes a marker on the billing row before it calls
+the provider (`cancel_marker_*`, `src/services/billing/cancel-marker.service.ts`),
+whether or not analytics is on, so a cancel its webhook brings in first is
+still `by: owner`, and its move to Free reads cause `cancelled` in the mail
+and in analytics alike (a past-due one included). The marker counts for 15
+minutes and only while it names the current subscription; the cancel's own
+write clears it, and a cancel that fails clears it, and a suspended or archived
+workspace's cancel reads `by: suspension` whatever the marker says. A staff
+cancel sets the same marker, which reads `by: staff`, also behind the
+suspension; only the staff cancel's own write reads `by: staff` on a
+suspended workspace. A sync an
+owner's or a staff member's request runs only brings in what the provider did,
+so it reads the provider's cause: a subscription already cancelled at the
+provider when an owner asks to cancel reads `by: customer_bank`.
+
+Three readings of a workspace's billing feed analytics, and they can briefly
+disagree: group properties and diff events use the stored state, flag traits
+use the state read with the clock (a trial that ended reads `free` before the
+job moves it), and refusals use the effective entitlements the request was
+refused on.
+
+| Event                                                                 | Sent from                                                                                                                                                                                                                                             | `distinct_id`                                                                                      |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `trial_started`                                                       | `createTenant`, and the join that starts a staff-made tenant's trial                                                                                                                                                                                  | the creator, or the owner who joined                                                               |
+| `trial_reminder_sent { days_left }`                                   | the three-day, last-day and midpoint trial reminders, once sent                                                                                                                                                                                       | the trial's user, else the payer, else the checkout's starter, else system                         |
+| `trial_extended { days }`                                             | `extendTrial` (staff), once per extension                                                                                                                                                                                                             | the trial's user, else the payer, else the checkout's starter, else system; never the staff member |
+| `trial_ended`                                                         | `emitBillingDiff`: a trialing row moves to Free                                                                                                                                                                                                       | the trial's user, else the payer, else the checkout's starter, else system                         |
+| `plan_limit_approaching { key, used, limit }`                         | an invite or an expired invitation's resend whose seat moves the limit into its "approaching" band (`limitUsage`, as the app shows it), from the use read under the seat lock; once per tenant, key and hour                                          | the member who wrote                                                                               |
+| `plan_limit_reached { key, used, limit }`                             | an invite or resend the members limit refused, after its rollback; a refused join sends `{ key }` only                                                                                                                                                | the inviter; system for a refused join                                                             |
+| `plan_feature_blocked { key }`                                        | `requireFeature`; once per tenant, key and hour                                                                                                                                                                                                       | the member refused                                                                                 |
+| `upgrade_requested { key, surface }`                                  | `requestUpgrade`, after the request opens, and again when a lapsed one reopens                                                                                                                                                                        | the member who asked                                                                               |
+| `upgrade_request_fulfilled`                                           | `emitBillingDiff`, for each request a move to Paid fulfilled                                                                                                                                                                                          | the requester                                                                                      |
+| `checkout_started { interval, amount_minor, currency, during_trial }` | `startCheckout`, for an upgrade (not an interval switch or a card change)                                                                                                                                                                             | the owner                                                                                          |
+| `checkout_confirmed`                                                  | `confirmCheckout`, for an upgrade checkout                                                                                                                                                                                                            | the last owner who opened the checkout (`checkoutStartedBy`), else the owner who confirmed         |
+| `subscription_activated { interval }`                                 | `emitBillingDiff`: the row becomes `active` with a new subscription                                                                                                                                                                                   | the last owner who opened the checkout (`checkoutStartedBy`), else the payer                       |
+| `subscription_renewed`                                                | `emitBillingDiff`: an active row's paid period moves forward on the same subscription; not the first paid cycle of a subscription adopted before it was paid, whose stored period end was a stand-in (`isFirstPaidCycle`)                             | the payer; the checkout's starter for a first charge                                               |
+| `payment_failed { failure_code }`                                     | `emitBillingDiff`: `pastDueSince` is set; `retrying`, `halted` or `paused`                                                                                                                                                                            | the payer; the checkout's starter for a first charge                                               |
+| `subscription_recovered`                                              | `emitBillingDiff`: a past-due row is active again                                                                                                                                                                                                     | the payer                                                                                          |
+| `subscription_halted`                                                 | `emitBillingDiff`: `haltedAt` is set                                                                                                                                                                                                                  | the payer; the checkout's starter for a first charge                                               |
+| `subscription_cancel_scheduled { by }`                                | `emitBillingDiff`: a cancel at period end (not a switch's), an owner's cancel before the first charge, or a staff cancel that ends Paid now; `by` is `owner`, `customer_bank` (the provider reported a cancel no owner made), `staff` or `suspension` | the owner who cancelled, else the payer                                                            |
+| `subscription_interval_change_scheduled`                              | `emitBillingDiff`: the next subscription is authenticated on the other interval                                                                                                                                                                       | the owner who started the switch                                                                   |
+| `downgraded_to_free { downgrade_cause }`                              | `emitBillingDiff`: the row becomes `free`; `trial_ended`, `payment_failed`, `cancelled` (an owner's own cancel too, of a past-due subscription included), `staff` or `lifecycle`                                                                      | the payer; for `trial_ended`, as `trial_ended`                                                     |
+| `payer_left`                                                          | `sendPayerLeft`, while a subscription runs                                                                                                                                                                                                            | the payer (system for a deleted account)                                                           |
+| `duplicate_subscription_refunded { refund_cause }`                    | the sync's refund of a duplicate subscription (`refund_cause: duplicate`), or of one an archived workspace adopted (`archived`); only when a payment was refunded                                                                                     | the payer                                                                                          |
+| `billing_reconciled { field }`                                        | `emitBillingDiff` from the reconcile: the first column it repaired                                                                                                                                                                                    | the payer                                                                                          |
+| `dispute_opened`                                                      | the dispute webhook, when the tenant's dispute flag turns on                                                                                                                                                                                          | the payer                                                                                          |
+
+The owner actions are audited too, as `billing_checkout_started`,
+`billing_cancel_scheduled`, `billing_interval_switch_scheduled` and
+`billing_card_change_started`, and the staff actions as
+`billing_resynced`, `billing_trial_extended`, `billing_grant_added`,
+`billing_grant_revoked`, `billing_cancelled_by_staff`, `billing_viewed`,
+`plan_updated`, `plan_price_created` and `billing_settings_updated`.
+Those are the action log under other names; count the product events above
+in dashboards, never both. A staff action sends no product event of its own
+but `trial_extended`; the billing change it makes is sent as the person the
+rules attribute it to, never the staff member.
+
+**Metric definitions** (from the billing design): trial-to-paid at 30 and 90 days; free-to-paid at 180 days; time to upgrade; paywall hit rate (tenants with ≥1 limit/feature block ÷ active tenants); conversion per prompt surface; payment recovery rate (`subscription_recovered` ÷ `payment_failed` tenants); churn by `downgrade_cause`.
 
 ### Error tracking
 
@@ -1116,8 +1371,11 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   experiment is multivariate with `control` first. `FlagKey` makes an
   unregistered key a type error.
 - **Traits** are only `FLAG_TRAITS`: `platform_role`, `tenant_role`,
-  `app_env`, `account_created_days` and `tenant_created_days`, built from the
-  database at evaluation time and never stored in PostHog. There is no `app`
+  `app_env`, `account_created_days`, `tenant_created_days`, and the tenant's
+  `plan` and `billing_state`, built from the database at evaluation time.
+  `plan` and `billing_state` are read with the clock (a trial that ended
+  reads `free` before the job moves it) and are also the tenant group's
+  properties; the others are never stored in PostHog. There is no `app`
   trait, so a route gate and the UI always agree.
 - **Snapshot** (`flag-snapshot.service.ts`). Each process loads it at boot,
   reloads on a `reload` message and every 60 s, and keeps its copy when a
@@ -1176,6 +1434,108 @@ redacted with `redactedForLog` when it carries a database query.
 also go to Slack. Repeats of one `source` and message within 60 s are counted
 and summarised once, and the message, source, request id and stack are
 scrubbed with the error tracker's `scrubText` first.
+
+## Billing
+
+Every customer workspace is on a plan: Free, or Paid through a Razorpay
+subscription, with a trial of Paid when it is created. This section is the
+map; the detail lives in the sections it links.
+
+- **Tables.** `plans`, `plan_prices`, `tenant_billing` (one row per customer
+  workspace: state, plan, trial, paid period and provider ids),
+  `user_trials`, `tenant_entitlement_grants`, `billing_settings`,
+  `billing_events`, `billing_state_history`, `upgrade_requests`,
+  `user_banner_dismissals` and `billing_alerts`
+  ([DATABASE.md](DATABASE.md#models-and-tables)). The platform tenant has no
+  billing row.
+- **States and entitlements.** A row is `trialing`, `free`, `active` or
+  `past_due`. Reads act on the effective state, which the clock can move to
+  Free before a job writes it: a trial past its end, a cancelling period past
+  its end plus 3 days, a past-due grace past its end
+  (`effectiveBillingState`, `src/utilities/billing-rules.utilities.ts`).
+  The plan's values, filled from the registry
+  (`src/constants/entitlements.constants.ts`) and overridden by staff grants,
+  are the entitlements `requireFeature` and `assertWithinLimit` enforce
+  (`src/services/billing/entitlements.service.ts`). Adding one is a recipe in
+  [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-plan-gated-feature).
+- **Seats.** Every write that adds a member takes the seat lock, the billing
+  row, at its place in the [lock order](#layers).
+- **One sync path.** Only `syncTenantBilling`
+  (`src/services/billing/billing-sync.service.ts`) maps the provider's
+  subscriptions onto a row, under the row lock with a versioned write. A
+  checkout confirm, a webhook job, a staff resync, the frequent run and the
+  daily reconcile all call it; the mapping itself is pure
+  (`src/utilities/billing-state-machine.utilities.ts`). A failed provider read
+  writes nothing, and the job retries.
+- **Confirm after the webhook.** The payment webhook usually lands before
+  the browser's confirm and promotes the checkout to current. A confirm of
+  that current subscription answers 200 when the row still bills on it, its
+  signature verifies, the confirming owner started the checkout, and the
+  subscription is younger than a checkout lives plus its margin
+  (`CHECKOUT_EXPIRY_MS + NEXT_CHECKOUT_MARGIN_MS`). It syncs, records
+  `checkout_confirmed` (deduped per subscription), and records the owner's
+  address as the billing address while they are still the payer of that
+  subscription, the one thing the adoption leaves to the confirm. It never
+  changes the payer, so a replay after another owner's card change takes
+  nothing back. Any other confirm of the current subscription outside a card
+  change is `CHECKOUT_MISMATCH`.
+- **Owner cancel.** An owner's cancel keeps Paid until the cycle end. A
+  deferred start (not charged yet) and a past-due subscription (its paid
+  time is over) are cancelled now, and the workspace returns to its trial or
+  moves to Free at once (`cancelPaid`, `src/services/billing/checkout.service.ts`).
+  On an active workspace, both cancels are confirmed once per subscription,
+  whoever cancelled: a `billing_paid_cancelled` notice to each owner carrying
+  the `paid_cancelled` mail, and that mail to the billing address. The
+  period-end variant says when Paid ends; the variant for a deferred start's
+  return to its trial says no payment was taken and when the trial ends
+  (`billingTransitions`).
+- **Interval switch.** A switch starts a next subscription at the period end,
+  and the sync cancels the current one at its cycle end once the next one is
+  authenticated. A switch inside the checkout's hour plus an hour's margin
+  before the renewal is refused with 409 `SWITCH_TOO_CLOSE_TO_RENEWAL`, and a
+  checkout that starts at the period end (a switch or a resubscribe) lapses at
+  least an hour before it, so it can't be paid after the renewal charged. A
+  next subscription the sync still reads as paid after the current one renewed
+  (a new cycle whose invoice is paid; the provider moves the cycle start before
+  the money arrives) is cancelled and refunded as a duplicate, and the current
+  one kept.
+- **Mail recipients.** Billing mail goes to the workspace's active owners and
+  to the billing address the payer gave, when it is no owner's
+  (`src/services/billing/billing-emails.service.ts`). Once the payer is no
+  longer an active member, that address gets only mail about the mandate
+  their card still backs: the renewal reminder, a failed payment, a cancel,
+  and a move to Free after a failed payment or a cancel. A payer who leaves
+  while the subscription runs is reported to the remaining owners: an active
+  one still charges the payer's card until they update the payment method,
+  and a past-due one keeps Paid only until its grace ends.
+- **Provider.** `getBillingProvider()`
+  (`src/services/billing/billing-provider.service.ts`) answers Razorpay when
+  its keys are set, the fake when `BILLING_FAKE_PROVIDER` is (local only), and
+  null otherwise: then plans, trials, limits, grants and staff tooling still
+  work, and every owner billing write and the webhook answer the unknown-route 404. The fake keeps its subscriptions in Redis so the API and the worker
+  agree.
+- **Jobs and schedulers.** The `billing` queue carries one job per webhook
+  event, workspace syncs, the prompt lifecycle cancel and the two runs
+  ([Queues and Workers](#queues-and-workers), [Schedulers](#schedulers)).
+- **Events and pushes.** Every change emits its product events
+  ([Billing events](#billing-events)) and tells the workspace's open apps over
+  SSE ([Realtime (SSE)](#realtime-sse)).
+- **Staff.** `platform-billing.service.ts` serves Apex's billing views and
+  writes ([Platform access](#platform-access)).
+- **Maintenance.** The billing routes have their rows in
+  `MAINTENANCE_ROUTE_RULES`: `read_only` refuses the owner writes, and
+  `full` lets only the public plan list and the Razorpay webhook through. The
+  webhook records each event, and `full` pauses the `billing` queue with the
+  others, so the events wait and run when it ends
+  ([Maintenance mode](#maintenance-mode)).
+- **Before launch.** No real tenant exists yet. A database switched from
+  Razorpay test keys to live keys keeps the test-mode ids on its rows: the
+  sync skips them as another mode, and a purge of such a workspace refuses
+  with 502 until staff clear those ids from its row.
+- **Dev seed and time travel.** `pnpm billing:seed` (local, with
+  `BILLING_FAKE_PROVIDER=true`) creates 13 `billing-*` workspaces, one per
+  billing state, and `pnpm billing:time-travel` moves one back in time
+  ([README.md](README.md#billing-dev-seed)).
 
 ## Maintenance mode
 
@@ -1353,6 +1713,12 @@ what `pnpm env:table` prints.
 | `APEX_APP_NAME`                       | no       | `Apex`                     | Name of the Apex staff dashboard in email copy: the subject and sign-off of every mail whose link opens Apex (a staff sign-in link or welcome, a step-up link, a staff invitation and its confirm link). Chosen by the frontend the link targets, whether or not APEX_URL is set. Defaults to "Apex".                                                                                                                                                                                                                                                                                                     |
 | `RESEND_WEBHOOK_SECRET`               | no       | —                          | Signing secret of the Resend webhook endpoint (Resend dashboard, Webhooks, the endpoint's signing secret: whsec_ followed by base64). Enables POST /api/v1/webhooks/email/resend, which verifies each event's Svix signature with it; absent, that route answers 404. Subscribe the endpoint to the email.* events: delivered, delivery_delayed, bounced, complained, opened, clicked, failed and suppressed.                                                                                                                                                                                             |
 | `FAKE_EMAIL_WEBHOOK_SECRET`           | no       | `fake-webhook`             | Signs local fake email webhook events (`pnpm email:fire-event`), as an HMAC-SHA256 hex digest in the x-fake-signature header. Read only when APP_ENV is local, the one environment that serves POST /api/v1/webhooks/email/fake. Defaults to "fake-webhook"; not a credential.                                                                                                                                                                                                                                                                                                                            |
+| `RAZORPAY_KEY_ID`                     | no       | —                          | Razorpay API key id (Razorpay dashboard, Account and Settings, API keys): rzp_test_ for test mode, rzp_live_ for live mode. Set it with RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET to turn on paid plans; with none of the three set, paid checkout and the Razorpay webhook answer 404. Live keys are accepted only when APP_ENV is prod.                                                                                                                                                                                                                                                           |
+| `RAZORPAY_KEY_SECRET`                 | no       | —                          | Razorpay API key secret that pairs with RAZORPAY_KEY_ID. Set all three Razorpay variables or none.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `RAZORPAY_WEBHOOK_SECRET`             | no       | —                          | Signing secret of the Razorpay webhook endpoint (Razorpay dashboard, Webhooks). Verifies each event on POST /api/v1/webhooks/razorpay. Set all three Razorpay variables or none.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `RAZORPAY_WEBHOOK_SECRET_PREVIOUS`    | no       | —                          | The webhook signing secret you rotated away from. While set, events signed with it still verify, so a rotation drops no event. Unset it once Razorpay sends only the new secret. Needs RAZORPAY_WEBHOOK_SECRET.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `BILLING_GST_REGISTERED`              | no       | `false`                    | Whether the business is registered for GST. When false, prices show without a GST line. Defaults to false.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `BILLING_FAKE_PROVIDER`               | no       | `false`                    | Replaces Razorpay with an in-process fake for the dev seed and end-to-end runs. Only APP_ENV=local accepts it, and it cannot be set together with Razorpay keys. Defaults to false.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `SMTP_CONNECTION_TIMEOUT_MS`          | no       | `3000`                     | Milliseconds to wait for each SMTP connection attempt to establish before failing. Also the timeout for the first try of each DNS query; the resolver doubles it on each retry, and the OS-lookup fallback has no timeout. A host that resolves to several addresses can take it once per address. Boot checks that it plus SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS and the 5s HTTP drain stays at least 5s under SHUTDOWN_TIMEOUT_MS; that assumes one address and is a sanity check, not a per-send deadline. nodemailer's own defaults are 2 minutes to connect and 30 seconds per DNS query. |
 | `SMTP_GREETING_TIMEOUT_MS`            | no       | `5000`                     | Milliseconds to wait for the SMTP server's greeting after connecting. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 30 seconds.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `SMTP_SOCKET_TIMEOUT_MS`              | no       | `7000`                     | Milliseconds of inactivity before an open SMTP connection is closed. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes.                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -1401,6 +1767,12 @@ Everywhere:
 - `APEX_URL` on another host than `APP_URL` with `GOOGLE_CLIENT_ID` set is
   refused unless `COOKIE_DOMAIN` covers the Apex host;
 - `POSTHOG_FEATURE_FLAGS_KEY` without `POSTHOG_PROJECT_KEY` is refused;
+- only some of `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and
+  `RAZORPAY_WEBHOOK_SECRET` set is refused, as is a `rzp_live_` key outside
+  `APP_ENV=prod`, a `rzp_test_` key in prod, and
+  `RAZORPAY_WEBHOOK_SECRET_PREVIOUS` without the current secret;
+- `BILLING_FAKE_PROVIDER` outside `APP_ENV=local`, or with Razorpay keys set,
+  is refused;
 - a warning when `COOKIE_SECURE` resolves true with `GOOGLE_CLIENT_ID` set and
   `TRUST_PROXY=false` (express-session would never send the OAuth cookie behind
   a TLS-terminating proxy), and when only one of `POSTHOG_PERSONAL_API_KEY` and

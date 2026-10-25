@@ -9,6 +9,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import {
@@ -16,6 +17,9 @@ import {
   type MembershipWithUser,
 } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
+import { trackTrialStarted } from '@/services/billing/billing-analytics.service'
+import { sendTrialStarted } from '@/services/billing/billing-emails.service'
+import { initialBillingFor } from '@/services/billing/trial.service'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { lockActorRole, lockUserForOwnership } from '@/services/tenant-membership.service'
@@ -29,6 +33,7 @@ import type {
   UpdateTenantSettingsInput,
 } from '@/validators/tenant.validators'
 
+const billingRepository = new BillingRepository()
 const tenantRepository = new TenantRepository()
 const tenantSettingsRepository = new TenantSettingsRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -118,7 +123,9 @@ function changedFields<TValues extends object>(
 
 /**
  * Create a tenant with its settings row and the actor as sole owner, and
- * audit it, in one transaction; then emit `tenant_created`. The actor's user
+ * audit it, in one transaction; then emit `tenant_created`. The tenant gets a
+ * billing row, with the actor's one trial when they have not had it; a
+ * trial's start is mailed after the commit. The actor's user
  * row is locked `FOR SHARE` first (`lockUserForOwnership`), so a concurrent
  * staff delete of the actor either sees the new tenant or wins and this
  * answers 401.
@@ -130,7 +137,12 @@ function changedFields<TValues extends object>(
 export async function createTenant(actor: Actor, input: CreateTenantInput): Promise<Tenant> {
   const created = await withTransaction(async (tx) => {
     await lockUserForOwnership(actor.userId, () => new HttpError('Sign in to continue.', 401), tx)
-    const tenant = await tenantRepository.create({ ...input, ownerId: actor.userId }, tx)
+    // The person's one trial is claimed before the insert, so two creates at once cannot both win it.
+    const billing = await initialBillingFor({ userId: actor.userId }, tx)
+    const tenant = await tenantRepository.create({ ...input, ownerId: actor.userId }, tx, billing)
+    if (billing.state === 'trialing') {
+      await billingRepository.setFirstTrialTenant(actor.userId, tenant.id, tx)
+    }
     // The creator is the owner from this write on, so they act as a member.
     await record(
       {
@@ -143,18 +155,22 @@ export async function createTenant(actor: Actor, input: CreateTenantInput): Prom
       },
       tx
     )
-    return tenant
+    return { tenant, isTrialing: billing.state === 'trialing' }
   })
   await emitDomainEvent(
     {
       type: 'tenant_created',
-      tenantId: created.id,
+      tenantId: created.tenant.id,
       ownerId: actor.userId,
-      at: created.createdAt,
+      at: created.tenant.createdAt,
     },
     { access: 'member' }
   )
-  return created
+  if (created.isTrialing) {
+    await sendTrialStarted(created.tenant.id)
+    await trackTrialStarted(created.tenant.id, actor.userId)
+  }
+  return created.tenant
 }
 
 /**

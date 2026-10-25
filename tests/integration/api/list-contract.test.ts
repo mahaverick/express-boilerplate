@@ -75,6 +75,7 @@ const like = {
   onboarding: `${tag}-o%`,
   members: `${tag}-m%`,
   myTenants: `${tag}-y%`,
+  alerts: `${tag}-a%`,
 }
 
 /**
@@ -149,7 +150,36 @@ describeListContract({
     { query: { state: 'suspended' }, count: 1 },
     { query: { state: 'suspended,active' }, count: 5 },
     { query: { state: 'archived' }, count: 0 },
+    // Seeded by SQL with no billing record, so every billing state filter leaves them out.
+    { query: { billingState: 'free,trialing' }, count: 0 },
   ],
+})
+
+describeListContract({
+  name: 'GET /api/v1/platform/billing/alerts',
+  app: () => app,
+  path: () => '/api/v1/platform/billing/alerts',
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({ search: `${tag}-a` }),
+  sorts: ['-at', 'at'],
+  order: {
+    '-at': (item) => Date.parse((item as { at: string }).at),
+    at: (item) => Date.parse((item as { at: string }).at),
+  },
+  setup: createStaff,
+  teardown: removeStaff,
+  seed: async (count) => {
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      kind: index % 2 === 0 ? 'dispute' : 'webhook_failing',
+      message: `${tag}-a${pad(index)}`,
+      at: createdAtOf(index),
+    }))
+    await sql`insert into billing_alerts ${sql(rows, 'kind', 'message', 'at')}`
+  },
+  clear: async () => {
+    await sql`delete from billing_alerts where message like ${like.alerts}`
+  },
+  search: { text: `${tag}-a0003`, count: 1 },
 })
 
 describe('GET /api/v1/platform/tenants search', () => {

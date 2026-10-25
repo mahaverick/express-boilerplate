@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
+import { buildBillingLink, buildTenantHomeLink } from '@/services/billing/billing-links.service'
 import { buildInvitationAcceptUrl } from '@/services/frontend-links.service'
 import {
   buildInvitationConfirmUrl,
@@ -185,6 +186,223 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
     },
     contents: ['text_link'],
   }),
+  trial_started: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'trial_started',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        trialEndsOn: '7 November 2026',
+        billingLink: buildBillingLink('acme', 'trial_started', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  trial_midpoint: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'trial_midpoint',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        daysLeft: '7',
+        trialEndsOn: '7 November 2026',
+        usageSummary: '5 members',
+        billingLink: buildBillingLink('acme', 'trial_midpoint', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  trial_ending: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'trial_ending',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        trialEndsOn: '7 November 2026',
+        memberLimit: '3',
+        membersUsed: '5',
+        monthlyPrice: '999',
+        yearlyPrice: '9,990',
+        billingLink: buildBillingLink('acme', 'trial_ending', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  trial_ends_today: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'trial_ends_today',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        memberLimit: '3',
+        membersUsed: '5',
+        monthlyPrice: '999',
+        yearlyPrice: '9,990',
+        billingLink: buildBillingLink('acme', 'trial_ends_today', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  trial_ended: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'trial_ended',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        summary: 'Free allows 3 members, and Acme has 5.',
+        billingLink: buildBillingLink('acme', 'trial_ended', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  paid_welcome: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'paid_welcome',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        amount: '999',
+        interval: 'month',
+        nextChargeOn: '7 November 2026',
+        billingLink: buildBillingLink('acme', 'paid_welcome', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  renewal_upcoming: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'renewal_upcoming',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        renewsOn: '7 November 2026',
+        amount: '999',
+        billingLink: buildBillingLink('acme', 'renewal_upcoming', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  payment_failed: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'payment_failed',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        amount: '999',
+        stoppedBy: 'halted',
+        graceEndsOn: '7 November 2026',
+        billingLink: buildBillingLink('acme', 'payment_failed', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  moved_to_free: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'moved_to_free',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        downgradeCause: 'cancelled',
+        billingLink: buildBillingLink('acme', 'moved_to_free', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  paid_cancelled: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'paid_cancelled',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        endsOn: '7 November 2026',
+        beforeFirstCharge: 'false',
+        billingLink: buildBillingLink('acme', 'paid_cancelled', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  interval_switch_scheduled: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'interval_switch_scheduled',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        interval: 'month',
+        switchOn: '7 November 2026',
+        amount: '999',
+        billingLink: buildBillingLink('acme', 'interval_switch_scheduled', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  payer_left: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'payer_left',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        payerName: 'Grace',
+        leftOn: '1 November 2026',
+        billingState: 'active',
+        periodEndsOn: '7 November 2026',
+        billingLink: buildBillingLink('acme', 'payer_left', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  upgrade_requested: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'upgrade_requested',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        requesterName: 'Grace',
+        monthlyPrice: '999',
+        yearlyPrice: '9,990',
+        billingLink: buildBillingLink('acme', 'upgrade_requested', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  upgrade_request_fulfilled: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'upgrade_request_fulfilled',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        tenantLink: buildTenantHomeLink('acme', 'upgrade_request_fulfilled', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
+  winback: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'winback',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        memberLimit: '3',
+        monthlyPrice: '999',
+        billingLink: buildBillingLink('acme', 'winback', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
 }
 
 /**
@@ -284,5 +502,22 @@ describe('links we send', () => {
     const url = buildSignInLinkUrl(RAW, { email: EMAIL, app: 'web', redirect }, 'sign_in_link')
     expect(new URL(url).searchParams.get('redirect')).toBe(redirect)
     expect(new URL(url).searchParams.get('utm_source')).toBe('email')
+  })
+})
+
+describe('billing links', () => {
+  it('opens the workspace Billing page, tagged for the email that carries it', () => {
+    const url = new URL(buildBillingLink('acme co', 'payment_failed', 'https://app.example.test'))
+    expect(url.pathname).toBe('/settings/workspace/acme%20co/billing')
+    expect(url.searchParams.get('utm_campaign')).toBe('payment_failed')
+    expect(url.searchParams.get('utm_content')).toBe('primary_button')
+  })
+
+  it('opens the workspace home for a fulfilled upgrade request', () => {
+    const url = new URL(
+      buildTenantHomeLink('acme', 'upgrade_request_fulfilled', 'https://app.example.test/')
+    )
+    expect(url.pathname).toBe('/tenants/acme')
+    expect(url.searchParams.get('utm_campaign')).toBe('upgrade_request_fulfilled')
   })
 })

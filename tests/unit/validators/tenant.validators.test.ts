@@ -19,6 +19,14 @@ describe('slugSchema', () => {
     expect(slugSchema.safeParse('platform').success).toBe(false)
   })
 
+  it.each(['pricing', 'checkout', 'upgrade'])(
+    'reserves %s for the pricing and upgrade pages',
+    (slug) => {
+      expect(RESERVED_SLUGS).toContain(slug)
+      expect(slugSchema.safeParse(slug).success).toBe(false)
+    }
+  )
+
   it('still accepts an ordinary slug', () => {
     expect(slugSchema.safeParse('platform-team').success).toBe(true)
   })

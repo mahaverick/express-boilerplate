@@ -32,6 +32,7 @@ import { hashToken, signAccessToken } from '@/services/session.service'
 import { platformTenantListSchema } from '@/validators/platform.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
+import { putTenantOnPaid } from '../../helpers/billing'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
@@ -404,6 +405,8 @@ describe('platform access over the API', () => {
 
     it('lets a staff owner invite an owner, and change an admin or a manager', async () => {
       const { tenant } = await ownedTenant()
+      // Owner, admin, manager and the invitation are four seats: past Free's three.
+      await putTenantOnPaid(tenant.id)
       const admin = await addMember(tenant, 'admin')
       const manager = await addMember(tenant, 'manager')
       const { token } = await staffUser('owner')
@@ -423,6 +426,7 @@ describe('platform access over the API', () => {
 
     it('lets a staff admin invite a manager, an editor and a viewer', async () => {
       const { tenant } = await ownedTenant()
+      await putTenantOnPaid(tenant.id)
       const { token } = await staffUser('admin')
 
       for (const role of ['manager', 'editor', 'viewer'] as const) {

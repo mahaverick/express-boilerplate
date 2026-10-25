@@ -232,6 +232,27 @@
       "when": 1792517392850,
       "tag": "0032_passkeys",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792818648238,
+      "tag": "0033_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792836479378,
+      "tag": "0034_billing_next_and_card_change",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792880310995,
+      "tag": "0035_billing_cancel_marker",
+      "breakpoints": true
     }
   ]
 }

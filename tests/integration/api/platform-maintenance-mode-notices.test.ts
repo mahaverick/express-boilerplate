@@ -32,6 +32,7 @@ const FULL_PAUSE = {
   notification: true,
   maintenance: true,
   analytics: true,
+  billing: true,
 }
 
 /**

@@ -133,6 +133,26 @@ describe('errorResponse', () => {
     expect(body()).toMatchObject({ code: 'VALIDATION_FAILED', errors: fieldErrors })
   })
 
+  it('writes details next to code when supplied', () => {
+    const { response, body } = mockResponse()
+    errorResponse(response, 'refused', 402, 'PLAN_LIMIT_REACHED', undefined, {
+      details: { key: 'members', used: 3, limit: 3 },
+    })
+
+    expect(body()).toMatchObject({
+      statusCode: 402,
+      code: 'PLAN_LIMIT_REACHED',
+      details: { key: 'members', used: 3, limit: 3 },
+    })
+  })
+
+  it('omits the details key when none are supplied', () => {
+    const { response, body } = mockResponse()
+    errorResponse(response, 'refused', 402, 'PLAN_LIMIT_REACHED')
+
+    expect(body()).not.toHaveProperty('details')
+  })
+
   it('reads the correlation id off the response via the shared header constant', () => {
     // The header name must have exactly one spelling — asserting via the exported constant, not the literal 'X-Request-Id', means this test cannot pass if the two ever drift apart.
     const { response, body, getHeader } = mockResponse()

@@ -63,6 +63,7 @@ const live: { entries: WalkedEntry[]; requireAuth: unknown } = {
 const KNOWN_MOUNTS = [
   '/api/v1',
   '/api/v1/webhooks/email',
+  '/api/v1/webhooks/razorpay',
   '/api/v1/collect',
   '/auth',
   '/passkeys',
@@ -73,6 +74,7 @@ const KNOWN_MOUNTS = [
   '/platform',
   '/flags',
   '/status',
+  '/plans',
 ] as const
 
 const PREFIX_PATHS = new Set(
@@ -254,6 +256,7 @@ describe('maintenance-mode route classification', () => {
         'GET /api/v1/status/maintenance',
         '* /api/v1/platform',
         '* /api/v1/webhooks/email',
+        '* /api/v1/webhooks/razorpay',
         '* /api/v1/collect',
       ])
     )
@@ -277,6 +280,7 @@ describe('maintenance-mode route classification', () => {
         'GET /health',
         'GET /health/ready',
         '* /api/v1/webhooks/email',
+        '* /api/v1/webhooks/razorpay',
         '* /api/v1/collect',
         'GET /api/v1/status/maintenance',
         '* /api/v1/platform',
@@ -295,6 +299,7 @@ describe('maintenance-mode route classification', () => {
         'POST /api/v1/auth/passkeys/step-up/options',
         'POST /api/v1/auth/passkeys/step-up/verify',
         'GET /api/v1/profile',
+        'GET /api/v1/plans',
       ].toSorted(byText)
     )
   })

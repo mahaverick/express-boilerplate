@@ -532,7 +532,8 @@ invitee's mailbox receives the confirm link.
 - **One answer on the confirm.** An unknown, used, expired or malformed link,
   an `email` that is not the link's address, an invitation revoked, accepted
   or expired since, a suspended or archived workspace and a deactivated
-  account all answer `404 invitation_invalid`. Each refusal spends nothing:
+  account all answer `404 invitation_invalid`; the one other refusal is a
+  full workspace's `402 PLAN_LIMIT_REACHED`. Each refusal spends nothing:
   the link is claimed inside the joining transaction, after the user row is
   locked, and the invitation is re-checked atomically by
   `claimForAcceptById`, so a refusal rolls the claim back. A never-verified
@@ -588,7 +589,19 @@ registered address to a tenant directly
 
 - **No enumeration.** Inviting answers the same `202` whether or not the
   address has an account. The one distinct answer is `409 already_member`,
-  which tells an owner or admin who is already in their own tenant.
+  which tells an owner or admin who is already in their own tenant. A
+  workspace at its members limit answers `402 PLAN_LIMIT_REACHED` whatever the
+  address: the count it reads (members and pending invitations) is one the
+  inviter can list already.
+- **A full workspace refuses the join, privately.** An accept, verify or
+  confirm into a workspace over its members limit (after a downgrade) answers
+  `402 PLAN_LIMIT_REACHED` with no `details`: the invitee is not a member, so
+  the workspace's count and limit stay hidden. The check runs under the seat
+  lock before the claim, so the refusal spends neither the invitation nor the
+  confirm link. Two joins are never refused: a user who is already a member,
+  and an owner invitation while the workspace has no active owner, so a
+  workspace can always get an owner. An owner invitation to a workspace that
+  has an owner is checked like any other.
 - **Consent.** The link was mailed to the invited address, so one click on it
   proves the mailbox
   ([Invitation links are single-use](#invitation-links-are-single-use)). A
@@ -727,6 +740,24 @@ their role there is their platform role (`src/services/platform.service.ts`).
   last-owner guard (`409`) apply to it. A grant that waits finds the account
   gone and grants nothing (`401`, or `404 member_not_found` for a role
   change).
+- **Billing.** Staff read a tenant's billing as a platform viewer
+  (`/platform/tenants/:id/billing`, audited as `billing.viewed` once per
+  staff member and tenant every ten minutes), never with the billing email
+  or another owner-only field. A manager resyncs it, extends its trial and
+  adds or revokes grants; an admin cancels its subscription. Staff never take
+  payment for a tenant, and never make it pay or mark it paying: a grant
+  covers a comp, and it only ever adds access. A staff member whose role is
+  revoked between a cancel's provider call and its write is refused at the
+  write: the provider cancel stands, no audit entry is written, and the next
+  sync records it, as with an owner's cancel. The platform tenant has no billing and
+  answers `tenant_billing_not_found`. A grant id from another tenant answers
+  `grant_not_found`.
+  Viewers read the plans and the billing settings; an admin previews and
+  edits a plan, adds a price, changes the settings and reads the billing
+  alerts. A plan or settings edit carries the version it read and is refused
+  `409 PLAN_VERSION_CONFLICT` when someone saved first. A plan edit reaches
+  every tenant on the plan at once; a new price never moves a subscriber off
+  the price it pays.
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
@@ -748,8 +779,12 @@ Step-up guards:
 
 - on `/platform`: deactivating, deleting and purging a user; suspending,
   archiving and purging a tenant; re-inviting a tenant's owner; changing the
-  maintenance mode; and an email resend of an invitation, which the service
-  checks because the route cannot know the tenant;
+  maintenance mode; every write to a tenant's billing (resync, trial
+  extension, a grant and its revocation, the staff cancel); a plan edit, a
+  new price and a billing settings change (a plan preview writes nothing and
+  needs none); and an email
+  resend of an invitation, which the service checks because the route cannot
+  know the tenant;
 - on the platform tenant's member routes: a role change, a removal, leaving, an
   invitation and a resend (`requireRecentAuthOnPlatformTenant`), since each
   changes who holds staff power;
@@ -761,8 +796,10 @@ Staff actions that change an account's, a tenant's or a mail's state record why:
 deactivating, reactivating, signing out, deleting and purging a user;
 suspending, reactivating, archiving and purging a tenant; re-inviting its owner;
 resending an email; lifting a suppression; completing an onboarding step or
-sending a reminder; and the member and invitation writes made through platform
-access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
+sending a reminder; resyncing a tenant's billing, extending its trial, adding
+or revoking a grant and cancelling its subscription; editing a plan, adding a
+price and changing the billing settings; and the member and
+invitation writes made through platform access. A `reason` of 1 to 500 characters of safe text (`reasonSchema`,
 `src/validators/platform.validators.ts`) goes into the audit entry's metadata.
 Staff acting in a customer tenant through their platform role send it in the
 body or get `400 REASON_REQUIRED`, and the services check it again under the
@@ -838,7 +875,12 @@ tenant are soft; a platform owner then purges with step-up and a reason. A user
 purge removes the row, nulls their actor id, IP and user agent in the audit
 entries they acted in, and queues the deletion of their PostHog person with its
 events and recordings. A tenant purge removes the tenant and its own audit
-entries. Each purge is recorded in the platform tenant.
+entries. Each purge is recorded in the platform tenant. A tenant purge is
+refused while the payment provider shows a subscription that may still charge
+a card, and whenever the tenant holds a subscription the provider can't be
+asked about (payments off, another account or mode, or a failed read): a purge
+never proceeds unchecked, so no card is charged for a tenant that is gone. A user purge, like a user delete, clears the user as
+payer along with the billing address they gave.
 [ARCHITECTURE.md](ARCHITECTURE.md#analytics), under Purges and what stays in
 PostHog, describes what stays there.
 
@@ -1009,7 +1051,9 @@ unread (`src/routes/analytics-proxy.routes.ts`).
   names, full addresses, staff reasons or email contents go into an event; an
   address's domain may. A tenant's name goes into the tenant group's properties
   (`$groupidentify`). A user id `distinct_id` and a `$session_id` are
-  pseudonymous, not anonymous.
+  pseudonymous, not anonymous. Billing events carry ids, plans, states and
+  amounts only, never a billing address, card, VPA or payer name, and name
+  their cause `downgrade_cause` or `failure_code`, since `reason` is dropped.
 - **The opt-out is the browser's.** `analyticsOptOut` tells the frontends to
   stop capturing; server events do not read it (`src/presenters/user.presenter.ts`).
 - **Server events are signed; browser events are client-reported.** The project
@@ -1066,7 +1110,7 @@ not through the outbox, since errors often arrive while the database is down
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 27 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 33 limiter specs,
 each commented with the reason for its window, budget and key, and
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -1127,10 +1171,72 @@ The auth limiters each answer a specific threat:
   refresh token is 256 random bits. Logout's budget is generous because a 429
   leaves the cookie uncleared.
 
+The billing limiters count per user and guard the payment provider, whose own
+rate limit every workspace shares: one `billing-write` budget across a
+workspace owner's checkout, confirm, interval switch, card change and cancel
+(10 a minute), and `billing-read` on the invoice list, which reads the
+provider on every page (30 a minute). The billing read itself has none. A
+member's upgrade request has its own per-user `upgrade-request` budget (10 an
+hour); a request while one is open notifies no one, so it only bounds a
+script. The public plan list (`GET /plans`) needs no sign-in and counts per IP
+on `public-plans` (120 a minute); its answer carries no provider id and is
+cacheable for a minute.
+
+The Razorpay webhook (`POST /webhooks/razorpay`) is public, so it verifies
+Razorpay's HMAC-SHA256 signature over the raw body against the current and
+then the previous webhook secret before it reads anything
+(`src/services/billing/billing-webhook.service.ts`). Two limiters guard it,
+both per IP: `billing-webhook-rejected` counts only failed responses (30 a
+minute), which caps forged traffic from one address, and `billing-webhook`
+counts only accepted ones (3000 a minute), so unsigned traffic cannot spend
+the budget Razorpay's deliveries need. The rejected limiter counts each
+request when it arrives and gives the count back once it succeeds, so more
+than 30 valid deliveries in flight at once from one address can briefly get
+429; Razorpay retries those. A bad signature answers 401 with no
+detail and writes nothing. The route stores the event's ids, type and
+outcome, never its body, which carries the payer's address, phone and card
+ids. An event whose subscription notes name another environment is
+acknowledged and not stored; an invoice, refund or dispute event, whose
+payload carries no such notes, is checked against its subscription's notes
+by the Worker and marked `other_environment` without an alert. With payments off, or on the fake provider, the
+route answers the unknown-route 404 before either limiter runs.
+
 There is no global limiter: most authenticated reads mount none. Notification
 streams are capped per process: `SSE_MAX_STREAMS_PER_USER` (default 5) answers
 `429 too_many_streams`, and `SSE_MAX_STREAMS_TOTAL` (default 2000) answers
 `503 stream_capacity`; a stream ends when its access token expires.
+
+## Billing
+
+The webhook's signature check and limiters, and the billing limiters, are under
+[Rate limits and abuse](#rate-limits-and-abuse); what staff can do to a
+workspace's billing is under [Platform staff](#platform-staff). The rest:
+
+- **One workspace's payment never activates another.** Every subscription
+  carries the workspace id in its provider notes, set by the server at
+  checkout. A checkout confirm accepts only the subscription id the row
+  stored for that checkout, a valid checkout signature for it, and notes that
+  name the path's workspace; anything else answers 400 `CHECKOUT_MISMATCH` and
+  changes nothing (`confirmCheckout`, `src/services/billing/checkout.service.ts`).
+  The sync ignores, and alerts staff about, a subscription whose notes name
+  another workspace, whichever path brought it (`syncTenantBilling`).
+- **The server sets the price.** A checkout names an interval; the plan, the
+  amount and the provider plan come from `plan_prices`. Only the provider's
+  state, read by the server, makes a workspace Paid.
+- **No card data is stored.** Card entry happens in the provider's checkout.
+  The database holds subscription, plan and event ids, states and
+  amounts, plus the payer's user id and billing address for the owner's
+  billing page. `billing_events` never stores a webhook's body, and job
+  payloads carry ids only.
+- **Owners pay; members ask.** Only a workspace owner by membership can start,
+  confirm, switch, change the card on or cancel a subscription; staff with
+  platform access cannot, and use the audited staff routes instead. A member's
+  upgrade request only notifies the owners.
+- **The fake provider and the dev tools stay local.** `BILLING_FAKE_PROVIDER`
+  is refused outside `APP_ENV=local` and beside Razorpay keys
+  ([Boot-time consistency checks](ARCHITECTURE.md#boot-time-consistency-checks)).
+  `pnpm billing:seed` and `pnpm billing:time-travel` refuse to run elsewhere,
+  and time travel refuses a workspace whose row names a real provider.
 
 ## Maintenance mode
 
@@ -1139,10 +1245,11 @@ Maintenance mode is an availability control, not an access control. Its gate
 in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 `src/constants/maintenance-mode.constants.ts`), before any router runs. In
 `read_only` it refuses writes outside a short allowlist; in `full` it refuses
-everything but health, the email webhook, the collect proxy, the public status,
+everything but health, the email and Razorpay webhooks, the collect proxy, the public status,
 `/platform`, the sign-in link routes, Google sign-in, the step-up routes
 (link and passkey), the passkey sign-in routes, refresh, logout,
-`GET /auth/providers`, `GET /auth/passkeys/config` and `GET /profile`. Listing,
+`GET /auth/providers`, `GET /auth/passkeys/config`, `GET /profile` and the
+public plan list (`GET /plans`). Listing,
 creating, renaming and deleting a passkey are customer routes: `read_only`
 refuses the writes, and on the routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
 staff through. The let-through list is visible during maintenance: a route on
@@ -1196,7 +1303,7 @@ reload and the queue pause.
 | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                                                                                                  |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                                                                                         |
-| Global rate limiting                                  | **Partial**         | 27 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
+| Global rate limiting                                  | **Partial**         | 33 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`) and the passkeys a claim clears (`user.passkeys_cleared_on_claim`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                                                                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                                                                                         |

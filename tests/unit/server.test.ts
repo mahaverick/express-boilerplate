@@ -45,7 +45,7 @@ const { gracefulShutdown } = await import('@/server')
 
 describe('gracefulShutdown', () => {
   it('flushes error reports after the Workers close, before Redis closes and before OTel shuts down', async () => {
-    const workers: SupervisedWorkers = { close: recorder('workers.close') }
+    const workers: SupervisedWorkers = { names: [], close: recorder('workers.close') }
 
     await gracefulShutdown(http.createServer(), workers)
 
@@ -59,7 +59,7 @@ describe('gracefulShutdown', () => {
 
   it('stops the flag snapshot subscriber with the other dependencies, after the Workers', async () => {
     calls.length = 0
-    await gracefulShutdown(http.createServer(), { close: recorder('workers.close') })
+    await gracefulShutdown(http.createServer(), { names: [], close: recorder('workers.close') })
 
     expect(calls).toContain('stopFlagSnapshot')
     expect(calls.indexOf('workers.close')).toBeLessThan(calls.indexOf('stopFlagSnapshot'))
@@ -68,7 +68,7 @@ describe('gracefulShutdown', () => {
 
   it('stops the maintenance-mode store with the other dependencies, after the Workers', async () => {
     calls.length = 0
-    await gracefulShutdown(http.createServer(), { close: recorder('workers.close') })
+    await gracefulShutdown(http.createServer(), { names: [], close: recorder('workers.close') })
 
     expect(calls).toContain('stopMaintenanceModeStore')
     expect(calls.indexOf('workers.close')).toBeLessThan(calls.indexOf('stopMaintenanceModeStore'))

@@ -20,6 +20,13 @@ export const TENANT_LIFECYCLE_STATES = ['active', 'suspended', 'archived'] as co
 export type TenantLifecycleState = (typeof TENANT_LIFECYCLE_STATES)[number]
 
 /**
+ * What a caller whose role is below a route's bar reads: `requireRole`'s 403,
+ * and the same refusal a service gives after re-reading the role under lock.
+ */
+export const ROLE_REFUSAL_MESSAGE =
+  "Your role in this workspace doesn't allow this. Ask a workspace owner or admin."
+
+/**
  * Every role a `user_memberships` row can carry, in descending order of
  * privilege. Which member each role may change is `canActorModifyTarget`
  * (tenant.policy.ts):
@@ -98,6 +105,9 @@ export const RESERVED_SLUGS = [
   'dev',
   'localhost',
   'platform',
+  'pricing',
+  'checkout',
+  'upgrade',
 ] as const
 
 /**

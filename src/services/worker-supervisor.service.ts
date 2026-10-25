@@ -1,5 +1,5 @@
 /**
- * @file Starts the email, notification and maintenance Workers, and the
+ * @file Starts the email, notification, maintenance and billing Workers, and the
  * analytics Worker when analytics or PostHog's private API is enabled, and
  * keeps them on a live connection, replacing them whenever their connection
  * gives up before its first 'ready' (see `startWorkers`).
@@ -9,6 +9,7 @@ import type IORedis from 'ioredis'
 import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
+import { ensureBillingSchedules } from '@/jobs/billing.job'
 import { ensureFlagDefinitionsSchedule } from '@/jobs/flag-definitions.job'
 import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
 import { isShuttingDown } from '@/services/lifecycle.service'
@@ -19,6 +20,7 @@ import {
   setWorkersFailed,
 } from '@/services/queue.service'
 import { startAnalyticsWorker } from '@/workers/analytics.worker'
+import { startBillingWorker } from '@/workers/billing.worker'
 import { startEmailWorker } from '@/workers/email.worker'
 import { startMaintenanceWorker } from '@/workers/maintenance.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
@@ -28,9 +30,41 @@ import { startNotificationWorker } from '@/workers/notification.worker'
  */
 export interface SupervisedWorkers {
   /**
+   * The Workers the first start started, in start order, such as `email`
+   * or `billing`: what the boot log names.
+   */
+  names: readonly string[]
+  /**
    * Stop replacing Workers, then close the current ones and any still closing.
    */
   close: () => Promise<void>
+}
+
+/**
+ * One Worker to start, by the name the boot log gives it.
+ */
+interface WorkerStarter {
+  name: string
+  start: () => Worker
+}
+
+/**
+ * The Workers each generation starts, in order: the analytics Worker only
+ * when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`.
+ * @returns The starters.
+ */
+function workerStarters(): WorkerStarter[] {
+  const starters: WorkerStarter[] = [
+    { name: 'email', start: () => startEmailWorker('email') },
+    { name: 'auth-email', start: () => startEmailWorker('auth-email') },
+    { name: 'notification', start: startNotificationWorker },
+    { name: 'maintenance', start: startMaintenanceWorker },
+    { name: 'billing', start: startBillingWorker },
+  ]
+  if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
+    starters.push({ name: 'analytics', start: startAnalyticsWorker })
+  }
+  return starters
 }
 
 /**
@@ -74,12 +108,14 @@ async function registerInBackground(
 }
 
 /**
- * Start the email, auth-email, notification and maintenance Workers, and the
+ * Start the email, auth-email, notification, maintenance and billing Workers, and the
  * analytics Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`
  * (feature flags need the project key, so `isFlagsEnabled()` implies the
  * first), replacing
  * them whenever their connection gives up before its first ready. Each
- * generation registers the retention schedule, the analytics drain schedule
+ * generation registers the retention schedule, the two billing schedules
+ * (always: trials, grants and upgrade requests lapse with payments off too),
+ * the analytics drain schedule
  * when `isAnalyticsEnabled()`, the PostHog deletion schedule when
  * `isPosthogApiEnabled()`, and the flag definitions schedule when
  * `isFlagsEnabled()`.
@@ -95,7 +131,7 @@ async function registerInBackground(
  * A failed first start throws. A failed restart cannot throw from inside
  * 'end', so it calls `setWorkersFailed(true)` and readiness stays red until a
  * later restart succeeds or the process restarts.
- * @returns A handle whose `close()` closes whichever Workers are current.
+ * @returns A handle naming the Workers, whose `close()` closes whichever are current.
  * @throws {Error} Whatever starting a Worker throws at first start, after closing any already started.
  */
 export function startWorkers(): SupervisedWorkers {
@@ -104,6 +140,7 @@ export function startWorkers(): SupervisedWorkers {
     isClosed: false,
   }
   const retiring = new Set<Promise<void>>()
+  const firstNames: string[] = []
 
   /**
    * Close discarded Workers in the background, tracked until they settle so
@@ -130,24 +167,18 @@ export function startWorkers(): SupervisedWorkers {
     supervisor.generation = generation
     try {
       generation.connection = getQueueConnection()
-      const starters = [
-        () => startEmailWorker('email'),
-        () => startEmailWorker('auth-email'),
-        startNotificationWorker,
-        startMaintenanceWorker,
-      ]
-      if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
-        starters.push(startAnalyticsWorker)
-      }
+      const starters = workerStarters()
       // One at a time, so a throw leaves the ones already started in `workers`.
-      for (const start of starters) {
+      for (const { start } of starters) {
         generation.workers.push(start())
       }
+      if (firstNames.length === 0) firstNames.push(...starters.map(({ name }) => name))
       // Each generation retries, so a Redis outage at boot can't leave the purge unscheduled.
       void registerInBackground(
         ensureRetentionSchedule,
         'Registering the retention schedule failed'
       )
+      void registerInBackground(ensureBillingSchedules, 'Registering the billing schedules failed')
       if (isAnalyticsEnabled()) {
         void registerInBackground(
           ensureAnalyticsDrainSchedule,
@@ -192,6 +223,7 @@ export function startWorkers(): SupervisedWorkers {
   })
 
   return {
+    names: firstNames,
     close: async () => {
       supervisor.isClosed = true
       unsubscribe()

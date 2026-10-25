@@ -21,6 +21,7 @@ import {
   type AuditAccess,
   type AuditAction,
 } from '@/constants/audit.constants'
+import { BILLING_INTERVALS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
 import { EMAIL_EVENT_TYPES } from '@/constants/email.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
@@ -37,7 +38,11 @@ import {
 } from '@/services/analytics/analytics-event-builder.service'
 import { logger } from '@/services/logger.service'
 import type { TenantGroupSnapshot } from '@/types/analytics'
-import type { ProductDomainEvent } from '@/types/domain-event'
+import type {
+  BillingDomainEvent,
+  BillingEventDetail,
+  ProductDomainEvent,
+} from '@/types/domain-event'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 
 const OCCURRED_AT = new Date('2026-10-02T09:00:00.000Z')
@@ -241,6 +246,19 @@ describe('buildAuditEvents', () => {
       email_domain: 'example.test',
       invitee_user_id: NONE,
     })
+  })
+
+  it("keeps a plan edit's snapshots in the audit log and sends its tenant counts", () => {
+    const snapshot = { name: 'Free', description: `Ask ${PII_EMAIL}`, entitlements: { members: 3 } }
+    const affected = { trialing: 0, active: 0, past_due: 0, free: 4 }
+    const [row] = buildAuditEvents(
+      auditRow('plan.updated', { before: snapshot, after: snapshot, affected, reason: 'Review' }),
+      {}
+    )
+    expect(row?.properties).toMatchObject({ affected, has_reason: true })
+    expect(row?.properties).not.toHaveProperty('before')
+    expect(row?.properties).not.toHaveProperty('after')
+    expect(JSON.stringify(row)).not.toContain(PII_EMAIL)
   })
 
   it('adds no has_reason to an action without a reason', () => {
@@ -583,6 +601,9 @@ const CANDIDATES: readonly unknown[] = [
   ...MEMBERSHIP_ROLES,
   ...MAINTENANCE_MODES,
   ...EMAIL_TEMPLATE_KEYS,
+  ...BILLING_INTERVALS,
+  ...STAFF_CANCEL_WHEN,
+  '2026-11-02T10:00:00.000Z',
   'react',
   'apex',
   true,
@@ -590,6 +611,9 @@ const CANDIDATES: readonly unknown[] = [
   0,
   7,
   NONE,
+  // A plan edit's snapshot, its free text carrying the probes, and its tenant counts.
+  { name: PII_NAME, description: PII_EMAIL, entitlements: { members: 3 } },
+  { trialing: 0, active: 1, past_due: 0, free: 7 },
 ]
 
 /**
@@ -822,6 +846,7 @@ describe('buildProductEvent', () => {
         required: false,
         at: OCCURRED_AT,
       },
+      ...BILLING_DETAILS.map((detail) => billingEvent(detail)),
     ]
     expect(
       events.map((event) => event.type).toSorted((left, right) => left.localeCompare(right))
@@ -830,6 +855,197 @@ describe('buildProductEvent', () => {
       const row = buildProductEvent(event, TRACE, 'member', { person, isViaInvitation: false })
       for (const key of Object.keys(row.properties)) expect(key).toMatch(SNAKE_KEY)
     }
+  })
+})
+
+/**
+ * One of each billing event's own fields, every field set.
+ */
+const BILLING_DETAILS: readonly BillingEventDetail[] = [
+  { type: 'trial_started' },
+  { type: 'trial_reminder_sent', daysLeft: 3 },
+  { type: 'trial_extended', days: 7 },
+  { type: 'trial_ended' },
+  { type: 'plan_limit_approaching', key: 'members', used: 8, limit: 10 },
+  { type: 'plan_limit_reached', key: 'members', usage: { used: 3, limit: 3 } },
+  { type: 'plan_feature_blocked', key: 'advanced_example' },
+  { type: 'upgrade_requested', key: 'members', surface: 'invite_dialog' },
+  { type: 'upgrade_request_fulfilled' },
+  {
+    type: 'checkout_started',
+    interval: 'month',
+    amountMinor: 99_900,
+    currency: 'INR',
+    duringTrial: true,
+  },
+  { type: 'checkout_confirmed' },
+  { type: 'subscription_activated', interval: 'year' },
+  { type: 'subscription_renewed' },
+  { type: 'payment_failed', failureCode: 'halted' },
+  { type: 'subscription_recovered' },
+  { type: 'subscription_halted' },
+  { type: 'subscription_cancel_scheduled', by: 'customer_bank' },
+  { type: 'subscription_interval_change_scheduled' },
+  { type: 'downgraded_to_free', downgradeCause: 'payment_failed' },
+  { type: 'payer_left' },
+  { type: 'duplicate_subscription_refunded', refundCause: 'archived' },
+  { type: 'billing_reconciled', field: 'state' },
+  { type: 'dispute_opened' },
+]
+
+/**
+ * A billing event attributed to the actor, on Paid and active, unless `base` says otherwise.
+ * @param detail - The event's type and own fields.
+ * @param base - Fields of the base to replace.
+ * @returns The event.
+ */
+function billingEvent(
+  detail: BillingEventDetail,
+  base: Partial<Omit<BillingDomainEvent, 'type'>> = {}
+): BillingDomainEvent {
+  return {
+    tenantId: TENANT_ID,
+    userId: NONE,
+    attributedUserId: ACTOR_ID,
+    plan: 'paid',
+    billingState: 'active',
+    at: OCCURRED_AT,
+    ...base,
+    ...detail,
+  }
+}
+
+describe('buildProductEvent for a billing event', () => {
+  it('sends a provider-driven change as the attributed person, in the tenant group, as a system action', () => {
+    const row = buildProductEvent(
+      billingEvent({ type: 'subscription_activated', interval: 'month' }),
+      TRACE
+    )
+
+    expect(row).toEqual({
+      event: 'subscription_activated',
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: {
+        interval: 'month',
+        plan: 'paid',
+        billing_state: 'active',
+        source: 'product',
+        access: 'system',
+        app: 'api',
+        $groups: { tenant: TENANT_ID },
+        trace_id: TRACE.traceId,
+        span_id: TRACE.spanId,
+        $session_id: TRACE.posthogSessionId,
+      },
+    })
+  })
+
+  it('sends a member action as that member with their access, ahead of any attributed person', () => {
+    const row = buildProductEvent(
+      billingEvent(
+        { type: 'plan_feature_blocked', key: 'advanced_example' },
+        { userId: TARGET_ID, plan: 'free', billingState: 'free' }
+      ),
+      {},
+      'member'
+    )
+
+    expect(row.distinctId).toBe(TARGET_ID)
+    expect(row.properties).toMatchObject({
+      key: 'advanced_example',
+      plan: 'free',
+      billing_state: 'free',
+      access: 'member',
+      $groups: { tenant: TENANT_ID },
+    })
+  })
+
+  it('sends a change with no known person as the system distinct id with no person profile', () => {
+    const row = buildProductEvent(
+      billingEvent({ type: 'trial_ended' }, { attributedUserId: NONE, plan: 'free' }),
+      {}
+    )
+
+    expect(row).toMatchObject({
+      distinctId: 'system',
+      properties: {
+        access: 'system',
+        $process_person_profile: false,
+        $groups: { tenant: TENANT_ID },
+      },
+    })
+  })
+
+  it('names the cause and the failure in their own keys, never reason', () => {
+    const downgrade = buildProductEvent(
+      billingEvent({ type: 'downgraded_to_free', downgradeCause: 'trial_ended' }),
+      {}
+    )
+    const failure = buildProductEvent(
+      billingEvent({ type: 'payment_failed', failureCode: 'paused' }),
+      {}
+    )
+
+    expect(downgrade.properties).toMatchObject({ downgrade_cause: 'trial_ended' })
+    expect(failure.properties).toMatchObject({ failure_code: 'paused' })
+    expect(downgrade.properties).not.toHaveProperty('reason')
+    expect(failure.properties).not.toHaveProperty('reason')
+    const refunded = buildProductEvent(
+      billingEvent({ type: 'duplicate_subscription_refunded', refundCause: 'archived' }),
+      {}
+    )
+    expect(refunded.properties).toMatchObject({ refund_cause: 'archived' })
+    expect(refunded.properties).not.toHaveProperty('reason')
+  })
+
+  it.each(BILLING_DETAILS.map((detail) => [detail.type, detail] as const))(
+    'gives %s plan, billing_state and the tenant group, and no PII key',
+    (_type, detail) => {
+      const row = buildProductEvent(billingEvent(detail, { billingState: 'past_due' }), TRACE)
+
+      expect(row.properties).toMatchObject({
+        plan: 'paid',
+        billing_state: 'past_due',
+        $groups: { tenant: TENANT_ID },
+      })
+      for (const key of Object.keys(row.properties)) {
+        expect(PII_KEYS.has(key)).toBe(false)
+        expect(key).toMatch(SNAKE_KEY)
+      }
+    }
+  )
+
+  it('gives the checkout properties in snake_case', () => {
+    const row = buildProductEvent(
+      billingEvent({
+        type: 'checkout_started',
+        interval: 'year',
+        amountMinor: 999_000,
+        currency: 'INR',
+        duringTrial: false,
+      }),
+      {}
+    )
+
+    expect(row.properties).toMatchObject({
+      interval: 'year',
+      amount_minor: 999_000,
+      currency: 'INR',
+      during_trial: false,
+    })
+  })
+
+  it('derives a stable UUID row id from the dedupe key, and none without one', () => {
+    const first = buildProductEvent(billingEvent({ type: 'trial_ended' }, { dedupeKey: 'k-1' }), {})
+    const again = buildProductEvent(billingEvent({ type: 'trial_ended' }, { dedupeKey: 'k-1' }), {})
+    const other = buildProductEvent(billingEvent({ type: 'trial_ended' }, { dedupeKey: 'k-2' }), {})
+    const keyless = buildProductEvent(billingEvent({ type: 'trial_ended' }), {})
+
+    expect(first.id).toMatch(/^[\da-f]{8}-[\da-f]{4}-8[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/)
+    expect(again.id).toBe(first.id)
+    expect(other.id).not.toBe(first.id)
+    expect(keyless).not.toHaveProperty('id')
   })
 })
 

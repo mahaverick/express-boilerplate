@@ -8,7 +8,8 @@
  * `trace_id`. Covers the sign-up, sign-in, tenant, invite and accept
  * sequence, the email webhook's `email_*` events, a resend after a lost
  * acknowledgement (same `uuid`, `timestamp`, `event` and `distinct_id`, which
- * PostHog deduplicates on), and that no address or name reaches PostHog.
+ * PostHog deduplicates on), a trial start and a plan refusal with their
+ * tenant group's plan properties, and that no address or name reaches PostHog.
  * Analytics is enabled for this file through a mocked `getEnv()`. No Worker
  * runs: the drains are called directly, and mail is read off the queues.
  */
@@ -262,8 +263,13 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
       'email_verified',
       'user_signed_in',
     ])
-    // The tenant's group row is built in the same savepoint as its audit event, so it shares the trace.
-    expect(namesOf(events, tenantCreation.traceId)).toEqual(['tenant_created', '$groupidentify'])
+    // The tenant's group row is built in the same savepoint as its audit event, so it shares the trace; the creator's trial start adds its own event and marker, stamped with the trial's start, so the four sort by time and row id.
+    expect(namesOf(events, tenantCreation.traceId).toSorted()).toEqual([
+      '$groupidentify',
+      '$groupidentify',
+      'tenant_created',
+      'trial_started',
+    ])
     expect(namesOf(events, invite.traceId)).toEqual([
       'invitation_created',
       'onboarding_step_completed',
@@ -300,7 +306,7 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
     for (const traceId of [owner.traces.signIn, invitee.traces.signIn]) {
       expect(eventsOf(events, traceId)[0]?.properties.$groups).toBeUndefined()
     }
-    expect(eventsOf(events, tenantCreation.traceId)[0]).toMatchObject({
+    expect(eventNamed(events, tenantCreation.traceId, 'tenant_created')).toMatchObject({
       distinct_id: owner.userId,
       properties: {
         source: 'audit',
@@ -310,8 +316,12 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
         $groups: { tenant: tenantId },
       },
     })
-    expect(eventsOf(events, tenantCreation.traceId)[0]?.properties).not.toHaveProperty('name')
-    expect(eventsOf(events, tenantCreation.traceId)[0]?.properties).not.toHaveProperty('slug')
+    expect(
+      eventNamed(events, tenantCreation.traceId, 'tenant_created')?.properties
+    ).not.toHaveProperty('name')
+    expect(
+      eventNamed(events, tenantCreation.traceId, 'tenant_created')?.properties
+    ).not.toHaveProperty('slug')
     expect(eventsOf(events, invite.traceId)).toMatchObject([
       {
         distinct_id: owner.userId,
@@ -349,15 +359,32 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
       },
     ])
 
-    // The tenant's group properties, read from the tenant row when the drainer sent the marker.
-    expect(events.filter((event) => event.event === '$groupidentify')).toMatchObject([
-      {
-        properties: {
-          $group_type: 'tenant',
-          $group_key: tenantId,
-          $group_set: { name: 'Analytics Workspace', status: 'active' },
-        },
+    // The trial's start is the creator's, in the tenant group, with the plan it gives.
+    expect(eventNamed(events, tenantCreation.traceId, 'trial_started')).toMatchObject({
+      distinct_id: owner.userId,
+      properties: {
+        source: 'product',
+        access: 'member',
+        plan: 'paid',
+        billing_state: 'trialing',
+        $groups: { tenant: tenantId },
       },
+    })
+
+    // The tenant's group properties, read from the tenant and billing rows when the drainer sent each marker.
+    const groupSet = {
+      name: 'Analytics Workspace',
+      status: 'active',
+      plan: 'paid',
+      billing_state: 'trialing',
+      billing_interval: null,
+      trial_plan_name: 'Paid',
+      open_upgrade_requests: 0,
+      paid_since: null,
+    }
+    expect(events.filter((event) => event.event === '$groupidentify')).toMatchObject([
+      { properties: { $group_type: 'tenant', $group_key: tenantId, $group_set: groupSet } },
+      { properties: { $group_type: 'tenant', $group_key: tenantId, $group_set: groupSet } },
     ])
 
     // Every traced event but a group marker (which carries the trace only) has the server span's own id beside the client's trace id.
@@ -372,6 +399,50 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
     for (const pii of [ownerEmail, inviteeEmail, PROBE_FIRST_NAME, PROBE_LAST_NAME]) {
       expect(sentBodies).not.toContain(pii)
     }
+  })
+})
+
+describe('a plan refusal', () => {
+  it('sends plan_feature_blocked as the member refused, in the tenant group, with the plan they are on', async () => {
+    const { app } = running()
+    const owner = await signUpVerifyAndSignIn(`analytics-plan-${randomUUID()}@example.test`)
+    const slugs: string[] = []
+    // The first workspace takes the owner's one trial, so the second is on Free.
+    for (const name of ['Trial Workspace', 'Free Workspace']) {
+      const slug = `plan-${randomUUID().slice(0, 8)}`
+      const created = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({ name, slug })
+      expect(created.status).toBe(201)
+      state.tenantIds.push((created.body as { data: { id: string } }).data.id)
+      slugs.push(slug)
+    }
+    const freeTenantId = state.tenantIds.at(-1)
+
+    const refused = await traced(
+      request(app)
+        .get(`/api/v1/tenants/${slugs[1] ?? ''}/insights`)
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+    )
+
+    expect(refused.status).toBe(402)
+    const events = await drainAll()
+    expect(namesOf(events, refused.traceId)).toEqual(['plan_feature_blocked', '$groupidentify'])
+    expect(eventNamed(events, refused.traceId, 'plan_feature_blocked')).toMatchObject({
+      distinct_id: owner.userId,
+      properties: {
+        source: 'product',
+        access: 'member',
+        key: 'advanced_example',
+        plan: 'free',
+        billing_state: 'free',
+        $groups: { tenant: freeTenantId },
+      },
+    })
+    expect(
+      eventNamed(events, refused.traceId, '$groupidentify')?.properties.$group_set
+    ).toMatchObject({ plan: 'free', billing_state: 'free', limit_hits_30d: 1 })
   })
 })
 
@@ -399,7 +470,8 @@ describe('browser session attribution', () => {
     expect(eventNamed(events, owner.traces.signIn, 'user_signed_in')?.properties.$session_id).toBe(
       signInSession
     )
-    const [created, groupIdentify] = eventsOf(events, tenantCreation.traceId)
+    const created = eventNamed(events, tenantCreation.traceId, 'tenant_created')
+    const groupIdentify = eventNamed(events, tenantCreation.traceId, '$groupidentify')
     expect(created?.event).toBe('tenant_created')
     expect(created?.properties.$session_id).toBe(apiSession)
     expect(groupIdentify?.event).toBe('$groupidentify')

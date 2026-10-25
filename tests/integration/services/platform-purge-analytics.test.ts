@@ -6,6 +6,7 @@
  * change. Analytics is off under `.env.test`, which is the unconfigured case.
  */
 import { randomUUID } from 'node:crypto'
+import { eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
 import { analyticsDeletionModel } from '@/database/models/analytics-deletion.model'
@@ -84,7 +85,11 @@ describe('purgeUser and analytics', () => {
     await purgeUser({ userId: owner.id }, goneId, REASON)
 
     const after = Date.now()
-    const rows = await db.select().from(analyticsDeletionModel)
+    // Scoped to this user: another file's purge in the same worker database may have left its own row.
+    const rows = await db
+      .select()
+      .from(analyticsDeletionModel)
+      .where(eq(analyticsDeletionModel.distinctId, goneId))
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ distinctId: goneId, attempts: 0 })
     const notBefore = rows[0]?.notBefore.getTime() ?? 0

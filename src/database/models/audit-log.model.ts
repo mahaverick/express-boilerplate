@@ -19,15 +19,7 @@ import {
 } from '@/constants/audit.constants'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
-
-/**
- * Render a fixed, code-defined value list as SQL literals for a CHECK.
- * @param values - The allowed values.
- * @returns The values quoted and comma-separated.
- */
-function sqlValueList(values: readonly string[]): string {
-  return values.map((value) => `'${value}'`).join(', ')
-}
+import { sqlValueList } from '@/utilities/sql-value-list.utilities'
 
 /**
  * The `audit_logs` table: one row per audited change or staff visit.

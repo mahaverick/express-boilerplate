@@ -11,7 +11,8 @@
       "specExpected = what the spec §4.4 evaluator returns for a registry entry with fallback false / variants[0]; holdout -> entry.fallback with reason holdout.",
       "specUnsupported marks fixtures whose flag the §4.5 parser must mark unsupported; they still document PostHog semantics (missing property, non-trait operators).",
       "timeRelative: tests must rebuild personProps.signup_date = now - N days before evaluating (is_date_* compare against now).",
-      "Integer traits are sent as JSON numbers, exactly as express will send them."
+      "Integer traits are sent as JSON numbers, exactly as express will send them.",
+      "Tenant contexts carry the plan and billing_state group traits (free) added after capture; no captured flag filters on them, so every expected answer stands."
     ]
   },
   "fixtures": [
@@ -2742,7 +2743,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -2812,7 +2816,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -2877,7 +2884,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -2931,7 +2941,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3016,7 +3029,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3077,7 +3093,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3139,7 +3158,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3200,7 +3222,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3261,7 +3286,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3322,7 +3350,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3383,7 +3414,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3463,7 +3497,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3549,7 +3586,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3612,7 +3652,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3673,7 +3716,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3742,7 +3788,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3823,7 +3872,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -3898,7 +3950,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -3986,7 +4040,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4050,7 +4106,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4114,7 +4172,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4176,7 +4236,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4238,7 +4300,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4300,7 +4364,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4364,7 +4430,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4443,7 +4511,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4515,7 +4585,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4574,7 +4646,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4648,7 +4722,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4707,7 +4783,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4765,7 +4843,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4856,7 +4936,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4922,7 +5004,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -4990,7 +5074,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5080,7 +5166,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5304,7 +5392,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5387,7 +5477,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5453,7 +5545,10 @@
           "account_created_days": 6
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -5517,7 +5612,10 @@
           "account_created_days": 6
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -5591,7 +5689,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5660,7 +5760,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5752,7 +5854,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5845,7 +5949,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 30
+            "tenant_created_days": 30,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5910,7 +6016,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -5975,7 +6083,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 365
+            "tenant_created_days": 365,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -6043,7 +6153,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6116,7 +6229,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6180,7 +6296,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6242,7 +6361,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6303,7 +6425,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6364,7 +6489,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6427,7 +6555,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6490,7 +6621,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6551,7 +6685,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6612,7 +6749,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6675,7 +6815,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6729,7 +6872,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6783,7 +6929,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6839,7 +6988,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6893,7 +7045,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -6956,7 +7111,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7011,7 +7169,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7073,7 +7234,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7134,7 +7298,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7196,7 +7363,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7259,7 +7429,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7317,7 +7490,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7380,7 +7556,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7443,7 +7622,10 @@
           "account_created_days": 29
         },
         "groupProps": {
-          "tenant": {}
+          "tenant": {
+            "plan": "free",
+            "billing_state": "free"
+          }
         }
       },
       "expected": {
@@ -7508,7 +7690,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7572,7 +7756,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7636,7 +7822,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7700,7 +7888,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7762,7 +7952,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7826,7 +8018,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7908,7 +8102,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -7996,7 +8192,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8060,7 +8258,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8126,7 +8326,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8197,7 +8399,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8272,7 +8476,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8363,7 +8569,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8446,7 +8654,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 90
+            "tenant_created_days": 90,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8522,7 +8732,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },
@@ -8610,7 +8822,9 @@
         },
         "groupProps": {
           "tenant": {
-            "tenant_created_days": 89
+            "tenant_created_days": 89,
+            "plan": "free",
+            "billing_state": "free"
           }
         }
       },

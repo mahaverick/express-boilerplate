@@ -23,6 +23,10 @@ import {
 } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
+  addPlatformPlanRoutes,
+  createPlatformTenantBillingRouter,
+} from '@/routes/platform-billing.routes'
+import {
   createPlatformEmailRouter,
   createPlatformEmailSuppressionRouter,
 } from '@/routes/platform-email.routes'
@@ -43,7 +47,7 @@ export function createPlatformRouter(): Router {
   router.use(logStaffWrites)
   // One instance: separate ones would split the budget on the in-memory fallback.
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
-  // One instance shared by the /platform writes of users, tenants, emails and onboarding.
+  // One instance shared by the /platform writes of users, tenants, emails, onboarding and billing.
   const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
   // The flag evaluator's own budget: each call evaluates every flag for one user.
   const flagEvaluateLimiter = createRateLimiter(RATE_LIMITS.flagEvaluate, {
@@ -60,6 +64,11 @@ export function createPlatformRouter(): Router {
     '/tenants/:id/onboarding',
     createPlatformTenantOnboardingRouter({ searchLimiter, writeLimiter })
   )
+  router.use(
+    '/tenants/:id/billing',
+    createPlatformTenantBillingRouter({ searchLimiter, writeLimiter })
+  )
+  addPlatformPlanRoutes(router, { searchLimiter, writeLimiter })
   router.get(
     '/tenants',
     requirePlatformRole('viewer'),

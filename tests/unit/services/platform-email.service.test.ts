@@ -88,6 +88,29 @@ describe('buildPreviewMessage', () => {
     }
   )
 
+  it('previews a billing mail with its stored link and a placeholder for the payer it names', () => {
+    const billingLink = `${ORIGIN}/settings/workspace/acme/billing?utm_source=email`
+    const { message, isPartial } = buildPreviewMessage(
+      'payer_left',
+      {
+        appName: 'Acme',
+        tenantName: 'Acme Robotics',
+        payerName: 'Grace Hopper',
+        leftOn: '1 November 2026',
+        billingState: 'active',
+        periodEndsOn: '7 November 2026',
+        billingLink,
+      },
+      ORIGIN
+    )
+    const rendered = renderForMessage(message)
+
+    expect(isPartial).toBe(false)
+    expect(rendered.text).toContain(`${INVITER_NAME_PLACEHOLDER} paid for Paid and left`)
+    expect(rendered.text).not.toContain('Grace Hopper')
+    expect(rendered.text).toContain(billingLink)
+  })
+
   it('uses the stored first name and product name and is not partial', () => {
     const { message, isPartial } = buildPreviewMessage(
       'step_up_link',

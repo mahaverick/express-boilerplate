@@ -41,6 +41,8 @@
     "onboarding:reconcile": "tsx --env-file-if-exists=.env src/scripts/onboarding-reconcile.ts",
     "analytics:backfill-groups": "tsx --env-file-if-exists=.env src/scripts/analytics-backfill-groups.ts",
     "flags:sync": "tsx --env-file-if-exists=.env src/scripts/flags-sync.ts",
+    "billing:seed": "tsx --env-file-if-exists=.env src/scripts/billing-seed.ts",
+    "billing:time-travel": "tsx --env-file-if-exists=.env src/scripts/billing-time-travel.ts",
     "test": "vp test run",
     "test:unit": "vp test run --project unit",
     "test:integration": "vp test run --project integration",
@@ -80,14 +82,14 @@
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "ms": "^2.1.3",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.2.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "pino": "10.3.1",
     "postgres": "^3.4.9",
     "rate-limit-redis": "^6.0.1",
     "redis": "6.2.1",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.3",

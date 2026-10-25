@@ -55,6 +55,7 @@ export function messageResponse(response: Response, message: string, status = 20
  *   names its log line and, when reported, its error-tracking event.
  * @param extra.mode - On a maintenance-mode 503, the mode it was refused under.
  * @param extra.since - On a maintenance-mode 503, when that mode began (or null).
+ * @param extra.details - Structured facts about a refusal, such as a limit and how much of it is used.
  */
 export function errorResponse(
   response: Response,
@@ -62,7 +63,12 @@ export function errorResponse(
   status: number,
   code?: string,
   errors?: unknown,
-  extra: { errorId?: string; mode?: string; since?: string | null } = {}
+  extra: {
+    errorId?: string
+    mode?: string
+    since?: string | null
+    details?: Record<string, unknown>
+  } = {}
 ): void {
   response.status(status).json({
     success: false,
@@ -70,6 +76,7 @@ export function errorResponse(
     statusCode: status,
     ...(code !== undefined && { code }),
     ...(errors !== undefined && { errors }),
+    ...(extra.details !== undefined && { details: extra.details }),
     ...(extra.errorId !== undefined && { errorId: extra.errorId }),
     ...(extra.mode !== undefined && { mode: extra.mode, since: extra.since }),
     requestId: response.getHeader(REQUEST_ID_HEADER),

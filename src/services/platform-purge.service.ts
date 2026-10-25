@@ -9,12 +9,16 @@
  */
 import { sql } from 'drizzle-orm'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
+import { PAYMENT_PROVIDER_UNAVAILABLE_CODE } from '@/constants/billing.constants'
+import type { TenantBillingRecord } from '@/database/models/billing.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
+import { isUnknownIdError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { analyticsDeletionRepository } from '@/repositories/analytics-deletion.repository'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
@@ -28,13 +32,17 @@ import { currentAnalyticsContext } from '@/services/analytics/analytics-context.
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
 import { enqueueAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { record } from '@/services/audit.service'
+import { callProvider, getBillingProvider } from '@/services/billing/billing-provider.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import type { Actor } from '@/types/actor'
+import type { ProviderSubscription } from '@/types/billing'
+import { heldSubscriptionIds, isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
 const auditLogRepository = new AuditLogRepository()
+const billingRepository = new BillingRepository()
 const emailLogRepository = new EmailLogRepository()
 const emailMessageRepository = new EmailMessageRepository()
 const emailSuppressionRepository = new EmailSuppressionRepository()
@@ -44,6 +52,74 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
+
+/**
+ * The refusal of a purge while a subscription may still charge a card.
+ */
+const LIVE_SUBSCRIPTION_MESSAGE = "Cancel this tenant's subscription before you purge it."
+
+/**
+ * Provider statuses after which a subscription can never charge again.
+ */
+const ENDED_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
+  'cancelled',
+  'completed',
+  'expired',
+])
+
+/**
+ * The refusal when the provider does not know a subscription the row holds.
+ * Razorpay never deletes one, so it means this server's keys belong to
+ * another account than the one that created it.
+ */
+const UNKNOWN_SUBSCRIPTION_MESSAGE =
+  "The payment provider doesn't know this tenant's subscription, so nothing was purged. Check that this server uses the account that created it."
+
+/**
+ * The refusal when the provider refuses the purge's read.
+ */
+const PURGE_CHECK_REFUSED_MESSAGE =
+  "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in a few minutes. If it fails again, check the provider keys."
+
+/**
+ * Refuse the purge of a workspace whose subscription may still charge a
+ * card. Every id the row holds is read, whatever the row's state (a failed
+ * cancel can leave a Free row holding a halted subscription, which can
+ * resume): any status but cancelled, completed or expired refuses with 409,
+ * and an id the provider does not know refuses with 502. A purge never
+ * proceeds without that check: a provider failure refuses with 503 or 502,
+ * and a row holding any id that the running provider can't read (payments
+ * off, or another provider or mode) refuses with 502. A row holding no id
+ * needs no check. Runs before the purge's transaction, since no provider
+ * call happens inside one.
+ * @param row - The workspace's billing row.
+ * @returns The ids the provider showed ended, for the re-check under lock.
+ * @throws {HttpError} 409 while a subscription runs; 502 for an unknown subscription or a row this server can't check; 503 or 502 when the provider fails.
+ */
+async function assertNoLiveSubscription(row: TenantBillingRecord): Promise<ReadonlySet<string>> {
+  const ids = heldSubscriptionIds(row)
+  if (ids.length === 0) return new Set()
+  const provider = getBillingProvider()
+  if (provider === null || isOtherProvider(row, provider)) {
+    throw new HttpError(
+      "This server can't reach the tenant's subscription. Cancel it in the provider's dashboard, then purge from a server that has payments on.",
+      502,
+      PAYMENT_PROVIDER_UNAVAILABLE_CODE
+    )
+  }
+  for (const id of ids) {
+    const sub = await callProvider(async () => {
+      try {
+        return await provider.fetchSubscription(id)
+      } catch (error) {
+        if (!isUnknownIdError(error)) throw error
+        throw new HttpError(UNKNOWN_SUBSCRIPTION_MESSAGE, 502, PAYMENT_PROVIDER_UNAVAILABLE_CODE)
+      }
+    }, PURGE_CHECK_REFUSED_MESSAGE)
+    if (!ENDED_STATUSES.has(sub.status)) throw new HttpError(LIVE_SUBSCRIPTION_MESSAGE, 409)
+  }
+  return new Set(ids)
+}
 
 /**
  * Lock every membership row of a user, in the order every membership write
@@ -83,7 +159,8 @@ async function lockMembershipsForPurge(
  * they acted in, delete the email messages (with their attempts and events)
  * sent to their account, delete the mail log rows, email messages,
  * invitations and emailed links addressed to their address up to their deletion, forget them as
- * the lifter of any email suppression, delete their memberships (locked first,
+ * the lifter of any email suppression, forget them as payer with the billing
+ * address they gave, delete their memberships (locked first,
  * in the membership lock order) and then the row (the rest cascades), record
  * `user.purged` in the platform tenant, queue the deletion of their PostHog
  * person, events and recordings (`analytics_deletions`, sent an hour later by
@@ -112,6 +189,8 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
     // First, before any other lock: the delete below would otherwise take these rows out of order.
     const memberships = await lockMembershipsForPurge(userId, platform.id, tx)
     await assertStillPlatformRole(actor, 'owner', tx)
+    // The foreign key clears only the payer id; the billing address they gave goes too.
+    await billingRepository.clearPayer(userId, tx)
     await tx.execute(sql`select set_config('app.audit_redact', 'on', true)`)
     await auditLogRepository.redactActor(userId, tx)
     // Live accounts only: the purged user is soft-deleted, so any match is someone else.
@@ -158,17 +237,22 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
 /**
  * Permanently delete an archived customer tenant: delete its own audit
  * entries (the customer's data) and its email messages (which carry its
- * name), then the row (settings, memberships and invitations cascade; the
+ * name), then the row (settings, billing, memberships and invitations cascade; the
  * memberships are locked first, in the membership lock order),
  * record `tenant.purged` in the platform tenant, and queue a `$groupidentify`
  * marker for it, which the drainer sends with the group's name cleared and
  * its status `purged`: PostHog cannot delete a group (ARCHITECTURE.md, "Analytics").
  * `memberCount` counts the members whose accounts are not soft-deleted.
+ * Refused while its subscription may still charge a card
+ * (`assertNoLiveSubscription`): the archive's cancel job cancels it, and the
+ * purge then goes through. The purge is not queued: this request is where
+ * the delete happens, so the check runs here, and again under the billing
+ * row's lock for a subscription that arrived meanwhile.
  * @param actor - The platform owner, recently authenticated.
  * @param tenantId - The tenant.
  * @param reason - Why, for the audit log.
  * @returns Resolves once the transaction commits.
- * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown tenant or the actor lost the owner role; 409 for the platform tenant or a tenant that is not archived.
+ * @throws {HttpError} 401 when the actor's own account was deleted or deactivated meanwhile; 404 unknown tenant or the actor lost the owner role; 409 for the platform tenant, a tenant that is not archived, or one whose subscription still runs; 503 when the provider does not answer; 502 when it refuses the read, does not know a subscription the row holds, or the row holds any subscription id this server can't check (payments off, or another provider or mode).
  */
 export async function purgeTenant(actor: Actor, tenantId: string, reason: string): Promise<void> {
   const found = await tenantRepository.findByIdIncludingDeleted(tenantId)
@@ -176,12 +260,20 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
   if (found.isPlatform || found.lifecycleState !== 'archived') {
     throw new HttpError('Archive this tenant before you purge it.', 409)
   }
+  const billing = await billingRepository.findByTenantId(tenantId)
+  const checked =
+    billing === undefined ? new Set<string>() : await assertNoLiveSubscription(billing)
 
   await withTransaction(async (tx) => {
     // The tenant's owner rows, then every membership, before the platform role: the order every membership write takes.
     await userMembershipRepository.lockOwners(tenantId, 'update', tx)
     await userMembershipRepository.lockAllMemberships(tenantId, 'update', tx)
     await assertStillPlatformRole(actor, 'owner', tx)
+    // The seat lock's place: a webhook's sync may have brought a subscription in since the check.
+    const locked = await billingRepository.lockByTenantId(tenantId, tx)
+    if (locked !== undefined && heldSubscriptionIds(locked).some((id) => !checked.has(id))) {
+      throw new HttpError(LIVE_SUBSCRIPTION_MESSAGE, 409)
+    }
     const members = await userMembershipRepository.listByTenant(tenantId, tx)
     await tx.execute(
       sql`select set_config('app.audit_purge', 'on', true), set_config('app.audit_purge_before', 'infinity', true)`

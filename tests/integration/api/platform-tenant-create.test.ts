@@ -275,6 +275,30 @@ describe('staff-created tenants', () => {
       const result = await userMembershipRepository.findByUserAndTenant(invitee.id, tenantId)
       expect(result?.role).toBe('owner')
     })
+
+    it('creates the tenant on Free, then starts its trial when the owner accepts', async () => {
+      const { token } = await staff('admin')
+      const { user: invitee, token: inviteeToken } = await createUser(true)
+      const response = await create(token, {
+        name: 'Trial On Accept',
+        slug: newSlug(),
+        ownerEmail: invitee.email,
+      })
+      const tenantId = (response.body as { data: CreatedBody }).data.tenant.id
+      const [before] =
+        await sql`select state, trial_on_owner_accept from tenant_billing where tenant_id = ${tenantId}`
+      expect(before).toMatchObject({ state: 'free', trial_on_owner_accept: true })
+      const mail = await waitForInvitationEmail(invitee.email)
+
+      await request(app)
+        .post('/api/v1/invitations/accept')
+        .set('Authorization', `Bearer ${inviteeToken}`)
+        .send({ token: mail.token })
+
+      const [after] =
+        await sql`select state, trial_on_owner_accept from tenant_billing where tenant_id = ${tenantId}`
+      expect(after).toMatchObject({ state: 'trialing', trial_on_owner_accept: false })
+    })
   })
 
   describe('POST /platform/tenants/:id/owner-invitation', () => {

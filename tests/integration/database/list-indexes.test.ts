@@ -22,6 +22,7 @@ import type { TransactionSql } from 'postgres'
 import { describe, expect, it } from 'vite-plus/test'
 import { auditLogList } from '@/repositories/audit-log.repository'
 import { notificationList } from '@/repositories/notification.repository'
+import { billingAlertList } from '@/repositories/platform-billing.repository'
 import {
   platformEmailList,
   platformSuppressionList,
@@ -379,6 +380,16 @@ const ordered: OrderedCase[] = [
     ['audit_logs_occurred_idx'],
   ],
   [
+    'billing alerts -at',
+    () => listPageQuery(db, billingAlertList(undefined), first('-at')).toSQL(),
+    'billing_alerts_at_idx',
+  ],
+  [
+    'billing alerts at',
+    () => listPageQuery(db, billingAlertList(undefined), first('at')).toSQL(),
+    'billing_alerts_at_idx',
+  ],
+  [
     'members role',
     () => listPageQuery(db, memberList(ID, undefined, noRoles), first('role')).toSQL(),
     'user_memberships_tenant_role_sort_idx',
@@ -614,6 +625,7 @@ describe('list names', () => {
       }),
       auditLogList(undefined, { scope: 'platform' }),
       auditLogList(undefined, { scope: 'tenant', tenantId: ID }),
+      billingAlertList(undefined),
       memberList(ID, undefined, noRoles),
       invitationList(ID, undefined, noRoles),
       myTenantList(ID, undefined, noRoles),

@@ -95,6 +95,118 @@ const SAMPLE_VARIABLES: {
     expiresAt: '15:42 UTC on 20 October 2026',
     appName: 'App',
   },
+  trial_started: {
+    appName: 'App',
+    tenantName: 'Acme',
+    trialEndsOn: '7 November 2026',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  trial_midpoint: {
+    appName: 'App',
+    tenantName: 'Acme',
+    daysLeft: '7',
+    trialEndsOn: '7 November 2026',
+    usageSummary: '5 members',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  trial_ending: {
+    appName: 'App',
+    tenantName: 'Acme',
+    trialEndsOn: '7 November 2026',
+    memberLimit: '3',
+    membersUsed: '5',
+    monthlyPrice: '999',
+    yearlyPrice: '9,990',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  trial_ends_today: {
+    appName: 'App',
+    tenantName: 'Acme',
+    memberLimit: '3',
+    membersUsed: '5',
+    monthlyPrice: '999',
+    yearlyPrice: '9,990',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  trial_ended: {
+    appName: 'App',
+    tenantName: 'Acme',
+    summary: 'Free allows 3 members, and Acme has 5.',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  paid_welcome: {
+    appName: 'App',
+    tenantName: 'Acme',
+    amount: '999',
+    interval: 'month',
+    nextChargeOn: '7 November 2026',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  renewal_upcoming: {
+    appName: 'App',
+    tenantName: 'Acme',
+    renewsOn: '7 November 2026',
+    amount: '999',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  payment_failed: {
+    appName: 'App',
+    tenantName: 'Acme',
+    amount: '999',
+    stoppedBy: 'halted',
+    graceEndsOn: '7 November 2026',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  moved_to_free: {
+    appName: 'App',
+    tenantName: 'Acme',
+    downgradeCause: 'cancelled',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  paid_cancelled: {
+    appName: 'App',
+    tenantName: 'Acme',
+    endsOn: '7 November 2026',
+    beforeFirstCharge: 'false',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  interval_switch_scheduled: {
+    appName: 'App',
+    tenantName: 'Acme',
+    interval: 'month',
+    switchOn: '7 November 2026',
+    amount: '999',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  payer_left: {
+    appName: 'App',
+    tenantName: 'Acme',
+    payerName: 'Grace',
+    leftOn: '1 November 2026',
+    billingState: 'active',
+    periodEndsOn: '7 November 2026',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  upgrade_requested: {
+    appName: 'App',
+    tenantName: 'Acme',
+    requesterName: 'Grace',
+    monthlyPrice: '999',
+    yearlyPrice: '9,990',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
+  upgrade_request_fulfilled: {
+    appName: 'App',
+    tenantName: 'Acme',
+    tenantLink: 'https://x.test/tenants/acme',
+  },
+  winback: {
+    appName: 'App',
+    tenantName: 'Acme',
+    memberLimit: '3',
+    monthlyPrice: '999',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -165,6 +277,133 @@ describe('EMAIL_TEMPLATE_META', () => {
         ],
         resendAction: 'invitation',
       },
+      trial_started: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'billingLink'],
+        resendAction: null,
+      },
+      trial_midpoint: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'daysLeft',
+          'trialEndsOn',
+          'usageSummary',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      trial_ending: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'trialEndsOn',
+          'memberLimit',
+          'membersUsed',
+          'monthlyPrice',
+          'yearlyPrice',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      trial_ends_today: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'memberLimit',
+          'membersUsed',
+          'monthlyPrice',
+          'yearlyPrice',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      trial_ended: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'summary', 'billingLink'],
+        resendAction: null,
+      },
+      paid_welcome: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'amount',
+          'interval',
+          'nextChargeOn',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      renewal_upcoming: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'renewsOn', 'amount', 'billingLink'],
+        resendAction: null,
+      },
+      payment_failed: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'amount',
+          'stoppedBy',
+          'graceEndsOn',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      moved_to_free: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'downgradeCause', 'billingLink'],
+        resendAction: null,
+      },
+      paid_cancelled: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'endsOn', 'beforeFirstCharge', 'billingLink'],
+        resendAction: null,
+      },
+      interval_switch_scheduled: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'interval',
+          'switchOn',
+          'amount',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      payer_left: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'leftOn',
+          'billingState',
+          'periodEndsOn',
+          'billingLink',
+        ],
+        resendAction: null,
+      },
+      upgrade_requested: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'monthlyPrice', 'yearlyPrice', 'billingLink'],
+        resendAction: null,
+      },
+      upgrade_request_fulfilled: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'tenantLink'],
+        resendAction: null,
+      },
+      winback: {
+        senderClass: 'general',
+        previewVariables: ['appName', 'tenantName', 'memberLimit', 'monthlyPrice', 'billingLink'],
+        resendAction: null,
+      },
     })
   })
 
@@ -193,6 +432,11 @@ describe('EMAIL_TEMPLATE_META', () => {
     expect(EMAIL_TEMPLATE_META.step_up_link.resendAction).toBeNull()
     expect(EMAIL_TEMPLATE_META.passkey_created.resendAction).toBeNull()
     expect(EMAIL_TEMPLATE_META.passkey_deleted.resendAction).toBeNull()
+  })
+
+  it('never stores the payer or requester name a billing email names', () => {
+    expect(EMAIL_TEMPLATE_META.payer_left.previewVariables).not.toContain('payerName')
+    expect(EMAIL_TEMPLATE_META.upgrade_requested.previewVariables).not.toContain('requesterName')
   })
 
   it('stores every onboarding reminder variable: its link carries no token', () => {

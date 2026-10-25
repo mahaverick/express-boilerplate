@@ -68,6 +68,20 @@ export const NOT_FOUND = {
     code: 'passkey_not_found',
     message: "We couldn't find this passkey. It may have been deleted. Refresh your passkey list.",
   },
+  tenantBilling: {
+    code: 'tenant_billing_not_found',
+    message:
+      'This tenant has no billing: the platform tenant is never billed. Go back to Tenants and pick a customer tenant.',
+  },
+  grant: {
+    code: 'grant_not_found',
+    message:
+      "We couldn't find this grant on this tenant. Refresh the tenant's Billing tab to see its grants.",
+  },
+  plan: {
+    code: 'plan_not_found',
+    message: "We couldn't find this plan. Go back to Plans and pick one from the list.",
+  },
   suppression: {
     code: 'suppression_not_found',
     message:

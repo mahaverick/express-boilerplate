@@ -15,6 +15,8 @@ vi.mock('@/services/session-denylist.service', () => ({ isSessionDenied: vi.fn()
 vi.mock('@/services/notification-emitter.service', () => ({
   onNotification: vi.fn(),
   offNotification: vi.fn(),
+  onEntitlementsChanged: vi.fn(),
+  offEntitlementsChanged: vi.fn(),
 }))
 
 /**

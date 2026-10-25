@@ -16,6 +16,7 @@ import {
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { BillingRepository } from '@/repositories/billing.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import {
   PlatformUserRepository,
@@ -28,6 +29,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import { sendPayerLeftEverywhere } from '@/services/billing/billing-emails.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
@@ -51,6 +53,7 @@ import type {
 
 const platformUserRepository = new PlatformUserRepository()
 const authProviderRepository = new AuthProviderRepository()
+const billingRepository = new BillingRepository()
 const emailMessageRepository = new EmailMessageRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
@@ -606,7 +609,12 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
 /**
  * Soft-delete a user and end their sessions; remove their federated provider
  * links and revoke the invitations they sent, so the address can be reused
- * fully, Google included (Deactivate is the way to ban). Refused while they
+ * fully, Google included (Deactivate is the way to ban). Every workspace
+ * they paid for forgets them as payer, with the billing address they gave
+ * (`clearPayer`); the subscription keeps running. After the commit, the
+ * remaining owners of each workspace they paid for with a live
+ * subscription, and were still a member of, are told
+ * (`sendPayerLeftEverywhere`). Refused while they
  * are the last live owner of any customer tenant or the last active platform
  * owner: those tenants' owner rows are locked first, in tenant-id order, then
  * the platform's (see `lockStaffPair`), and the owners re-counted under the
@@ -630,7 +638,7 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
   const owned = await platformUserRepository.listOwnedTenants(userId)
   const customerTenants = owned.filter((tenant) => !tenant.isPlatform)
 
-  const revoked = await withTransaction(async (tx) => {
+  const deleted = await withTransaction(async (tx) => {
     const { target, targetRole, platform } = await lockStaffPair(
       actor,
       userId,
@@ -665,7 +673,12 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       )
     }
 
+    // Read before the delete: a workspace the user already left was told then.
+    const memberOf = await userMembershipRepository.listTenantIdsForUser(target.id, tx)
     await userRepository.softDelete(target.id, tx)
+    // After the user row, before the invitation writes: the billing row's place in the lock order.
+    const paidFor = await billingRepository.clearPayer(target.id, tx)
+    await billingRepository.closeAllOpenUpgradeRequestsOf(target.id, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
     await authProviderRepository.deleteFederatedForUser(target.id, tx)
     await revokeInvitationsSentBy(actor, target.id, tx)
@@ -680,7 +693,8 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       },
       tx
     )
-    return sessionIds
+    return { sessionIds, memberOf, paidFor: paidFor.map((row) => row.tenantId) }
   })
-  await denySessionsAfterCommit(userId, revoked)
+  await denySessionsAfterCommit(userId, deleted.sessionIds)
+  await sendPayerLeftEverywhere(userId, deleted.paidFor, deleted.memberOf, new Date())
 }

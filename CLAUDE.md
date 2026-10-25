@@ -104,6 +104,14 @@ points at the code or doc that holds the detail. How things work is in
   account. The raw token travels in a JSON body, never an API URL, because
   tracing and proxy logs record URLs. See
   [SECURITY.md](SECURITY.md#invitations).
+- **Every write that adds a seat takes the seat lock before it writes.** An
+  invite, the resend of an expired invitation, and an accept, invitation
+  verify or confirm call `lockSeats` (`src/services/billing/seats.service.ts`)
+  before any invitation or membership write, then `assertWithinLimit`. A path
+  that skips it lets two writes at once both take the last seat on a Free
+  workspace. A join refusal passes `audience: 'outsider'`, which sends no
+  `details`: the invitee is not a member, so the count stays private. Its
+  place in the lock order is in [ARCHITECTURE.md](ARCHITECTURE.md#layers).
 - **Keep the revoke UPDATE in `TenantInvitationRepository.createPending`.**
   `tenant_invitations_pending_unique` can't filter on `now()`, so an expired
   invitation still holds the slot, and without the UPDATE every re-invite after
@@ -133,7 +141,7 @@ points at the code or doc that holds the detail. How things work is in
   unknown sibling path, not with `/api/v1/<unknown>`:
   `tests/integration/api/platform-route-gates.test.ts`.
   See [SECURITY.md](SECURITY.md#platform-staff).
-- **Only `src/services/platform-*.service.ts` import the five cross-tenant
+- **Only `src/services/platform-*.service.ts` import the six cross-tenant
   `platform-*` repositories** (lint enforces it). "Your tenants" stays on
   `TenantRepository.listForUser`; never serve it from a query that sees every
   tenant.
@@ -251,8 +259,9 @@ points at the code or doc that holds the detail. How things work is in
   sign in to switch maintenance off. `tenant_invitation` mail goes through `addEmailJob()`
   directly, since the invitee may have no account.
 - **Some email channels can't be switched off** (`tenant_invitation`,
-  `maintenance_mode_changed`): disabling them would cut off an invitee or
-  silence the mail an account owner must see. `PUT /notifications/preferences`
+  `maintenance_mode_changed` and the billing notices that carry an email;
+  `workspace_full` is in-app only and stays switchable): disabling them would
+  cut off an invitee or silence the mail an account owner must see. `PUT /notifications/preferences`
   answers 400 for `emailEnabled: false` on any of them (the repository's
   `upsert` refuses it too); `inAppEnabled` can still be switched off for any
   type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
@@ -293,8 +302,8 @@ points at the code or doc that holds the detail. How things work is in
 - **Outbox writes go through `enqueueAnalytics`, or `enqueueAuditAnalytics`
   for an audit entry,** never the repository: their savepoint and `try`/`catch`
   keep a failed insert from failing the user's action. `enqueueAnalyticsOrThrow`
-  is for a caller that handles the failure itself (the groups backfill and
-  flag exposure).
+  is for a caller that handles the failure itself (the groups backfill, flag
+  exposure and the throttled billing events).
 - **Never store `$group_set` in the outbox.** A `$groupidentify` row is a
   marker the drain fills at send time (`resolveGroupMarkers`); a stored
   snapshot sent late would overwrite a newer one in PostHog.
@@ -341,6 +350,22 @@ points at the code or doc that holds the detail. How things work is in
   `flagContextForUser`. See [ARCHITECTURE.md](ARCHITECTURE.md#feature-flags).
 - **`pnpm flags:sync` never edits or deletes a PostHog flag, and never prints
   a PostHog answer body:** the body names the flag's creator.
+
+## Billing
+
+The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
+[ARCHITECTURE.md](ARCHITECTURE.md#billing).
+
+- **Never read a provider error as a cancellation.** A 4xx, a 5xx or a
+  timeout from Razorpay says nothing about the subscription, so a sync that
+  cannot read one throws `ProviderError`, writes nothing, and its job retries
+  (`syncTenantBilling`, `src/services/billing/billing-sync.service.ts`). A
+  workspace moves to Free only on a status the provider returned, or on the
+  clock (`effectiveBillingState`). Mapping a failed read to `cancelled`
+  would take Paid away from a customer who paid.
+- **Never store a webhook or provider payload body.** `billing_events` holds
+  the event's ids, type and outcome only, and a billing job carries ids only:
+  the body names the payer's address, phone and card. Log ids, never the body.
 
 ## Maintenance mode
 
@@ -516,7 +541,10 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   Under 30 words a sentence; no vague failure words, weasel, peacock or filler
   words, or jargon such as "token"; a next step on every error; an absolute
   UTC time from `formatUtcDateTime` (`src/utilities/date-text.utilities.ts`) in
-  mail and notifications. `tests/unit/copy-style.test.ts` fails on a banned
+  mail and notifications. The one exception is a billing date: the date alone,
+  in the workspace's time zone (`formatBillingDate`,
+  `src/services/billing/billing-dates.service.ts`), so it matches the day on
+  the customer's bank message. `tests/unit/copy-style.test.ts` fails on a banned
   phrase or a long sentence. zod's own messages come from
   `src/validators/zod-messages.validators.ts`; a schema's own message wins.
   Never rename a `code` to change copy: clients branch on codes.
