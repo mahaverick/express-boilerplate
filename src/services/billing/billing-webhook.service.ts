@@ -593,14 +593,15 @@ export async function processBillingWebhookEvent(data: BillingWebhookJobData): P
 /**
  * A short, id-only description of why a job failed, for `billing_events.error`.
  * @param error - What the last attempt threw.
- * @returns The status and code of a provider error, else the error's name.
+ * @returns The status and code of a provider error, else the name of the error or of its cause.
  */
 function failureSummary(error: Error): string {
-  const cause = error.cause instanceof ProviderError ? error.cause : error
+  // The worker wraps a failure it stops retrying in `UnrecoverableError`; the cause says why.
+  const cause = error.cause instanceof Error ? error.cause : error
   if (cause instanceof ProviderError) {
     return `provider_error ${String(cause.status)}${cause.code === undefined ? '' : ` ${cause.code}`}`
   }
-  return error.name
+  return cause.name
 }
 
 /**

@@ -10,7 +10,12 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
-import { BILLING_WEBHOOK_JOB, type BillingWebhookJobData } from '@/jobs/billing.job'
+import {
+  BILLING_BACKOFF_TYPE,
+  BILLING_JOB_ATTEMPTS,
+  BILLING_WEBHOOK_JOB,
+  type BillingWebhookJobData,
+} from '@/jobs/billing.job'
 import { sql } from '@/services/database.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { closeQueue, getBillingQueue } from '@/services/queue.service'
@@ -158,8 +163,8 @@ describe('POST /webhooks/razorpay', () => {
       paymentId: 'pay_FIXTUREsynth01',
       disputeId: null,
     })
-    expect(jobs[0]?.opts.attempts).toBe(8)
-    expect(jobs[0]?.opts.backoff).toEqual({ type: 'exponential', delay: 30_000 })
+    expect(jobs[0]?.opts.attempts).toBe(BILLING_JOB_ATTEMPTS)
+    expect(jobs[0]?.opts.backoff).toEqual({ type: BILLING_BACKOFF_TYPE })
   })
 
   it('answers a second delivery of the same event 200 and queues nothing new', async () => {
