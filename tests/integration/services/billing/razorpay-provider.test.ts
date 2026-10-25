@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { BillingProviderConfig } from '@/configs/billing.config'
-import { RAZORPAY_API_TIMEOUT_MS } from '@/constants/billing.constants'
+import { INVOICE_PAGE_SIZE, RAZORPAY_API_TIMEOUT_MS } from '@/constants/billing.constants'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { RazorpayProvider } from '@/services/billing/razorpay-provider.service'
 import type { ProviderPlanPrice } from '@/types/billing'
@@ -481,6 +481,38 @@ describe('fetchDisputeStatus', () => {
   })
 })
 
+/**
+ * The paid invoice of the fixture, with a numbered id.
+ * @param n - The number in its id.
+ * @returns The invoice body.
+ */
+function paidInvoice(n: number): Record<string, unknown> {
+  const [paid] = fixture('api-invoices-paid').json.items as Record<string, unknown>[]
+  return { ...paid, id: `inv_N${String(n)}` }
+}
+
+/**
+ * A Razorpay list body.
+ * @param items - Its items.
+ * @returns The body.
+ */
+function collection(items: unknown[]): unknown {
+  return { entity: 'collection', count: items.length, items }
+}
+
+/**
+ * The subscription and skip of every invoice list call so far.
+ * @returns One entry per call, oldest first.
+ */
+function invoiceCalls(): { subscription: string | null; skip: string | null }[] {
+  return fake.requests
+    .filter((r) => r.method === 'GET' && r.path.startsWith('/v1/invoices?'))
+    .map((r) => {
+      const query = new URLSearchParams(r.path.split('?')[1] ?? '')
+      return { subscription: query.get('subscription_id'), skip: query.get('skip') }
+    })
+}
+
 describe('listInvoices', () => {
   it('maps invoices for owners', async () => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)
@@ -499,6 +531,63 @@ describe('listInvoices', () => {
       ],
       nextCursor: null,
     })
+  })
+
+  it('fills the first page from an older subscription when the newest has no invoices yet', async () => {
+    fake.replyInTurn('GET', '/invoices', [
+      { status: 200, json: fixture('api-invoices-deferred-empty').json },
+      { status: 200, json: fixture('api-invoices-paid').json },
+    ])
+    const page = await provider.listInvoices(['sub_NEXT', 'sub_Trax7OfeENGU9N'], null)
+    expect(page.items.map((item) => item.id)).toStrictEqual(['inv_Trax80lboN4a8X'])
+    expect(page.nextCursor).toBeNull()
+    expect(invoiceCalls()).toStrictEqual([
+      { subscription: 'sub_NEXT', skip: '0' },
+      { subscription: 'sub_Trax7OfeENGU9N', skip: '0' },
+    ])
+  })
+
+  it('counts a page after dropping drafts, and skips by what Razorpay returned', async () => {
+    const draft = { ...paidInvoice(0), id: 'inv_DRAFT', status: 'draft' }
+    const first = [
+      draft,
+      ...Array.from({ length: INVOICE_PAGE_SIZE - 1 }, (_, n) => paidInvoice(n + 1)),
+    ]
+    fake.replyInTurn('GET', '/invoices', [
+      { status: 200, json: collection(first) },
+      { status: 200, json: collection([paidInvoice(INVOICE_PAGE_SIZE)]) },
+    ])
+    const page = await provider.listInvoices(['sub_A', 'sub_B'], null)
+    expect(page.items).toHaveLength(INVOICE_PAGE_SIZE)
+    expect(page.items.map((item) => item.id)).not.toContain('inv_DRAFT')
+    expect(page.nextCursor).toBe('1:0')
+    expect(invoiceCalls()).toStrictEqual([
+      { subscription: 'sub_A', skip: '0' },
+      { subscription: 'sub_A', skip: String(INVOICE_PAGE_SIZE) },
+    ])
+  })
+
+  it('resumes inside a subscription when the page fills there', async () => {
+    const twentyFive = Array.from({ length: INVOICE_PAGE_SIZE + 5 }, (_, n) => paidInvoice(n))
+    fake.replyInTurn('GET', '/invoices', [
+      { status: 200, json: collection(twentyFive.slice(0, INVOICE_PAGE_SIZE)) },
+      { status: 200, json: collection(twentyFive.slice(INVOICE_PAGE_SIZE)) },
+      { status: 200, json: collection([paidInvoice(99)]) },
+    ])
+    const first = await provider.listInvoices(['sub_A', 'sub_B'], null)
+    expect(first.items).toHaveLength(INVOICE_PAGE_SIZE)
+    expect(first.nextCursor).toBe(`0:${String(INVOICE_PAGE_SIZE)}`)
+
+    const second = await provider.listInvoices(['sub_A', 'sub_B'], first.nextCursor)
+    expect(second.items.map((item) => item.id)).toStrictEqual([
+      ...twentyFive.slice(INVOICE_PAGE_SIZE).map((item) => item.id),
+      'inv_N99',
+    ])
+    expect(second.nextCursor).toBeNull()
+    expect(invoiceCalls().slice(1)).toStrictEqual([
+      { subscription: 'sub_A', skip: String(INVOICE_PAGE_SIZE) },
+      { subscription: 'sub_B', skip: '0' },
+    ])
   })
 
   it('answers an empty page for no subscriptions without a call', async () => {

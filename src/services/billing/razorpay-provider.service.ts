@@ -540,7 +540,12 @@ export class RazorpayProvider implements BillingProviderClient {
   }
 
   /**
-   * One page of invoices: the first subscription's pages, then the next one's.
+   * One page of invoices, newest subscription first and newest invoice
+   * first within each, filled across the subscriptions up to
+   * `INVOICE_PAGE_SIZE` shown invoices: a subscription with no invoices yet,
+   * or only ones the view drops, never leaves the page short while a later
+   * one has some. The cursor is `<subscription index>:<raw skip>`, where the
+   * skip counts every invoice Razorpay returned, dropped ones included.
    * @param subscriptionIds - The subscriptions, newest first.
    * @param cursor - The previous page's `nextCursor`, or null.
    * @returns The page.
@@ -550,26 +555,40 @@ export class RazorpayProvider implements BillingProviderClient {
     cursor: string | null
   ): Promise<ProviderInvoicePage> {
     if (subscriptionIds.length === 0) return { items: [], nextCursor: null }
-    const { index, skip } = parseInvoiceCursor(cursor, subscriptionIds.length)
-    const items = itemsOf(
-      await this.#call('GET', '/invoices', {
-        query: {
-          subscription_id: subscriptionIds[index] ?? '',
-          count: String(INVOICE_PAGE_SIZE),
-          skip: String(skip),
-        },
-      })
-    )
-    let nextCursor: string | null = null
-    if (items.length >= INVOICE_PAGE_SIZE)
-      nextCursor = `${String(index)}:${String(skip + items.length)}`
-    else if (index + 1 < subscriptionIds.length) nextCursor = `${String(index + 1)}:0`
-    return {
-      items: items
-        .map((item) => invoiceView(item))
-        .filter((view): view is InvoiceView => view !== null),
-      nextCursor,
+    let { index, skip } = parseInvoiceCursor(cursor, subscriptionIds.length)
+    const items: InvoiceView[] = []
+    while (index < subscriptionIds.length) {
+      const raw = itemsOf(
+        await this.#call('GET', '/invoices', {
+          query: {
+            subscription_id: subscriptionIds[index] ?? '',
+            count: String(INVOICE_PAGE_SIZE),
+            skip: String(skip),
+          },
+        })
+      )
+      for (const [position, item] of raw.entries()) {
+        const view = invoiceView(item)
+        if (view !== null) items.push(view)
+        if (items.length < INVOICE_PAGE_SIZE) continue
+        // A full page: resume after this invoice, in this subscription or the next.
+        const rest = raw.length - position - 1
+        if (rest > 0 || raw.length >= INVOICE_PAGE_SIZE) {
+          return { items, nextCursor: `${String(index)}:${String(skip + position + 1)}` }
+        }
+        const next = index + 1
+        return {
+          items,
+          nextCursor: next < subscriptionIds.length ? `${String(next)}:0` : null,
+        }
+      }
+      if (raw.length >= INVOICE_PAGE_SIZE) skip += raw.length
+      else {
+        index += 1
+        skip = 0
+      }
     }
+    return { items, nextCursor: null }
   }
 
   /**
