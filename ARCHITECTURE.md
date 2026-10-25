@@ -1467,6 +1467,13 @@ map; the detail lives in the sections it links.
   daily reconcile all call it; the mapping itself is pure
   (`src/utilities/billing-state-machine.utilities.ts`). A failed provider read
   writes nothing, and the job retries.
+- **Confirm after the webhook.** The payment webhook usually lands before
+  the browser's confirm and promotes the checkout to current. A confirm of
+  that current subscription answers 200 when its signature verifies, the
+  confirming owner started the checkout, and the subscription is younger
+  than a checkout lives; it only syncs and records `checkout_confirmed`
+  (deduped per subscription). Any other confirm of the current subscription
+  outside a card change is `CHECKOUT_MISMATCH`.
 - **Owner cancel.** An owner's cancel keeps Paid until the cycle end. A
   deferred start (not charged yet) and a past-due subscription (its paid
   time is over) are cancelled now, and the workspace returns to its trial or

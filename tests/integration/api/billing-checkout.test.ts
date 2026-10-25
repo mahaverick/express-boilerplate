@@ -491,6 +491,56 @@ describe('POST /api/v1/tenants/:slug/billing/checkout/confirm', () => {
     expect(history.map((entry) => entry.source)).toEqual(['confirm'])
   })
 
+  it('answers 200 when the webhook adopted the checkout before the confirm arrived', async () => {
+    const { tenant, owner } = await workspace()
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: id,
+      pendingSubscriptionId: null,
+    })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body)).toMatchObject({
+      state: 'active',
+      payer: { userId: owner.id, isMember: true },
+    })
+  })
+
+  it('refuses the adopted checkout from an owner who did not start it', async () => {
+    const { tenant, owner } = await workspace()
+    const { owner: other } = await workspace()
+    await membershipRepository.create({ userId: other.id, tenantId: tenant.id, role: 'owner' })
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+
+    const response = await postAs(other, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+    expect(await readBilling(tenant.id)).toMatchObject({ payerUserId: owner.id })
+  })
+
+  it('refuses the adopted checkout once it is older than a checkout lives', async () => {
+    const { tenant, owner } = await workspace()
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+    await fake.fakeShiftBack(id, 2 * 60 * 60 * 1000)
+
+    const response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+  })
+
   it('refuses a bad signature with 400 CHECKOUT_MISMATCH and changes nothing', async () => {
     const { tenant, owner } = await workspace()
     const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })

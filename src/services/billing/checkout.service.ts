@@ -1001,8 +1001,60 @@ export async function syncOrRetry(
 }
 
 /**
+ * Whether a confirm names the current subscription because the webhook
+ * adopted this owner's checkout before the browser's confirm arrived: the
+ * provider signed it, the owner started that checkout, and the subscription
+ * is no older than a checkout lives. Payment webhooks usually beat the
+ * browser, so this is the common path, not a replay.
+ * @param provider - The running provider.
+ * @param row - The billing row as locked.
+ * @param actor - The confirming owner.
+ * @param body - What the provider's checkout handed the browser.
+ * @returns True when the confirm is the adopted checkout's own.
+ */
+async function isAdoptedOwnCheckout(
+  provider: BillingProviderClient,
+  row: TenantBillingRecord,
+  actor: Actor,
+  body: CheckoutConfirm
+): Promise<boolean> {
+  const posted = body.razorpay_subscription_id
+  if (row.providerSubscriptionId !== posted || row.checkoutStartedBy !== actor.userId) return false
+  if (!provider.verifyCheckout(body, posted)) return false
+  const sub = await callProvider(() => provider.fetchSubscription(posted))
+  return (
+    sub.notes.tenantId === row.tenantId &&
+    sub.createdAt !== null &&
+    Date.now() - sub.createdAt.getTime() < CHECKOUT_EXPIRY_MS
+  )
+}
+
+/**
+ * Answer a confirm whose checkout the webhook already adopted: sync, record
+ * the confirmation (deduped per subscription), and change nothing else. The
+ * adoption already made the starter the payer.
+ * @param actor - The confirming owner.
+ * @param tenantId - The workspace.
+ * @param subscriptionId - The adopted subscription.
+ * @returns The workspace's billing.
+ */
+async function acknowledgeAdoptedCheckout(
+  actor: Actor,
+  tenantId: string,
+  subscriptionId: string
+): Promise<TenantBillingView> {
+  await syncOrRetry(tenantId, 'confirm')
+  const provider = requireProvider()
+  const sub = await callProvider(() => provider.fetchSubscription(subscriptionId))
+  await trackCheckoutConfirmed(tenantId, actor.userId, sub)
+  return getTenantBilling(actor, tenantId)
+}
+
+/**
  * Confirm a checkout the browser finished: the posted subscription must be
- * this workspace's pending, next or (for a card change) current one, the
+ * this workspace's pending, next or (for a card change) current one, or
+ * the current one when the webhook already adopted this owner's checkout
+ * (which only syncs and records the confirmation), the
  * signature must be the provider's over that stored id, and the
  * subscription's notes must name this workspace. Only then is the workspace
  * synced and the caller recorded as the payer. Any mismatch changes nothing.
@@ -1027,6 +1079,9 @@ export async function confirmCheckout(
     isCardChangeOpen(row, actor, new Date()) ? row.providerSubscriptionId : null,
   ].find((id): id is string => id !== null && id === posted)
   if (isOtherProvider(row, provider)) throw checkoutMismatch()
+  if (stored === undefined && (await isAdoptedOwnCheckout(provider, row, actor, body))) {
+    return acknowledgeAdoptedCheckout(actor, tenantId, posted)
+  }
   if (stored === undefined) throw await unheldConfirmRefusal(provider, tenantId, body)
   if (!provider.verifyCheckout(body, stored)) throw checkoutMismatch()
   const sub = await callProvider(() => provider.fetchSubscription(stored))
