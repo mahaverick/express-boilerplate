@@ -1588,7 +1588,7 @@ export async function listInvoices(
       : [row.nextSubscriptionId, row.providerSubscriptionId].filter(
           (id): id is string => id !== null
         )
-  // Only ids this workspace's own row held, so another workspace's subscription is never listed.
+  // Only ids recorded for this workspace (its current subscriptions, and before 0036 its resolved charge events), so another workspace's subscription is never listed.
   const held = await billingRepository.listHeldSubscriptionIds(
     tenantId,
     { kind: provider.kind, mode: provider.mode },

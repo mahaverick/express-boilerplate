@@ -13,6 +13,7 @@ CREATE TABLE "tenant_billing_subscriptions" (
 ALTER TABLE "tenant_billing_subscriptions" ADD CONSTRAINT "tenant_billing_subscriptions_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "tenant_billing_subscriptions_tenant_seen_idx" ON "tenant_billing_subscriptions" USING btree ("tenant_id","first_seen_at","id");--> statement-breakpoint
 -- Backfill: each workspace's current subscription, and every subscription a charge or activation event resolved to a workspace, first seen at its earliest record.
+-- A duplicate checkout the sync refused also has charge events resolved to the workspace; it never became current, and every refund path raises a staff alert naming "duplicate subscription <id>", so an id such an alert names is left out.
 INSERT INTO "tenant_billing_subscriptions" ("tenant_id", "provider", "mode", "subscription_id", "first_seen_at")
 SELECT "tenant_id", "provider", "mode", "subscription_id", min("at")
 FROM (
@@ -24,6 +25,10 @@ FROM (
 	FROM "billing_events"
 	WHERE "tenant_id" IS NOT NULL AND "subscription_id" IS NOT NULL
 		AND "type" IN ('subscription.activated', 'subscription.charged', 'invoice.paid')
+		AND NOT EXISTS (
+			SELECT 1 FROM "billing_alerts"
+			WHERE "billing_alerts"."message" ~* ('duplicate subscription ' || "billing_events"."subscription_id" || '([^A-Za-z0-9_]|$)')
+		)
 ) AS "seen"
 GROUP BY "tenant_id", "provider", "mode", "subscription_id"
 ORDER BY min("at")

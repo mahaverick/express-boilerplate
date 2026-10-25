@@ -108,12 +108,20 @@ beforeAll(async () => {
       ['subscription.authenticated', 'sub_ABANDONED', resubscribedId, NEW_CHARGED_AT],
       ['subscription.charged', 'sub_UNRESOLVED', null, NEW_CHARGED_AT],
       ['invoice.paid', 'sub_OTHER', otherId, NEW_CHARGED_AT],
+      // A duplicate checkout the sync refused and refunded: charged, never current.
+      ['subscription.charged', 'sub_DUP', resubscribedId, NEW_CHARGED_AT],
+      // Its id is a prefix of sub_DUP2's, which no alert names.
+      ['subscription.charged', 'sub_DUP2', otherId, NEW_CHARGED_AT],
     ]
     for (const [type, subscriptionId, tenantId, at] of events) {
       await legacy`
         insert into billing_events (provider, mode, provider_event_id, type, subscription_id, tenant_id, received_at)
         values ('razorpay', 'test', ${`evt_${randomUUID()}`}, ${type}, ${subscriptionId}, ${tenantId}, ${at}::timestamptz)`
     }
+    await legacy`
+      insert into billing_alerts (kind, tenant_id, message)
+      values ('duplicate_refunded', ${resubscribedId},
+        'Cancelled duplicate subscription sub_DUP and refunded 99900 paise in rfnd_X.')`
   } finally {
     await legacy.end({ timeout: 5 })
   }
@@ -128,7 +136,7 @@ afterAll(async () => {
 })
 
 describe('migration 0036: backfill', () => {
-  it('records the current subscription and every earlier charged one, each with its own workspace', async () => {
+  it('records the current subscription and every earlier charged one but a refunded duplicate, each with its own workspace', async () => {
     const rows = await scratch<
       {
         tenant_id: string
@@ -141,6 +149,7 @@ describe('migration 0036: backfill', () => {
       select tenant_id, provider, mode, subscription_id, first_seen_at
       from tenant_billing_subscriptions order by subscription_id`
     expect(rows.map((row) => [row.subscription_id, row.tenant_id])).toStrictEqual([
+      ['sub_DUP2', otherId],
       ['sub_NEW', resubscribedId],
       ['sub_OLD', resubscribedId],
       ['sub_OTHER', otherId],

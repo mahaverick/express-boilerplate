@@ -417,11 +417,14 @@ export const billingEventModel = pgTable(
 )
 
 /**
- * The `tenant_billing_subscriptions` table: every subscription a workspace
+ * The `tenant_billing_subscriptions` table: the subscriptions a workspace
  * has held as its current one, so the invoice list still reaches the
  * invoices of a subscription the row has since replaced. One row per
- * subscription id, written when the id first becomes current, and deleted
- * with the workspace.
+ * subscription id, written when a billing row write first makes it current,
+ * and deleted with the workspace. Migration 0036 backfilled it from each
+ * row's current subscription and from the charge and activation events
+ * resolved to a workspace, less the duplicates a refund alert names; a
+ * subscription replaced before 0036 whose events never arrived is missing.
  */
 export const tenantBillingSubscriptionModel = pgTable(
   'tenant_billing_subscriptions',
