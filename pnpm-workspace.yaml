@@ -30,6 +30,10 @@ overrides:
   # express-rate-limit, which calls only ipKeyGenerator (never isInSubnet).
   # Production dependency.
   ip-address@<10.7.4: ^10.7.4
+  # Advisory "body-parser vulnerable to Denial of Service via trailing bytes
+  # after a compressed request body" (patched in 2.4.0): via express 5.2.1
+  # and express-rate-limit > express. Production dependency.
+  body-parser@>=2 <2.4.0: ^2.4.0
   # GHSA-68fv-2mgg-jv7q: via vitest > vite > postcss. Dev only.
   source-map-js@<1.2.2: ^1.2.2
   # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr: via
