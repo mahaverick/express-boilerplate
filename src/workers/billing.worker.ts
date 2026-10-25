@@ -14,7 +14,6 @@
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
-  BILLING_BACKOFF_TYPE,
   BILLING_LIFECYCLE_CANCEL_JOB,
   BILLING_OTHER_FAILURE_ATTEMPTS,
   BILLING_PUBLISH_ENTITLEMENTS_JOB,
@@ -141,8 +140,8 @@ export function startBillingWorker(): Worker {
     concurrency: 2,
     lockDuration: 60_000,
     settings: {
-      backoffStrategy: (attemptsMade: number, type?: string) =>
-        type === BILLING_BACKOFF_TYPE ? billingRetryDelay(attemptsMade) : -1,
+      // Never -1: that fails a job short of its attempts, which skips the final-failure handling.
+      backoffStrategy: (attemptsMade: number) => billingRetryDelay(attemptsMade),
     },
   })
 
