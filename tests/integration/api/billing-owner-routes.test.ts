@@ -2,9 +2,10 @@
  * @file The owner billing routes besides checkout, end to end against the
  * real database and the fake payment provider: the billing read and its
  * owner-only fields, the interval switch, the card change, the cancel (a
- * cycle-end cancel, and a deferred start cancelled back to its trial) and the
- * invoice list.
+ * cycle-end cancel, and a deferred start cancelled back to its trial, with
+ * its one confirmation) and the invoice list.
  */
+import type { Job } from 'bullmq'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import {
@@ -13,10 +14,12 @@ import {
 } from '@/constants/billing.constants'
 import type { User } from '@/database/models/user.model'
 import { ProviderError } from '@/errors/billing-provider-errors'
+import type { NotificationJobData } from '@/jobs/notification.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { sql } from '@/services/database.service'
+import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -41,6 +44,7 @@ import {
   deleteTrackedUsers,
   tokenFor,
 } from '../../helpers/platform-users'
+import { queuedJobs } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
@@ -69,6 +73,7 @@ afterEach(async () => {
 })
 
 afterAll(async () => {
+  await closeQueue()
   await forgetProviderPlans()
   await closeRedis()
 })
@@ -766,6 +771,81 @@ describe('POST /api/v1/tenants/:slug/billing/cancel', () => {
       cancelAtPeriodEnd: true,
     })
     expect(await subscriptionStatus(nextId)).toBe('cancelled')
+  })
+})
+
+/**
+ * The queued cancel notices for one workspace.
+ * @param tenantId - The workspace.
+ * @returns The jobs.
+ */
+async function cancelNoticesOf(tenantId: string): Promise<Job<NotificationJobData>[]> {
+  const jobs = await queuedJobs<NotificationJobData>(getNotificationQueue())
+  return jobs.filter(
+    (job) =>
+      job.data.type === 'billing_paid_cancelled' &&
+      (job.data.metadata as { tenantId?: string } | undefined)?.tenantId === tenantId
+  )
+}
+
+/**
+ * How many `paid_cancelled` messages a workspace was sent directly.
+ * @param tenantId - The workspace.
+ * @returns The count.
+ */
+async function cancelMailCountOf(tenantId: string): Promise<number> {
+  const [row] = await sql<{ count: number }[]>`
+    select count(*)::int as count from email_messages
+    where tenant_id = ${tenantId} and template_key = 'paid_cancelled'`
+  return row?.count ?? 0
+}
+
+describe('POST /api/v1/tenants/:slug/billing/cancel before the first charge', () => {
+  afterEach(async () => {
+    await getEmailQueue().obliterate({ force: true })
+    await getNotificationQueue().obliterate({ force: true })
+  })
+
+  it('confirms once that nothing was charged and the trial goes on; a second cancel sends nothing', async () => {
+    const { tenant, owner } = await workspace()
+    const trialEndsAt = new Date(Date.now() + 10 * DAY_MS)
+    await setBilling(tenant.id, { state: 'trialing', planId: plans.paidId, trialEndsAt })
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const subscriptionId = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(subscriptionId, 'authenticated')
+    const confirmed = await postAs(
+      owner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(subscriptionId)
+    )
+    expect(confirmed.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: subscriptionId,
+    })
+
+    const cancelled = await postAs(owner, `${tenant.slug}/billing/cancel`)
+
+    expect(cancelled.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'trialing' })
+    const notices = await cancelNoticesOf(tenant.id)
+    expect(notices.map((job) => job.data.userId)).toStrictEqual([owner.id])
+    const [notice] = notices
+    expect(notice?.data.title).toBe('Your Paid plan is cancelled')
+    expect(notice?.data.email).toMatchObject({
+      to: owner.email,
+      templateKey: 'paid_cancelled',
+      variables: { beforeFirstCharge: 'true' },
+    })
+    // The notice carries the email, and the billing address is the owner's, so no mail goes out directly.
+    expect(await cancelMailCountOf(tenant.id)).toBe(0)
+
+    const again = await postAs(owner, `${tenant.slug}/billing/cancel`)
+
+    expect(again.status).toBe(409)
+    expect(again.body).toMatchObject({ code: 'NO_SUBSCRIPTION' })
+    expect(await cancelNoticesOf(tenant.id)).toHaveLength(1)
+    expect(await cancelMailCountOf(tenant.id)).toBe(0)
   })
 })
 

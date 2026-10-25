@@ -61,6 +61,7 @@ const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
   'maintenance_mode_changed',
   'billing_trial_ending',
   'billing_payment_failed',
+  'billing_paid_cancelled',
   'billing_upgrade_requested',
   'billing_payer_left',
 ])

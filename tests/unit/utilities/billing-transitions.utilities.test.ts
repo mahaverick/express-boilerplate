@@ -113,6 +113,9 @@ function kinds(
   return billingTransitions(before, after, source, context).map((transition) => {
     if (transition.kind === 'moved_to_free') return `${transition.kind}:${transition.cause}`
     if (transition.kind === 'payment_failed') return `${transition.kind}:${transition.stoppedBy}`
+    if (transition.kind === 'paid_cancelled' && transition.beforeFirstCharge) {
+      return `${transition.kind}:before_first_charge`
+    }
     return transition.kind
   })
 }
@@ -268,9 +271,39 @@ describe('billingTransitions', () => {
     }
   })
 
-  it('sends nothing when a deferred start is cancelled back to its trial', () => {
+  it('confirms a deferred start cancelled back to its trial, once, as a cancel before the first charge', () => {
+    const deferred = paying({ state: 'active', trialEndsAt: PERIOD_END })
+    const backToTrial = row({
+      state: 'trialing',
+      planId: 'plan-paid',
+      trialEndsAt: PERIOD_END,
+      providerSubscriptionId: 'sub_1',
+    })
+    const ownerCancel = { ...CONTEXT, isOwnerCancel: true }
+    expect(kinds(deferred, backToTrial, 'owner', ownerCancel)).toEqual([
+      'paid_cancelled:before_first_charge',
+    ])
+    // The webhook that brings the cancel in first reads the same.
+    expect(kinds(deferred, backToTrial, 'webhook')).toEqual(['paid_cancelled:before_first_charge'])
+    expect(kinds(backToTrial, backToTrial, 'owner', ownerCancel)).toEqual([])
+  })
+
+  it('confirms a staff cancel of a deferred start too, as it confirms a staff cancel at the period end', () => {
     const deferred = paying({ state: 'active', trialEndsAt: PERIOD_END })
     const backToTrial = row({ state: 'trialing', planId: 'plan-paid', trialEndsAt: PERIOD_END })
-    expect(kinds(deferred, backToTrial, 'owner')).toEqual([])
+    const staffCancel = { ...CONTEXT, isStaffCancel: true }
+    expect(kinds(deferred, backToTrial, 'staff', staffCancel)).toEqual([
+      'paid_cancelled:before_first_charge',
+    ])
+    expect(kinds(paying(), paying({ cancelAtPeriodEnd: true }), 'staff', staffCancel)).toEqual([
+      'paid_cancelled',
+    ])
+  })
+
+  it('sends no cancel before the first charge to a suspended or archived workspace', () => {
+    const deferred = paying({ state: 'active', trialEndsAt: PERIOD_END })
+    const backToTrial = row({ state: 'trialing', planId: 'plan-paid', trialEndsAt: PERIOD_END })
+    const context = { ...CONTEXT, isWorkspaceActive: false }
+    expect(kinds(deferred, backToTrial, 'job', context)).toEqual([])
   })
 })

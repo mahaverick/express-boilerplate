@@ -520,14 +520,15 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
         billingLink: 'https://app.example.test/settings/workspace/acme/billing',
       })
   ),
-  paid_cancelled: [
+  paid_cancelled: (['false', 'true'] as const).map((beforeFirstCharge) =>
     renderPaidCancelledTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
       endsOn: '7 November 2026',
+      beforeFirstCharge,
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
-    }),
-  ],
+    })
+  ),
   interval_switch_scheduled: (['month', 'year'] as const).map((interval) =>
     renderIntervalSwitchScheduledTemplate({
       appName: 'Acme',

@@ -1478,6 +1478,11 @@ map; the detail lives in the sections it links.
   deferred start (not charged yet) and a past-due subscription (its paid
   time is over) are cancelled now, and the workspace returns to its trial or
   moves to Free at once (`cancelPaid`, `src/services/billing/checkout.service.ts`).
+  On an active workspace, a deferred start's return to its trial is
+  confirmed once per subscription, whoever cancelled it, as a period-end
+  cancel is: a `billing_paid_cancelled` notice to each owner carrying the
+  `paid_cancelled` mail in its variant before the first charge, which says
+  nothing was charged and when the trial ends (`billingTransitions`).
 - **Interval switch.** A switch starts a next subscription at the period end,
   and the sync cancels the current one at its cycle end once the next one is
   authenticated. A switch inside the checkout's hour plus an hour's margin

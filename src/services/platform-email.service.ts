@@ -715,6 +715,7 @@ export function buildPreviewMessage(
             appName: fill('appName'),
             tenantName: fill('tenantName'),
             endsOn: fill('endsOn'),
+            beforeFirstCharge: fill('beforeFirstCharge'),
             billingLink: fill('billingLink'),
           },
         }

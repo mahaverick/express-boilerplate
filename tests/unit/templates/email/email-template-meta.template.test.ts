@@ -167,6 +167,7 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     tenantName: 'Acme',
     endsOn: '7 November 2026',
+    beforeFirstCharge: 'false',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
   interval_switch_scheduled: {
@@ -361,7 +362,7 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       paid_cancelled: {
         senderClass: 'general',
-        previewVariables: ['appName', 'tenantName', 'endsOn', 'billingLink'],
+        previewVariables: ['appName', 'tenantName', 'endsOn', 'beforeFirstCharge', 'billingLink'],
         resendAction: null,
       },
       interval_switch_scheduled: {

@@ -15,7 +15,9 @@
  *   set (paused from the payer's bank or UPI app), once per stamp. Both start
  *   the grace period.
  * - Paid cancelled: `cancelAtPeriodEnd` turns on while Paid runs, unless a
- *   scheduled switch or resubscribe continues it.
+ *   scheduled switch or resubscribe continues it. Its variant before the
+ *   first charge: a deferred start is cancelled and the row goes back from
+ *   `active` to `trialing`, so no charge was made and the trial goes on.
  * - Interval switch scheduled: the next subscription is first authenticated
  *   and bills another interval than the current one. A resubscribe on the
  *   same interval sends nothing.
@@ -45,7 +47,14 @@ export type DowngradeCause = 'trial_ended' | 'payment_failed' | 'cancelled' | 's
 export type BillingTransition =
   | { kind: 'paid_welcome' }
   | { kind: 'payment_failed'; stoppedBy: 'halted' | 'paused' }
-  | { kind: 'paid_cancelled' }
+  | {
+      kind: 'paid_cancelled'
+      /**
+       * A deferred start cancelled before its first charge: the workspace
+       * is back on its trial, not cancelling a paid period.
+       */
+      beforeFirstCharge: boolean
+    }
   | { kind: 'interval_switch_scheduled' }
   | { kind: 'moved_to_free'; cause: DowngradeCause }
 
@@ -170,7 +179,10 @@ export function billingTransitions(
     PAYING_STATES.has(after.state) &&
     !isContinued(after)
   ) {
-    transitions.push({ kind: 'paid_cancelled' })
+    transitions.push({ kind: 'paid_cancelled', beforeFirstCharge: false })
+  }
+  if (PAYING_STATES.has(before.state) && after.state === 'trialing') {
+    transitions.push({ kind: 'paid_cancelled', beforeFirstCharge: true })
   }
   if (before.nextAuthenticatedAt === null && after.nextAuthenticatedAt !== null) {
     const next = context.intervalOf(after.nextPriceId)

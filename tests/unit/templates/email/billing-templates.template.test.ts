@@ -253,6 +253,7 @@ const CASES: readonly TemplateCase[] = [
       appName: 'Acme',
       tenantName: 'Rocket Co',
       endsOn: '7 November 2026',
+      beforeFirstCharge: 'false',
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
@@ -458,6 +459,29 @@ describe('billing email templates', () => {
 })
 
 describe('billing email variants', () => {
+  it('confirms a cancel before the first charge: no charge, the trial end and how to keep Paid', () => {
+    const rendered = renderPaidCancelledTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      endsOn: '7 November 2026',
+      beforeFirstCharge: 'true',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.subject).toBe('Your Acme Paid plan is cancelled')
+    for (const sentence of [
+      "You cancelled Paid before your first charge, so you weren't charged.",
+      'Your trial continues until 7 November 2026.',
+      'To keep Paid after that, upgrade again in Billing.',
+    ]) {
+      expect(rendered.text).toContain(sentence)
+      expect(rendered.html).toContain(sentence.replaceAll("'", '&#39;'))
+    }
+    expect(rendered.text).not.toContain('moves to Free')
+    expect(rendered.html).toContain(
+      `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Open Billing</a>`
+    )
+  })
+
   it('tells a paused subscription apart from a failed payment, and asks for a payment method', () => {
     const rendered = renderPaymentFailedTemplate({
       appName: 'Acme',

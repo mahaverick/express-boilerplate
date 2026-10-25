@@ -10,7 +10,8 @@
  * mandate their card still backs (`MANDATE_TEMPLATES`, and the move to Free
  * when a payment failed or the subscription was cancelled). A fulfilled upgrade
  * request mails its requester alone. A type with a notification (payment
- * failed) reaches each owner as a notification job carrying the email, so the
+ * failed, Paid cancelled before its first charge) reaches each owner as a
+ * notification job carrying the email, so the
  * email is not also sent directly; the billing address has no account, so it
  * gets the email directly. A requester who is no longer a member is told
  * nothing, and a suspended or archived workspace gets only its move to Free,
@@ -528,6 +529,11 @@ async function sendTransition(
       return
     }
     case 'paid_cancelled': {
+      if (transition.beforeFirstCharge) {
+        if (after.trialEndsAt === null) break
+        await sendCancelledBeforeFirstCharge(context, after, dateOf(after.trialEndsAt))
+        return
+      }
       if (after.currentPeriodEnd === null) break
       const endsOn = dateOf(after.currentPeriodEnd)
       await mailOwners(context, 'paid_cancelled', after.providerSubscriptionId ?? '', (to) => ({
@@ -537,6 +543,7 @@ async function sendTransition(
           appName,
           tenantName,
           endsOn,
+          beforeFirstCharge: 'false',
           billingLink: buildBillingLink(tenant.slug, 'paid_cancelled'),
         },
       }))
@@ -573,6 +580,44 @@ async function sendTransition(
   logger.warn('A billing email had no date or price to send with', {
     tenantId,
     transition: transition.kind,
+  })
+}
+
+/**
+ * Tell the owners that a deferred start was cancelled before its first
+ * charge, so nothing was charged and the trial goes on: a notification
+ * carrying the email, and the email to the billing address. Once per
+ * subscription.
+ * @param context - The workspace.
+ * @param after - The row after the change, back on its trial.
+ * @param trialEndsOn - The trial's end, as a billing date.
+ */
+async function sendCancelledBeforeFirstCharge(
+  context: MailContext,
+  after: TenantBillingRecord,
+  trialEndsOn: string
+): Promise<void> {
+  const { tenant, appName } = context
+  await notifyOwners(context, {
+    type: 'billing_paid_cancelled',
+    // The cancelled subscription stays on the row, so a re-run of the same change keeps the stamp.
+    stamp: `before-first-charge-${after.providerSubscriptionId ?? ''}`,
+    title: 'Your Paid plan is cancelled',
+    body: `You cancelled Paid before your first charge, so you weren't charged. Your trial continues until ${trialEndsOn}. To keep Paid after that, upgrade again in Billing.`,
+    email: {
+      templateKey: 'paid_cancelled',
+      messageFor: (to) => ({
+        to,
+        templateKey: 'paid_cancelled',
+        variables: {
+          appName,
+          tenantName: tenant.name,
+          endsOn: trialEndsOn,
+          beforeFirstCharge: 'true',
+          billingLink: buildBillingLink(tenant.slug, 'paid_cancelled'),
+        },
+      }),
+    },
   })
 }
 

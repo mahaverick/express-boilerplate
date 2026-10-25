@@ -1,6 +1,6 @@
 /**
  * @file The notification types this codebase produces: invitations, the
- * maintenance-mode notice and the five billing notices.
+ * maintenance-mode notice and the six billing notices.
  */
 import { describe, expect, it } from 'vite-plus/test'
 import {
@@ -15,6 +15,7 @@ describe('NOTIFICATION_TYPES', () => {
       'maintenance_mode_changed',
       'billing_trial_ending',
       'billing_payment_failed',
+      'billing_paid_cancelled',
       'billing_upgrade_requested',
       'billing_payer_left',
       'workspace_full',
