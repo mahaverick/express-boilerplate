@@ -1,3 +1,4 @@
+import type { Job } from 'bullmq'
 /**
  * @file The billing emails a committed change sends, through
  * `emitBillingDiff` and the sync: who gets each one (owners once each, the
@@ -499,9 +500,57 @@ describe('billing emails', () => {
       email: { templateKey: 'paid_cancelled' },
     })
     expect(notices[0]?.data.body).toContain(
-      'was cancelled before its first charge, so no payment was taken. Your trial continues until 1 November 2026.'
+      "Paid for Billing Co was cancelled before its first charge, so no payment was taken. Billing Co's trial continues until 1 November 2026."
     )
     expect(notices[0]?.data.body).not.toContain('You cancelled')
+    expect(notices[0]?.data.body).not.toContain('Your trial')
+  })
+
+  it('confirms a cancel before the first charge once when the owner write and its webhook both bring it in', async () => {
+    const { tenantId, owner, coOwner, row } = await team()
+    const deferred = { ...paidFrom(row), trialEndsAt: PERIOD_END }
+    const backToTrial = {
+      ...deferred,
+      state: 'trialing' as const,
+      priceId: null,
+      currentPeriodEnd: null,
+      version: deferred.version + 1,
+    }
+    /**
+     * The workspace's queued cancel notices.
+     * @returns The jobs.
+     */
+    const notices = async (): Promise<Job<NotificationJobData>[]> => {
+      const jobs = await queuedJobs<NotificationJobData>(getNotificationQueue())
+      return jobs.filter(
+        (job) =>
+          job.data.type === 'billing_paid_cancelled' &&
+          (job.data.metadata as { tenantId?: string } | undefined)?.tenantId === tenantId
+      )
+    }
+
+    await emitBillingDiff(deferred, backToTrial, 'owner', { actorUserId: owner.id })
+    await emitBillingDiff(deferred, { ...backToTrial, version: backToTrial.version + 1 }, 'webhook')
+
+    expect(await recipientsOf(tenantId, 'paid_cancelled')).toEqual(['accounts@example.test'])
+    const queued = await notices()
+    expect(queued.map((job) => job.data.userId).toSorted()).toEqual(
+      [owner.id, coOwner.id].toSorted()
+    )
+    for (const job of queued) await processNotificationJob(job)
+    expect(await recipientsOf(tenantId, 'paid_cancelled')).toEqual(
+      ['accounts@example.test', owner.email, coOwner.email].toSorted()
+    )
+
+    // The same change once more, after every mail went out: its notice jobs run and add nothing.
+    await deliverAll(tenantId)
+    await emitBillingDiff(deferred, backToTrial, 'webhook')
+    for (const job of await notices()) await processNotificationJob(job)
+    expect(await mailsOf(tenantId, 'paid_cancelled')).toHaveLength(3)
+    const inApp =
+      await sql`select id from notifications where user_id = any(${[owner.id, coOwner.id]}) and type = 'billing_paid_cancelled'`
+    expect(inApp).toHaveLength(2)
+    await sql`delete from notifications where user_id = any(${[owner.id, coOwner.id]})`
   })
 
   it('sends the trial summary when the scheduler ends a lapsed trial', async () => {

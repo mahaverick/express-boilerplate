@@ -89,7 +89,7 @@ export function renderPaidCancelledTemplate(variables: PaidCancelledVariables): 
       appName,
       paragraphs: [
         `Paid for ${tenantName} was cancelled before its first charge, so no payment was taken.`,
-        `Your trial continues until ${endsOn}.`,
+        `${tenantName}'s trial continues until ${endsOn}.`,
         'To keep Paid after that, upgrade again in Billing.',
       ],
       button: { label: 'Open Billing', link: billingLink },

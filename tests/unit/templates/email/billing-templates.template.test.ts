@@ -470,7 +470,7 @@ describe('billing email variants', () => {
     expect(rendered.subject).toBe('Your Acme Paid plan is cancelled')
     for (const sentence of [
       'Paid for Rocket Co was cancelled before its first charge, so no payment was taken.',
-      'Your trial continues until 7 November 2026.',
+      "Rocket Co's trial continues until 7 November 2026.",
       'To keep Paid after that, upgrade again in Billing.',
     ]) {
       expect(rendered.text).toContain(sentence)
@@ -478,6 +478,7 @@ describe('billing email variants', () => {
     }
     expect(rendered.text).not.toContain('moves to Free')
     expect(rendered.text).not.toContain('You cancelled')
+    expect(rendered.text).not.toContain('Your trial')
     expect(rendered.subject).not.toContain('Rocket Co')
     expect(rendered.html).toContain(
       `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Open Billing</a>`

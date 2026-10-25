@@ -594,7 +594,7 @@ async function sendPaidCancelled(
     stamp: isBeforeFirstCharge ? `before-first-charge-${subscriptionId}` : subscriptionId,
     title: isBeforeFirstCharge ? 'Your Paid plan is cancelled' : `Paid ends on ${endsOn}`,
     body: isBeforeFirstCharge
-      ? `Paid for ${tenant.name} was cancelled before its first charge, so no payment was taken. Your trial continues until ${endsOn}. To keep Paid after that, upgrade again in Billing.`
+      ? `Paid for ${tenant.name} was cancelled before its first charge, so no payment was taken. ${tenant.name}'s trial continues until ${endsOn}. To keep Paid after that, upgrade again in Billing.`
       : `${tenant.name} keeps Paid until ${endsOn}, then moves to Free. You won't be charged again. To keep Paid, subscribe again from Billing.`,
     email: {
       templateKey: 'paid_cancelled',
