@@ -7,7 +7,11 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
-import { BILLING_OWNER_ONLY_MESSAGE } from '@/constants/billing.constants'
+import {
+  BILLING_OWNER_ONLY_MESSAGE,
+  CHECKOUT_EXPIRY_MS,
+  NEXT_CHECKOUT_MARGIN_MS,
+} from '@/constants/billing.constants'
 import type { User } from '@/database/models/user.model'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { BillingRepository } from '@/repositories/billing.repository'
@@ -502,13 +506,123 @@ describe('POST /api/v1/tenants/:slug/billing/checkout/confirm', () => {
       pendingSubscriptionId: null,
     })
 
+    expect(await readBilling(tenant.id)).toMatchObject({
+      payerUserId: owner.id,
+      billingEmail: null,
+    })
+
     const response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
 
     expect(response.status).toBe(200)
     expect(dataOf(response.body)).toMatchObject({
       state: 'active',
       payer: { userId: owner.id, isMember: true },
+      billingEmail: owner.email,
     })
+    // The adoption left the billing address for the confirm: it is the one write the confirm makes.
+    expect(await readBilling(tenant.id)).toMatchObject({
+      payerUserId: owner.id,
+      billingEmail: owner.email,
+    })
+  })
+
+  it("never takes the payer back when the starter replays an adopted confirm after another owner's card change", async () => {
+    const { tenant, owner } = await workspace()
+    const { owner: other } = await workspace()
+    await membershipRepository.create({ userId: other.id, tenantId: tenant.id, role: 'owner' })
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+    const original = confirmBody(id)
+    const first = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, original)
+    expect(first.status).toBe(200)
+    await postAs(other, `${tenant.slug}/billing/payment-method`, {})
+    const cardChange = await postAs(
+      other,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(id)
+    )
+    expect(cardChange.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      payerUserId: other.id,
+      billingEmail: other.email,
+    })
+
+    const replay = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, original)
+
+    expect(replay.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      payerUserId: other.id,
+      billingEmail: other.email,
+    })
+  })
+
+  it('refuses an adopted confirm whose signature is not over the posted subscription', async () => {
+    const { tenant, owner } = await workspace()
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+
+    const response = await postAs(
+      owner,
+      `${tenant.slug}/billing/checkout/confirm`,
+      confirmBody(id, 'sub_FAKEsomethingelse')
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+    expect(await readBilling(tenant.id)).toMatchObject({ billingEmail: null })
+  })
+
+  it("refuses an adopted confirm whose subscription's notes name another workspace", async () => {
+    const { tenant, owner } = await workspace()
+    const { tenant: elsewhere } = await workspace()
+    const id = await fakeSubscription({ tenantId: elsewhere.id, priceId: plans.monthPriceId })
+    const active = await fake.fakeAdvance(id, 'active')
+    await setBilling(tenant.id, {
+      state: 'active',
+      planId: plans.paidId,
+      priceId: plans.monthPriceId,
+      providerSubscriptionId: id,
+      currentPeriodEnd: active.currentEnd,
+      provider: 'fake',
+      providerMode: 'test',
+      checkoutStartedBy: owner.id,
+      payerUserId: owner.id,
+    })
+
+    const response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CHECKOUT_MISMATCH' })
+    expect(await readBilling(tenant.id)).toMatchObject({ billingEmail: null })
+  })
+
+  it('refuses a replayed adopted confirm once a cancel took the workspace back to its trial', async () => {
+    const { tenant, owner } = await workspace()
+    const trialEndsAt = new Date(Date.now() + 10 * DAY_MS)
+    await setBilling(tenant.id, { state: 'trialing', planId: plans.paidId, trialEndsAt })
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'authenticated')
+    await syncTenantBilling(tenant.id, 'webhook')
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: id,
+    })
+    const cancelled = await postAs(owner, `${tenant.slug}/billing/cancel`, {})
+    expect(cancelled.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'trialing',
+      providerSubscriptionId: id,
+    })
+
+    const replay = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+
+    expect(replay.status).toBe(400)
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'trialing', billingEmail: null })
   })
 
   it('refuses the adopted checkout from an owner who did not start it', async () => {
@@ -527,13 +641,27 @@ describe('POST /api/v1/tenants/:slug/billing/checkout/confirm', () => {
     expect(await readBilling(tenant.id)).toMatchObject({ payerUserId: owner.id })
   })
 
-  it('refuses the adopted checkout once it is older than a checkout lives', async () => {
+  it('accepts the adopted checkout a little past its life, while the payment may still be landing', async () => {
     const { tenant, owner } = await workspace()
     const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
     const id = String(dataOf(started.body).subscriptionId)
     await fake.fakeAdvance(id, 'active')
     await syncTenantBilling(tenant.id, 'webhook')
-    await fake.fakeShiftBack(id, 2 * 60 * 60 * 1000)
+    await fake.fakeShiftBack(id, CHECKOUT_EXPIRY_MS + 5 * 60 * 1000)
+
+    const response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
+
+    expect(response.status).toBe(200)
+  })
+
+  it('refuses the adopted checkout once it is older than a checkout lives plus its margin', async () => {
+    const { tenant, owner } = await workspace()
+    const started = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
+    const id = String(dataOf(started.body).subscriptionId)
+    await fake.fakeAdvance(id, 'active')
+    await syncTenantBilling(tenant.id, 'webhook')
+    // Past the confirm's bound, a checkout's life plus its margin, by a minute.
+    await fake.fakeShiftBack(id, CHECKOUT_EXPIRY_MS + NEXT_CHECKOUT_MARGIN_MS + 60_000)
 
     const response = await postAs(owner, `${tenant.slug}/billing/checkout/confirm`, confirmBody(id))
 

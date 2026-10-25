@@ -1469,11 +1469,16 @@ map; the detail lives in the sections it links.
   writes nothing, and the job retries.
 - **Confirm after the webhook.** The payment webhook usually lands before
   the browser's confirm and promotes the checkout to current. A confirm of
-  that current subscription answers 200 when its signature verifies, the
-  confirming owner started the checkout, and the subscription is younger
-  than a checkout lives; it only syncs and records `checkout_confirmed`
-  (deduped per subscription). Any other confirm of the current subscription
-  outside a card change is `CHECKOUT_MISMATCH`.
+  that current subscription answers 200 when the row still bills on it, its
+  signature verifies, the confirming owner started the checkout, and the
+  subscription is younger than a checkout lives plus its margin
+  (`CHECKOUT_EXPIRY_MS + NEXT_CHECKOUT_MARGIN_MS`). It syncs, records
+  `checkout_confirmed` (deduped per subscription), and records the owner's
+  address as the billing address while they are still the payer of that
+  subscription, the one thing the adoption leaves to the confirm. It never
+  changes the payer, so a replay after another owner's card change takes
+  nothing back. Any other confirm of the current subscription outside a card
+  change is `CHECKOUT_MISMATCH`.
 - **Owner cancel.** An owner's cancel keeps Paid until the cycle end. A
   deferred start (not charged yet) and a past-due subscription (its paid
   time is over) are cancelled now, and the workspace returns to its trial or

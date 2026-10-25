@@ -883,6 +883,25 @@ describe('adversarial attribution', () => {
     expect(await outboxOf(other.tenant.id)).toEqual([])
   })
 
+  it('an adopted confirm records checkout_confirmed once, as the starter, and its repeat records no second', async () => {
+    const { tenant, owner } = await workspace()
+    const session = await startCheckout({ userId: owner.id }, tenant.id, 'month')
+    await fake.fakeAdvance(session.subscriptionId, 'active')
+    await webhook(session.subscriptionId, 'subscription.activated')
+    expect(await readBilling(tenant.id)).toMatchObject({
+      providerSubscriptionId: session.subscriptionId,
+      pendingSubscriptionId: null,
+    })
+    expect(await stampsOf(tenant.id, 'checkout_confirmed')).toEqual([])
+    const body = confirmBody(session.subscriptionId)
+
+    await confirmCheckout({ userId: owner.id }, tenant.id, body)
+    await confirmCheckout({ userId: owner.id }, tenant.id, body)
+
+    await expectAudited(tenant.id, 'checkout_confirmed', owner.id)
+    expect(await readBilling(tenant.id)).toMatchObject({ billingEmail: owner.email })
+  })
+
   it('a confirm posted again after the drain gives the same uuid and timestamp', async () => {
     const { tenant, owner } = await workspace()
     const session = await startCheckout({ userId: owner.id }, tenant.id, 'month')
