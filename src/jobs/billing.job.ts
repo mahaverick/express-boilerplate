@@ -161,12 +161,36 @@ export const BILLING_RETRY_MAX_DELAY_MS = 3_600_000
 export const BILLING_JOB_ATTEMPTS = 31
 
 /**
- * How many attempts a billing job gets for any other failure, such as a
- * sync that kept meeting a concurrent write or a database error: about an
- * hour of waits (30 s × 127), so a fault that a provider outage does not
- * explain reaches staff within the hour.
+ * How many failures other than a provider outage a billing job may have,
+ * such as a sync that kept meeting a concurrent write or a database error,
+ * counted on their own in the job's `otherFailures`: the eighth stops it, so
+ * a fault an outage does not explain reaches staff within about an hour
+ * (30 s × 127 of waits) of its first failure, however many outage
+ * attempts came before.
  */
 export const BILLING_OTHER_FAILURE_ATTEMPTS = 8
+
+/**
+ * The provider-outage failure, counted in the job's `outageFailures`, at
+ * which staff get one "still retrying" alert: about an hour in, where a job
+ * used to fail for good. The job keeps retrying.
+ */
+export const BILLING_OUTAGE_ALERT_FAILURES = 8
+
+/**
+ * The failure counts the billing Worker keeps in a job's data across its
+ * attempts. Absent until the first failure of each kind.
+ */
+export interface BillingRetryCounts {
+  /**
+   * Failures that were not a provider outage.
+   */
+  otherFailures?: number
+  /**
+   * Failures that were a provider timeout, network failure, 5xx or 429.
+   */
+  outageFailures?: number
+}
 
 /**
  * The wait before the next attempt of a billing job: 30 s doubling with
@@ -182,8 +206,8 @@ export function billingRetryDelay(attemptsMade: number): number {
 /**
  * Options for every billing job. A failed sync changes nothing, so a retry
  * is always safe. A provider outage gets `BILLING_JOB_ATTEMPTS` with waits
- * from `billingRetryDelay`, about 24 hours; the Worker stops any other
- * failure after `BILLING_OTHER_FAILURE_ATTEMPTS`. Failed jobs are kept a week.
+ * from `billingRetryDelay`, about 24 hours; the Worker stops a job at its
+ * `BILLING_OTHER_FAILURE_ATTEMPTS`th other failure. Failed jobs are kept a week.
  */
 const BILLING_JOB_OPTIONS = {
   attempts: BILLING_JOB_ATTEMPTS,

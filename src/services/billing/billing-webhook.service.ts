@@ -28,7 +28,11 @@ import type { TenantBillingRecord } from '@/database/models/billing.model'
 import { isUnknownIdError, ProviderError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
-import { addBillingWebhookJob, type BillingWebhookJobData } from '@/jobs/billing.job'
+import {
+  addBillingWebhookJob,
+  BILLING_WEBHOOK_JOB,
+  type BillingWebhookJobData,
+} from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
@@ -596,12 +600,30 @@ export async function processBillingWebhookEvent(data: BillingWebhookJobData): P
  * @returns The status and code of a provider error, else the name of the error or of its cause.
  */
 function failureSummary(error: Error): string {
-  // The worker wraps a failure it stops retrying in `UnrecoverableError`; the cause says why.
-  const cause = error.cause instanceof Error ? error.cause : error
+  // The worker wraps a failure it stops retrying in `UnrecoverableError`; the cause says why. A provider error's own cause (the fetch failure) is not unwrapped.
+  const cause =
+    error.name === 'UnrecoverableError' && error.cause instanceof Error ? error.cause : error
   if (cause instanceof ProviderError) {
     return `provider_error ${String(cause.status)}${cause.code === undefined ? '' : ` ${cause.code}`}`
   }
   return cause.name
+}
+
+/**
+ * The workspace a webhook job's event concerns: the row that holds its
+ * subscription, else the workspace the event resolved to.
+ * @param data - The job's payload.
+ * @returns The workspace id, or null when the event resolved to none.
+ */
+async function tenantOfWebhookJob(data: BillingWebhookJobData): Promise<string | null> {
+  const row =
+    data.subscriptionId === null
+      ? undefined
+      : await billingRepository.findBySubscriptionId(data.subscriptionId)
+  // An event resolved through its payment names no subscription; its row keeps the workspace it resolved to.
+  const event =
+    row === undefined ? await billingRepository.findEventById(data.eventRowId) : undefined
+  return row?.tenantId ?? event?.tenantId ?? null
 }
 
 /**
@@ -617,24 +639,62 @@ export async function recordWebhookJobFailure(
 ): Promise<void> {
   try {
     await billingRepository.markEventFailed(data.eventRowId, failureSummary(error))
-    const row =
-      data.subscriptionId === null
-        ? undefined
-        : await billingRepository.findBySubscriptionId(data.subscriptionId)
-    // An event resolved through its payment names no subscription; its row keeps the workspace it resolved to.
-    const event =
-      row === undefined ? await billingRepository.findEventById(data.eventRowId) : undefined
-    const tenantId = row?.tenantId ?? event?.tenantId ?? null
     await alertOnce(
-      tenantId,
+      await tenantOfWebhookJob(data),
       'webhook_failing',
-      data.providerEventId,
+      // Not the bare event id: the earlier still-retrying alert names it too.
+      `${data.providerEventId} (${data.eventType}) failed`,
       `Provider event ${data.providerEventId} (${data.eventType}) failed after every retry. Resync the workspace.`
     )
   } catch (recordError) {
     logger.error('Could not record a failed billing webhook job', {
       error: recordError,
       providerEventId: data.providerEventId,
+    })
+  }
+}
+
+/**
+ * Tell staff, once per job, that a billing job is still retrying after about
+ * an hour of provider outage, the point where it used to fail for good. It
+ * keeps retrying; the alert after every retry still follows if it never
+ * succeeds. A webhook job raises `webhook_failing` for its event's workspace;
+ * any other job `reconcile_repair` for the workspace it names. Never rejects.
+ * @param job - The job.
+ * @param job.name - Its name.
+ * @param job.id - Its id.
+ * @param job.data - Its payload.
+ */
+export async function recordProviderOutageRetrying(job: {
+  name: string
+  id?: string | undefined
+  data: unknown
+}): Promise<void> {
+  try {
+    if (job.name === BILLING_WEBHOOK_JOB) {
+      const data = job.data as BillingWebhookJobData
+      const what = `Provider event ${data.providerEventId} (${data.eventType})`
+      await alertOnce(
+        await tenantOfWebhookJob(data),
+        'webhook_failing',
+        `${data.providerEventId} (${data.eventType}) is still retrying`,
+        `${what} is still retrying after an hour of provider outage. It retries for 24 hours. Check the provider's status page.`
+      )
+      return
+    }
+    const { tenantId } = job.data as { tenantId?: unknown }
+    const what = `Billing job ${job.name} ${job.id ?? ''}`.trim()
+    await alertOnce(
+      typeof tenantId === 'string' ? tenantId : null,
+      'reconcile_repair',
+      `${what} is still retrying`,
+      `${what} is still retrying after an hour of provider outage. It retries for 24 hours. Check the provider's status page.`
+    )
+  } catch (alertError) {
+    logger.error('Could not record a billing job still retrying', {
+      error: alertError,
+      jobId: job.id,
+      name: job.name,
     })
   }
 }

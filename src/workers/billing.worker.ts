@@ -5,17 +5,19 @@
  * of the workspaces it changed, and runs the frequent and
  * daily scheduler runs, two jobs at a time.
  * A retryable provider error (a timeout, a network failure, a 5xx or a 429)
- * is retried for about 24 hours, Razorpay's own webhook retry window; any
- * other failure, such as a sync that kept meeting a concurrent write, for
- * about an hour; a provider refusal that a retry cannot change fails the
- * job at once. A webhook job that fails for good marks its event failed and
- * alerts staff.
+ * is retried for about 24 hours, Razorpay's own webhook retry window, and
+ * staff get one "still retrying" alert about an hour in. Any other failure,
+ * such as a sync that kept meeting a concurrent write, is counted on its own
+ * and stops the job at the eighth, about an hour after the first; a provider
+ * refusal that a retry cannot change fails the job at once. A webhook job
+ * that fails for good marks its event failed and alerts staff.
  */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
   BILLING_LIFECYCLE_CANCEL_JOB,
   BILLING_OTHER_FAILURE_ATTEMPTS,
+  BILLING_OUTAGE_ALERT_FAILURES,
   BILLING_PUBLISH_ENTITLEMENTS_JOB,
   BILLING_SCHEDULER_DAILY_JOB,
   BILLING_SCHEDULER_FREQUENT_JOB,
@@ -24,6 +26,7 @@ import {
   billingRetryDelay,
   type BillingLifecycleCancelJobData,
   type BillingPublishEntitlementsJobData,
+  type BillingRetryCounts,
   type BillingSyncTenantJobData,
   type BillingWebhookJobData,
 } from '@/jobs/billing.job'
@@ -40,6 +43,7 @@ import {
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import {
   processBillingWebhookEvent,
+  recordProviderOutageRetrying,
   recordWebhookJobFailure,
 } from '@/services/billing/billing-webhook.service'
 import { logger } from '@/services/logger.service'
@@ -48,25 +52,49 @@ import { getQueueConnection } from '@/services/queue.service'
 import { redisKey } from '@/services/redis.service'
 
 /**
- * Run one job's work, turning a failure that should not be retried into
- * `UnrecoverableError`, so BullMQ stops at once: a provider refusal a retry
- * cannot change, and any failure but a retryable provider error once the
- * job has had `BILLING_OTHER_FAILURE_ATTEMPTS`. A retryable provider error
- * is rethrown for the retry until the job's own attempts run out.
- * @param job - The job, for its attempt count.
+ * Store a job's failure counts for its next attempt. A failed write is
+ * logged and the retry still happens; the count then starts lower.
+ * @param job - The job.
+ * @param counts - The counts after this failure.
+ */
+async function storeRetryCounts(job: Job, counts: BillingRetryCounts): Promise<void> {
+  try {
+    await job.updateData({ ...(job.data as object), ...counts })
+  } catch (error) {
+    logger.warn('Could not store a billing job retry count', { jobId: job.id, error })
+  }
+}
+
+/**
+ * Run one job's work and decide what a failure means. A provider refusal a
+ * retry cannot change becomes `UnrecoverableError`, so BullMQ stops at once.
+ * A provider outage (a retryable `ProviderError`) is rethrown for the retry
+ * until the job's attempts run out, and its `BILLING_OUTAGE_ALERT_FAILURES`th
+ * one alerts staff once. Any other failure is counted in the job's
+ * `otherFailures`, and its `BILLING_OTHER_FAILURE_ATTEMPTS`th becomes
+ * `UnrecoverableError`, however many outage failures came before.
+ * @param job - The job, whose data carries the failure counts.
  * @param work - The job's work.
  * @returns Resolves once the work is done.
- * @throws {UnrecoverableError} For a non-retryable failure, with it as the cause.
+ * @throws {UnrecoverableError} For a failure that should not be retried, with it as the cause.
  */
 async function withRetryPolicy(job: Job, work: () => Promise<unknown>): Promise<void> {
   try {
     await work()
   } catch (error) {
-    const isProviderOutage = error instanceof ProviderError && error.retryable
-    const attempt = job.attemptsMade + 1
+    const counts = job.data as BillingRetryCounts
+    if (error instanceof ProviderError && error.retryable) {
+      const outageFailures = (counts.outageFailures ?? 0) + 1
+      await storeRetryCounts(job, { outageFailures })
+      if (outageFailures === BILLING_OUTAGE_ALERT_FAILURES) {
+        await recordProviderOutageRetrying(job)
+      }
+      throw error
+    }
+    const otherFailures = (counts.otherFailures ?? 0) + 1
     if (
       (error instanceof ProviderError && !error.retryable) ||
-      (!isProviderOutage && attempt >= BILLING_OTHER_FAILURE_ATTEMPTS)
+      otherFailures >= BILLING_OTHER_FAILURE_ATTEMPTS
     ) {
       const unrecoverable = new UnrecoverableError(
         error instanceof Error ? error.message : 'A billing job failed'
@@ -74,6 +102,7 @@ async function withRetryPolicy(job: Job, work: () => Promise<unknown>): Promise<
       unrecoverable.cause = error
       throw unrecoverable
     }
+    await storeRetryCounts(job, { otherFailures })
     throw error
   }
 }

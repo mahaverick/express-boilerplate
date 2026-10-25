@@ -15,9 +15,16 @@ import { createApp } from '@/app'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
   BILLING_OTHER_FAILURE_ATTEMPTS,
+  BILLING_OUTAGE_ALERT_FAILURES,
   BILLING_SYNC_TENANT_JOB,
+  BILLING_WEBHOOK_JOB,
+  billingRetryDelay,
   type BillingWebhookJobData,
 } from '@/jobs/billing.job'
+import {
+  recordProviderOutageRetrying,
+  recordWebhookJobFailure,
+} from '@/services/billing/billing-webhook.service'
 import { RazorpayProvider } from '@/services/billing/razorpay-provider.service'
 import { sql } from '@/services/database.service'
 import { closeQueue, getBillingQueue } from '@/services/queue.service'
@@ -255,13 +262,70 @@ function alertsNaming(kind: string, text: string) {
 }
 
 /**
- * A sync job as the Worker hands it over after some failed attempts.
- * @param tenantId - The workspace.
- * @param attemptsMade - The attempts that already failed.
+ * A job the test drives through attempts by hand: `attemptsMade` is set
+ * before each run, and `updateData` keeps what the Worker stores, as
+ * BullMQ's does.
+ */
+type DrivenJob = Job & { attemptsMade: number }
+
+/**
+ * A billing job as the Worker hands it over, starting with no failed attempts.
+ * @param name - The job name.
+ * @param data - Its payload.
  * @returns The job.
  */
-function syncJob(tenantId: string, attemptsMade: number): Job {
-  return { name: BILLING_SYNC_TENANT_JOB, data: { tenantId }, attemptsMade } as Job
+function drivenJob(name: string, data: object): DrivenJob {
+  const job = {
+    name,
+    id: `test-${randomUUID()}`,
+    data: { ...data },
+    attemptsMade: 0,
+    updateData: (next: object) => {
+      job.data = next
+      return Promise.resolve()
+    },
+  }
+  return job as unknown as DrivenJob
+}
+
+/**
+ * Run one attempt of a driven job and count it as made.
+ * @param job - The job.
+ * @returns What the attempt threw, or undefined when it succeeded.
+ */
+async function attempt(job: DrivenJob): Promise<unknown> {
+  let thrown: unknown
+  try {
+    await processBillingJob(job)
+  } catch (error) {
+    thrown = error
+  }
+  job.attemptsMade += 1
+  return thrown
+}
+
+/**
+ * A stored payment event resolved to a workspace, as a payment.failed
+ * leaves it once its job ran.
+ * @param tenantId - The workspace.
+ * @returns The job payload for it.
+ */
+async function storedEvent(tenantId: string): Promise<BillingWebhookJobData> {
+  const providerEventId = `evt_TEST${randomUUID().replaceAll('-', '').slice(0, 12)}`
+  eventIds.push(providerEventId)
+  namedIds.push(providerEventId)
+  const [row] = await sql<{ id: string }[]>`
+    insert into billing_events (provider, mode, provider_event_id, type, tenant_id)
+    values ('razorpay', 'test', ${providerEventId}, 'payment.failed', ${tenantId})
+    returning id`
+  return {
+    eventRowId: row?.id ?? '',
+    providerEventId,
+    eventType: 'payment.failed',
+    subscriptionId: null,
+    paymentId: paymentId(),
+    disputeId: null,
+  }
 }
 
 beforeAll(async () => {
@@ -352,6 +416,9 @@ describe('billing webhook jobs', () => {
 
     const job = await retrying(id)
     expect(job.attemptsMade).toBe(1)
+    // The Worker's own backoff strategy set the wait: the first retry waits 30 s.
+    expect(job.delay).toBe(billingRetryDelay(1))
+    expect(billingRetryDelay(1)).toBe(30_000)
     expect(await eventRow(id)).toMatchObject({ processed_at: null, attempts: 0, error: null })
     expect(await billingColumn(tenant.id, 'state')).toBe('free')
     await job.remove()
@@ -643,6 +710,9 @@ describe('billing webhook jobs', () => {
 
     const job = await retrying(id)
     expect(job.attemptsMade).toBe(1)
+    // The Worker's own backoff strategy set the wait: the first retry waits 30 s.
+    expect(job.delay).toBe(billingRetryDelay(1))
+    expect(billingRetryDelay(1)).toBe(30_000)
     expect(await alertsNaming('dispute', payment)).toEqual([])
     await job.remove()
   })
@@ -753,40 +823,85 @@ describe('processBillingJob', () => {
 
   it('keeps retrying a provider timeout long after the hour other failures get', async () => {
     const { tenant } = await workspace()
-    const sub = subscriptionId()
-    await setBilling(tenant.id, { pendingSubscriptionId: sub })
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId() })
+    const job = drivenJob(BILLING_SYNC_TENANT_JOB, { tenantId: tenant.id })
+    job.attemptsMade = BILLING_OTHER_FAILURE_ATTEMPTS + 10
     await withMutatedMethod(
       RazorpayProvider.prototype,
       'fetchSubscription',
-      () => Promise.reject(new ProviderError(`GET /subscriptions/${sub}`, 'timeout')),
+      () => Promise.reject(new ProviderError('GET /subscriptions/x', 'timeout')),
       async () => {
-        const error = await processBillingJob(
-          syncJob(tenant.id, BILLING_OTHER_FAILURE_ATTEMPTS + 10)
-        ).catch((error: unknown) => error)
+        const error = await attempt(job)
         expect(error).toBeInstanceOf(ProviderError)
         expect(error).not.toBeInstanceOf(UnrecoverableError)
       }
     )
   })
 
-  it('stops a failure that is not a provider outage after its hour of attempts', async () => {
+  it('stops at the eighth failure that is not a provider outage', async () => {
     const { tenant } = await workspace()
-    const sub = subscriptionId()
-    await setBilling(tenant.id, { pendingSubscriptionId: sub })
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId() })
+    const job = drivenJob(BILLING_SYNC_TENANT_JOB, { tenantId: tenant.id })
     await withMutatedMethod(
       RazorpayProvider.prototype,
       'fetchSubscription',
       () => Promise.reject(new TypeError('unexpected')),
       async () => {
-        const early = await processBillingJob(
-          syncJob(tenant.id, BILLING_OTHER_FAILURE_ATTEMPTS - 2)
-        ).catch((error: unknown) => error)
-        expect(early).toBeInstanceOf(TypeError)
-        const last = await processBillingJob(
-          syncJob(tenant.id, BILLING_OTHER_FAILURE_ATTEMPTS - 1)
-        ).catch((error: unknown) => error)
+        for (let failure = 1; failure < BILLING_OTHER_FAILURE_ATTEMPTS; failure += 1) {
+          expect(await attempt(job)).toBeInstanceOf(TypeError)
+        }
+        const last = await attempt(job)
         expect(last).toBeInstanceOf(UnrecoverableError)
         expect((last as Error).cause).toBeInstanceOf(TypeError)
+      }
+    )
+  })
+
+  it('retries a failure that is not an outage after many outage attempts', async () => {
+    const { tenant } = await workspace()
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId() })
+    const job = drivenJob(BILLING_SYNC_TENANT_JOB, { tenantId: tenant.id })
+    job.attemptsMade = 10
+    await withMutatedMethod(
+      RazorpayProvider.prototype,
+      'fetchSubscription',
+      () => Promise.reject(new ProviderError('GET /subscriptions/x', 'timeout')),
+      async () => {
+        expect(await attempt(job)).toBeInstanceOf(ProviderError)
+      }
+    )
+    await withMutatedMethod(
+      RazorpayProvider.prototype,
+      'fetchSubscription',
+      () => Promise.reject(new TypeError('unexpected')),
+      async () => {
+        const error = await attempt(job)
+        expect(error).toBeInstanceOf(TypeError)
+        expect(error).not.toBeInstanceOf(UnrecoverableError)
+      }
+    )
+  })
+
+  it('alerts staff once when a job is still retrying an hour into a provider outage', async () => {
+    const { tenant } = await workspace()
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId() })
+    const job = drivenJob(BILLING_SYNC_TENANT_JOB, { tenantId: tenant.id })
+    namedIds.push(String(job.id))
+    await withMutatedMethod(
+      RazorpayProvider.prototype,
+      'fetchSubscription',
+      () => Promise.reject(new ProviderError('GET /subscriptions/x', 503)),
+      async () => {
+        for (let failure = 1; failure < BILLING_OUTAGE_ALERT_FAILURES; failure += 1) {
+          await attempt(job)
+        }
+        expect(await alertsNaming('reconcile_repair', String(job.id))).toHaveLength(0)
+        expect(await attempt(job)).toBeInstanceOf(ProviderError)
+        expect(await alertsNaming('reconcile_repair', String(job.id))).toEqual([
+          { tenant_id: tenant.id },
+        ])
+        await attempt(job)
+        expect(await alertsNaming('reconcile_repair', String(job.id))).toHaveLength(1)
       }
     )
   })
@@ -795,5 +910,41 @@ describe('processBillingJob', () => {
     await expect(processBillingJob({ name: 'nope', data: {} } as Job)).rejects.toBeInstanceOf(
       UnrecoverableError
     )
+  })
+})
+
+describe('a failed or still-retrying webhook job', () => {
+  it.each([
+    ['timeout', new DOMException('The operation timed out.', 'TimeoutError')],
+    ['network', new TypeError('fetch failed')],
+  ] as const)(
+    'records a %s that outlasted every retry as a provider error',
+    async (status, cause) => {
+      const { tenant } = await workspace()
+      const data = await storedEvent(tenant.id)
+
+      await recordWebhookJobFailure(
+        data,
+        new ProviderError(`GET /payments/${String(data.paymentId)}`, status, {}, { cause })
+      )
+
+      expect(await eventRow(data.eventRowId)).toMatchObject({ error: `provider_error ${status}` })
+    }
+  )
+
+  it('still alerts the final failure after the still-retrying alert named the event', async () => {
+    const { tenant } = await workspace()
+    const data = await storedEvent(tenant.id)
+
+    await recordProviderOutageRetrying({ name: BILLING_WEBHOOK_JOB, id: 'x', data })
+    await recordWebhookJobFailure(data, new ProviderError('GET /payments/x', 'timeout'))
+
+    const alerts = await sql<{ message: string; tenant_id: string | null }[]>`
+      select message, tenant_id from billing_alerts
+      where kind = 'webhook_failing' and strpos(message, ${data.providerEventId}) > 0
+      order by at, id`
+    expect(alerts.map((alert) => alert.tenant_id)).toStrictEqual([tenant.id, tenant.id])
+    expect(alerts[0]?.message).toMatch(/still retrying/)
+    expect(alerts[1]?.message).toMatch(/failed after every retry/)
   })
 })
