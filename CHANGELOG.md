@@ -1,5 +1,16 @@
 # Changelog
 
+## [9.0.0](https://github.com/mahaverick/express-boilerplate/compare/v8.0.2...v9.0.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **billing:** migrations 0033–0035 add the billing tables (`plans`, `plan_prices`, `billing_settings`, `tenant_billing`, `billing_events`, `billing_state_history`, grants, upgrade requests and alerts) and seed the Free and Paid plans, so run `pnpm db:migrate`; every new workspace now starts a Paid trial and moves to Free when it ends, and existing customer workspaces start on Free (no trial) on migrate; the Free plan's limits are enforced: inviting, resending and accepting past the member limit answer 402 `PLAN_LIMIT_REACHED`, and plan-gated routes answer 402 `PLAN_FEATURE_REQUIRED`; new routes `GET /api/v1/plans`, `/api/v1/tenants/:slug/billing` (read, checkout, interval, payment-method, checkout/confirm, cancel, invoices), `/upgrade-requests`, `/banner-dismissals`, `/insights`, `POST /api/v1/webhooks/razorpay`, and staff routes under `/api/v1/platform` (plans, prices, billing-settings, billing/alerts, and per-tenant extend-trial, grants, cancel, resync); new codes `SUBSCRIPTION_EXISTS`, `NO_SUBSCRIPTION`, `SAME_INTERVAL`, `CHECKOUT_MISMATCH`, `PAYMENT_PROVIDER_UNAVAILABLE`, `BILLING_BUSY`, `SWITCH_BEFORE_FIRST_CHARGE`, `SWITCH_TOO_CLOSE_TO_RENEWAL`, `ALREADY_PAID`, `TRIAL_NOT_EXTENDABLE` and `PLAN_VERSION_CONFLICT`; paid plans turn on only when `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` are all set (live keys only with `APP_ENV=prod`), otherwise billing writes and the webhook answer 404; new notification types `billing_trial_ending`, `billing_payment_failed`, `billing_payer_left`, `billing_upgrade_requested` and `billing_paid_cancelled` (email can't be switched off) and `workspace_full` (in-app); purging a tenant with a live subscription answers 409, and suspending or archiving one cancels its subscription.
+
+### Features
+
+* **billing:** plans, a Paid trial, Razorpay subscriptions and plan limits ([1dde584](https://github.com/mahaverick/express-boilerplate/commit/1dde58456a1a99596ae31cd79eaf8a8751efd81b))
+
 ## [8.0.2](https://github.com/mahaverick/express-boilerplate/compare/v8.0.1...v8.0.2) (2026-10-23)
 
 
