@@ -22,7 +22,12 @@ import type { TransactionSql } from 'postgres'
 import { describe, expect, it } from 'vite-plus/test'
 import { auditLogList } from '@/repositories/audit-log.repository'
 import { notificationList } from '@/repositories/notification.repository'
-import { billingAlertList } from '@/repositories/platform-billing.repository'
+import {
+  billingAlertList,
+  billingEventList,
+  billingHistoryList,
+  billingSubscriptionList,
+} from '@/repositories/platform-billing.repository'
 import {
   platformEmailList,
   platformSuppressionList,
@@ -243,6 +248,9 @@ const liveUsers = {
   staff: undefined,
 }
 const noRoles = { roles: undefined }
+const noSources = { sources: undefined }
+const noStatuses = { statuses: undefined }
+const noHeldFilters = { providers: undefined, modes: undefined }
 
 /**
  * One ordered-by-index case: the page query, the index that must serve it, and its competitors.
@@ -388,6 +396,46 @@ const ordered: OrderedCase[] = [
     'billing alerts at',
     () => listPageQuery(db, billingAlertList(undefined), first('at')).toSQL(),
     'billing_alerts_at_idx',
+  ],
+  [
+    'billing history -at',
+    () => listPageQuery(db, billingHistoryList(ID, undefined, noSources), first('-at')).toSQL(),
+    'billing_state_history_tenant_at_idx',
+  ],
+  [
+    'billing history at',
+    () => listPageQuery(db, billingHistoryList(ID, undefined, noSources), first('at')).toSQL(),
+    'billing_state_history_tenant_at_idx',
+  ],
+  [
+    'billing events -at',
+    () => listPageQuery(db, billingEventList(ID, undefined, noStatuses), first('-at')).toSQL(),
+    'billing_events_tenant_received_sort_idx',
+  ],
+  [
+    'billing events at',
+    () => listPageQuery(db, billingEventList(ID, undefined, noStatuses), first('at')).toSQL(),
+    'billing_events_tenant_received_sort_idx',
+  ],
+  [
+    'billing subscriptions -firstSeen',
+    () =>
+      listPageQuery(
+        db,
+        billingSubscriptionList(ID, undefined, noHeldFilters),
+        first('-firstSeen')
+      ).toSQL(),
+    'tenant_billing_subscriptions_tenant_seen_idx',
+  ],
+  [
+    'billing subscriptions firstSeen',
+    () =>
+      listPageQuery(
+        db,
+        billingSubscriptionList(ID, undefined, noHeldFilters),
+        first('firstSeen')
+      ).toSQL(),
+    'tenant_billing_subscriptions_tenant_seen_idx',
   ],
   [
     'members role',
@@ -626,6 +674,9 @@ describe('list names', () => {
       auditLogList(undefined, { scope: 'platform' }),
       auditLogList(undefined, { scope: 'tenant', tenantId: ID }),
       billingAlertList(undefined),
+      billingHistoryList(ID, undefined, noSources),
+      billingEventList(ID, undefined, noStatuses),
+      billingSubscriptionList(ID, undefined, noHeldFilters),
       memberList(ID, undefined, noRoles),
       invitationList(ID, undefined, noRoles),
       myTenantList(ID, undefined, noRoles),

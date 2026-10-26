@@ -7,6 +7,9 @@
  * their prices and tenant counts, a plan change's preview, the plan edit, a
  * new price, the billing settings and the alerts list.
  *
+ * The read and its paged lists (state history, provider events and held
+ * subscriptions) share one throttled `billing.viewed` audit window.
+ *
  * Every write re-checks the staff member's platform role under lock
  * (`assertStillPlatformRole`, which locks the platform-role row, then the
  * user row), then takes the row it changes: a tenant's billing row, the
@@ -81,6 +84,9 @@ import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import {
   PlatformBillingRepository,
+  type BillingEventListItem,
+  type BillingHistoryListItem,
+  type BillingSubscriptionListItem,
   type TenantBillingStateRow,
 } from '@/repositories/platform-billing.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -116,6 +122,9 @@ import {
 import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
   BillingAlertListQuery,
+  BillingEventListQuery,
+  BillingHistoryListQuery,
+  BillingSubscriptionListQuery,
   CreatePriceBody,
   GrantBody,
   UpdateBillingSettingsBody,
@@ -233,6 +242,19 @@ export async function getStaffTenantBilling(
 ): Promise<StaffTenantBillingView> {
   await customerTenant(tenantId)
   const view = await staffView(tenantId)
+  await auditBillingView(actor, tenantId)
+  return view
+}
+
+/**
+ * Audit a staff read of a customer tenant's billing, at most once per staff
+ * member and tenant in the view-audit throttle window. The read and every
+ * one of its lists share the window, so opening the billing tab writes one
+ * entry.
+ * @param actor - The staff member.
+ * @param tenantId - The tenant.
+ */
+async function auditBillingView(actor: Actor, tenantId: string): Promise<void> {
   await auditThrottledView({
     key: redisKey(
       'billing',
@@ -261,7 +283,77 @@ export async function getStaffTenantBilling(
       })
     },
   })
-  return view
+}
+
+/**
+ * One page of a customer tenant's billing state changes, audited as a
+ * billing read.
+ * @param actor - The staff member (a platform viewer or above; the route checked).
+ * @param tenantId - The tenant.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listStaffBillingHistory(
+  actor: Actor,
+  tenantId: string,
+  query: BillingHistoryListQuery
+): Promise<ListPage<BillingHistoryListItem>> {
+  await customerTenant(tenantId)
+  const page = await platformBillingRepository.listHistoryPage(tenantId, query.params, {
+    sources: query.filters.source,
+  })
+  await auditBillingView(actor, tenantId)
+  return page
+}
+
+/**
+ * One page of a customer tenant's provider events, audited as a billing
+ * read. An event shows its type, outcome, times and error, never its
+ * provider ids or payload.
+ * @param actor - The staff member (a platform viewer or above; the route checked).
+ * @param tenantId - The tenant.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listStaffBillingEvents(
+  actor: Actor,
+  tenantId: string,
+  query: BillingEventListQuery
+): Promise<ListPage<BillingEventListItem>> {
+  await customerTenant(tenantId)
+  const page = await platformBillingRepository.listEventsPage(tenantId, query.params, {
+    statuses: query.filters.status,
+  })
+  await auditBillingView(actor, tenantId)
+  return page
+}
+
+/**
+ * One page of the subscriptions a customer tenant has held as its current
+ * one, audited as a billing read.
+ * @param actor - The staff member (a platform viewer or above; the route checked).
+ * @param tenantId - The tenant.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listStaffBillingSubscriptions(
+  actor: Actor,
+  tenantId: string,
+  query: BillingSubscriptionListQuery
+): Promise<ListPage<BillingSubscriptionListItem>> {
+  await customerTenant(tenantId)
+  const page = await platformBillingRepository.listSubscriptionsPage(tenantId, query.params, {
+    providers: query.filters.provider,
+    modes: query.filters.mode,
+  })
+  await auditBillingView(actor, tenantId)
+  return page
 }
 
 /**

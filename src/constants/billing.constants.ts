@@ -266,6 +266,25 @@ export const MAX_TRIAL_DAYS = 90
 export const STAFF_BILLING_LIST_LIMIT = 20
 
 /**
+ * Where a stored provider event stands: `processed` changed the workspace
+ * (or was a duplicate), `unused` was handled and changed nothing (its error
+ * says why), `failed` threw on its last attempt and retries, `pending` has
+ * not been handled yet.
+ */
+export const BILLING_EVENT_STATUSES = ['processed', 'unused', 'failed', 'pending'] as const
+
+/**
+ * One status of a stored provider event.
+ */
+export type BillingEventStatus = (typeof BILLING_EVENT_STATUSES)[number]
+
+/**
+ * What a held subscription is to its workspace now: the billing row's
+ * current, pending or next subscription, or an earlier one.
+ */
+export type BillingSubscriptionStanding = 'current' | 'pending' | 'next' | 'earlier'
+
+/**
  * When a staff cancel ends a subscription: at its cycle end, or now.
  */
 export const STAFF_CANCEL_WHEN = ['cycle_end', 'now'] as const
