@@ -38,7 +38,6 @@
  * since its end is computed on each read.
  */
 import {
-  BILLING_BUSY_CODE,
   BILLING_STATES,
   NO_SUBSCRIPTION_CODE,
   PAYMENT_PROVIDER_UNAVAILABLE_CODE,
@@ -66,6 +65,7 @@ import type {
   TenantBillingRecord,
 } from '@/database/models/billing.model'
 import type { Tenant } from '@/database/models/tenant.model'
+import { isUnknownIdError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import {
@@ -106,10 +106,19 @@ import {
   emitBillingDiff,
   publishEntitlementsChanged,
 } from '@/services/billing/billing-events.service'
-import { callProvider, getBillingProvider } from '@/services/billing/billing-provider.service'
-import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import {
+  callProvider,
+  getBillingProvider,
+  providerFailure,
+} from '@/services/billing/billing-provider.service'
+import {
+  BillingSyncConflictError,
+  syncTenantBilling,
+} from '@/services/billing/billing-sync.service'
+import {
+  billingBusy,
   cancelSubscriptions,
+  ENDED_STATUSES,
   getTenantBillingForStaff,
   listInvoicesForStaff,
   syncOrRetry,
@@ -122,11 +131,12 @@ import { auditThrottledView } from '@/services/platform-view-audit.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import { redisKey } from '@/services/redis.service'
 import type { Actor } from '@/types/actor'
-import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import type { BillingProviderClient } from '@/types/billing'
 import {
   effectiveBillingState,
   extendTrialEnd,
   heldSubscriptionIds,
+  isOtherProvider,
   mergeEntitlements,
   planKeyForState,
 } from '@/utilities/billing-rules.utilities'
@@ -148,15 +158,6 @@ const planRepository = new PlanRepository()
 const platformBillingRepository = new PlatformBillingRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
-
-/**
- * Statuses after which a subscription can no longer be cancelled.
- */
-const ENDED_SUBSCRIPTION_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
-  'cancelled',
-  'completed',
-  'expired',
-])
 
 /**
  * What staff read when a cancel finds a row of another provider or mode.
@@ -435,26 +436,86 @@ export async function resyncTenantBilling(
 }
 
 /**
- * Sync a tenant whose stored `active` or `past_due` state its paid time has
- * outlived, so the move to Free is recorded as the billing job records it
- * (`syncTenantBilling`, the job's grace and cancelling steps). A sync that
- * keeps meeting a concurrent write is left to that write: the caller decides
- * under its own lock either way.
- * @param tenantId - The tenant.
- * @returns The row after the sync, or undefined when the row was not lapsed.
- * @throws {HttpError} 503 or 502 when the provider fails, with nothing written.
+ * Whether a row is stored as paying but served as Free: its paid time has
+ * passed and the billing job has not recorded the move yet.
+ * @param row - The billing row.
+ * @param graceDays - Days of grace after a halt or pause.
+ * @returns True for a lapsed `active` or `past_due` row.
  */
-async function syncIfLapsed(tenantId: string): Promise<TenantBillingRecord | undefined> {
+function isLapsed(row: TenantBillingRecord, graceDays: number): boolean {
+  if (row.state !== 'active' && row.state !== 'past_due') return false
+  return effectiveBillingState(row, new Date(), graceDays) === 'free'
+}
+
+/**
+ * The answer for a provider read the lapsed sync could not make. A
+ * subscription the provider has no record of fails every later sync, the
+ * job's and a resync's alike, so it answers a 409 that says who can fix the
+ * record: a 5xx body is masked, and staff would read only "try again". Any
+ * other failure is the provider's 503 or 502.
+ * @param error - What the sync threw.
+ * @param refusalCode - The caller's refusal code.
+ * @returns The error to throw.
+ */
+function lapsedSyncFailure(error: unknown, refusalCode: string): Error {
+  if (!isUnknownIdError(error)) return providerFailure(error)
+  return new HttpError(
+    "The payment provider has no record of one of this tenant's subscriptions, so we can't confirm its paid time ended. Ask engineering to check its billing record.",
+    409,
+    refusalCode
+  )
+}
+
+/**
+ * Sync a tenant whose stored `active` or `past_due` state its paid time has
+ * outlived: the billing job's grace and cancelling steps, run now. The
+ * history row says `job`, since the transition and its cause are the clock's
+ * and identical to the job's, not a choice the staff member made; it carries
+ * no staff audit entry for the same reason. A sync that keeps losing to a
+ * concurrent write is left to that write when the write moved the row; a row
+ * still lapsed afterwards answers the busy 503.
+ * @param tenantId - The tenant.
+ * @param refusalCode - The caller's 409 code, for a subscription the provider has no record of.
+ * @returns The row after the sync, or undefined when the row was not lapsed.
+ * @throws {HttpError} 503 `BILLING_BUSY` when the row kept moving and is still lapsed; 409 `refusalCode` for a subscription the provider has no record of; 503 or 502 when another provider read fails, with nothing written.
+ */
+async function syncIfLapsed(
+  tenantId: string,
+  refusalCode: string
+): Promise<TenantBillingRecord | undefined> {
   const row = await billingRepository.findByTenantId(tenantId)
-  if (row === undefined || (row.state !== 'active' && row.state !== 'past_due')) return
   const { pastDueGraceDays } = await planRepository.getSettings()
-  if (effectiveBillingState(row, new Date(), pastDueGraceDays) !== 'free') return
+  if (row === undefined || !isLapsed(row, pastDueGraceDays)) return
+  let isBusy = false
   try {
-    await syncOrRetry(tenantId, 'staff')
+    await syncTenantBilling(tenantId, 'job')
   } catch (error) {
-    if (!(error instanceof HttpError) || error.code !== BILLING_BUSY_CODE) throw error
+    if (!(error instanceof BillingSyncConflictError)) throw lapsedSyncFailure(error, refusalCode)
+    isBusy = true
   }
-  return billingRepository.findByTenantId(tenantId)
+  const after = await billingRepository.findByTenantId(tenantId)
+  if (isBusy && after !== undefined && isLapsed(after, pastDueGraceDays)) throw billingBusy()
+  return after
+}
+
+/**
+ * The refusal for an extension whose row is still stored `active` or
+ * `past_due` after the lapsed sync, worded by why the sync could not move it.
+ * @param row - The locked row.
+ * @returns The 409.
+ */
+function notConfirmedEnded(row: TenantBillingRecord): HttpError {
+  const provider = getBillingProvider()
+  let message =
+    "The payment provider hasn't confirmed this tenant's subscription ended. Resync the tenant, then try again."
+  if (provider === null) {
+    message =
+      "Payments are off on this server, so we can't confirm this tenant's paid time ended. Try again once payments are on."
+  } else if (isOtherProvider(row, provider)) {
+    message =
+      "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Try again from the server that uses that account."
+  }
+  return new HttpError(message, 409, TRIAL_NOT_EXTENDABLE_CODE)
 }
 
 /**
@@ -477,7 +538,7 @@ async function hasNothingLeftToCancel(
   const currentId = row.providerSubscriptionId
   if (currentId === null) return true
   const current = await callProvider(() => provider.fetchSubscription(currentId))
-  return ENDED_SUBSCRIPTION_STATUSES.has(current.status)
+  return ENDED_STATUSES.has(current.status)
 }
 
 /**
@@ -493,15 +554,15 @@ async function hasNothingLeftToCancel(
  * move to Free lands with the job's history cause; the sync takes the row
  * lock itself and calls the provider with no lock held. The decision is then
  * made under this write's lock, on the row's effective state. A row still
- * stored `active` or `past_due` after the sync is refused: the provider did
- * not confirm the subscription ended, and its next sync would make the
- * tenant active again.
+ * stored `active` or `past_due` after the sync is refused (`notConfirmedEnded`):
+ * the provider did not confirm the subscription ended, and its next sync
+ * would make the tenant active again.
  * @param actor - The staff member (a platform manager or above).
  * @param tenantId - The tenant.
  * @param days - Days to add, 1 to `MAX_TRIAL_DAYS` (the body schema checked).
  * @param reason - Why, for the audit log.
  * @returns The staff billing view after the extension.
- * @throws {HttpError} 404s as the read; 409 `TRIAL_NOT_EXTENDABLE` on a paying or past-due tenant, or one the provider still shows paying; 503 or 502 when the provider fails during the sync, with nothing written.
+ * @throws {HttpError} 404s as the read; 409 `TRIAL_NOT_EXTENDABLE` on a paying or past-due tenant, or one whose end the provider has not confirmed; 503 `BILLING_BUSY` when the lapsed row keeps moving; 503 or 502 when the provider read fails, with nothing written.
  */
 export async function extendTrial(
   actor: Actor,
@@ -511,7 +572,7 @@ export async function extendTrial(
 ): Promise<StaffTenantBillingView> {
   await customerTenant(tenantId)
   // No role re-check before the sync: it changes nothing a caller chose, and the write below re-checks under lock.
-  await syncIfLapsed(tenantId)
+  await syncIfLapsed(tenantId, TRIAL_NOT_EXTENDABLE_CODE)
   const written = await withTransaction(async (tx) => {
     const locked = await lockStaffAndBilling(actor, 'manager', tenantId, tx)
     const now = new Date()
@@ -524,13 +585,7 @@ export async function extendTrial(
         TRIAL_NOT_EXTENDABLE_CODE
       )
     }
-    if (locked.state === 'active' || locked.state === 'past_due') {
-      throw new HttpError(
-        'The payment provider still shows this subscription running, so there is no trial to extend. Cancel the subscription now, then try again.',
-        409,
-        TRIAL_NOT_EXTENDABLE_CODE
-      )
-    }
+    if (locked.state === 'active' || locked.state === 'past_due') throw notConfirmedEnded(locked)
     const isRunning =
       locked.state === 'trialing' && locked.trialEndsAt !== null && locked.trialEndsAt > now
     const trialEndsAt = extendTrialEnd(isRunning ? locked.trialEndsAt : null, now, days)
@@ -689,6 +744,35 @@ export async function revokeGrant(
 }
 
 /**
+ * The 409 a staff cancel answers when it finds nothing to end, worded for
+ * the row. A paying row whose cancel is already scheduled says so. A row off
+ * Paid that still holds a subscription id names it: the cancel ends only a
+ * paying row's subscription, and the id most often names one that ended, but
+ * a resync ends one that still runs.
+ * @param row - The locked row.
+ * @param fallback - The answer for a row that holds no subscription.
+ * @returns The error.
+ */
+function staffNothingToCancel(row: TenantBillingRecord, fallback: HttpError): HttpError {
+  const isPaying = row.state === 'active' || row.state === 'past_due'
+  if (isPaying && row.cancelAtPeriodEnd) {
+    return new HttpError(
+      'This subscription already ends at its period end. Cancel it now to end it sooner.',
+      409,
+      NO_SUBSCRIPTION_CODE
+    )
+  }
+  if (!isPaying && row.providerSubscriptionId !== null) {
+    return new HttpError(
+      `This tenant isn't on Paid, so a cancel has nothing to end. If the provider shows subscription ${row.providerSubscriptionId} running, resync the tenant.`,
+      409,
+      NO_SUBSCRIPTION_CODE
+    )
+  }
+  return fallback
+}
+
+/**
  * Cancel a tenant's subscription as staff, by the owner cancel's provider
  * rules (`cancelSubscriptions`): at its cycle end, which this records as
  * cancelling, or now, which moves the tenant to Free. A deferred start that
@@ -754,14 +838,17 @@ export async function cancelByStaff(
     )
   }
   // As the extension does: a lapsed row moves to Free by the job's cause before the cancel reads it.
-  const synced = await syncIfLapsed(tenantId)
+  const synced = await syncIfLapsed(tenantId, NO_SUBSCRIPTION_CODE)
   if (synced !== undefined && (await hasNothingLeftToCancel(provider, synced))) {
     // As for a subscription that ended before, the cancel is only audited.
-    await withTransaction(async (tx) => {
-      await lockStaffAndBilling(actor, 'admin', tenantId, tx)
+    const isAudited = await withTransaction(async (tx) => {
+      const locked = await lockStaffAndBilling(actor, 'admin', tenantId, tx)
+      // A write since the check (an adopted checkout, an extension) may have left something to cancel.
+      if (locked.version !== synced.version) return false
       await audit(tx)
+      return true
     })
-    return staffView(tenantId)
+    if (isAudited) return staffView(tenantId)
   }
   await cancelSubscriptions(provider, {
     tenantId,
@@ -770,17 +857,7 @@ export async function cancelByStaff(
     lock: (tx) => lockStaffAndBilling(actor, 'admin', tenantId, tx),
     audit,
     shouldAuditWhenEnded: true,
-    nothingToCancel: (row) =>
-      Promise.resolve(
-        // A Free row keeps the flag from its ended subscription: there is no period end left to wait for.
-        row.cancelAtPeriodEnd && row.state !== 'free'
-          ? new HttpError(
-              'This subscription already ends at its period end. Cancel it now to end it sooner.',
-              409,
-              NO_SUBSCRIPTION_CODE
-            )
-          : nothingToCancel
-      ),
+    nothingToCancel: (row) => Promise.resolve(staffNothingToCancel(row, nothingToCancel)),
     otherProviderMessage: OTHER_PROVIDER_STAFF_MESSAGE,
   })
   try {

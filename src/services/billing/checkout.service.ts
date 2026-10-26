@@ -134,7 +134,7 @@ const MAX_PROVIDER_CURSOR_LENGTH = 64
 /**
  * Statuses after which a subscription can no longer be cancelled.
  */
-const ENDED_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
+export const ENDED_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
   'cancelled',
   'completed',
   'expired',
@@ -217,7 +217,7 @@ function noSubscription(message: string): HttpError {
  * The 503 for a write that found the billing row busy on every attempt.
  * @returns The error.
  */
-function billingBusy(): HttpError {
+export function billingBusy(): HttpError {
   return new HttpError(
     'Your billing is updating right now. Try again in 30 seconds.',
     503,
@@ -1272,14 +1272,19 @@ export interface CancelRequest {
  * workspace goes back to its trial, or to Free when the trial is over. A
  * charged subscription cancelled now moves the workspace to Free at once.
  * Provider calls run with no lock held; a provider failure on the current
- * subscription writes nothing.
+ * subscription writes nothing. A current subscription that had already
+ * ended is only synced; if the row then holds a subscription this cancel
+ * would end (a checkout adopted, a switch scheduled since the read), the
+ * cancel starts over once on the moved row rather than report it done.
  * @param provider - The running provider.
  * @param request - The workspace, who cancels, when, and the caller's lock, audit and refusals.
- * @throws {HttpError} 409 `NO_SUBSCRIPTION` with nothing to cancel; 503 or 502 when the provider fails.
+ * @param attempt - Which start this is; the second gives up as busy.
+ * @throws {HttpError} 409 `NO_SUBSCRIPTION` with nothing to cancel; 503 or 502 when the provider fails; 503 `BILLING_BUSY` when the row moved under both starts.
  */
 export async function cancelSubscriptions(
   provider: BillingProviderClient,
-  request: CancelRequest
+  request: CancelRequest,
+  attempt = 1
 ): Promise<void> {
   const { tenantId, source, ownerUserId } = request
   const row = await withTransaction((tx) => request.lock(tx))
@@ -1299,12 +1304,17 @@ export async function cancelSubscriptions(
     if (ENDED_STATUSES.has(current.status) && nextId === null) {
       // It ended at the provider already: the sync records that, and there is nothing to cancel.
       await syncOrRetry(tenantId, source)
-      if (request.shouldAuditWhenEnded === true) {
-        await withTransaction(async (tx) => {
-          await request.lock(tx)
-          await request.audit(tx)
-        })
-      }
+      const isNothingLeft = await withTransaction(async (tx) => {
+        const locked = await request.lock(tx)
+        const isNewCurrent =
+          hasCurrentSubscription(locked) && locked.providerSubscriptionId !== currentId
+        if (isNewCurrent || locked.nextSubscriptionId !== null) return false
+        if (request.shouldAuditWhenEnded === true) await request.audit(tx)
+        return true
+      })
+      if (isNothingLeft) return
+      if (attempt > 1) throw billingBusy()
+      await cancelSubscriptions(provider, request, attempt + 1)
       return
     }
     if (!ENDED_STATUSES.has(current.status)) {

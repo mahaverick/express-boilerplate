@@ -90,6 +90,8 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
+  // A spy an expect left installed would collect the next test's calls.
+  vi.restoreAllMocks()
   paymentsSwitch.on = true
   vi.mocked(emitEntitlementsChanged).mockClear()
   // The changes queue billing mail; a later file in this worker counts the queue's jobs.
@@ -268,10 +270,8 @@ async function lapsedCancellingWorkspace() {
 }
 
 /**
- * A tenant's billing state history, in the order it was written. It sorts by
- * the uuidv7 id, which is stamped at the insert, not by `at`, which is the
- * writing transaction's start: two extensions that race both begin before
- * either takes the row lock, so their `at` order need not be their write order.
+ * A tenant's billing state history, oldest first, by `at` as the staff
+ * history lists it.
  * @param tenantId - The tenant.
  * @returns Each row's states, cause and source.
  */
@@ -280,7 +280,7 @@ async function historyOf(
 ): Promise<{ fromState: string; toState: string; cause: string; source: string }[]> {
   return sql<{ fromState: string; toState: string; cause: string; source: string }[]>`
     select from_state as "fromState", to_state as "toState", cause, source
-    from billing_state_history where tenant_id = ${tenantId} order by id`
+    from billing_state_history where tenant_id = ${tenantId} order by at, id`
 }
 
 describe('GET /api/v1/platform/tenants/:id/billing', () => {
@@ -542,14 +542,14 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
       source: 'job',
     })
     expect(await historyOf(tenant.id)).toEqual([
-      { ...jobMove, source: 'staff' },
+      jobMove,
       { fromState: 'free', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
     ])
   })
 
   it('starts a trial for a past-due tenant whose grace has ended, recording grace_ended', async () => {
     const { tenant, subscriptionId } = await payingWorkspace()
-    const longAgo = new Date(Date.now() - 30 * DAY_MS)
+    const longAgo = new Date(Date.now() - 60 * DAY_MS)
     await fake.fakeAdvance(subscriptionId, 'halted')
     await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
     const { token } = await staff('manager')
@@ -559,7 +559,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
     expect(response.status).toBe(200)
     expect(await readBilling(tenant.id)).toMatchObject({ state: 'trialing' })
     expect(await historyOf(tenant.id)).toEqual([
-      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'staff' },
+      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'job' },
       { fromState: 'free', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
     ])
   })
@@ -578,7 +578,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
     expect(row.state).toBe('trialing')
     expect(isNear(row.trialEndsAt, Date.now() + 14 * DAY_MS)).toBe(true)
     expect(await historyOf(tenant.id)).toEqual([
-      { fromState: 'active', toState: 'free', cause: 'cancelled', source: 'staff' },
+      { fromState: 'active', toState: 'free', cause: 'cancelled', source: 'job' },
       { fromState: 'free', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
       { fromState: 'trialing', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
     ])
@@ -593,10 +593,164 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
     const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
 
     expect(response.status).toBe(409)
-    expect(response.body).toMatchObject({ code: 'TRIAL_NOT_EXTENDABLE' })
+    expect(response.body).toMatchObject({
+      code: 'TRIAL_NOT_EXTENDABLE',
+      message:
+        "Payments are off on this server, so we can't confirm this tenant's paid time ended. Try again once payments are on.",
+    })
     const after = await readBilling(tenant.id)
     expect(after.version).toBe(before.version)
     expect(await historyOf(tenant.id)).toEqual([])
+    expect(await billingAudit(tenant.id)).toEqual([])
+  })
+
+  it('refuses a lapsed tenant of another payment account, and changes nothing', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    await setBilling(tenant.id, { provider: 'razorpay' })
+    const before = await readBilling(tenant.id)
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: 'TRIAL_NOT_EXTENDABLE',
+      message:
+        "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Try again from the server that uses that account.",
+    })
+    const after = await readBilling(tenant.id)
+    expect(after.version).toBe(before.version)
+  })
+
+  it('refuses a past-grace tenant whose subscription the provider would not cancel, and asks for a resync', async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    const longAgo = new Date(Date.now() - 60 * DAY_MS)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
+    vi.spyOn(fake, 'cancelSubscription').mockRejectedValue(
+      new ProviderError(`POST /subscriptions/${subscriptionId}/cancel`, 503)
+    )
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: 'TRIAL_NOT_EXTENDABLE',
+      message:
+        "The payment provider hasn't confirmed this tenant's subscription ended. Resync the tenant, then try again.",
+    })
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'past_due' })
+    expect(await subscriptionStatus(subscriptionId)).toBe('halted')
+  })
+
+  it('answers 503 BILLING_BUSY when the lapsed row keeps moving and is still not on Free', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const before = await readBilling(tenant.id)
+    const { token } = await staff('manager')
+    const original = BillingRepository.prototype.updateVersioned
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // Every sync write loses its version check, as if another writer kept moving the row.
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      async function (this: BillingRepository, tenantId, version, patch, tx) {
+        if (tenantId === tenant.id && patch.syncedAt !== undefined) return
+        return original.call(this, tenantId, version, patch, tx)
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+      }
+    )
+
+    expect(response?.status).toBe(503)
+    expect(response?.body).toMatchObject({ code: 'BILLING_BUSY' })
+    expect(response?.headers['retry-after']).toBe('30')
+    const after = await readBilling(tenant.id)
+    expect(after).toMatchObject({ state: 'active', version: before.version })
+  })
+
+  it('starts the trial when the sync loses to a writer that moved the row to Free', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const { token } = await staff('manager')
+    const original = BillingRepository.prototype.updateVersioned
+    let syncWrites = 0
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // The first sync write lands, but reports a lost version check, as a competing writer's would; the rest lose.
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      async function (this: BillingRepository, tenantId, version, patch, tx) {
+        if (tenantId !== tenant.id || patch.syncedAt === undefined) {
+          return original.call(this, tenantId, version, patch, tx)
+        }
+        syncWrites += 1
+        // Landed or not, the sync reads a lost version check: nothing is returned.
+        if (syncWrites === 1) await original.call(this, tenantId, version, patch, tx)
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+      }
+    )
+
+    expect(syncWrites).toBeGreaterThan(1)
+    expect(response?.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'trialing' })
+  })
+
+  it('refuses a lapsed tenant whose subscription the provider has no record of, and says who can fix it', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const before = await readBilling(tenant.id)
+    vi.spyOn(fake, 'fetchSubscription').mockRejectedValue(
+      new ProviderError('GET /subscriptions/sub_gone', 400, { code: 'BAD_REQUEST_ERROR' })
+    )
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: 'TRIAL_NOT_EXTENDABLE',
+      message:
+        "The payment provider has no record of one of this tenant's subscriptions, so we can't confirm its paid time ended. Ask engineering to check its billing record.",
+    })
+    const after = await readBilling(tenant.id)
+    expect(after.version).toBe(before.version)
+  })
+
+  it('answers 502 when the provider refuses the read, and changes nothing', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const before = await readBilling(tenant.id)
+    vi.spyOn(fake, 'fetchSubscription').mockRejectedValue(
+      new ProviderError('GET /subscriptions/sub_any', 401)
+    )
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(502)
+    expect(response.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    const after = await readBilling(tenant.id)
+    expect(after.version).toBe(before.version)
+  })
+
+  it('refuses a lapsed cancel whose subscription the provider has no record of, and says who can fix it', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    vi.spyOn(fake, 'fetchSubscription').mockRejectedValue(
+      new ProviderError('GET /subscriptions/sub_gone', 404)
+    )
+    const { token } = await staff('admin')
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: 'NO_SUBSCRIPTION',
+      message:
+        "The payment provider has no record of one of this tenant's subscriptions, so we can't confirm its paid time ended. Ask engineering to check its billing record.",
+    })
     expect(await billingAudit(tenant.id)).toEqual([])
   })
 
@@ -1055,7 +1209,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
       cancel.mockRestore()
       expect(dataOf(response.body)).toMatchObject({ state: 'free', plan: { key: 'free' } })
       expect(await historyOf(tenant.id)).toEqual([
-        { fromState: 'active', toState: 'free', cause: 'cancelled', source: 'staff' },
+        { fromState: 'active', toState: 'free', cause: 'cancelled', source: 'job' },
       ])
       expect(await billingAudit(tenant.id)).toEqual([
         {
@@ -1118,12 +1272,189 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     )
 
     expect(reads).toBeGreaterThan(1)
-    expect(response?.status).not.toBe(200)
+    expect(response?.status).toBe(409)
+    expect(response?.body).toMatchObject({
+      code: 'NO_SUBSCRIPTION',
+      message: `This tenant isn't on Paid, so a cancel has nothing to end. If the provider shows subscription ${subscriptionId} running, resync the tenant.`,
+    })
     expect(await billingAudit(tenant.id)).toEqual([])
   })
 
-  it('refuses a cycle-end cancel of a tenant the job moved to Free as having nothing to cancel', async () => {
+  it('audits a lapsed tenant holding only an unpaid checkout without cancelling the checkout', async () => {
     const { tenant } = await lapsedCancellingWorkspace()
+    const pendingId = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await setBilling(tenant.id, { pendingSubscriptionId: pendingId })
+    const { token, user } = await staff('admin')
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(await subscriptionStatus(pendingId)).toBe('created')
+    expect(await billingAudit(tenant.id)).toEqual([
+      {
+        action: 'billing.cancelled_by_staff',
+        access: 'platform',
+        actorId: user.id,
+        metadata: { when: 'now', reason: REASON },
+      },
+    ])
+  })
+
+  it('audits a lapsed tenant the sync left with no subscription, without reading the provider again', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const { token } = await staff('admin')
+    const original = BillingRepository.prototype.updateVersioned
+    const fetch = vi.spyOn(fake, 'fetchSubscription')
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // The sync's move to Free also drops the subscription id.
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      async function (this: BillingRepository, tenantId, version, patch, tx) {
+        const isDowngrade = tenantId === tenant.id && patch.state === 'free'
+        const written = isDowngrade ? { ...patch, providerSubscriptionId: null } : patch
+        return original.call(this, tenantId, version, written, tx)
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(response?.status).toBe(200)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'free',
+      providerSubscriptionId: null,
+    })
+    expect(await billingAudit(tenant.id)).toHaveLength(1)
+  })
+
+  it('cancels through the normal path when the sync ended the subscription but could not record it', async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    const longAgo = new Date(Date.now() - 60 * DAY_MS)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
+    const { token } = await staff('admin')
+    const original = BillingRepository.prototype.updateVersioned
+    let syncWrites = 0
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // The follow-up sync after the grace cancel loses both its writes, so the row stays past due with an ended subscription.
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'updateVersioned',
+      async function (this: BillingRepository, tenantId, version, patch, tx) {
+        if (tenantId === tenant.id && patch.syncedAt !== undefined) {
+          syncWrites += 1
+          if (syncWrites === 2 || syncWrites === 3) return
+        }
+        return original.call(this, tenantId, version, patch, tx)
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(syncWrites).toBeGreaterThan(3)
+    expect(response?.status).toBe(200)
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free' })
+    expect(await historyOf(tenant.id)).toEqual([
+      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'staff' },
+    ])
+    expect(await billingAudit(tenant.id)).toHaveLength(1)
+  })
+
+  it('cancels a checkout adopted while a lapsed cancel checked the row, rather than only auditing', async () => {
+    const { tenant, subscriptionId } = await lapsedCancellingWorkspace()
+    const adoptedId = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    const adopted = await fake.fakeAdvance(adoptedId, 'active')
+    const { token } = await staff('admin')
+    const original = fake.fetchSubscription.bind(fake)
+    let reads = 0
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // The second read of the ended subscription is the check before the audit; the owner's payment lands during it.
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => {
+        if (id === subscriptionId) {
+          reads += 1
+          if (reads === 2) {
+            const moving = await readBilling(tenant.id)
+            // Every real writer bumps the version, as the webhook's sync would.
+            await setBilling(tenant.id, {
+              version: moving.version + 1,
+              state: 'active',
+              planId: plans.paidId,
+              priceId: plans.monthPriceId,
+              providerSubscriptionId: adoptedId,
+              currentPeriodEnd: adopted.currentEnd,
+              cancelAtPeriodEnd: false,
+            })
+          }
+        }
+        return original(id)
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(reads).toBe(2)
+    expect(response?.status).toBe(200)
+    expect(cancel.mock.calls.map(([id]) => id)).toEqual([adoptedId])
+    expect(await subscriptionStatus(adoptedId)).toBe('cancelled')
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free' })
+    expect(await billingAudit(tenant.id)).toHaveLength(1)
+  })
+
+  it('cancels a checkout adopted after the current subscription read as ended, rather than only auditing', async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    const adoptedId = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    const adopted = await fake.fakeAdvance(adoptedId, 'active')
+    const { token } = await staff('admin')
+    const original = fake.fetchSubscription.bind(fake)
+    let isAdopted = false
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // The cancel reads its current subscription ended; the owner's new checkout is adopted right after.
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => {
+        const sub = await original(id)
+        if (id === subscriptionId && !isAdopted) {
+          isAdopted = true
+          await setBilling(tenant.id, {
+            providerSubscriptionId: adoptedId,
+            currentPeriodEnd: adopted.currentEnd,
+          })
+        }
+        return sub
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(isAdopted).toBe(true)
+    expect(response?.status).toBe(200)
+    expect(cancel.mock.calls.map(([id]) => id)).toEqual([adoptedId])
+    expect(await subscriptionStatus(adoptedId)).toBe('cancelled')
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free' })
+    expect(await billingAudit(tenant.id)).toHaveLength(1)
+  })
+
+  it('refuses a cycle-end cancel of a tenant the job moved to Free, naming the subscription to check', async () => {
+    const { tenant, subscriptionId } = await lapsedCancellingWorkspace()
     await syncTenantBilling(tenant.id, 'job')
     expect(await readBilling(tenant.id)).toMatchObject({ state: 'free', cancelAtPeriodEnd: true })
     const { token } = await staff('admin')
@@ -1136,14 +1467,14 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(response.status).toBe(409)
     expect(response.body).toMatchObject({
       code: 'NO_SUBSCRIPTION',
-      message: 'This tenant has no subscription to cancel. Resync it if the provider shows one.',
+      message: `This tenant isn't on Paid, so a cancel has nothing to end. If the provider shows subscription ${subscriptionId} running, resync the tenant.`,
     })
     expect(await billingAudit(tenant.id)).toEqual([])
   })
 
   it("cancels a past-due tenant whose grace has ended by the job's cause, grace_ended", async () => {
     const { tenant, subscriptionId } = await payingWorkspace()
-    const longAgo = new Date(Date.now() - 30 * DAY_MS)
+    const longAgo = new Date(Date.now() - 60 * DAY_MS)
     await fake.fakeAdvance(subscriptionId, 'halted')
     await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
     const { token, user } = await staff('admin')
@@ -1154,7 +1485,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(await readBilling(tenant.id)).toMatchObject({ state: 'free', planId: plans.freeId })
     expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
     expect(await historyOf(tenant.id)).toEqual([
-      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'staff' },
+      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'job' },
     ])
     expect(await billingAudit(tenant.id)).toEqual([
       {
