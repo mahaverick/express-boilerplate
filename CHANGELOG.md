@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.1.0](https://github.com/mahaverick/express-boilerplate/compare/v9.0.1...v9.1.0) (2026-10-26)
+
+
+### Features
+
+* **billing:** paged staff lists of a tenant's billing history, events, subscriptions and invoices ([#154](https://github.com/mahaverick/express-boilerplate/issues/154)) ([68aa608](https://github.com/mahaverick/express-boilerplate/commit/68aa6086ad1a2d06ceae810231333b7b2bb60623))
+
 ## [9.0.1](https://github.com/mahaverick/express-boilerplate/compare/v9.0.0...v9.0.1) (2026-10-25)
 
 
