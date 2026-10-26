@@ -146,6 +146,42 @@ describe('BillingRepository', () => {
     expect(await repository.listHistory(tenantId, 1)).toHaveLength(1)
   })
 
+  it('stamps history at its write, so a transaction that began first but wrote last lists newest', async () => {
+    const tenantId = await billedTenant()
+    const firstBegun = deferred()
+    const secondWritten = deferred()
+    const first = withTransaction(async (tx) => {
+      // A statement fixes the transaction's start before the second one begins.
+      await tx.execute(drizzleSql`select 1`)
+      firstBegun.resolve()
+      await secondWritten.promise
+      await repository.appendHistory(
+        {
+          tenantId,
+          fromState: 'free',
+          toState: 'trialing',
+          cause: 'trial_extended',
+          source: 'staff',
+        },
+        tx
+      )
+    })
+    await firstBegun.promise
+    // Postgres's transaction start has microsecond resolution; this makes the second start strictly later.
+    await sql`select pg_sleep(0.01)`
+    await withTransaction(async (tx) => {
+      await repository.appendHistory(
+        { tenantId, fromState: 'active', toState: 'free', cause: 'cancelled', source: 'job' },
+        tx
+      )
+    })
+    secondWritten.resolve()
+    await first
+
+    const history = await repository.listHistory(tenantId, 10)
+    expect(history.map((entry) => entry.cause)).toEqual(['trial_extended', 'cancelled'])
+  })
+
   it('records an event once and reports the second delivery as a duplicate', async () => {
     const tenantId = await billedTenant()
     const providerEventId = `evt_${randomUUID()}`
