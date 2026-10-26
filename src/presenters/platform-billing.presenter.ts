@@ -42,7 +42,8 @@ export interface GrantView {
   reason: string
   /**
    * The staff member who granted it, or null when no account is on record
-   * (purged, or the grant was written by a script).
+   * (purged, or the grant was written by a script). The name falls back to
+   * their email when they have none.
    */
   grantedBy: { userId: string; name: string } | null
   createdAt: Date
@@ -221,6 +222,7 @@ export interface BillingSettingsView {
   updatedAt: Date
   /**
    * Null before any staff edit, or when the account is no longer on record.
+   * The name falls back to their email when they have none.
    */
   updatedBy: { userId: string; name: string } | null
 }

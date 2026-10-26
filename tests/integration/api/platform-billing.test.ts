@@ -284,6 +284,20 @@ async function historyOf(
 }
 
 describe('GET /api/v1/platform/tenants/:id/billing', () => {
+  it('names a payer with no name by their email', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    await setBilling(tenant.id, { payerUserId: owner.id, billingEmail: owner.email })
+    const { token } = await staff('viewer')
+
+    const response = await readAs(token, tenant.id)
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body)).toMatchObject({
+      payer: { userId: owner.id, name: owner.email, isMember: true },
+    })
+  })
+
   it('shows a viewer the billing with provider fields and sources, never the billing email', async () => {
     const { tenant, owner, subscriptionId, periodEnd } = await payingWorkspace()
     const { token } = await staff('viewer')
@@ -838,6 +852,22 @@ describe('POST /api/v1/platform/tenants/:id/billing/grants', () => {
       tenantId: tenant.id,
       slug: tenant.slug,
     })
+  })
+
+  it('names a granter with no name by their email', async () => {
+    const { tenant } = await workspace()
+    const { token, user } = await createTrackedStaff('manager')
+
+    const response = await postAs(token, tenant.id, '/grants', {
+      key: 'members',
+      value: 10,
+      expiresAt: null,
+      reason: REASON,
+    })
+
+    expect(response.status).toBe(200)
+    const grants = dataOf(response.body).grants as Record<string, unknown>[]
+    expect(grants[0]?.grantedBy).toEqual({ userId: user.id, name: user.email })
   })
 
   it('grants an unlimited members cap with null, and a feature with true until a future date', async () => {

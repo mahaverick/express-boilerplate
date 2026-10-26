@@ -47,6 +47,7 @@ import { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import {
   displayName,
+  nameOrEmail,
   toPriceView,
   type CheckoutPurpose,
   type CheckoutSession,
@@ -1482,7 +1483,7 @@ async function payerOf(
   const user = await userRepository.findById(payerUserId)
   if (user === undefined) return null
   const membership = await membershipRepository.findByUserAndTenant(payerUserId, tenantId)
-  return { userId: user.id, name: displayName(user), isMember: membership !== undefined }
+  return { userId: user.id, name: nameOrEmail(user), isMember: membership !== undefined }
 }
 
 /**

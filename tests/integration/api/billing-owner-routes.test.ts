@@ -181,6 +181,18 @@ describe('GET /api/v1/tenants/:slug/billing', () => {
     })
   })
 
+  it('names a payer with no name by their email', async () => {
+    const { tenant, owner } = await workspace()
+    await makePaying(tenant.id)
+    await setBilling(tenant.id, { payerUserId: owner.id, billingEmail: owner.email })
+
+    const response = await getAs(owner, `${tenant.slug}/billing`)
+
+    expect(dataOf(response.body)).toMatchObject({
+      payer: { userId: owner.id, name: owner.email, isMember: true },
+    })
+  })
+
   it('gives staff with platform access the read without the owner-only fields', async () => {
     const { tenant, owner } = await workspace()
     await makePaying(tenant.id)

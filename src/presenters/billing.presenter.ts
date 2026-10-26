@@ -51,6 +51,9 @@ export interface CheckoutSession {
  */
 interface BillingPayer {
   userId: string
+  /**
+   * Their name, or their email when they have none (`nameOrEmail`).
+   */
   name: string
   /**
    * False once the payer has left the workspace.
@@ -101,7 +104,8 @@ export function toPriceView(price: PlanPrice): PriceView {
 }
 
 /**
- * A person's display name.
+ * A person's display name, for a caller that words its own fallback (the
+ * checkout prefill, and the owner emails' "A teammate").
  * @param person - The person's name fields.
  * @param person.firstName - The first name.
  * @param person.lastName - The last name.
@@ -109,4 +113,23 @@ export function toPriceView(price: PlanPrice): PriceView {
  */
 export function displayName(person: { firstName: string | null; lastName: string | null }): string {
   return [person.firstName, person.lastName].filter(Boolean).join(' ').trim()
+}
+
+/**
+ * A person as the billing API names them: their first and last name, or
+ * their email when they have neither, as every new passwordless account
+ * starts. Clients wrap it as PII either way.
+ * @param person - The person.
+ * @param person.firstName - The first name.
+ * @param person.lastName - The last name.
+ * @param person.email - The account's email.
+ * @returns A non-empty name.
+ */
+export function nameOrEmail(person: {
+  firstName: string | null
+  lastName: string | null
+  email: string
+}): string {
+  const name = displayName(person)
+  return name === '' ? person.email : name
 }
