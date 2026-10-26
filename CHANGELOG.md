@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.1.1](https://github.com/mahaverick/express-boilerplate/compare/v9.1.0...v9.1.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **billing:** word staff billing field errors without wire values ([#156](https://github.com/mahaverick/express-boilerplate/issues/156)) ([742d553](https://github.com/mahaverick/express-boilerplate/commit/742d553e5198a9d3105f712a5e5f0c4ec5a3bb71))
+
 ## [9.1.0](https://github.com/mahaverick/express-boilerplate/compare/v9.0.1...v9.1.0) (2026-10-26)
 
 
