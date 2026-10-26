@@ -10,7 +10,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { AuditAccess, StoredAuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'
-import { tenantModel } from '@/database/models/tenant.model'
+import { tenantModel, tenantSettingsModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
@@ -40,7 +40,10 @@ interface AuditActorRow {
 export interface AuditLogListRow {
   entry: AuditLog
   actor: AuditActorRow | null
-  tenant: { id: string; name: string; slug: string }
+  /**
+   * `timezone` is the tenant's IANA time zone from `tenant_settings`, `UTC` when it has no settings row.
+   */
+  tenant: { id: string; name: string; slug: string; timezone: string }
 }
 
 /**
@@ -98,11 +101,18 @@ export function auditLogList(search: string | undefined, filters: AuditLogFilter
           id: auditLogModel.id,
           entry: auditLogModel,
           actor: actorColumns,
-          tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
+          tenant: {
+            id: tenantModel.id,
+            name: tenantModel.name,
+            slug: tenantModel.slug,
+            timezone: sql<string>`coalesce(${tenantSettingsModel.timezone}, 'UTC')`,
+          },
           sortOccurred: timestampKey(auditLogModel.occurredAt),
         })
         .from(auditLogModel)
         .innerJoin(tenantModel, eq(auditLogModel.tenantId, tenantModel.id))
+        // One primary-key probe per listed row, for the tenant's day in staff audit sentences.
+        .leftJoin(tenantSettingsModel, eq(tenantSettingsModel.tenantId, auditLogModel.tenantId))
         .leftJoin(userModel, eq(auditLogModel.actorUserId, userModel.id))
         .leftJoin(
           targetUser,

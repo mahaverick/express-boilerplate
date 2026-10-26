@@ -10,7 +10,7 @@ import type { AuditLog } from '@/database/models/audit-log.model'
 export interface JoinedAuditRow {
   entry: AuditLog
   actor: { id: string; email: string; firstName: string | null; lastName: string | null } | null
-  tenant: { id: string; name: string; slug: string }
+  tenant: { id: string; name: string; slug: string; timezone: string }
 }
 
 /**
@@ -39,7 +39,11 @@ export interface AuditEntryResponse {
  * One entry of `GET /platform/audit-log`: an entry plus its tenant.
  */
 export interface PlatformAuditEntryResponse extends AuditEntryResponse {
-  tenant: { id: string; name: string; slug: string }
+  /**
+   * `timezone` is the tenant's IANA time zone (`tenant_settings.timezone`),
+   * so a client reads a date in an audit sentence as the tenant's day.
+   */
+  tenant: { id: string; name: string; slug: string; timezone: string }
 }
 
 /**
