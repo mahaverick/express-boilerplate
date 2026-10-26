@@ -40,11 +40,41 @@ import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.service'
 import { closeDatabase, db, withTransaction } from '@/services/database.service'
 import { closeRedis } from '@/services/redis.service'
-import type { ProviderSubscription } from '@/types/billing'
+import type { ProviderRefundOutcome, ProviderSubscription } from '@/types/billing'
 import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { effectiveBillingState } from '@/utilities/billing-rules.utilities'
 
 const billingRepository = new BillingRepository()
+
+/**
+ * The staff alert the sync raises for a duplicate's refund outcome, so a
+ * seeded alert reads as a real one: none when it was refunded already.
+ * @param subscriptionId - The duplicate.
+ * @param refund - The fake's refund outcome.
+ * @returns The alert field, or nothing.
+ */
+function refundAlert(subscriptionId: string, refund: ProviderRefundOutcome): { alert?: string } {
+  switch (refund.status) {
+    case 'refunded': {
+      return {
+        alert: BILLING_ALERT_TEXT.duplicateRefunded(
+          subscriptionId,
+          refund.amountMinor,
+          refund.refundId
+        ),
+      }
+    }
+    case 'nothing_paid': {
+      return { alert: BILLING_ALERT_TEXT.duplicateNothingPaid(subscriptionId) }
+    }
+    case 'partly_refunded': {
+      return { alert: BILLING_ALERT_TEXT.duplicatePartlyRefunded(subscriptionId) }
+    }
+    case 'already_refunded': {
+      return {}
+    }
+  }
+}
 const planRepository = new PlanRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
@@ -352,14 +382,7 @@ export const SEED_TENANTS: readonly SeedTenant[] = [
       return {
         billing: payingColumns(context, sub, 'month'),
         history: paidHistory(0),
-        alert:
-          refund.status === 'refunded'
-            ? BILLING_ALERT_TEXT.duplicateRefunded(
-                duplicate.id,
-                refund.amountMinor,
-                refund.refundId
-              )
-            : BILLING_ALERT_TEXT.duplicateNothingPaid(duplicate.id),
+        ...refundAlert(duplicate.id, refund),
       }
     },
   },
