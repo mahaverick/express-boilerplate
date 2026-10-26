@@ -167,7 +167,7 @@ describe('BillingRepository', () => {
       )
     })
     await firstBegun.promise
-    // Postgres's transaction start has microsecond resolution; this makes the second start strictly later.
+    // The column keeps milliseconds; this makes the second transaction start a whole 10 ms later.
     await sql`select pg_sleep(0.01)`
     await withTransaction(async (tx) => {
       await repository.appendHistory(
