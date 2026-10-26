@@ -279,6 +279,16 @@ export const BILLING_EVENT_STATUSES = ['processed', 'unused', 'failed', 'pending
 export type BillingEventStatus = (typeof BILLING_EVENT_STATUSES)[number]
 
 /**
+ * The statuses an invoice is shown with; a draft or deleted invoice is not shown.
+ */
+export const INVOICE_STATUSES = ['issued', 'paid', 'cancelled', 'expired'] as const
+
+/**
+ * One shown invoice status.
+ */
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number]
+
+/**
  * What a held subscription is to its workspace now: the billing row's
  * current, pending or next subscription, or an earlier one.
  */

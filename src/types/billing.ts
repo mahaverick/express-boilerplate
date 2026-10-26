@@ -7,6 +7,7 @@ import type {
   BillingProvider,
   BillingProviderMode,
   BillingState,
+  InvoiceStatus,
   PlanKey,
 } from '@/constants/billing.constants'
 import type { EntitlementKey, EntitlementValue } from '@/constants/entitlements.constants'
@@ -282,10 +283,18 @@ export interface InvoiceView {
   id: string
   amountMinor: number
   currency: 'INR'
-  status: 'issued' | 'paid' | 'cancelled' | 'expired'
+  status: InvoiceStatus
   issuedAt: string
   paidAt: string | null
   url: string | null
+}
+
+/**
+ * One invoice as the provider lists it: the owner's view and the
+ * subscription it bills.
+ */
+export interface ProviderInvoice extends InvoiceView {
+  subscriptionId: string
 }
 
 /**
@@ -325,7 +334,7 @@ export interface ProviderInvoicePage {
   /**
    * The invoices on this page.
    */
-  items: InvoiceView[]
+  items: ProviderInvoice[]
   /**
    * The cursor for the next page, or null on the last one.
    */
@@ -391,11 +400,19 @@ export interface BillingProviderClient {
   refundLatestPayment(subscriptionId: string): Promise<ProviderRefundOutcome>
   /**
    * One page of the invoices of some subscriptions, in the order given.
+   * With `statuses`, an invoice of another status is left out as a draft
+   * is, and a page may end short of full, with a cursor, after a bounded
+   * number of provider reads.
    * @param subscriptionIds - The subscriptions, newest first.
    * @param cursor - The previous page's `nextCursor`, or null for the first page.
+   * @param statuses - The statuses to list, or undefined for every shown one.
    * @returns The page.
    */
-  listInvoices(subscriptionIds: string[], cursor: string | null): Promise<ProviderInvoicePage>
+  listInvoices(
+    subscriptionIds: string[],
+    cursor: string | null,
+    statuses?: readonly InvoiceStatus[]
+  ): Promise<ProviderInvoicePage>
   /**
    * The subscription a payment was taken for, through the payment's invoice:
    * a dispute or a refund names only the payment.

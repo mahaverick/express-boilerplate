@@ -4,7 +4,7 @@
  * provider's ids, the effective entitlements with where each value came
  * from, the grants, and the newest state changes and provider events. A
  * provider event shows its type, times and error only, never its payload.
- * Then the plans with their prices and counts, a plan change's preview, the
+ * A staff invoice drops the owner's link. Then the plans with their prices and counts, a plan change's preview, the
  * billing settings and the alerts. Dates go out as
  * `Date`s, which the JSON response writes as ISO strings.
  */
@@ -25,7 +25,7 @@ import type {
   PlanPrice,
 } from '@/database/models/billing.model'
 import { toPriceView, type PriceView, type TenantBillingView } from '@/presenters/billing.presenter'
-import type { SourcedEntitlements } from '@/types/billing'
+import type { ProviderInvoice, SourcedEntitlements } from '@/types/billing'
 
 /**
  * Where a grant stands: in force, past its expiry, or revoked by staff.
@@ -132,6 +132,30 @@ export function toEventView(event: BillingEventRecord): StaffTenantBillingView['
     receivedAt: event.receivedAt,
     processedAt: event.processedAt,
     error: event.error,
+  }
+}
+
+/**
+ * One invoice as staff see it: the owner's view without its link, since the
+ * provider's hosted invoice page shows the payer's contact details, and with
+ * the subscription it bills.
+ */
+export type StaffInvoiceView = Omit<ProviderInvoice, 'url'>
+
+/**
+ * Project a provider invoice for staff.
+ * @param invoice - The invoice the provider listed.
+ * @returns It without its link.
+ */
+export function toStaffInvoiceView(invoice: ProviderInvoice): StaffInvoiceView {
+  return {
+    id: invoice.id,
+    subscriptionId: invoice.subscriptionId,
+    amountMinor: invoice.amountMinor,
+    currency: invoice.currency,
+    status: invoice.status,
+    issuedAt: invoice.issuedAt,
+    paidAt: invoice.paidAt,
   }
 }
 

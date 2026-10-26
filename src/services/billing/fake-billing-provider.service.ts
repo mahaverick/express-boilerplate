@@ -19,6 +19,7 @@ import type {
   CheckoutConfirm,
   CreateSubscriptionInput,
   InvoiceView,
+  ProviderInvoice,
   ProviderInvoicePage,
   ProviderPlanPrice,
   ProviderRefundOutcome,
@@ -321,19 +322,26 @@ export class FakeBillingProvider implements BillingProviderClient {
 
   /**
    * Every invoice of the subscriptions, in the order given, newest first
-   * within each, on one page.
+   * within each, on one page; with `statuses`, only those of a listed status.
    * @param subscriptionIds - The subscriptions.
    * @param _cursor - Unused; the fake answers one page.
+   * @param statuses - The statuses to list, or undefined for all.
    * @returns The page.
    */
   async listInvoices(
     subscriptionIds: string[],
-    _cursor: string | null
+    _cursor: string | null,
+    statuses?: readonly InvoiceView['status'][]
   ): Promise<ProviderInvoicePage> {
-    const items: InvoiceView[] = []
+    const items: ProviderInvoice[] = []
     for (const id of subscriptionIds) {
       const record = await this.#read<FakeSubscriptionRecord>(`sub:${id}`)
-      if (record !== undefined) items.push(...record.invoices.toReversed())
+      if (record === undefined) continue
+      for (const invoice of record.invoices.toReversed()) {
+        if (statuses === undefined || statuses.includes(invoice.status)) {
+          items.push({ ...invoice, subscriptionId: id })
+        }
+      }
     }
     return { items, nextCursor: null }
   }

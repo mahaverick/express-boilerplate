@@ -20,6 +20,7 @@ import {
   listStaffBillingEvents,
   listStaffBillingHistory,
   listStaffBillingSubscriptions,
+  listStaffInvoices,
   listStaffPlans,
   previewPlanChange,
   resyncTenantBilling,
@@ -39,6 +40,7 @@ import {
   grantBodySchema,
   planPreviewBodySchema,
   staffCancelBodySchema,
+  staffInvoiceListSchema,
   updateBillingSettingsBodySchema,
   updatePlanBodySchema,
 } from '@/validators/platform-billing.validators'
@@ -96,6 +98,19 @@ class PlatformBillingController extends BaseController {
       response,
       await listStaffBillingSubscriptions(actorFrom(request), tenantId, query),
       'Subscriptions retrieved.'
+    )
+  })
+
+  /**
+   * `GET /platform/tenants/:id/billing/invoices`: one page of the tenant's invoices, newest first.
+   */
+  listInvoices = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    const query = parseBody(staffInvoiceListSchema, request.query)
+    successResponse(
+      response,
+      await listStaffInvoices(actorFrom(request), tenantId, query),
+      'Invoices retrieved.'
     )
   })
 

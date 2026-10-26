@@ -7,8 +7,9 @@
  * their prices and tenant counts, a plan change's preview, the plan edit, a
  * new price, the billing settings and the alerts list.
  *
- * The read and its paged lists (state history, provider events and held
- * subscriptions) share one throttled `billing.viewed` audit window.
+ * The read and its paged lists (state history, provider events, held
+ * subscriptions and invoices) share one throttled `billing.viewed` audit
+ * window.
  *
  * Every write re-checks the staff member's platform role under lock
  * (`assertStillPlatformRole`, which locks the platform-role row, then the
@@ -71,11 +72,13 @@ import {
   toEventView,
   toGrantView,
   toHistoryView,
+  toStaffInvoiceView,
   toStaffPriceView,
   type BillingAlertView,
   type BillingSettingsView,
   type GrantView,
   type PlanChangePreview,
+  type StaffInvoiceView,
   type StaffPlanView,
   type StaffTenantBillingView,
   type TenantStateCounts,
@@ -102,6 +105,7 @@ import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import {
   cancelSubscriptions,
   getTenantBillingForStaff,
+  listInvoicesForStaff,
   syncOrRetry,
 } from '@/services/billing/checkout.service'
 import { getEffectiveEntitlements } from '@/services/billing/entitlements.service'
@@ -127,6 +131,7 @@ import type {
   BillingSubscriptionListQuery,
   CreatePriceBody,
   GrantBody,
+  StaffInvoiceListQuery,
   UpdateBillingSettingsBody,
   UpdatePlanBody,
 } from '@/validators/platform-billing.validators'
@@ -354,6 +359,28 @@ export async function listStaffBillingSubscriptions(
   })
   await auditBillingView(actor, tenantId)
   return page
+}
+
+/**
+ * One page of a customer tenant's invoices across every subscription it
+ * has held with the running provider and mode, newest first, audited as a
+ * billing read. Empty with payments off.
+ * @param actor - The staff member (a platform viewer or above; the route checked).
+ * @param tenantId - The tenant.
+ * @param query - The parsed cursor and status filter.
+ * @returns The page; no invoice carries its link.
+ * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant; 503 or 502 when the provider fails.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listStaffInvoices(
+  actor: Actor,
+  tenantId: string,
+  query: StaffInvoiceListQuery
+): Promise<ListPage<StaffInvoiceView>> {
+  await customerTenant(tenantId)
+  const page = await listInvoicesForStaff(tenantId, query.cursor, query.status)
+  await auditBillingView(actor, tenantId)
+  return { ...page, items: page.items.map((invoice) => toStaffInvoiceView(invoice)) }
 }
 
 /**

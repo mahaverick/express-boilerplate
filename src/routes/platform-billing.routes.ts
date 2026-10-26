@@ -52,6 +52,12 @@ export function createPlatformTenantBillingRouter(limiters: PlatformLimiters): R
     limiters.searchLimiter,
     platformBillingController.listSubscriptions
   )
+  router.get(
+    '/invoices',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformBillingController.listInvoices
+  )
   router.post(
     '/resync',
     requirePlatformRole('manager'),

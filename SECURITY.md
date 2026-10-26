@@ -743,7 +743,12 @@ their role there is their platform role (`src/services/platform.service.ts`).
 - **Billing.** Staff read a tenant's billing as a platform viewer
   (`/platform/tenants/:id/billing`, audited as `billing.viewed` once per
   staff member and tenant every ten minutes), never with the billing email
-  or another owner-only field. A manager resyncs it, extends its trial and
+  or another owner-only field. Its paged lists (`…/billing/history`,
+  `events`, `subscriptions` and `invoices`) are a viewer's too, share that
+  audit window, and bind their cursors to the tenant. An event shows its
+  type, outcome and error, never a provider id or payload; a staff invoice
+  carries no link, since the provider's invoice page shows the payer's
+  contact details. A manager resyncs it, extends its trial and
   adds or revokes grants; an admin cancels its subscription. Staff never take
   payment for a tenant, and never make it pay or mark it paying: a grant
   covers a comp, and it only ever adds access. A staff member whose role is

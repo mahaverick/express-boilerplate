@@ -136,6 +136,19 @@ describe('FakeBillingProvider', () => {
     expect(page.items[0]).toMatchObject({ status: 'paid', amountMinor: 99_900, currency: 'INR' })
   })
 
+  it('lists invoices with the subscription they bill, only of the statuses asked for', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+
+    const paid = await provider.listInvoices([id], null, ['paid', 'issued'])
+    const issued = await provider.listInvoices([id], null, ['issued'])
+
+    expect(paid.items).toStrictEqual([
+      expect.objectContaining({ status: 'paid', subscriptionId: id }) as unknown,
+    ])
+    expect(issued).toStrictEqual({ items: [], nextCursor: null })
+  })
+
   it("starts a deferred start's first cycle at its start, not at the moment it is charged", async () => {
     const startAt = new Date('2026-12-01T00:00:00.000Z')
     const id = await createOne(startAt)

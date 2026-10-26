@@ -240,6 +240,13 @@ const ROUTES: readonly GateRow[] = [
     target: 'tenant',
   },
   {
+    method: 'get',
+    path: '/tenants/:id/billing/invoices',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  {
     method: 'post',
     path: '/tenants/:id/billing/resync',
     minRole: 'manager',

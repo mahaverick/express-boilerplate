@@ -2,7 +2,7 @@
  * @file Request bodies of the staff billing routes: one tenant's trial
  * extension, grant and staff cancel; a plan's preview and edit; a new
  * price; the billing settings edit; the alerts list query; and one tenant's
- * history, events and subscriptions list queries. Every write
+ * history, events, subscriptions and invoices list queries. Every write
  * carries the staff member's reason (`reasonSchema`). A grant or a plan
  * names registry keys and values of each key's kind, so a typo or a wrong
  * kind is a field error, never a stored value that grants nothing. A grant
@@ -15,6 +15,7 @@ import {
   BILLING_INTERVALS,
   BILLING_PROVIDER_MODES,
   BILLING_PROVIDERS,
+  INVOICE_STATUSES,
   MAX_TRIAL_DAYS,
   STAFF_CANCEL_WHEN,
 } from '@/constants/billing.constants'
@@ -386,3 +387,20 @@ export const billingSubscriptionListSchema = listParamsSchema({
  * A parsed subscriptions list query.
  */
 export type BillingSubscriptionListQuery = z.output<typeof billingSubscriptionListSchema>
+
+/**
+ * `GET /platform/tenants/:id/billing/invoices` query: the previous page's
+ * cursor and a comma list of statuses. The provider pages forward only,
+ * newest first, 20 invoices a page, so the list takes no sort, search,
+ * direction, limit or total.
+ */
+export const staffInvoiceListSchema = z.object({
+  // Any string, the empty one included: verifyCursor refuses a bad one as InvalidCursorError, as the shared lists do.
+  cursor: z.string().optional(),
+  status: listFilter('status', INVOICE_STATUSES).optional(),
+})
+
+/**
+ * A parsed staff invoice list query.
+ */
+export type StaffInvoiceListQuery = z.output<typeof staffInvoiceListSchema>
