@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.1.3](https://github.com/mahaverick/express-boilerplate/compare/v9.1.2...v9.1.3) (2026-10-26)
+
+
+### Bug Fixes
+
+* **billing:** true next steps in staff billing refusals ([#160](https://github.com/mahaverick/express-boilerplate/issues/160)) ([f0227d1](https://github.com/mahaverick/express-boilerplate/commit/f0227d112e0e956da28f63fb845079fa52055286))
+
 ## [9.1.2](https://github.com/mahaverick/express-boilerplate/compare/v9.1.1...v9.1.2) (2026-10-26)
 
 
