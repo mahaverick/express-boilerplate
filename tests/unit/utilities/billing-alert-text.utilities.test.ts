@@ -3,15 +3,16 @@ import {
   BILLING_ALERT_TEXT,
   cancelFailedMarker,
   LIFECYCLE_ALERT_TEXT,
+  readFailedMarker,
 } from '@/utilities/billing-alert-text.utilities'
 
 describe('BILLING_ALERT_TEXT', () => {
   it('words a refund in rupees and keeps the provider ids', () => {
     expect(BILLING_ALERT_TEXT.duplicateRefunded('sub_FAKE1', 99_900, 'rfnd_FAKE1')).toBe(
-      'We cancelled duplicate subscription sub_FAKE1 and refunded ₹999 in rfnd_FAKE1. No action needed.'
+      'We cancelled duplicate subscription sub_FAKE1 and refunded ₹999 in refund rfnd_FAKE1. No action needed.'
     )
     expect(BILLING_ALERT_TEXT.archivedRefunded('sub_FAKE1', 14_999_950, 'rfnd_FAKE1')).toBe(
-      'We cancelled subscription sub_FAKE1, which an archived workspace adopted, and refunded ₹1,49,999.50 in rfnd_FAKE1. No action needed.'
+      'We cancelled subscription sub_FAKE1, which an archived workspace adopted, and refunded ₹1,49,999.50 in refund rfnd_FAKE1. No action needed.'
     )
   })
 
@@ -25,6 +26,8 @@ describe('BILLING_ALERT_TEXT', () => {
     ]) {
       expect(text).toContain(marker)
     }
+    expect(BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X')).toContain(readFailedMarker('sub_X'))
+    expect(BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X')).not.toContain(marker)
     // A duplicate never became the workspace's current subscription, so the reconcile ignores it.
     expect(BILLING_ALERT_TEXT.duplicateCancelFailed('sub_X')).not.toContain(marker)
   })
@@ -32,6 +35,7 @@ describe('BILLING_ALERT_TEXT', () => {
   it('keeps the lifecycle text in every lifecycle cancel alert, which the retry searches for', () => {
     for (const text of [
       BILLING_ALERT_TEXT.lifecycleCancelFailed('sub_X'),
+      BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X'),
       BILLING_ALERT_TEXT.lifecycleCheckoutReadFailed('sub_X'),
       BILLING_ALERT_TEXT.lifecycleCheckoutSyncFailed(),
     ]) {

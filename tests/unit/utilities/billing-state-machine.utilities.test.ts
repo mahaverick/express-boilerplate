@@ -478,7 +478,7 @@ describe('nextBillingRow: a switch paid after the current subscription renewed',
         kind: 'alert',
         alert: 'reconcile_repair',
         message:
-          'Interval switch sub_next was paid after subscription sub_cur renewed. We cancelled and refunded sub_next and kept sub_cur.',
+          'Interval switch sub_next was paid after subscription sub_cur renewed, so we kept sub_cur and are refunding sub_next. Its own alert reports the refund.',
         subscriptionId: 'sub_next',
       },
     ])

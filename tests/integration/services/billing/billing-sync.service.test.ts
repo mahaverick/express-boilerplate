@@ -867,7 +867,7 @@ describe('syncTenantBilling', () => {
     const alerts = await alertsOf(tenantId)
     expect(alerts).toContainEqual({
       kind: 'reconcile_repair',
-      message: `Interval switch ${nextId} was paid after subscription ${subscriptionId} renewed. We cancelled and refunded ${nextId} and kept ${subscriptionId}.`,
+      message: `Interval switch ${nextId} was paid after subscription ${subscriptionId} renewed, so we kept ${subscriptionId} and are refunding ${nextId}. Its own alert reports the refund.`,
     })
   })
 

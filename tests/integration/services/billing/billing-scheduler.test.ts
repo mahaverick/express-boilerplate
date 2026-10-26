@@ -589,7 +589,7 @@ describe('runFrequentBilling', () => {
       expect(await stateOf(tenantId)).toBe('trialing')
       const alerts = await alertsOf(tenantId)
       expect(alerts).toHaveLength(1)
-      expect(alerts[0]?.message).toContain('reading its subscriptions from Razorpay failed')
+      expect(alerts[0]?.message).toContain('syncing its subscriptions failed')
     }
   )
 
@@ -617,7 +617,7 @@ describe('runFrequentBilling', () => {
     const alerts = await alertsOf(tenantId)
     expect(alerts).toHaveLength(1)
     expect(alerts[0]?.message).toContain('changed during every sync attempt')
-    expect(alerts[0]?.message).not.toContain('reading its subscriptions from Razorpay failed')
+    expect(alerts[0]?.message).not.toContain('syncing its subscriptions failed')
   })
 
   it('moves a lapsed trial to Free when the provider does not know its subscription, and alerts staff once', async () => {
@@ -980,6 +980,11 @@ describe('runDailyBilling', () => {
     [
       'an earlier',
       (id: string) => `Could not cancel subscription ${id}. Cancel it at the provider.`,
+    ],
+    [
+      'the read-failed',
+      (id: string) =>
+        `Reading subscription ${id} of a suspended or archived workspace from Razorpay failed, so we did not cancel it and it still charges. Cancel it in Razorpay.`,
     ],
   ])(
     'syncs a Free row whose current subscription a failed cancel left running, named in %s wording, so the cancel is tried again',

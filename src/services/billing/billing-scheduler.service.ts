@@ -61,6 +61,7 @@ import {
   cancelFailedMarker,
   legacyCancelFailedMarker,
   LIFECYCLE_ALERT_TEXT,
+  readFailedMarker,
 } from '@/utilities/billing-alert-text.utilities'
 import { isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { isRunning } from '@/utilities/billing-state-machine.utilities'
@@ -284,7 +285,7 @@ async function endTrial(
         throw error
       }
       if (!isUnknownIdError(error)) {
-        await alertOnce(row.tenantId, BILLING_ALERT_TEXT.trialEndReadFailed())
+        await alertOnce(row.tenantId, BILLING_ALERT_TEXT.trialEndSyncFailed())
         throw error
       }
       logger.warn('A lapsed trial holds a subscription the provider does not know', {
@@ -513,7 +514,7 @@ async function cancelLifecycleRow(
         subscriptionId: currentId,
       })
       if (isArchived) await didCancelForLifecycle(provider, tenantId, currentId, false)
-      else await alertOnce(tenantId, BILLING_ALERT_TEXT.lifecycleCancelFailed(currentId))
+      else await alertOnce(tenantId, BILLING_ALERT_TEXT.lifecycleReadFailed(currentId))
     }
     if (current !== undefined && !ENDED_STATUSES.has(current.status)) {
       const hasCycle = current.status !== 'created' && current.status !== 'authenticated'
@@ -822,7 +823,11 @@ async function isEndedFree(row: TenantBillingRecord): Promise<boolean> {
   if (row.providerSubscriptionId === null) return true
   const id = row.providerSubscriptionId
   // An alert raised before the current wording names the failed cancel in its own words.
-  for (const marker of [cancelFailedMarker(id), legacyCancelFailedMarker(id)]) {
+  for (const marker of [
+    cancelFailedMarker(id),
+    readFailedMarker(id),
+    legacyCancelFailedMarker(id),
+  ]) {
     if (await billingRepository.hasAlertNaming(row.tenantId, 'reconcile_repair', marker)) {
       return false
     }

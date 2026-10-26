@@ -499,7 +499,7 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(alerts[0]?.kind).toBe('reconcile_repair')
     expect(alerts[0]?.message).toMatch(
       new RegExp(
-        `^We cancelled subscription ${pending}, which an archived workspace adopted, and refunded ₹[\\d,.]+ in rfnd_\\w+\\. No action needed\\.$`
+        `^We cancelled subscription ${pending}, which an archived workspace adopted, and refunded ₹[\\d,.]+ in refund rfnd_\\w+\\. No action needed\\.$`
       )
     )
   })
