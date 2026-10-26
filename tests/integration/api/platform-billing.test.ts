@@ -1068,6 +1068,60 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     }
   )
 
+  it('cancels the scheduled switch a lapsed tenant still holds, never its checkout or its ended subscription', async () => {
+    const { tenant, subscriptionId } = await lapsedCancellingWorkspace()
+    const nextId = await fakeSubscription(
+      { tenantId: tenant.id, priceId: plans.yearPriceId },
+      'year'
+    )
+    const pendingId = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await setBilling(tenant.id, {
+      nextSubscriptionId: nextId,
+      nextPriceId: plans.yearPriceId,
+      pendingSubscriptionId: pendingId,
+    })
+    const { token } = await staff('admin')
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(200)
+    // A cancel ends the current and next subscriptions only; an unpaid checkout lapses on its own.
+    expect(cancel.mock.calls.map(([id]) => id)).toEqual([nextId])
+    cancel.mockRestore()
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+    expect(await subscriptionStatus(nextId)).toBe('cancelled')
+    expect(await subscriptionStatus(pendingId)).toBe('created')
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free', nextSubscriptionId: null })
+  })
+
+  it('never reports a cancel when the subscription a sync read as ended still runs at the provider', async () => {
+    const { tenant, subscriptionId } = await lapsedCancellingWorkspace()
+    await fake.fakeAdvance(subscriptionId, 'active')
+    const { token } = await staff('admin')
+    const original = fake.fetchSubscription.bind(fake)
+    let reads = 0
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // The sync's read sees it ended; every later read sees it running.
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => {
+        const sub = await original(id)
+        reads += 1
+        return id === subscriptionId && reads === 1 ? { ...sub, status: 'cancelled' as const } : sub
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(reads).toBeGreaterThan(1)
+    expect(response?.status).not.toBe(200)
+    expect(await billingAudit(tenant.id)).toEqual([])
+  })
+
   it('refuses a cycle-end cancel of a tenant the job moved to Free as having nothing to cancel', async () => {
     const { tenant } = await lapsedCancellingWorkspace()
     await syncTenantBilling(tenant.id, 'job')

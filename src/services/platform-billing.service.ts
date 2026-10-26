@@ -106,7 +106,7 @@ import {
   emitBillingDiff,
   publishEntitlementsChanged,
 } from '@/services/billing/billing-events.service'
-import { getBillingProvider } from '@/services/billing/billing-provider.service'
+import { callProvider, getBillingProvider } from '@/services/billing/billing-provider.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import {
   cancelSubscriptions,
@@ -122,6 +122,7 @@ import { auditThrottledView } from '@/services/platform-view-audit.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import { redisKey } from '@/services/redis.service'
 import type { Actor } from '@/types/actor'
+import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
 import {
   effectiveBillingState,
   extendTrialEnd,
@@ -147,6 +148,15 @@ const planRepository = new PlanRepository()
 const platformBillingRepository = new PlatformBillingRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
+
+/**
+ * Statuses after which a subscription can no longer be cancelled.
+ */
+const ENDED_SUBSCRIPTION_STATUSES: ReadonlySet<ProviderSubscription['status']> = new Set([
+  'cancelled',
+  'completed',
+  'expired',
+])
 
 /**
  * What staff read when a cancel finds a row of another provider or mode.
@@ -448,6 +458,29 @@ async function syncIfLapsed(tenantId: string): Promise<TenantBillingRecord | und
 }
 
 /**
+ * Whether a cancel would find nothing to end on a row a lapsed sync just
+ * moved to Free. It mirrors `cancelSubscriptions`, which ends only the
+ * current and the next subscription and never the pending checkout (an
+ * unpaid checkout lapses at the provider; a paid one the sync adopts as
+ * current). So the row is on Free, holds no next subscription, and its
+ * current one, read again now, has ended.
+ * @param provider - The running provider.
+ * @param row - The row after the sync.
+ * @returns True when nothing is left to cancel.
+ * @throws {HttpError} 503 or 502 when the provider read fails.
+ */
+async function hasNothingLeftToCancel(
+  provider: BillingProviderClient,
+  row: TenantBillingRecord
+): Promise<boolean> {
+  if (row.state !== 'free' || row.nextSubscriptionId !== null) return false
+  const currentId = row.providerSubscriptionId
+  if (currentId === null) return true
+  const current = await callProvider(() => provider.fetchSubscription(currentId))
+  return ENDED_SUBSCRIPTION_STATUSES.has(current.status)
+}
+
+/**
  * Extend a tenant's trial, or put a Free tenant back on one: the end moves
  * `days` past the later of now and a running trial's end. A Free tenant, or
  * one whose trial already lapsed, starts its trial now. The reminder claims
@@ -722,8 +755,8 @@ export async function cancelByStaff(
   }
   // As the extension does: a lapsed row moves to Free by the job's cause before the cancel reads it.
   const synced = await syncIfLapsed(tenantId)
-  if (synced?.state === 'free' && synced.nextSubscriptionId === null) {
-    // The sync moves to Free only on a subscription that ended: as for one that ended before, the cancel is only audited.
+  if (synced !== undefined && (await hasNothingLeftToCancel(provider, synced))) {
+    // As for a subscription that ended before, the cancel is only audited.
     await withTransaction(async (tx) => {
       await lockStaffAndBilling(actor, 'admin', tenantId, tx)
       await audit(tx)
