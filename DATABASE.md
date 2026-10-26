@@ -254,6 +254,10 @@ marked by a comment in its file (0024's has none):
   `users`, set null on delete) and `cancel_marker_at`. An owner's or staff
   cancel writes it before it calls the provider, so a sync that brings the
   cancel in first reads it as theirs in the mail and in analytics.
+- `0037` is generated whole. It replaces `billing_events_tenant_received_idx`
+  (`tenant_id`, `received_at`) with `billing_events_tenant_received_sort_idx`
+  (`tenant_id`, `received_at`, `id`), so the staff events list's both sorts,
+  with their id tiebreak, read in index order with no Sort.
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until
@@ -688,6 +692,19 @@ as described so it does not build them a second time under the lock, then run
   rewrite), a foreign key on `cancel_marker_user_id` that takes
   `SHARE ROW EXCLUSIVE` on `users`, and a CHECK that every row (all NULL)
   passes. `tenant_billing` takes a brief `ACCESS EXCLUSIVE` for the scan.
+
+- **`0037` blocks writes to `billing_events` until its index is built.** A
+  plain `CREATE INDEX` takes a `SHARE` lock, so the webhook's event inserts
+  wait while reads continue. On a large table, build the new index and drop
+  the old one first, each statement on its own outside any transaction:
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS billing_events_tenant_received_sort_idx ON billing_events (tenant_id, received_at, id);
+  DROP INDEX CONCURRENTLY IF EXISTS billing_events_tenant_received_idx;
+  ```
+
+  Then edit the `0037` file: add `IF EXISTS` to its `DROP INDEX` and
+  `IF NOT EXISTS` to its `CREATE INDEX`, so `pnpm db:migrate` only records it.
 
 ## The test database
 
