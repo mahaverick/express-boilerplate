@@ -78,7 +78,7 @@ export const grantBodySchema = z
   .strictObject({
     key: z.string({ error: 'Choose a limit or feature this product has.' }),
     value: z.union([z.boolean(), z.number(), z.null()], {
-      error: 'Enter a number for a limit, or true for a feature.',
+      error: 'Enter a whole number for a limit, or turn the feature on.',
     }),
     expiresAt: z.iso
       .datetime({ error: 'Choose an end date, or leave Ends on empty for no end date.' })
@@ -141,13 +141,15 @@ export const staffCancelBodySchema = z.strictObject({
  * would change nothing.
  */
 const planEntitlementsSchema = z
-  .record(z.string(), z.unknown(), { error: 'Send entitlements as an object of keys and values.' })
+  .record(z.string(), z.unknown(), { error: 'Choose at least one feature or limit to change.' })
   .superRefine((entitlements, context) => {
-    const known = Object.keys(ENTITLEMENTS).join(', ')
+    const known = Object.values(ENTITLEMENTS)
+      .map((definition: EntitlementDefinition) => definition.label)
+      .join(', ')
     if (Object.keys(entitlements).length === 0) {
       context.addIssue({
         code: 'custom',
-        message: `Send at least one entitlement to change. This product has: ${known}.`,
+        message: `Change at least one feature or limit. This product has: ${known}.`,
       })
     }
     for (const [key, value] of Object.entries(entitlements)) {
@@ -155,7 +157,7 @@ const planEntitlementsSchema = z
         context.addIssue({
           code: 'custom',
           path: [key],
-          message: `Remove the keys this product doesn't have. It has: ${known}.`,
+          message: `Choose from the features and limits this product has: ${known}.`,
         })
         continue
       }

@@ -49,7 +49,11 @@ export const platformEmailListSchema = listParamsSchema({
   },
   refine: (filters, context) => {
     if (filters.from !== undefined && filters.to !== undefined && filters.from > filters.to) {
-      context.addIssue({ code: 'custom', path: ['to'], message: 'to must not be before from.' })
+      context.addIssue({
+        code: 'custom',
+        path: ['to'],
+        message: 'Choose an end date on or after the start date.',
+      })
     }
   },
 })
