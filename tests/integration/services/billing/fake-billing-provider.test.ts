@@ -140,8 +140,8 @@ describe('FakeBillingProvider', () => {
     const id = await createOne()
     await provider.fakeAdvance(id, 'active')
 
-    const paid = await provider.listInvoices([id], null, ['paid', 'issued'])
-    const issued = await provider.listInvoices([id], null, ['issued'])
+    const paid = await provider.listInvoices([id], null, { statuses: ['paid', 'issued'] })
+    const issued = await provider.listInvoices([id], null, { statuses: ['issued'] })
 
     expect(paid.items).toStrictEqual([
       expect.objectContaining({ status: 'paid', subscriptionId: id }) as unknown,

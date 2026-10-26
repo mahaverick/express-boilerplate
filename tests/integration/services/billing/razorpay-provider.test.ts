@@ -602,7 +602,7 @@ describe('listInvoices', () => {
       { status: 200, json: collection([issued(3), paidInvoice(4)]) },
     ])
 
-    const page = await provider.listInvoices(['sub_A', 'sub_B'], null, ['issued'])
+    const page = await provider.listInvoices(['sub_A', 'sub_B'], null, { statuses: ['issued'] })
 
     expect(page.items.map((item) => [item.id, item.subscriptionId])).toStrictEqual([
       ['inv_N0', 'sub_A'],
@@ -616,7 +616,10 @@ describe('listInvoices', () => {
     const paidPage = Array.from({ length: INVOICE_PAGE_SIZE }, (_, n) => paidInvoice(n))
     fake.reply('GET', '/invoices', 200, collection(paidPage))
 
-    const page = await provider.listInvoices(['sub_A'], null, ['cancelled'])
+    const page = await provider.listInvoices(['sub_A'], null, {
+      statuses: ['cancelled'],
+      maxReads: 10,
+    })
 
     // Ten reads of 20 paid invoices each, none cancelled: the page stops at the cap.
     expect(page).toStrictEqual({ items: [], nextCursor: `0:${String(10 * INVOICE_PAGE_SIZE)}` })
@@ -627,7 +630,19 @@ describe('listInvoices', () => {
     })
   })
 
-  it('reads every subscription unfiltered, with no cap on the reads', async () => {
+  it('answers an unfiltered page short, with a cursor, after its most Razorpay reads', async () => {
+    const empty = collection([])
+    const ids = Array.from({ length: 12 }, (_, n) => `sub_${String(n)}`)
+    fake.reply('GET', '/invoices', 200, empty)
+
+    const page = await provider.listInvoices(ids, null, { maxReads: 10 })
+
+    // Ten subscriptions read, each with no invoices: the page stops before the eleventh.
+    expect(page).toStrictEqual({ items: [], nextCursor: '10:0' })
+    expect(invoiceCalls()).toHaveLength(10)
+  })
+
+  it('reads every subscription with no cap asked for, as the owner list does', async () => {
     const empty = collection([])
     const ids = Array.from({ length: 12 }, (_, n) => `sub_${String(n)}`)
     fake.replyInTurn('GET', '/invoices', [

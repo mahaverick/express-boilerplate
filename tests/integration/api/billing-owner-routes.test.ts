@@ -875,6 +875,16 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
     expect(page.items).toEqual([
       expect.objectContaining({ amountMinor: 99_900, currency: 'INR', status: 'paid' }),
     ])
+    // The owner's shape exactly: the provider's subscription id is staff-only.
+    expect(Object.keys(page.items[0] ?? {}).toSorted()).toStrictEqual([
+      'amountMinor',
+      'currency',
+      'id',
+      'issuedAt',
+      'paidAt',
+      'status',
+      'url',
+    ])
     expect(page.page).toMatchObject({ nextCursor: null, hasNext: false, hasPrev: false })
   })
 

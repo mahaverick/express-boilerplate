@@ -18,6 +18,7 @@ import type {
   BillingProviderClient,
   CheckoutConfirm,
   CreateSubscriptionInput,
+  InvoiceListOptions,
   InvoiceView,
   ProviderInvoice,
   ProviderInvoicePage,
@@ -322,17 +323,20 @@ export class FakeBillingProvider implements BillingProviderClient {
 
   /**
    * Every invoice of the subscriptions, in the order given, newest first
-   * within each, on one page; with `statuses`, only those of a listed status.
+   * within each, on one page; with `options.statuses`, only those of a
+   * listed status. The fake makes no provider calls, so `maxReads` changes
+   * nothing.
    * @param subscriptionIds - The subscriptions.
    * @param _cursor - Unused; the fake answers one page.
-   * @param statuses - The statuses to list, or undefined for all.
+   * @param options - The statuses to list.
    * @returns The page.
    */
   async listInvoices(
     subscriptionIds: string[],
     _cursor: string | null,
-    statuses?: readonly InvoiceView['status'][]
+    options: InvoiceListOptions = {}
   ): Promise<ProviderInvoicePage> {
+    const { statuses } = options
     const items: ProviderInvoice[] = []
     for (const id of subscriptionIds) {
       const record = await this.#read<FakeSubscriptionRecord>(`sub:${id}`)

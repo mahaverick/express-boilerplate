@@ -43,6 +43,7 @@ import type {
   TenantBillingRecord,
 } from '@/database/models/billing.model'
 import { HttpError } from '@/errors/http-error'
+import { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import {
   displayName,
@@ -83,6 +84,7 @@ import type { Actor } from '@/types/actor'
 import type {
   BillingProviderClient,
   CheckoutConfirm,
+  InvoiceListOptions,
   InvoiceView,
   ProviderInvoice,
   ProviderSubscription,
@@ -112,6 +114,12 @@ const INVOICE_LIST = 'tenant-billing-invoices'
  * The sort and list name the staff invoice cursor is bound to.
  */
 const STAFF_INVOICE_LIST = 'platform-tenant-billing-invoices'
+
+/**
+ * The most provider calls one staff invoice page makes before it answers
+ * short with a cursor.
+ */
+const STAFF_INVOICE_MAX_READS = 10
 
 /**
  * The most subscriptions the invoice list reads, newest first.
@@ -1613,7 +1621,7 @@ async function invoiceSubscriptionIds(
  * @param tenantId - The workspace.
  * @param cursor - The previous page's `nextCursor`, if any.
  * @param list - The list's name.
- * @param statuses - The staff list's status filter, or undefined.
+ * @param options - The staff list's status filter and provider-call cap; neither for the owner's list.
  * @returns The page.
  * @throws {InvalidCursorError} When the cursor does not verify.
  * @throws {HttpError} 503 or 502 when the provider fails.
@@ -1623,8 +1631,9 @@ async function invoicePage(
   tenantId: string,
   cursor: string | undefined,
   list: string,
-  statuses: readonly InvoiceStatus[] | undefined
+  options: InvoiceListOptions
 ): Promise<ListPage<ProviderInvoice>> {
+  const { statuses } = options
   const subscriptionIds = await invoiceSubscriptionIds(tenantId, provider)
   const scope = invoiceScope(list, tenantId, subscriptionIds, statuses)
   let providerCursor: string | null = null
@@ -1637,7 +1646,7 @@ async function invoicePage(
     providerCursor = String(key)
   }
   const page = await callProvider(() =>
-    provider.listInvoices(subscriptionIds, providerCursor, statuses)
+    provider.listInvoices(subscriptionIds, providerCursor, options)
   )
   return {
     items: page.items,
@@ -1672,7 +1681,8 @@ export async function listInvoices(
   if (!(await isMemberOwner(actor, tenantId))) {
     throw new HttpError(INVOICES_OWNER_ONLY_MESSAGE, 403)
   }
-  const page = await invoicePage(provider, tenantId, cursor, INVOICE_LIST, undefined)
+  // No call cap: an owner's page fills across every subscription, as the contract promises.
+  const page = await invoicePage(provider, tenantId, cursor, INVOICE_LIST, {})
   return {
     ...page,
     items: page.items.map(({ subscriptionId: _subscription, ...invoice }) => invoice),
@@ -1681,14 +1691,17 @@ export async function listInvoices(
 
 /**
  * One page of a customer workspace's invoices for staff, from the same
- * subscriptions as the owner's list, optionally only some statuses. With
- * payments off there is no provider to read, and the page is empty. The
- * caller has checked the workspace and the staff role.
+ * subscriptions as the owner's list, optionally only some statuses. Every
+ * page makes at most `STAFF_INVOICE_MAX_READS` provider calls, filtered or
+ * not, since any staff viewer can page any workspace. With payments off
+ * there is no provider to read: the first page is empty, and any cursor is
+ * refused, since no list it could resume exists. The caller has checked the
+ * workspace and the staff role.
  * @param tenantId - The customer workspace.
  * @param cursor - The previous page's `nextCursor`, if any.
  * @param statuses - The statuses to list, or undefined for all.
  * @returns The page, each invoice with the subscription it bills.
- * @throws {InvalidCursorError} When the cursor does not verify.
+ * @throws {InvalidCursorError} When the cursor does not verify, or any cursor with payments off.
  * @throws {HttpError} 503 or 502 when the provider fails.
  */
 export async function listInvoicesForStaff(
@@ -1698,6 +1711,7 @@ export async function listInvoicesForStaff(
 ): Promise<ListPage<ProviderInvoice>> {
   const provider = getBillingProvider()
   if (provider === null) {
+    if (cursor !== undefined) throw new InvalidCursorError()
     return {
       items: [],
       page: {
@@ -1709,5 +1723,8 @@ export async function listInvoicesForStaff(
       },
     }
   }
-  return invoicePage(provider, tenantId, cursor, STAFF_INVOICE_LIST, statuses)
+  return invoicePage(provider, tenantId, cursor, STAFF_INVOICE_LIST, {
+    ...(statuses !== undefined && { statuses }),
+    maxReads: STAFF_INVOICE_MAX_READS,
+  })
 }

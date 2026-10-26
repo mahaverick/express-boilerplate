@@ -328,6 +328,20 @@ export type ProviderRefundOutcome =
   | { status: 'partly_refunded' }
 
 /**
+ * How a provider invoice page is narrowed and bounded.
+ */
+export interface InvoiceListOptions {
+  /**
+   * The statuses to list; every shown status when absent.
+   */
+  statuses?: readonly InvoiceStatus[]
+  /**
+   * The most provider calls one page makes; unbounded when absent.
+   */
+  maxReads?: number
+}
+
+/**
  * One page of invoices.
  */
 export interface ProviderInvoicePage {
@@ -401,17 +415,17 @@ export interface BillingProviderClient {
   /**
    * One page of the invoices of some subscriptions, in the order given.
    * With `statuses`, an invoice of another status is left out as a draft
-   * is, and a page may end short of full, with a cursor, after a bounded
-   * number of provider reads.
+   * is. With `maxReads`, a page makes at most that many provider calls and
+   * may then end short of full, even empty, with a cursor to resume from.
    * @param subscriptionIds - The subscriptions, newest first.
    * @param cursor - The previous page's `nextCursor`, or null for the first page.
-   * @param statuses - The statuses to list, or undefined for every shown one.
+   * @param options - The statuses to list and the most provider calls, each optional.
    * @returns The page.
    */
   listInvoices(
     subscriptionIds: string[],
     cursor: string | null,
-    statuses?: readonly InvoiceStatus[]
+    options?: InvoiceListOptions
   ): Promise<ProviderInvoicePage>
   /**
    * The subscription a payment was taken for, through the payment's invoice:

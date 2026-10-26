@@ -266,10 +266,12 @@ export const MAX_TRIAL_DAYS = 90
 export const STAFF_BILLING_LIST_LIMIT = 20
 
 /**
- * Where a stored provider event stands: `processed` changed the workspace
- * (or was a duplicate), `unused` was handled and changed nothing (its error
- * says why), `failed` threw on its last attempt and retries, `pending` has
- * not been handled yet.
+ * Where a stored provider event stands: `processed` was handled and the
+ * workspace synced (the sync may have changed nothing); `unused` was handled
+ * and changed nothing, its error saying why; `failed` gave up after every
+ * retry and staff were alerted, so nothing retries it (resync the
+ * workspace); `pending` is not handled yet, including while its job retries,
+ * since a retried attempt writes nothing to the row.
  */
 export const BILLING_EVENT_STATUSES = ['processed', 'unused', 'failed', 'pending'] as const
 

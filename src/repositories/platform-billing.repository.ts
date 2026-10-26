@@ -198,7 +198,11 @@ export interface BillingEventListItem {
   mode: BillingProviderMode
   receivedAt: Date
   processedAt: Date | null
-  attempts: number
+  /**
+   * How many times an outcome was recorded on the row (handled, or given up
+   * on), 0 or 1 in practice; never the number of job attempts.
+   */
+  recordedOutcomes: number
   error: string | null
 }
 
@@ -301,7 +305,7 @@ export function billingEventList(
       mode: row.mode,
       receivedAt: row.receivedAt,
       processedAt: row.processedAt,
-      attempts: row.attempts,
+      recordedOutcomes: row.attempts,
       error: row.error,
     }),
   })

@@ -20,6 +20,7 @@ import type {
   BillingProviderClient,
   CheckoutConfirm,
   CreateSubscriptionInput,
+  InvoiceListOptions,
   InvoiceView,
   ProviderInvoice,
   ProviderInvoicePage,
@@ -59,13 +60,6 @@ const INVOICE_STATUSES: Readonly<Record<string, InvoiceView['status']>> = {
   cancelled: 'cancelled',
   expired: 'expired',
 }
-
-/**
- * The most invoice pages one filtered invoice page reads before it answers
- * short with a cursor, so a narrow status filter over many subscriptions
- * never holds a request for dozens of provider calls.
- */
-const FILTERED_INVOICE_MAX_READS = 10
 
 /**
  * How many subscriptions one reconcile page reads (Razorpay's maximum).
@@ -554,27 +548,28 @@ export class RazorpayProvider implements BillingProviderClient {
    * or only ones the view drops, never leaves the page short while a later
    * one has some. The cursor is `<subscription index>:<raw skip>`, where the
    * skip counts every invoice Razorpay returned, dropped ones included.
-   * Razorpay cannot filter invoices by status, so `statuses` drops the
-   * others as the view drops a draft; a filtered page reads at most
-   * `FILTERED_INVOICE_MAX_READS` Razorpay pages and may then answer short,
-   * even empty, with a cursor to resume from.
+   * Razorpay cannot filter invoices by status, so `options.statuses` drops
+   * the others as the view drops a draft. With `options.maxReads`, a page
+   * makes at most that many Razorpay calls and may then answer short, even
+   * empty, with a cursor to resume from.
    * @param subscriptionIds - The subscriptions, newest first.
    * @param cursor - The previous page's `nextCursor`, or null.
-   * @param statuses - The statuses to list, or undefined for every shown one.
+   * @param options - The statuses to list and the most Razorpay calls, each optional.
    * @returns The page.
    */
   async listInvoices(
     subscriptionIds: string[],
     cursor: string | null,
-    statuses?: readonly InvoiceView['status'][]
+    options: InvoiceListOptions = {}
   ): Promise<ProviderInvoicePage> {
     if (subscriptionIds.length === 0) return { items: [], nextCursor: null }
     let { index, skip } = parseInvoiceCursor(cursor, subscriptionIds.length)
-    const shown = statuses === undefined ? undefined : new Set(statuses)
+    const shown = options.statuses === undefined ? undefined : new Set(options.statuses)
+    const maxReads = options.maxReads ?? Number.POSITIVE_INFINITY
     const items: ProviderInvoice[] = []
     let reads = 0
     while (index < subscriptionIds.length) {
-      if (shown !== undefined && reads >= FILTERED_INVOICE_MAX_READS) {
+      if (reads >= maxReads) {
         return { items, nextCursor: `${String(index)}:${String(skip)}` }
       }
       reads += 1

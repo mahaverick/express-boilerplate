@@ -24,6 +24,7 @@ import {
   type EntitlementDefinition,
   type EntitlementValue,
 } from '@/constants/entitlements.constants'
+import { MAX_CURSOR_LENGTH } from '@/utilities/list-cursor.utilities'
 import { listFilter, listParamsSchema } from '@/validators/list.validators'
 import { reasonSchema } from '@/validators/platform.validators'
 import { safeText } from '@/validators/safe-text.validators'
@@ -395,8 +396,8 @@ export type BillingSubscriptionListQuery = z.output<typeof billingSubscriptionLi
  * direction, limit or total.
  */
 export const staffInvoiceListSchema = z.object({
-  // Any string, the empty one included: verifyCursor refuses a bad one as InvalidCursorError, as the shared lists do.
-  cursor: z.string().optional(),
+  // Capped as the owner list's; verifyCursor refuses any other bad one as InvalidCursorError.
+  cursor: z.string().max(MAX_CURSOR_LENGTH).optional(),
   status: listFilter('status', INVOICE_STATUSES).optional(),
 })
 

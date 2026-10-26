@@ -17,7 +17,7 @@ import { ProviderError } from '@/errors/billing-provider-errors'
 import { sql } from '@/services/database.service'
 import { closeQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
-import type { InvoiceView, ProviderInvoicePage } from '@/types/billing'
+import type { InvoiceListOptions, InvoiceView, ProviderInvoicePage } from '@/types/billing'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   deleteTrackedTenants,
@@ -55,7 +55,7 @@ const NONE = null
 const ANY_STRING = expect.any(String) as unknown as string
 
 /**
- * The three database-backed lists, by their last path segment.
+ * The four staff billing lists (three database-backed, one provider-backed), by their last path segment.
  */
 const LISTS = ['history', 'events', 'subscriptions', 'invoices'] as const
 
@@ -266,20 +266,20 @@ describe('GET /api/v1/platform/tenants/:id/billing/events', () => {
       ['subscription.charged', 'processed'],
     ])
     expect(Object.keys(items[1] ?? {}).toSorted()).toStrictEqual([
-      'attempts',
       'error',
       'id',
       'mode',
       'processedAt',
       'provider',
       'receivedAt',
+      'recordedOutcomes',
       'status',
       'type',
     ])
     expect(items[1]).toMatchObject({
       provider: 'fake',
       mode: 'test',
-      attempts: 1,
+      recordedOutcomes: 1,
       processedAt: null,
       error: 'ProviderError: 503',
     })
@@ -433,17 +433,17 @@ function invoice(id: string, subscriptionId: string): InvoiceView & { subscripti
 
 /**
  * A stand-in for the provider's invoice list that answers one fixed page
- * with a provider cursor, recording each call's cursor and statuses.
+ * with a provider cursor, recording each call's cursor and options.
  * @param calls - Where each call is recorded.
  * @param page - The page to answer.
  * @returns The stand-in.
  */
 function pagedInvoices(
-  calls: { ids: string[]; cursor: string | null; statuses: unknown }[],
+  calls: { ids: string[]; cursor: string | null; options: unknown }[],
   page: ProviderInvoicePage
 ) {
-  return (ids: string[], cursor: string | null, statuses?: readonly string[]) => {
-    calls.push({ ids, cursor, statuses })
+  return (ids: string[], cursor: string | null, options?: InvoiceListOptions) => {
+    calls.push({ ids, cursor, options })
     return Promise.resolve(page)
   }
 }
@@ -517,7 +517,7 @@ describe('GET /api/v1/platform/tenants/:id/billing/invoices', () => {
     const { tenant } = await workspace()
     const { subscriptionId } = await makePaying(tenant.id)
     const { token } = await viewer()
-    const calls: { ids: string[]; cursor: string | null; statuses: unknown }[] = []
+    const calls: { ids: string[]; cursor: string | null; options: unknown }[] = []
     let first: Awaited<ReturnType<typeof listAs>> | undefined
     let second: Awaited<ReturnType<typeof listAs>> | undefined
 
@@ -539,18 +539,18 @@ describe('GET /api/v1/platform/tenants/:id/billing/invoices', () => {
     expect(second?.status).toBe(200)
     expect(pageOf(second?.body)).toMatchObject({ hasPrev: true, prevCursor: null })
     expect(calls).toStrictEqual([
-      { ids: [subscriptionId], cursor: null, statuses: ['paid'] },
-      { ids: [subscriptionId], cursor: '0:20', statuses: ['paid'] },
+      { ids: [subscriptionId], cursor: null, options: { statuses: ['paid'], maxReads: 10 } },
+      { ids: [subscriptionId], cursor: '0:20', options: { statuses: ['paid'], maxReads: 10 } },
     ])
   })
 
-  it("refuses an unsigned cursor, and a cursor from another tenant, filter or the owner's list", async () => {
+  it("refuses an unsigned cursor, and a cursor from another tenant's subscriptions, another filter or the owner's list", async () => {
     const { tenant, owner } = await workspace()
     const other = await workspace()
     const { subscriptionId } = await makePaying(tenant.id)
     await makePaying(other.tenant.id)
     const { token } = await viewer()
-    const calls: { ids: string[]; cursor: string | null; statuses: unknown }[] = []
+    const calls: { ids: string[]; cursor: string | null; options: unknown }[] = []
     let staffCursor = ''
     let ownerCursor = ''
 
@@ -580,6 +580,83 @@ describe('GET /api/v1/platform/tenants/:id/billing/invoices', () => {
       expect(response.status).toBe(400)
       expect(response.body).toMatchObject({ code: 'CURSOR_INVALID' })
     }
+  })
+
+  it('caps an unfiltered page at 10 provider calls too', async () => {
+    const { tenant } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    const { token } = await viewer()
+    const calls: { ids: string[]; cursor: string | null; options: unknown }[] = []
+
+    await withMutatedMethod(
+      fake,
+      'listInvoices',
+      pagedInvoices(calls, { items: [], nextCursor: '0:200' }),
+      async () => {
+        const response = await listAs(token, tenant.id, 'invoices')
+        expect(response.status).toBe(200)
+        expect(itemsOf(response.body)).toStrictEqual([])
+        expect(pageOf(response.body)).toMatchObject({ hasNext: true })
+      }
+    )
+
+    expect(calls).toStrictEqual([
+      { ids: [subscriptionId], cursor: null, options: { maxReads: 10 } },
+    ])
+  })
+
+  it('refuses a cursor from another tenant listing the very same subscriptions', async () => {
+    const mine = await workspace()
+    const theirs = await workspace()
+    // Both rows name one scheduled subscription and nothing else, so only the tenant tells their cursors apart.
+    for (const tenantId of [mine.tenant.id, theirs.tenant.id]) {
+      await setBilling(tenantId, {
+        provider: 'fake',
+        providerMode: 'test',
+        providerSubscriptionId: null,
+        nextSubscriptionId: 'sub_SHARED',
+      })
+    }
+    const { token } = await viewer()
+    const calls: { ids: string[]; cursor: string | null; options: unknown }[] = []
+    let refused: Awaited<ReturnType<typeof listAs>> | undefined
+
+    await withMutatedMethod(
+      fake,
+      'listInvoices',
+      pagedInvoices(calls, { items: [invoice('inv_A', 'sub_SHARED')], nextCursor: '0:20' }),
+      async () => {
+        const first = await listAs(token, mine.tenant.id, 'invoices')
+        const cursor = pageOf(first.body).nextCursor ?? ''
+        refused = await listAs(token, theirs.tenant.id, 'invoices', { cursor })
+      }
+    )
+
+    expect(calls.map((call) => call.ids)).toStrictEqual([['sub_SHARED']])
+    expect(refused?.status).toBe(400)
+    expect(refused?.body).toMatchObject({ code: 'CURSOR_INVALID' })
+  })
+
+  it('refuses a cursor over the length cap with a field error', async () => {
+    const { tenant } = await workspace()
+    const { token } = await viewer()
+
+    const response = await listAs(token, tenant.id, 'invoices', { cursor: 'a'.repeat(4097) })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ errors: { cursor: expect.any(Array) as unknown } })
+    expect(response.body).not.toMatchObject({ code: 'CURSOR_INVALID' })
+  })
+
+  it('refuses any cursor with payments off', async () => {
+    const { tenant } = await workspace()
+    const { token } = await viewer()
+    paymentsSwitch.on = false
+
+    const response = await listAs(token, tenant.id, 'invoices', { cursor: 'not-a-cursor' })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'CURSOR_INVALID' })
   })
 
   it('answers an empty page with payments off', async () => {
@@ -643,6 +720,20 @@ describe('every staff billing list', () => {
     const response = await listAs(token, tenant.id, list)
 
     expect(response.status).toBe(200)
+  })
+
+  it.each(LISTS)('%s alone writes one billing.viewed audit entry', async (list) => {
+    const { tenant } = await workspace()
+    const { token, user } = await viewer()
+
+    const response = await listAs(token, tenant.id, list)
+
+    expect(response.status).toBe(200)
+    const entries = await sql<{ action: string; access: string; actorId: string | null }[]>`
+      select action, access, actor_user_id as "actorId" from audit_logs
+      where tenant_id = ${tenant.id} and action like 'billing.%'`
+    // toEqual: the driver's result array is its own class.
+    expect(entries).toEqual([{ action: 'billing.viewed', access: 'platform', actorId: user.id }])
   })
 
   it('shares one billing.viewed audit entry with the billing read in a throttle window', async () => {
