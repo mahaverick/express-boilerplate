@@ -34,6 +34,7 @@ import {
   SWITCH_BEFORE_FIRST_CHARGE_CODE,
   SWITCH_TOO_CLOSE_TO_RENEWAL_CODE,
   type BillingInterval,
+  type InvoiceStatus,
   type StaffCancelWhen,
 } from '@/constants/billing.constants'
 import type {
@@ -42,6 +43,7 @@ import type {
   TenantBillingRecord,
 } from '@/database/models/billing.model'
 import { HttpError } from '@/errors/http-error'
+import { InvalidCursorError } from '@/errors/list-errors'
 import { notFoundError } from '@/errors/not-found-errors'
 import {
   displayName,
@@ -82,7 +84,9 @@ import type { Actor } from '@/types/actor'
 import type {
   BillingProviderClient,
   CheckoutConfirm,
+  InvoiceListOptions,
   InvoiceView,
+  ProviderInvoice,
   ProviderSubscription,
   SourcedEntitlements,
 } from '@/types/billing'
@@ -105,6 +109,17 @@ const WRITE_ATTEMPTS = 3
  * The sort and list name the invoice cursor is bound to.
  */
 const INVOICE_LIST = 'tenant-billing-invoices'
+
+/**
+ * The sort and list name the staff invoice cursor is bound to.
+ */
+const STAFF_INVOICE_LIST = 'platform-tenant-billing-invoices'
+
+/**
+ * The most provider calls one staff invoice page makes before it answers
+ * short with a cursor.
+ */
+const STAFF_INVOICE_MAX_READS = 10
 
 /**
  * The most subscriptions the invoice list reads, newest first.
@@ -1546,18 +1561,103 @@ async function billingView(
 
 /**
  * The scope an invoice cursor is bound to: the list, the workspace and the
- * subscriptions it pages through, so a cursor from another workspace, or from
- * before the subscriptions changed, is refused.
+ * subscriptions it pages through, and for the staff list the status filter,
+ * so a cursor from another workspace, list or filter, or from before the
+ * subscriptions changed, is refused.
+ * @param list - The list's name, also the cursor's sort.
  * @param tenantId - The workspace.
  * @param subscriptionIds - The subscriptions listed.
+ * @param statuses - The staff list's status filter, or undefined.
  * @returns The scope hash.
  */
-function invoiceScope(tenantId: string, subscriptionIds: readonly string[]): string {
-  return bindScope(listScope({ search: undefined, sort: INVOICE_LIST, filters: {} }), {
-    list: INVOICE_LIST,
+function invoiceScope(
+  list: string,
+  tenantId: string,
+  subscriptionIds: readonly string[],
+  statuses: readonly InvoiceStatus[] | undefined
+): string {
+  return bindScope(listScope({ search: undefined, sort: list, filters: {} }), {
+    list,
     tenantId,
     subscriptions: subscriptionIds.join(','),
+    ...(statuses !== undefined && { statuses: statuses.join(',') }),
   })
+}
+
+/**
+ * The subscriptions a workspace's invoices are read from: the scheduled
+ * next subscription, the current one, then every earlier subscription the
+ * workspace held with this provider and mode, newest first, at most
+ * `MAX_INVOICE_SUBSCRIPTIONS`.
+ * @param tenantId - The workspace.
+ * @param provider - The running provider.
+ * @returns The subscription ids.
+ */
+async function invoiceSubscriptionIds(
+  tenantId: string,
+  provider: BillingProviderClient
+): Promise<string[]> {
+  const row = await billingRepository.findByTenantId(tenantId)
+  const live =
+    row === undefined || isOtherProvider(row, provider)
+      ? []
+      : [row.nextSubscriptionId, row.providerSubscriptionId].filter(
+          (id): id is string => id !== null
+        )
+  // Only ids recorded for this workspace (its current subscriptions, and before 0036 its resolved charge events), so another workspace's subscription is never listed.
+  const held = await billingRepository.listHeldSubscriptionIds(
+    tenantId,
+    { kind: provider.kind, mode: provider.mode },
+    MAX_INVOICE_SUBSCRIPTIONS
+  )
+  return [...new Set([...live, ...held])].slice(0, MAX_INVOICE_SUBSCRIPTIONS)
+}
+
+/**
+ * One page of a workspace's invoices across the subscriptions it held, the
+ * provider's own page cursor travelling signed under the list's scope.
+ * Forward only: there is no previous-page cursor.
+ * @param provider - The running provider.
+ * @param tenantId - The workspace.
+ * @param cursor - The previous page's `nextCursor`, if any.
+ * @param list - The list's name.
+ * @param options - The staff list's status filter and provider-call cap; neither for the owner's list.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ * @throws {HttpError} 503 or 502 when the provider fails.
+ */
+async function invoicePage(
+  provider: BillingProviderClient,
+  tenantId: string,
+  cursor: string | undefined,
+  list: string,
+  options: InvoiceListOptions
+): Promise<ListPage<ProviderInvoice>> {
+  const { statuses } = options
+  const subscriptionIds = await invoiceSubscriptionIds(tenantId, provider)
+  const scope = invoiceScope(list, tenantId, subscriptionIds, statuses)
+  let providerCursor: string | null = null
+  if (cursor !== undefined) {
+    const [key] = verifyCursor(cursor, {
+      sort: list,
+      scope,
+      keys: [z.string().min(1).max(MAX_PROVIDER_CURSOR_LENGTH)],
+    })
+    providerCursor = String(key)
+  }
+  const page = await callProvider(() =>
+    provider.listInvoices(subscriptionIds, providerCursor, options)
+  )
+  return {
+    items: page.items,
+    page: {
+      nextCursor: page.nextCursor === null ? null : signCursor(list, scope, [page.nextCursor]),
+      prevCursor: null,
+      hasNext: page.nextCursor !== null,
+      hasPrev: cursor !== undefined,
+      limit: INVOICE_PAGE_SIZE,
+    },
+  }
 }
 
 /**
@@ -1581,40 +1681,50 @@ export async function listInvoices(
   if (!(await isMemberOwner(actor, tenantId))) {
     throw new HttpError(INVOICES_OWNER_ONLY_MESSAGE, 403)
   }
-  const row = await billingRepository.findByTenantId(tenantId)
-  const live =
-    row === undefined || isOtherProvider(row, provider)
-      ? []
-      : [row.nextSubscriptionId, row.providerSubscriptionId].filter(
-          (id): id is string => id !== null
-        )
-  // Only ids recorded for this workspace (its current subscriptions, and before 0036 its resolved charge events), so another workspace's subscription is never listed.
-  const held = await billingRepository.listHeldSubscriptionIds(
-    tenantId,
-    { kind: provider.kind, mode: provider.mode },
-    MAX_INVOICE_SUBSCRIPTIONS
-  )
-  const subscriptionIds = [...new Set([...live, ...held])].slice(0, MAX_INVOICE_SUBSCRIPTIONS)
-  const scope = invoiceScope(tenantId, subscriptionIds)
-  let providerCursor: string | null = null
-  if (cursor !== undefined) {
-    const [key] = verifyCursor(cursor, {
-      sort: INVOICE_LIST,
-      scope,
-      keys: [z.string().min(1).max(MAX_PROVIDER_CURSOR_LENGTH)],
-    })
-    providerCursor = String(key)
-  }
-  const page = await callProvider(() => provider.listInvoices(subscriptionIds, providerCursor))
+  // No call cap: an owner's page fills across every subscription, as the contract promises.
+  const page = await invoicePage(provider, tenantId, cursor, INVOICE_LIST, {})
   return {
-    items: page.items,
-    page: {
-      nextCursor:
-        page.nextCursor === null ? null : signCursor(INVOICE_LIST, scope, [page.nextCursor]),
-      prevCursor: null,
-      hasNext: page.nextCursor !== null,
-      hasPrev: cursor !== undefined,
-      limit: INVOICE_PAGE_SIZE,
-    },
+    ...page,
+    items: page.items.map(({ subscriptionId: _subscription, ...invoice }) => invoice),
   }
+}
+
+/**
+ * One page of a customer workspace's invoices for staff, from the same
+ * subscriptions as the owner's list, optionally only some statuses. Every
+ * page makes at most `STAFF_INVOICE_MAX_READS` provider calls, filtered or
+ * not, since any staff viewer can page any workspace. With payments off
+ * there is no provider to read: the first page is empty, and any cursor is
+ * refused, since no list it could resume exists. The caller has checked the
+ * workspace and the staff role.
+ * @param tenantId - The customer workspace.
+ * @param cursor - The previous page's `nextCursor`, if any.
+ * @param statuses - The statuses to list, or undefined for all.
+ * @returns The page, each invoice with the subscription it bills.
+ * @throws {InvalidCursorError} When the cursor does not verify, or any cursor with payments off.
+ * @throws {HttpError} 503 or 502 when the provider fails.
+ */
+export async function listInvoicesForStaff(
+  tenantId: string,
+  cursor: string | undefined,
+  statuses: readonly InvoiceStatus[] | undefined
+): Promise<ListPage<ProviderInvoice>> {
+  const provider = getBillingProvider()
+  if (provider === null) {
+    if (cursor !== undefined) throw new InvalidCursorError()
+    return {
+      items: [],
+      page: {
+        nextCursor: null,
+        prevCursor: null,
+        hasNext: false,
+        hasPrev: false,
+        limit: INVOICE_PAGE_SIZE,
+      },
+    }
+  }
+  return invoicePage(provider, tenantId, cursor, STAFF_INVOICE_LIST, {
+    ...(statuses !== undefined && { statuses }),
+    maxReads: STAFF_INVOICE_MAX_READS,
+  })
 }

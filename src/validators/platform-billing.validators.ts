@@ -1,20 +1,31 @@
 /**
  * @file Request bodies of the staff billing routes: one tenant's trial
  * extension, grant and staff cancel; a plan's preview and edit; a new
- * price; the billing settings edit; and the alerts list query. Every write
+ * price; the billing settings edit; the alerts list query; and one tenant's
+ * history, events, subscriptions and invoices list queries. Every write
  * carries the staff member's reason (`reasonSchema`). A grant or a plan
  * names registry keys and values of each key's kind, so a typo or a wrong
  * kind is a field error, never a stored value that grants nothing. A grant
  * and a plan share one cap on a limit.
  */
 import { z } from 'zod'
-import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
+import {
+  BILLING_EVENT_STATUSES,
+  BILLING_HISTORY_SOURCES,
+  BILLING_INTERVALS,
+  BILLING_PROVIDER_MODES,
+  BILLING_PROVIDERS,
+  INVOICE_STATUSES,
+  MAX_TRIAL_DAYS,
+  STAFF_CANCEL_WHEN,
+} from '@/constants/billing.constants'
 import {
   ENTITLEMENTS,
   type EntitlementDefinition,
   type EntitlementValue,
 } from '@/constants/entitlements.constants'
-import { listParamsSchema } from '@/validators/list.validators'
+import { MAX_CURSOR_LENGTH } from '@/utilities/list-cursor.utilities'
+import { listFilter, listParamsSchema } from '@/validators/list.validators'
 import { reasonSchema } from '@/validators/platform.validators'
 import { safeText } from '@/validators/safe-text.validators'
 
@@ -326,3 +337,71 @@ export const billingAlertListSchema = listParamsSchema({
  * A parsed alerts list query.
  */
 export type BillingAlertListQuery = z.output<typeof billingAlertListSchema>
+
+/**
+ * `GET /platform/tenants/:id/billing/history` query: the shared list
+ * params, newest first unless asked otherwise; `search` matches the from
+ * and to states and the cause; `source` is a comma list.
+ */
+export const billingHistoryListSchema = listParamsSchema({
+  sorts: ['-at', 'at'],
+  defaultSort: '-at',
+  filters: { source: listFilter('source', BILLING_HISTORY_SOURCES).optional() },
+})
+
+/**
+ * A parsed history list query.
+ */
+export type BillingHistoryListQuery = z.output<typeof billingHistoryListSchema>
+
+/**
+ * `GET /platform/tenants/:id/billing/events` query: the shared list params,
+ * newest received first unless asked otherwise; `search` matches the type
+ * and the error; `status` is a comma list.
+ */
+export const billingEventListSchema = listParamsSchema({
+  sorts: ['-at', 'at'],
+  defaultSort: '-at',
+  filters: { status: listFilter('status', BILLING_EVENT_STATUSES).optional() },
+})
+
+/**
+ * A parsed events list query.
+ */
+export type BillingEventListQuery = z.output<typeof billingEventListSchema>
+
+/**
+ * `GET /platform/tenants/:id/billing/subscriptions` query: the shared list
+ * params, newest first seen unless asked otherwise; `search` matches the
+ * subscription id; `provider` and `mode` are comma lists.
+ */
+export const billingSubscriptionListSchema = listParamsSchema({
+  sorts: ['-firstSeen', 'firstSeen'],
+  defaultSort: '-firstSeen',
+  filters: {
+    provider: listFilter('provider', BILLING_PROVIDERS).optional(),
+    mode: listFilter('mode', BILLING_PROVIDER_MODES).optional(),
+  },
+})
+
+/**
+ * A parsed subscriptions list query.
+ */
+export type BillingSubscriptionListQuery = z.output<typeof billingSubscriptionListSchema>
+
+/**
+ * `GET /platform/tenants/:id/billing/invoices` query: the previous page's
+ * cursor and a comma list of statuses. The provider pages forward only,
+ * newest first, 20 invoices a page, so the list takes no sort, search,
+ * direction, limit or total.
+ */
+export const staffInvoiceListSchema = z.object({
+  // Capped as the owner list's; verifyCursor refuses any other bad one as InvalidCursorError.
+  cursor: z.string().max(MAX_CURSOR_LENGTH).optional(),
+  status: listFilter('status', INVOICE_STATUSES).optional(),
+})
+
+/**
+ * A parsed staff invoice list query.
+ */
+export type StaffInvoiceListQuery = z.output<typeof staffInvoiceListSchema>

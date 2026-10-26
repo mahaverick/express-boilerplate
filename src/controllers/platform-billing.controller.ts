@@ -17,6 +17,10 @@ import {
   getBillingSettings,
   getStaffTenantBilling,
   listBillingAlerts,
+  listStaffBillingEvents,
+  listStaffBillingHistory,
+  listStaffBillingSubscriptions,
+  listStaffInvoices,
   listStaffPlans,
   previewPlanChange,
   resyncTenantBilling,
@@ -28,11 +32,15 @@ import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
   billingAlertListSchema,
+  billingEventListSchema,
+  billingHistoryListSchema,
+  billingSubscriptionListSchema,
   createPriceBodySchema,
   extendTrialBodySchema,
   grantBodySchema,
   planPreviewBodySchema,
   staffCancelBodySchema,
+  staffInvoiceListSchema,
   updateBillingSettingsBodySchema,
   updatePlanBodySchema,
 } from '@/validators/platform-billing.validators'
@@ -51,6 +59,58 @@ class PlatformBillingController extends BaseController {
       response,
       await getStaffTenantBilling(actorFrom(request), tenantId),
       'Billing retrieved.'
+    )
+  })
+
+  /**
+   * `GET /platform/tenants/:id/billing/history`: one page of the tenant's billing state changes.
+   */
+  listHistory = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    const query = parseBody(billingHistoryListSchema, request.query)
+    successResponse(
+      response,
+      await listStaffBillingHistory(actorFrom(request), tenantId, query),
+      'Billing history retrieved.'
+    )
+  })
+
+  /**
+   * `GET /platform/tenants/:id/billing/events`: one page of the tenant's payment provider events.
+   */
+  listEvents = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    const query = parseBody(billingEventListSchema, request.query)
+    successResponse(
+      response,
+      await listStaffBillingEvents(actorFrom(request), tenantId, query),
+      'Billing events retrieved.'
+    )
+  })
+
+  /**
+   * `GET /platform/tenants/:id/billing/subscriptions`: one page of the subscriptions the tenant has held.
+   */
+  listSubscriptions = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    const query = parseBody(billingSubscriptionListSchema, request.query)
+    successResponse(
+      response,
+      await listStaffBillingSubscriptions(actorFrom(request), tenantId, query),
+      'Subscriptions retrieved.'
+    )
+  })
+
+  /**
+   * `GET /platform/tenants/:id/billing/invoices`: one page of the tenant's invoices, newest first.
+   */
+  listInvoices = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    const query = parseBody(staffInvoiceListSchema, request.query)
+    successResponse(
+      response,
+      await listStaffInvoices(actorFrom(request), tenantId, query),
+      'Invoices retrieved.'
     )
   })
 

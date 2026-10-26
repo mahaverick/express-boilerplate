@@ -527,6 +527,7 @@ describe('listInvoices', () => {
           issuedAt: new Date(1_792_812_072_000).toISOString(),
           paidAt: new Date(1_792_812_308_000).toISOString(),
           url: 'https://rzp.io/rzp/uvAO0vx',
+          subscriptionId: 'sub_Trax7OfeENGU9N',
         },
       ],
       nextCursor: null,
@@ -588,6 +589,71 @@ describe('listInvoices', () => {
       { subscription: 'sub_A', skip: String(INVOICE_PAGE_SIZE) },
       { subscription: 'sub_B', skip: '0' },
     ])
+  })
+
+  it('lists only the statuses asked for, skipping by what Razorpay returned', async () => {
+    /**
+     * Paid invoice `n` as an issued, unpaid one.
+     */
+    const issued = (n: number) => ({ ...paidInvoice(n), status: 'issued' })
+    const first = [issued(0), paidInvoice(1), issued(2)]
+    fake.replyInTurn('GET', '/invoices', [
+      { status: 200, json: collection(first) },
+      { status: 200, json: collection([issued(3), paidInvoice(4)]) },
+    ])
+
+    const page = await provider.listInvoices(['sub_A', 'sub_B'], null, { statuses: ['issued'] })
+
+    expect(page.items.map((item) => [item.id, item.subscriptionId])).toStrictEqual([
+      ['inv_N0', 'sub_A'],
+      ['inv_N2', 'sub_A'],
+      ['inv_N3', 'sub_B'],
+    ])
+    expect(page.nextCursor).toBeNull()
+  })
+
+  it('answers a filtered page short, with a cursor, after its most Razorpay reads', async () => {
+    const paidPage = Array.from({ length: INVOICE_PAGE_SIZE }, (_, n) => paidInvoice(n))
+    fake.reply('GET', '/invoices', 200, collection(paidPage))
+
+    const page = await provider.listInvoices(['sub_A'], null, {
+      statuses: ['cancelled'],
+      maxReads: 10,
+    })
+
+    // Ten reads of 20 paid invoices each, none cancelled: the page stops at the cap.
+    expect(page).toStrictEqual({ items: [], nextCursor: `0:${String(10 * INVOICE_PAGE_SIZE)}` })
+    expect(invoiceCalls()).toHaveLength(10)
+    expect(invoiceCalls().at(-1)).toStrictEqual({
+      subscription: 'sub_A',
+      skip: String(9 * INVOICE_PAGE_SIZE),
+    })
+  })
+
+  it('answers an unfiltered page short, with a cursor, after its most Razorpay reads', async () => {
+    const empty = collection([])
+    const ids = Array.from({ length: 12 }, (_, n) => `sub_${String(n)}`)
+    fake.reply('GET', '/invoices', 200, empty)
+
+    const page = await provider.listInvoices(ids, null, { maxReads: 10 })
+
+    // Ten subscriptions read, each with no invoices: the page stops before the eleventh.
+    expect(page).toStrictEqual({ items: [], nextCursor: '10:0' })
+    expect(invoiceCalls()).toHaveLength(10)
+  })
+
+  it('reads every subscription with no cap asked for, as the owner list does', async () => {
+    const empty = collection([])
+    const ids = Array.from({ length: 12 }, (_, n) => `sub_${String(n)}`)
+    fake.replyInTurn('GET', '/invoices', [
+      ...ids.slice(0, 11).map(() => ({ status: 200, json: empty })),
+      { status: 200, json: collection([paidInvoice(0)]) },
+    ])
+
+    const page = await provider.listInvoices(ids, null)
+
+    expect(page.items.map((item) => item.subscriptionId)).toStrictEqual(['sub_11'])
+    expect(invoiceCalls()).toHaveLength(12)
   })
 
   it('answers an empty page for no subscriptions without a call', async () => {

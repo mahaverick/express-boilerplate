@@ -1,22 +1,32 @@
 /**
- * @file Staff-only, cross-tenant reads of billing: workspace counts by plan
+ * @file Staff-only reads of billing. Cross-tenant: workspace counts by plan
  * and state, subscriber counts by price, the alerts list, billing columns
  * for a page of workspaces, and the billing records of every workspace a
- * page at a time. Only `services/platform-*.service.ts` may import
- * this file (an eslint rule). Counts leave out the platform tenant and
- * soft-deleted tenants.
+ * page at a time. One workspace's lists, each bound to its tenant: state
+ * history, provider events (ids, type and outcome only) and the
+ * subscriptions it has held. Only `services/platform-*.service.ts` may
+ * import this file (an eslint rule). Counts leave out the platform tenant
+ * and soft-deleted tenants.
  */
-import { and, asc, count, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm'
 import {
   BILLING_STATES,
   PLAN_KEYS,
+  type BillingEventStatus,
+  type BillingHistorySource,
+  type BillingProvider,
+  type BillingProviderMode,
   type BillingState,
+  type BillingSubscriptionStanding,
   type PlanKey,
 } from '@/constants/billing.constants'
 import {
   billingAlertModel,
+  billingEventModel,
+  billingStateHistoryModel,
   planModel,
   tenantBillingModel,
+  tenantBillingSubscriptionModel,
   type BillingAlertRecord,
 } from '@/database/models/billing.model'
 import { tenantModel } from '@/database/models/tenant.model'
@@ -100,6 +110,287 @@ export function billingAlertList(search: string | undefined) {
 }
 
 /**
+ * One state change of a workspace, as the staff history list shows it.
+ */
+export interface BillingHistoryListItem {
+  id: string
+  from: BillingState | null
+  to: BillingState
+  cause: string
+  source: BillingHistorySource
+  at: Date
+}
+
+/**
+ * The staff history list's filters.
+ */
+export interface BillingHistoryFilters {
+  sources: BillingHistorySource[] | undefined
+}
+
+/**
+ * One workspace's state changes, newest first by default; `search` matches
+ * the from and to states and the cause. Its cursors are bound to the tenant.
+ * @param tenantId - The workspace.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The sources.
+ * @returns The list definition.
+ */
+export function billingHistoryList(
+  tenantId: string,
+  search: string | undefined,
+  filters: BillingHistoryFilters
+) {
+  const history = billingStateHistoryModel
+  return defineList({
+    name: 'platform-tenant-billing-history',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: history.id,
+          fromState: history.fromState,
+          toState: history.toState,
+          cause: history.cause,
+          source: history.source,
+          at: history.at,
+          sortAt: timestampKey(history.at),
+        })
+        .from(history)
+        .where(
+          and(
+            eq(history.tenantId, tenantId),
+            filters.sources === undefined ? undefined : inArray(history.source, filters.sources),
+            searchCondition(search, [
+              sql`lower(${history.fromState})`,
+              sql`lower(${history.toState})`,
+              sql`lower(${history.cause})`,
+            ]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: history.id,
+    sorts: {
+      '-at': [timestampSort(history.at, 'desc', 'sortAt')],
+      at: [timestampSort(history.at, 'asc', 'sortAt')],
+    },
+    bound: { tenantId },
+    toItem: (row): BillingHistoryListItem => ({
+      id: row.id,
+      from: row.fromState,
+      to: row.toState,
+      cause: row.cause,
+      source: row.source,
+      at: row.at,
+    }),
+  })
+}
+
+/**
+ * One provider event of a workspace, as the staff events list shows it: its
+ * type, outcome and times, never its provider ids or payload.
+ */
+export interface BillingEventListItem {
+  id: string
+  type: string
+  status: BillingEventStatus
+  provider: BillingProvider
+  mode: BillingProviderMode
+  receivedAt: Date
+  processedAt: Date | null
+  /**
+   * How many times an outcome was recorded on the row (handled, or given up
+   * on), 0 or 1 in practice; never the number of job attempts.
+   */
+  recordedOutcomes: number
+  error: string | null
+}
+
+/**
+ * The staff events list's filters.
+ */
+export interface BillingEventFilters {
+  statuses: BillingEventStatus[] | undefined
+}
+
+/**
+ * The condition that a stored event has a status.
+ * @param status - The status.
+ * @returns The condition over `billing_events`.
+ */
+function eventStatusCondition(status: BillingEventStatus): SQL | undefined {
+  const event = billingEventModel
+  switch (status) {
+    case 'processed': {
+      return and(isNotNull(event.processedAt), isNull(event.error))
+    }
+    case 'unused': {
+      return and(isNotNull(event.processedAt), isNotNull(event.error))
+    }
+    case 'failed': {
+      return and(isNull(event.processedAt), isNotNull(event.error))
+    }
+    case 'pending': {
+      return and(isNull(event.processedAt), isNull(event.error))
+    }
+  }
+}
+
+/**
+ * A stored event's status, from its processed time and error.
+ * @param processedAt - When it was handled, or null.
+ * @param error - Why it changed nothing or failed, or null.
+ * @returns The status.
+ */
+function eventStatusOf(processedAt: Date | null, error: string | null): BillingEventStatus {
+  if (processedAt !== null) return error === null ? 'processed' : 'unused'
+  return error === null ? 'pending' : 'failed'
+}
+
+/**
+ * One workspace's provider events by receipt, newest first by default;
+ * `search` matches the type and the error. Its cursors are bound to the
+ * tenant.
+ * @param tenantId - The workspace.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The statuses.
+ * @returns The list definition.
+ */
+export function billingEventList(
+  tenantId: string,
+  search: string | undefined,
+  filters: BillingEventFilters
+) {
+  const event = billingEventModel
+  const statusMatch =
+    filters.statuses === undefined
+      ? undefined
+      : or(...filters.statuses.map((status) => eventStatusCondition(status)))
+  return defineList({
+    name: 'platform-tenant-billing-events',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: event.id,
+          type: event.type,
+          provider: event.provider,
+          mode: event.mode,
+          receivedAt: event.receivedAt,
+          processedAt: event.processedAt,
+          attempts: event.attempts,
+          error: event.error,
+          sortAt: timestampKey(event.receivedAt),
+        })
+        .from(event)
+        .where(
+          and(
+            eq(event.tenantId, tenantId),
+            statusMatch,
+            searchCondition(search, [sql`lower(${event.type})`, sql`lower(${event.error})`]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: event.id,
+    sorts: {
+      '-at': [timestampSort(event.receivedAt, 'desc', 'sortAt')],
+      at: [timestampSort(event.receivedAt, 'asc', 'sortAt')],
+    },
+    bound: { tenantId },
+    toItem: (row): BillingEventListItem => ({
+      id: row.id,
+      type: row.type,
+      status: eventStatusOf(row.processedAt, row.error),
+      provider: row.provider,
+      mode: row.mode,
+      receivedAt: row.receivedAt,
+      processedAt: row.processedAt,
+      recordedOutcomes: row.attempts,
+      error: row.error,
+    }),
+  })
+}
+
+/**
+ * One subscription a workspace has held as its current one, as the staff
+ * subscriptions list shows it.
+ */
+export interface BillingSubscriptionListItem {
+  id: string
+  subscriptionId: string
+  provider: BillingProvider
+  mode: BillingProviderMode
+  firstSeenAt: Date
+  standing: BillingSubscriptionStanding
+}
+
+/**
+ * The staff subscriptions list's filters.
+ */
+export interface BillingSubscriptionFilters {
+  providers: BillingProvider[] | undefined
+  modes: BillingProviderMode[] | undefined
+}
+
+/**
+ * One workspace's held subscriptions, newest first seen by default;
+ * `search` matches the subscription id. Each row says whether the billing
+ * row holds it now as its current, pending or next subscription, in the
+ * same provider and mode. Its cursors are bound to the tenant.
+ * @param tenantId - The workspace.
+ * @param search - The parsed search, or undefined.
+ * @param filters - The providers and modes.
+ * @returns The list definition.
+ */
+export function billingSubscriptionList(
+  tenantId: string,
+  search: string | undefined,
+  filters: BillingSubscriptionFilters
+) {
+  const held = tenantBillingSubscriptionModel
+  const row = tenantBillingModel
+  const standing = sql<BillingSubscriptionStanding>`case
+    when ${row.provider} is distinct from ${held.provider} or ${row.providerMode} is distinct from ${held.mode} then 'earlier'
+    when ${held.subscriptionId} = ${row.providerSubscriptionId} then 'current'
+    when ${held.subscriptionId} = ${row.pendingSubscriptionId} then 'pending'
+    when ${held.subscriptionId} = ${row.nextSubscriptionId} then 'next'
+    else 'earlier' end`
+  return defineList({
+    name: 'platform-tenant-billing-subscriptions',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: held.id,
+          subscriptionId: held.subscriptionId,
+          provider: held.provider,
+          mode: held.mode,
+          firstSeenAt: held.firstSeenAt,
+          standing,
+          sortFirstSeen: timestampKey(held.firstSeenAt),
+        })
+        .from(held)
+        .leftJoin(row, eq(row.tenantId, held.tenantId))
+        .where(
+          and(
+            eq(held.tenantId, tenantId),
+            filters.providers === undefined ? undefined : inArray(held.provider, filters.providers),
+            filters.modes === undefined ? undefined : inArray(held.mode, filters.modes),
+            searchCondition(search, [sql`lower(${held.subscriptionId})`]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: held.id,
+    sorts: {
+      '-firstSeen': [timestampSort(held.firstSeenAt, 'desc', 'sortFirstSeen')],
+      firstSeen: [timestampSort(held.firstSeenAt, 'asc', 'sortFirstSeen')],
+    },
+    bound: { tenantId },
+    toItem: ({ sortFirstSeen: _sort, ...item }): BillingSubscriptionListItem => item,
+  })
+}
+
+/**
  * Query access for the staff billing views.
  */
 export class PlatformBillingRepository {
@@ -162,6 +453,60 @@ export class PlatformBillingRepository {
     executor: DbExecutor = db
   ): Promise<ListPage<BillingAlertListRow>> {
     return listPage(executor, billingAlertList(params.search), params)
+  }
+
+  /**
+   * One page of a workspace's state changes.
+   * @param tenantId - The workspace.
+   * @param params - The parsed shared list params.
+   * @param filters - The sources.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
+   */
+  async listHistoryPage(
+    tenantId: string,
+    params: ListParams,
+    filters: BillingHistoryFilters,
+    executor: DbExecutor = db
+  ): Promise<ListPage<BillingHistoryListItem>> {
+    return listPage(executor, billingHistoryList(tenantId, params.search, filters), params)
+  }
+
+  /**
+   * One page of a workspace's provider events.
+   * @param tenantId - The workspace.
+   * @param params - The parsed shared list params.
+   * @param filters - The statuses.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
+   */
+  async listEventsPage(
+    tenantId: string,
+    params: ListParams,
+    filters: BillingEventFilters,
+    executor: DbExecutor = db
+  ): Promise<ListPage<BillingEventListItem>> {
+    return listPage(executor, billingEventList(tenantId, params.search, filters), params)
+  }
+
+  /**
+   * One page of the subscriptions a workspace has held.
+   * @param tenantId - The workspace.
+   * @param params - The parsed shared list params.
+   * @param filters - The providers and modes.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
+   */
+  async listSubscriptionsPage(
+    tenantId: string,
+    params: ListParams,
+    filters: BillingSubscriptionFilters,
+    executor: DbExecutor = db
+  ): Promise<ListPage<BillingSubscriptionListItem>> {
+    return listPage(executor, billingSubscriptionList(tenantId, params.search, filters), params)
   }
 
   /**

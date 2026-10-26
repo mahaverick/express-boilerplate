@@ -182,6 +182,197 @@ describeListContract({
   search: { text: `${tag}-a0003`, count: 1 },
 })
 
+/**
+ * The two tenants the staff billing list blocks read: their rows go to
+ * `tenantId`, and `otherId` is the second tenant a replayed cursor must fail on.
+ */
+const billed = { tenantId: '', otherId: '' }
+
+/**
+ * Create the staff admin and two tenants for the staff billing lists.
+ */
+async function createBilledTenants(): Promise<void> {
+  await createStaff()
+  const owner = await createTrackedUser()
+  const tenants = new TenantRepository()
+  const tenant = await tenants.create({
+    name: `${tag} billed`,
+    slug: `${tag}-bl-${randomUUID().slice(0, 6)}`,
+    ownerId: owner.id,
+  })
+  const other = await tenants.create({
+    name: `${tag} other billed`,
+    slug: `${tag}-bo-${randomUUID().slice(0, 6)}`,
+    ownerId: owner.id,
+  })
+  Object.assign(billed, { tenantId: tenant.id, otherId: other.id })
+}
+
+/**
+ * Remove both billed tenants (their billing rows cascade), the staff and every tracked user.
+ */
+async function removeBilledTenants(): Promise<void> {
+  await truncateAuditLogs()
+  await sql`delete from tenants where id in (${billed.tenantId}, ${billed.otherId})`
+  await deleteTrackedUsers()
+}
+
+/**
+ * A staff billing list path of the billed tenant or the other one.
+ * @param list - The list's last path segment.
+ * @param tenantId - The tenant.
+ * @returns The path.
+ */
+function billingListPath(list: string, tenantId: string): string {
+  return `/api/v1/platform/tenants/${tenantId}/billing/${list}`
+}
+
+/**
+ * The sources seeded history rows take, by index.
+ */
+const SEEDED_SOURCES = ['staff', 'webhook', 'staff', 'job', 'staff'] as const
+
+describeListContract({
+  name: 'GET /api/v1/platform/tenants/:id/billing/history',
+  app: () => app,
+  path: () => billingListPath('history', billed.tenantId),
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({}),
+  // The rows depend on the path tenant, which is not a query param.
+  otherScope: {
+    path: () => billingListPath('history', billed.otherId),
+    headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  },
+  sorts: ['-at', 'at'],
+  order: {
+    '-at': instantAt((item) => (item as { at: string }).at),
+    at: instantAt((item) => (item as { at: string }).at),
+  },
+  setup: createBilledTenants,
+  teardown: removeBilledTenants,
+  seed: async (count) => {
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      tenant_id: billed.tenantId,
+      from_state: index === 0 ? NONE : 'trialing',
+      to_state: 'free',
+      cause: `${tag}h${pad(index)}`,
+      source: SEEDED_SOURCES[index % SEEDED_SOURCES.length],
+      at: createdAtOf(index),
+    }))
+    await sql`insert into billing_state_history ${sql(rows, 'tenant_id', 'from_state', 'to_state', 'cause', 'source', 'at')}`
+  },
+  clear: async () => {
+    await sql`delete from billing_state_history where tenant_id = ${billed.tenantId}`
+  },
+  search: { text: `${tag}h0003`, count: 1 },
+  filters: [
+    { query: { source: 'staff' }, count: 3 },
+    { query: { source: 'job,webhook' }, count: 2 },
+  ],
+})
+
+/**
+ * A seeded event's processed time and error by index: processed, unused,
+ * failed, pending, then processed again.
+ * @param index - The row index.
+ * @returns The two columns.
+ */
+function eventOutcomeOf(index: number): { processed_at: string | null; error: string | null } {
+  const at = createdAtOf(index)
+  switch (index % 4) {
+    case 0: {
+      return { processed_at: at, error: NONE }
+    }
+    case 1: {
+      return { processed_at: at, error: 'unknown_subscription' }
+    }
+    case 2: {
+      return { processed_at: NONE, error: 'ProviderError: 503' }
+    }
+    default: {
+      return { processed_at: NONE, error: NONE }
+    }
+  }
+}
+
+describeListContract({
+  name: 'GET /api/v1/platform/tenants/:id/billing/events',
+  app: () => app,
+  path: () => billingListPath('events', billed.tenantId),
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({}),
+  // The rows depend on the path tenant, which is not a query param.
+  otherScope: {
+    path: () => billingListPath('events', billed.otherId),
+    headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  },
+  sorts: ['-at', 'at'],
+  order: {
+    '-at': instantAt((item) => (item as { receivedAt: string }).receivedAt),
+    at: instantAt((item) => (item as { receivedAt: string }).receivedAt),
+  },
+  setup: createBilledTenants,
+  teardown: removeBilledTenants,
+  seed: async (count) => {
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      provider: 'fake',
+      mode: 'test',
+      provider_event_id: `${tag}-ev${pad(index)}`,
+      type: `${tag}.e${pad(index)}`,
+      tenant_id: billed.tenantId,
+      received_at: createdAtOf(index),
+      ...eventOutcomeOf(index),
+    }))
+    await sql`insert into billing_events ${sql(rows, 'provider', 'mode', 'provider_event_id', 'type', 'tenant_id', 'received_at', 'processed_at', 'error')}`
+  },
+  clear: async () => {
+    await sql`delete from billing_events where tenant_id = ${billed.tenantId}`
+  },
+  search: { text: `${tag}.e0003`, count: 1 },
+  filters: [
+    { query: { status: 'processed' }, count: 2 },
+    { query: { status: 'failed,pending' }, count: 2 },
+  ],
+})
+
+describeListContract({
+  name: 'GET /api/v1/platform/tenants/:id/billing/subscriptions',
+  app: () => app,
+  path: () => billingListPath('subscriptions', billed.tenantId),
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({}),
+  // The rows depend on the path tenant, which is not a query param.
+  otherScope: {
+    path: () => billingListPath('subscriptions', billed.otherId),
+    headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  },
+  sorts: ['-firstSeen', 'firstSeen'],
+  order: {
+    '-firstSeen': instantAt((item) => (item as { firstSeenAt: string }).firstSeenAt),
+    firstSeen: instantAt((item) => (item as { firstSeenAt: string }).firstSeenAt),
+  },
+  setup: createBilledTenants,
+  teardown: removeBilledTenants,
+  seed: async (count) => {
+    const rows = Array.from({ length: count }, (_unused, index) => ({
+      tenant_id: billed.tenantId,
+      provider: 'fake',
+      mode: index % 2 === 0 ? 'test' : 'live',
+      subscription_id: `${tag}_sub${pad(index)}`,
+      first_seen_at: createdAtOf(index),
+    }))
+    await sql`insert into tenant_billing_subscriptions ${sql(rows, 'tenant_id', 'provider', 'mode', 'subscription_id', 'first_seen_at')}`
+  },
+  clear: async () => {
+    await sql`delete from tenant_billing_subscriptions where tenant_id = ${billed.tenantId}`
+  },
+  search: { text: `${tag}_sub0003`, count: 1 },
+  filters: [
+    { query: { mode: 'live' }, count: 2 },
+    { query: { provider: 'razorpay,fake' }, count: 5 },
+  ],
+})
+
 describe('GET /api/v1/platform/tenants search', () => {
   beforeAll(createStaff)
   afterAll(removeStaff)

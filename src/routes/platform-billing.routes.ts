@@ -1,8 +1,9 @@
 /**
  * @file Staff billing routes. `createPlatformTenantBillingRouter` is one
  * tenant's, mounted at `/api/v1/platform/tenants/:id/billing` by
- * `createPlatformRouter` behind its router-wide `requireAuth`; the read is a
- * platform viewer's, the resync, the trial extension and grants a manager's,
+ * `createPlatformRouter` behind its router-wide `requireAuth`; the read and
+ * its history, events, subscriptions and invoices lists are a platform
+ * viewer's, the resync, the trial extension and grants a manager's,
  * the cancel an admin's. `addPlatformPlanRoutes` registers the plans,
  * prices, billing settings and alerts flat on the platform router: the plan
  * and settings reads are a viewer's, everything else an admin's. Each route
@@ -32,6 +33,30 @@ export function createPlatformTenantBillingRouter(limiters: PlatformLimiters): R
     requirePlatformRole('viewer'),
     limiters.searchLimiter,
     platformBillingController.getBilling
+  )
+  router.get(
+    '/history',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformBillingController.listHistory
+  )
+  router.get(
+    '/events',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformBillingController.listEvents
+  )
+  router.get(
+    '/subscriptions',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformBillingController.listSubscriptions
+  )
+  router.get(
+    '/invoices',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformBillingController.listInvoices
   )
   router.post(
     '/resync',

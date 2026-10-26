@@ -20,7 +20,9 @@ import type {
   BillingProviderClient,
   CheckoutConfirm,
   CreateSubscriptionInput,
+  InvoiceListOptions,
   InvoiceView,
+  ProviderInvoice,
   ProviderInvoicePage,
   ProviderPlanPrice,
   ProviderRefundOutcome,
@@ -546,22 +548,36 @@ export class RazorpayProvider implements BillingProviderClient {
    * or only ones the view drops, never leaves the page short while a later
    * one has some. The cursor is `<subscription index>:<raw skip>`, where the
    * skip counts every invoice Razorpay returned, dropped ones included.
+   * Razorpay cannot filter invoices by status, so `options.statuses` drops
+   * the others as the view drops a draft. With `options.maxReads`, a page
+   * makes at most that many Razorpay calls and may then answer short, even
+   * empty, with a cursor to resume from.
    * @param subscriptionIds - The subscriptions, newest first.
    * @param cursor - The previous page's `nextCursor`, or null.
+   * @param options - The statuses to list and the most Razorpay calls, each optional.
    * @returns The page.
    */
   async listInvoices(
     subscriptionIds: string[],
-    cursor: string | null
+    cursor: string | null,
+    options: InvoiceListOptions = {}
   ): Promise<ProviderInvoicePage> {
     if (subscriptionIds.length === 0) return { items: [], nextCursor: null }
     let { index, skip } = parseInvoiceCursor(cursor, subscriptionIds.length)
-    const items: InvoiceView[] = []
+    const shown = options.statuses === undefined ? undefined : new Set(options.statuses)
+    const maxReads = options.maxReads ?? Number.POSITIVE_INFINITY
+    const items: ProviderInvoice[] = []
+    let reads = 0
     while (index < subscriptionIds.length) {
+      if (reads >= maxReads) {
+        return { items, nextCursor: `${String(index)}:${String(skip)}` }
+      }
+      reads += 1
+      const subscriptionId = subscriptionIds[index] ?? ''
       const raw = itemsOf(
         await this.#call('GET', '/invoices', {
           query: {
-            subscription_id: subscriptionIds[index] ?? '',
+            subscription_id: subscriptionId,
             count: String(INVOICE_PAGE_SIZE),
             skip: String(skip),
           },
@@ -569,7 +585,9 @@ export class RazorpayProvider implements BillingProviderClient {
       )
       for (const [position, item] of raw.entries()) {
         const view = invoiceView(item)
-        if (view !== null) items.push(view)
+        if (view !== null && (shown === undefined || shown.has(view.status))) {
+          items.push({ ...view, subscriptionId })
+        }
         if (items.length < INVOICE_PAGE_SIZE) continue
         // A full page: resume after this invoice, in this subscription or the next.
         const rest = raw.length - position - 1

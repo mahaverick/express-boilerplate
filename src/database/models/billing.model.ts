@@ -412,7 +412,8 @@ export const billingEventModel = pgTable(
       table.mode,
       table.providerEventId
     ),
-    index('billing_events_tenant_received_idx').on(table.tenantId, table.receivedAt),
+    // Ends in id: the staff events list sorts by receipt with the id tiebreak, both ways, with no Sort.
+    index('billing_events_tenant_received_sort_idx').on(table.tenantId, table.receivedAt, table.id),
   ]
 )
 
