@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { CANCEL_BUFFER_DAYS } from '@/constants/billing.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import type { User } from '@/database/models/user.model'
 import { ProviderError } from '@/errors/billing-provider-errors'
@@ -250,6 +251,35 @@ async function deferredStart(tenantId: string, trialEndsAt: Date): Promise<strin
   return subscriptionId
 }
 
+/**
+ * A paying workspace whose cancel ended at the provider and whose period
+ * ended more than `CANCEL_BUFFER_DAYS` ago, before the job synced it: stored
+ * `active` and cancelling, served as Free.
+ * @returns The workspace and its subscription.
+ */
+async function lapsedCancellingWorkspace() {
+  const paying = await payingWorkspace()
+  await fake.fakeAdvance(paying.subscriptionId, 'cancelled')
+  await setBilling(paying.tenant.id, {
+    cancelAtPeriodEnd: true,
+    currentPeriodEnd: new Date(Date.now() - (CANCEL_BUFFER_DAYS + 1) * DAY_MS),
+  })
+  return paying
+}
+
+/**
+ * A tenant's billing state history, oldest first.
+ * @param tenantId - The tenant.
+ * @returns Each row's states, cause and source.
+ */
+async function historyOf(
+  tenantId: string
+): Promise<{ fromState: string; toState: string; cause: string; source: string }[]> {
+  return sql<{ fromState: string; toState: string; cause: string; source: string }[]>`
+    select from_state as "fromState", to_state as "toState", cause, source
+    from billing_state_history where tenant_id = ${tenantId} order by at, id`
+}
+
 describe('GET /api/v1/platform/tenants/:id/billing', () => {
   it('shows a viewer the billing with provider fields and sources, never the billing email', async () => {
     const { tenant, owner, subscriptionId, periodEnd } = await payingWorkspace()
@@ -484,6 +514,87 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
     expect(event?.distinctId).toBe(owner.id)
     expect(event?.distinctId).not.toBe(user.id)
     expect(event?.properties).toMatchObject({ days: 5, billing_state: 'trialing' })
+  })
+
+  it('starts a trial for a cancelling tenant served as Free, recording the move to Free as the job does', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const twin = await lapsedCancellingWorkspace()
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body)).toMatchObject({ state: 'trialing', plan: { key: 'paid' } })
+    const row = await readBilling(tenant.id)
+    expect(row).toMatchObject({ state: 'trialing', planId: plans.paidId })
+    expect(isNear(row.trialEndsAt, Date.now() + 7 * DAY_MS)).toBe(true)
+    expect(isNear(row.trialStartedAt, Date.now())).toBe(true)
+    // The job's step on the same lapsed row: the move to Free must read the same.
+    await syncTenantBilling(twin.tenant.id, 'job')
+    const [jobMove] = await historyOf(twin.tenant.id)
+    expect(jobMove).toEqual({
+      fromState: 'active',
+      toState: 'free',
+      cause: 'cancelled',
+      source: 'job',
+    })
+    expect(await historyOf(tenant.id)).toEqual([
+      { ...jobMove, source: 'staff' },
+      { fromState: 'free', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
+    ])
+  })
+
+  it('starts a trial for a past-due tenant whose grace has ended, recording grace_ended', async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    const longAgo = new Date(Date.now() - 30 * DAY_MS)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'trialing' })
+    expect(await historyOf(tenant.id)).toEqual([
+      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'staff' },
+      { fromState: 'free', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
+    ])
+  })
+
+  it('moves a lapsed tenant to Free once when two extensions race, and applies both', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    const { token } = await staff('manager')
+
+    const responses = await Promise.all([
+      postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON }),
+      postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON }),
+    ])
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200])
+    const row = await readBilling(tenant.id)
+    expect(row.state).toBe('trialing')
+    expect(isNear(row.trialEndsAt, Date.now() + 14 * DAY_MS)).toBe(true)
+    expect(await historyOf(tenant.id)).toEqual([
+      { fromState: 'active', toState: 'free', cause: 'cancelled', source: 'staff' },
+      { fromState: 'free', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
+      { fromState: 'trialing', toState: 'trialing', cause: 'trial_extended', source: 'staff' },
+    ])
+  })
+
+  it('refuses a lapsed tenant the provider cannot confirm ended, and changes nothing', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    paymentsSwitch.on = false
+    const before = await readBilling(tenant.id)
+    const { token } = await staff('manager')
+
+    const response = await postAs(token, tenant.id, '/extend-trial', { days: 7, reason: REASON })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({ code: 'TRIAL_NOT_EXTENDABLE' })
+    const after = await readBilling(tenant.id)
+    expect(after.version).toBe(before.version)
+    expect(await historyOf(tenant.id)).toEqual([])
+    expect(await billingAudit(tenant.id)).toEqual([])
   })
 
   it.each(['active', 'past_due'] as const)(

@@ -38,6 +38,7 @@
  * since its end is computed on each read.
  */
 import {
+  BILLING_BUSY_CODE,
   BILLING_STATES,
   NO_SUBSCRIPTION_CODE,
   PAYMENT_PROVIDER_UNAVAILABLE_CODE,
@@ -419,17 +420,48 @@ export async function resyncTenantBilling(
 }
 
 /**
+ * Sync a tenant whose stored `active` or `past_due` state its paid time has
+ * outlived, so the move to Free is recorded as the billing job records it
+ * (`syncTenantBilling`, the job's grace and cancelling steps). A sync that
+ * keeps meeting a concurrent write is left to that write: the caller decides
+ * under its own lock either way.
+ * @param tenantId - The tenant.
+ * @throws {HttpError} 503 or 502 when the provider fails, with nothing written.
+ */
+async function syncIfLapsed(tenantId: string): Promise<void> {
+  const row = await billingRepository.findByTenantId(tenantId)
+  if (row === undefined || (row.state !== 'active' && row.state !== 'past_due')) return
+  const { pastDueGraceDays } = await planRepository.getSettings()
+  if (effectiveBillingState(row, new Date(), pastDueGraceDays) !== 'free') return
+  try {
+    await syncOrRetry(tenantId, 'staff')
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.code !== BILLING_BUSY_CODE) throw error
+  }
+}
+
+/**
  * Extend a tenant's trial, or put a Free tenant back on one: the end moves
  * `days` past the later of now and a running trial's end. A Free tenant, or
  * one whose trial already lapsed, starts its trial now. The reminder claims
  * are cleared so the reminders run for the new end, and a wait for the first
  * owner's acceptance is dropped, since staff gave the trial.
+ *
+ * A tenant stored `active` or `past_due` whose paid time has passed is
+ * served as Free (`effectiveBillingState`) before the billing job records
+ * it. It is synced first, as the job's grace and cancelling steps do, so the
+ * move to Free lands with the job's history cause; the sync takes the row
+ * lock itself and calls the provider with no lock held. The decision is then
+ * made under this write's lock, on the row's effective state. A row still
+ * stored `active` or `past_due` after the sync is refused: the provider did
+ * not confirm the subscription ended, and its next sync would make the
+ * tenant active again.
  * @param actor - The staff member (a platform manager or above).
  * @param tenantId - The tenant.
  * @param days - Days to add, 1 to `MAX_TRIAL_DAYS` (the body schema checked).
  * @param reason - Why, for the audit log.
  * @returns The staff billing view after the extension.
- * @throws {HttpError} 404s as the read; 409 `TRIAL_NOT_EXTENDABLE` on a paying or past-due tenant.
+ * @throws {HttpError} 404s as the read; 409 `TRIAL_NOT_EXTENDABLE` on a paying or past-due tenant, or one the provider still shows paying; 503 or 502 when the provider fails during the sync, with nothing written.
  */
 export async function extendTrial(
   actor: Actor,
@@ -438,16 +470,27 @@ export async function extendTrial(
   reason: string
 ): Promise<StaffTenantBillingView> {
   await customerTenant(tenantId)
+  // No role re-check before the sync: it changes nothing a caller chose, and the write below re-checks under lock.
+  await syncIfLapsed(tenantId)
   const written = await withTransaction(async (tx) => {
     const locked = await lockStaffAndBilling(actor, 'manager', tenantId, tx)
-    if (locked.state === 'active' || locked.state === 'past_due') {
+    const now = new Date()
+    const { pastDueGraceDays } = await planRepository.getSettings(tx)
+    const effective = effectiveBillingState(locked, now, pastDueGraceDays)
+    if (effective === 'active' || effective === 'past_due') {
       throw new HttpError(
         'This tenant pays for Paid, so it has no trial to extend. Add a grant to give it more.',
         409,
         TRIAL_NOT_EXTENDABLE_CODE
       )
     }
-    const now = new Date()
+    if (locked.state === 'active' || locked.state === 'past_due') {
+      throw new HttpError(
+        'The payment provider still shows this subscription running, so there is no trial to extend. Cancel the subscription now, then try again.',
+        409,
+        TRIAL_NOT_EXTENDABLE_CODE
+      )
+    }
     const isRunning =
       locked.state === 'trialing' && locked.trialEndsAt !== null && locked.trialEndsAt > now
     const trialEndsAt = extendTrialEnd(isRunning ? locked.trialEndsAt : null, now, days)
