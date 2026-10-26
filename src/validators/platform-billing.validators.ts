@@ -265,7 +265,7 @@ const PRICE_RANGE_MESSAGE = 'Enter a whole number of rupees from ₹1 to ₹1,00
  * included, and why.
  */
 export const createPriceBodySchema = z.strictObject({
-  interval: z.enum(BILLING_INTERVALS, { error: 'Choose month or year.' }),
+  interval: z.enum(BILLING_INTERVALS, { error: 'Choose Monthly or Yearly.' }),
   amountMinor: z
     .number({ error: PRICE_RANGE_MESSAGE })
     .int(PRICE_RANGE_MESSAGE)
