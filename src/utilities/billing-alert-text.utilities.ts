@@ -39,7 +39,8 @@ export function cancelFailedMarker(subscriptionId: string): string {
  * @returns The marker.
  */
 export function readFailedMarker(subscriptionId: string): string {
-  return `Reading subscription ${subscriptionId}`
+  // The trailing "of" keeps it from matching a longer id that starts with this one.
+  return `Reading subscription ${subscriptionId} of`
 }
 
 /**
@@ -67,7 +68,7 @@ export const BILLING_ALERT_TEXT = {
   switchCancelFailed: (id: string) =>
     `${cancelFailedMarker(id)}. It was the cycle-end cancel for an interval switch, so both subscriptions charge until you cancel it at its cycle end in Razorpay.`,
   switchCancelNotRecorded: (id: string) =>
-    `Razorpay will cancel subscription ${id} at its cycle end for an interval switch, but the workspace does not record it, so its billing shows a renewal. Resync the workspace to record it.`,
+    `Razorpay will cancel subscription ${id} at its cycle end for an interval switch, but the workspace does not record it, so its billing shows a renewal. Resync the workspace. If a "Cancelling subscription ${id} failed" alert follows, cancel it at its cycle end in Razorpay.`,
 
   // Refunding a duplicate subscription.
   duplicateCancelFailed: (id: string) =>
@@ -105,13 +106,13 @@ export const BILLING_ALERT_TEXT = {
   trialEndConflict: () =>
     'The trial ended, but its billing record changed during every sync attempt, so the workspace is not on Free. The next scheduler run retries it.',
   trialEndSyncFailed: () =>
-    'The trial ended, but syncing its subscriptions failed, so the workspace is still on its trial. The next scheduler run retries it. If this repeats, check Razorpay, then resync the workspace.',
+    'The trial ended, but syncing its subscriptions failed, so its billing record still reads trialing, though members already get Free limits. The next scheduler run retries it. If the alert stays open, check Razorpay, then resync the workspace.',
   trialEndUnknownSubscription: () =>
     'The trial ended holding a subscription Razorpay does not know, so ending the trial ignores that subscription. Check its billing.',
   lifecycleCancelFailed: (id: string) =>
-    `${cancelFailedMarker(id)}, so this subscription ${LIFECYCLE_ALERT_TEXT} still charges. Cancel it in Razorpay.`,
+    `${cancelFailedMarker(id)}, so this subscription ${LIFECYCLE_ALERT_TEXT} still charges. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
   lifecycleReadFailed: (id: string) =>
-    `${readFailedMarker(id)} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed, so we did not cancel it and it still charges. Cancel it in Razorpay.`,
+    `Reading subscription ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed, so we did not cancel it and it may still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
   lifecycleCheckoutReadFailed: (id: string) =>
     `Reading checkout ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed before its cancel. Check in Razorpay whether it was paid, and refund it if so.`,
   lifecycleCheckoutSyncFailed: () =>

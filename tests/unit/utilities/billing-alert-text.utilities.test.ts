@@ -27,6 +27,11 @@ describe('BILLING_ALERT_TEXT', () => {
       expect(text).toContain(marker)
     }
     expect(BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X')).toContain(readFailedMarker('sub_X'))
+    // A longer id that starts with this one never matches its marker.
+    expect(BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X1')).not.toContain(
+      readFailedMarker('sub_X')
+    )
+    expect(BILLING_ALERT_TEXT.cancelFailed('sub_X1')).not.toContain(marker)
     expect(BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X')).not.toContain(marker)
     // A duplicate never became the workspace's current subscription, so the reconcile ignores it.
     expect(BILLING_ALERT_TEXT.duplicateCancelFailed('sub_X')).not.toContain(marker)
