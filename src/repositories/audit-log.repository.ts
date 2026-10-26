@@ -41,9 +41,10 @@ export interface AuditLogListRow {
   entry: AuditLog
   actor: AuditActorRow | null
   /**
-   * `timezone` is the tenant's IANA time zone from `tenant_settings`, `UTC` when it has no settings row.
+   * `timezone` is the tenant's IANA time zone from `tenant_settings` on a
+   * `platform` read, and null on a `tenant` read, which never shows it.
    */
-  tenant: { id: string; name: string; slug: string; timezone: string }
+  tenant: { id: string; name: string; slug: string; timezone: string | null }
 }
 
 /**
@@ -95,8 +96,9 @@ const targetTenant = alias(tenantModel, 'target_tenant')
 export function auditLogList(search: string | undefined, filters: AuditLogFilters) {
   return defineList({
     name: filters.scope === 'tenant' ? 'tenant-audit-log' : 'platform-audit-log',
-    base: (executor, seek) =>
-      executor
+    base: (executor, seek) => {
+      const isPlatform = filters.scope === 'platform'
+      const query = executor
         .select({
           id: auditLogModel.id,
           entry: auditLogModel,
@@ -105,14 +107,23 @@ export function auditLogList(search: string | undefined, filters: AuditLogFilter
             id: tenantModel.id,
             name: tenantModel.name,
             slug: tenantModel.slug,
-            timezone: sql<string>`coalesce(${tenantSettingsModel.timezone}, 'UTC')`,
+            timezone: isPlatform
+              ? sql<string | null>`coalesce(${tenantSettingsModel.timezone}, 'UTC')`
+              : sql<string | null>`null`,
           },
           sortOccurred: timestampKey(auditLogModel.occurredAt),
         })
         .from(auditLogModel)
         .innerJoin(tenantModel, eq(auditLogModel.tenantId, tenantModel.id))
-        // One primary-key probe per listed row, for the tenant's day in staff audit sentences.
-        .leftJoin(tenantSettingsModel, eq(tenantSettingsModel.tenantId, auditLogModel.tenantId))
+        .$dynamic()
+      // Staff reads only: one primary-key probe per listed row, for the tenant's day in audit sentences.
+      const withSettings = isPlatform
+        ? query.leftJoin(
+            tenantSettingsModel,
+            eq(tenantSettingsModel.tenantId, auditLogModel.tenantId)
+          )
+        : query
+      return withSettings
         .leftJoin(userModel, eq(auditLogModel.actorUserId, userModel.id))
         .leftJoin(
           targetUser,
@@ -153,7 +164,7 @@ export function auditLogList(search: string | undefined, filters: AuditLogFilter
             seek
           )
         )
-        .$dynamic(),
+    },
     id: auditLogModel.id,
     sorts: {
       '-occurred': [timestampSort(auditLogModel.occurredAt, 'desc', 'sortOccurred')],

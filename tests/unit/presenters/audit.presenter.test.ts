@@ -72,4 +72,14 @@ describe('toPlatformAuditEntry', () => {
 
     expect(entry.tenant).toEqual(tenant)
   })
+
+  it('reads a missing time zone as UTC', () => {
+    const entry = toPlatformAuditEntry({
+      entry: base,
+      actor: null,
+      tenant: { ...tenant, timezone: null },
+    })
+
+    expect(entry.tenant.timezone).toBe('UTC')
+  })
 })
