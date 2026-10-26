@@ -81,7 +81,7 @@ export const grantBodySchema = z
       error: 'Enter a number for a limit, or true for a feature.',
     }),
     expiresAt: z.iso
-      .datetime({ error: 'Enter the expiry as an ISO date and time, or null for none.' })
+      .datetime({ error: 'Choose an end date, or leave Ends on empty for no end date.' })
       .nullable(),
     reason: reasonSchema,
   })
@@ -100,21 +100,22 @@ export const grantBodySchema = z
       context.addIssue({
         code: 'custom',
         path: ['value'],
-        message: 'A feature grant turns the feature on. Send true.',
+        message:
+          'A feature grant only turns the feature on. To set a number, choose a limit instead.',
       })
     }
     if (definition?.kind === 'limit' && !isLimitValue(body.value)) {
       context.addIssue({
         code: 'custom',
         path: ['value'],
-        message: `Enter a whole number from 1 to ${MAX_GRANT_LIMIT_TEXT} for a limit, or null for no cap.`,
+        message: `Enter a whole number from 1 to ${MAX_GRANT_LIMIT_TEXT}, or choose No limit.`,
       })
     }
     if (body.expiresAt !== null && new Date(body.expiresAt).getTime() <= Date.now()) {
       context.addIssue({
         code: 'custom',
         path: ['expiresAt'],
-        message: 'Choose an expiry in the future, or null for none.',
+        message: 'Choose today or a later date, or leave it empty for no end date.',
       })
     }
   })
@@ -128,7 +129,7 @@ export type GrantBody = z.infer<typeof grantBodySchema>
  * `POST /tenants/:id/billing/cancel`: when the subscription ends, and why.
  */
 export const staffCancelBodySchema = z.strictObject({
-  when: z.enum(STAFF_CANCEL_WHEN, { error: 'Choose cycle_end or now.' }),
+  when: z.enum(STAFF_CANCEL_WHEN, { error: 'Choose when the subscription ends.' }),
   reason: reasonSchema,
 })
 
@@ -163,14 +164,14 @@ const planEntitlementsSchema = z
         context.addIssue({
           code: 'custom',
           path: [key],
-          message: `${definition.label}: send true to include the feature or false to leave it out.`,
+          message: `${definition.label}: choose whether the plan includes this feature.`,
         })
       }
       if (definition.kind === 'limit' && !isLimitValue(value)) {
         context.addIssue({
           code: 'custom',
           path: [key],
-          message: `${definition.label}: enter a whole number from 1 to ${MAX_GRANT_LIMIT_TEXT}, or null for no cap.`,
+          message: `${definition.label}: enter a whole number from 1 to ${MAX_GRANT_LIMIT_TEXT}, or choose No limit.`,
         })
       }
     }
@@ -252,10 +253,10 @@ const MIN_PRICE_MINOR = 100
 const MAX_PRICE_MINOR = 10_000_000
 
 /**
- * What a price outside the range reads.
+ * What a price outside the range reads: in whole rupees, as staff enter it
+ * in apex, though the body carries paise.
  */
-const PRICE_RANGE_MESSAGE =
-  'Enter the price in paise, a whole number from 100 (₹1) to 10000000 (₹1,00,000).'
+const PRICE_RANGE_MESSAGE = 'Enter a whole number of rupees from ₹1 to ₹1,00,000.'
 
 /**
  * `POST /plans/:id/prices`: the interval, the amount in paise, tax
@@ -290,7 +291,9 @@ const MAX_PAST_DUE_GRACE_DAYS = 30
 export const updateBillingSettingsBodySchema = z
   .strictObject({
     version: versionSchema,
-    trialEnabled: z.boolean({ error: 'Send true to offer trials or false to stop.' }).optional(),
+    trialEnabled: z
+      .boolean({ error: 'Choose whether new workspaces get a Paid trial.' })
+      .optional(),
     trialDays: z
       .number({ error: `Enter a whole number of days from 1 to ${String(MAX_TRIAL_DAYS)}.` })
       .int(`Enter a whole number of days from 1 to ${String(MAX_TRIAL_DAYS)}.`)
@@ -315,7 +318,7 @@ export const updateBillingSettingsBodySchema = z
       body.trialEnabled !== undefined ||
       body.trialDays !== undefined ||
       body.pastDueGraceDays !== undefined,
-    { message: 'Change trialEnabled, trialDays or pastDueGraceDays.' }
+    { message: 'Change at least one setting: trials, the trial length or the grace period.' }
   )
 
 /**
