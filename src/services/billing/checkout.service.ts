@@ -1470,20 +1470,25 @@ async function isMemberOwner(actor: Actor, tenantId: string): Promise<boolean> {
 }
 
 /**
- * The payer, and whether they are still a member.
+ * The payer, and whether they are still a member. Staff read a payer with no
+ * name by their email; members read an empty name, so a former member's
+ * address never reaches the members who stayed.
  * @param tenantId - The workspace.
  * @param payerUserId - The payer, or null.
+ * @param isStaff - Whether staff read the view.
  * @returns The payer, or null when there is none or their account is gone.
  */
 async function payerOf(
   tenantId: string,
-  payerUserId: string | null
+  payerUserId: string | null,
+  isStaff: boolean
 ): Promise<TenantBillingView['payer']> {
   if (payerUserId === null) return null
   const user = await userRepository.findById(payerUserId)
   if (user === undefined) return null
   const membership = await membershipRepository.findByUserAndTenant(payerUserId, tenantId)
-  return { userId: user.id, name: nameOrEmail(user), isMember: membership !== undefined }
+  const name = isStaff ? nameOrEmail(user) : displayName(user)
+  return { userId: user.id, name, isMember: membership !== undefined }
 }
 
 /**
@@ -1500,6 +1505,7 @@ async function payerOf(
 export async function getTenantBilling(actor: Actor, tenantId: string): Promise<TenantBillingView> {
   return billingView(tenantId, {
     isOwner: await isMemberOwner(actor, tenantId),
+    isStaff: false,
     dismissedBanners: await billingRepository.listDismissals(actor.userId, tenantId),
   })
 }
@@ -1507,7 +1513,8 @@ export async function getTenantBilling(actor: Actor, tenantId: string): Promise<
 /**
  * A workspace's billing as staff read it in Apex: the view every member
  * reads, with the owner-only fields empty and no banner dismissals, even
- * for a staff member who is also an owner of the workspace.
+ * for a staff member who is also an owner of the workspace. A payer with no
+ * name reads as their email.
  * @param tenantId - The customer workspace.
  * @param entitlements - Its effective entitlements, read once by the caller.
  * @returns The billing view.
@@ -1516,7 +1523,11 @@ export async function getTenantBillingForStaff(
   tenantId: string,
   entitlements: SourcedEntitlements
 ): Promise<TenantBillingView> {
-  return billingView(tenantId, { isOwner: false, dismissedBanners: [] }, entitlements)
+  return billingView(
+    tenantId,
+    { isOwner: false, isStaff: true, dismissedBanners: [] },
+    entitlements
+  )
 }
 
 /**
@@ -1524,6 +1535,7 @@ export async function getTenantBillingForStaff(
  * @param tenantId - The workspace.
  * @param viewer - What the reader may see: the billing email when an owner, and their own banner dismissals.
  * @param viewer.isOwner - Whether the reader is an owner by membership.
+ * @param viewer.isStaff - Whether staff read it in Apex, which names a payer with no name by their email.
  * @param viewer.dismissedBanners - The reader's dismissed banners.
  * @param read - The effective entitlements when the caller already read them.
  * @returns The view.
@@ -1531,7 +1543,7 @@ export async function getTenantBillingForStaff(
  */
 async function billingView(
   tenantId: string,
-  viewer: { isOwner: boolean; dismissedBanners: string[] },
+  viewer: { isOwner: boolean; isStaff: boolean; dismissedBanners: string[] },
   read?: SourcedEntitlements
 ): Promise<TenantBillingView> {
   const row = await billingRepository.findByTenantId(tenantId)
@@ -1563,7 +1575,7 @@ async function billingView(
     cancelAtPeriodEnd: entitlements.cancelAtPeriodEnd,
     pastDue: entitlements.pastDue,
     nextSwitch,
-    payer: await payerOf(tenantId, row?.payerUserId ?? null),
+    payer: await payerOf(tenantId, row?.payerUserId ?? null, viewer.isStaff),
     billingEmail: viewer.isOwner ? (row?.billingEmail ?? null) : null,
     paymentsEnabled: getBillingProvider() !== null,
     dismissedBanners: viewer.dismissedBanners,

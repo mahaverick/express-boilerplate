@@ -181,16 +181,19 @@ describe('GET /api/v1/tenants/:slug/billing', () => {
     })
   })
 
-  it('names a payer with no name by their email', async () => {
-    const { tenant, owner } = await workspace()
+  it('leaves a payer with no name unnamed, never showing members their email', async () => {
+    const { tenant } = await workspace()
     await makePaying(tenant.id)
-    await setBilling(tenant.id, { payerUserId: owner.id, billingEmail: owner.email })
+    const formerOwner = await createTrackedUser()
+    await setBilling(tenant.id, { payerUserId: formerOwner.id, billingEmail: formerOwner.email })
+    const viewer = await addMember(tenant.id, 'editor')
 
-    const response = await getAs(owner, `${tenant.slug}/billing`)
+    const response = await getAs(viewer, `${tenant.slug}/billing`)
 
     expect(dataOf(response.body)).toMatchObject({
-      payer: { userId: owner.id, name: owner.email, isMember: true },
+      payer: { userId: formerOwner.id, name: '', isMember: false },
     })
+    expect(JSON.stringify(response.body)).not.toContain(formerOwner.email)
   })
 
   it('gives staff with platform access the read without the owner-only fields', async () => {

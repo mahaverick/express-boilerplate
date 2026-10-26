@@ -52,7 +52,8 @@ export interface CheckoutSession {
 interface BillingPayer {
   userId: string
   /**
-   * Their name, or their email when they have none (`nameOrEmail`).
+   * Their name. With no name, staff read their email (`nameOrEmail`) and
+   * members read an empty string.
    */
   name: string
   /**
