@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.1.2](https://github.com/mahaverick/express-boilerplate/compare/v9.1.1...v9.1.2) (2026-10-26)
+
+
+### Bug Fixes
+
+* **billing:** extend a trial from the tenant's effective billing state ([#158](https://github.com/mahaverick/express-boilerplate/issues/158)) ([719d02d](https://github.com/mahaverick/express-boilerplate/commit/719d02d1d118ace6a4bb40fa9fe6e1dd472f9e64))
+
 ## [9.1.1](https://github.com/mahaverick/express-boilerplate/compare/v9.1.0...v9.1.1) (2026-10-26)
 
 
