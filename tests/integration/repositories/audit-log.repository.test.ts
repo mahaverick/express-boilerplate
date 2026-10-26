@@ -246,6 +246,7 @@ describe('AuditLogRepository.list, with its tenant', () => {
       id: tenantId,
       name: 'Audit Co',
       slug: expect.stringMatching(/^audit-/) as string,
+      timezone: 'UTC',
     })
     expect(staffOnly.items.map((row) => row.entry.action)).toEqual(['tenant.accessed_by_platform'])
     expect(byAction.items.map((row) => row.entry.access)).toEqual(['member'])
