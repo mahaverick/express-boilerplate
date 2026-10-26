@@ -594,7 +594,7 @@ describe('syncTenantBilling', () => {
     expect(alerts).toStrictEqual([
       {
         kind: 'reconcile_repair',
-        message: `Duplicate subscription ${duplicateId} is only partly refunded. Refund the rest at the provider.`,
+        message: `Duplicate subscription ${duplicateId} is only partly refunded. Refund the rest in Razorpay.`,
       },
     ])
   })
@@ -644,7 +644,7 @@ describe('syncTenantBilling', () => {
     expect(await alertsOf(tenantId)).toStrictEqual([
       {
         kind: 'reconcile_repair',
-        message: `Could not cancel subscription ${subscriptionId}. Cancel it at the provider.`,
+        message: `Cancelling subscription ${subscriptionId} failed. Cancel it in Razorpay.`,
       },
     ])
     const after = await readBilling(tenantId)
@@ -722,7 +722,7 @@ describe('syncTenantBilling', () => {
     })
     const alerts = await alertsOf(tenantId)
     expect(alerts.map((alert) => alert.message)).toStrictEqual([
-      `Ignored subscription ${foreignId}: its notes name another workspace.`,
+      `The sync skipped subscription ${foreignId} because its notes name another workspace. Check its notes in Razorpay.`,
     ])
   })
 
@@ -867,7 +867,7 @@ describe('syncTenantBilling', () => {
     const alerts = await alertsOf(tenantId)
     expect(alerts).toContainEqual({
       kind: 'reconcile_repair',
-      message: `Interval switch ${nextId} was paid after subscription ${subscriptionId} renewed, so the switch was cancelled and refunded and ${subscriptionId} kept.`,
+      message: `Interval switch ${nextId} was paid after subscription ${subscriptionId} renewed. We cancelled and refunded ${nextId} and kept ${subscriptionId}.`,
     })
   })
 

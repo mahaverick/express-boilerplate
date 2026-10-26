@@ -7,7 +7,8 @@
  * constants, validator messages, notification titles and bodies, onboarding
  * step copy and the CLI output of `src/scripts`. Each email template is
  * rendered instead of scanned, so its subject and text are checked as a
- * person reads them. The frontends' `tests/unit/copy-style.test.ts` is the
+ * person reads them, and each staff billing alert is rendered from
+ * `BILLING_ALERT_TEXT`, which Apex shows as sent. The frontends' `tests/unit/copy-style.test.ts` is the
  * model.
  *
  * Out of scope, by design: log lines, internal `new Error` text outside
@@ -43,6 +44,10 @@ import { renderUpgradeRequestFulfilledTemplate } from '@/templates/email/upgrade
 import { renderUpgradeRequestedTemplate } from '@/templates/email/upgrade-requested.template'
 import { renderWelcomeTemplate } from '@/templates/email/welcome.template'
 import { renderWinbackTemplate } from '@/templates/email/winback.template'
+import {
+  BILLING_ALERT_TEXT,
+  type BillingAlertTextKey,
+} from '@/utilities/billing-alert-text.utilities'
 import type { EmailTemplateKey, RenderedEmail } from '@/utilities/email-template.utilities'
 
 const SOURCE_ROOT = path.resolve(process.cwd(), 'src')
@@ -608,6 +613,44 @@ function templateCopy(): Copy[] {
 }
 
 /**
+ * Each staff billing alert, rendered with realistic ids. A `Record` over
+ * the alert texts' keys, so a new alert fails to compile until it is here.
+ */
+const ALERTS: Record<BillingAlertTextKey, string> = {
+  foreignSubscription: BILLING_ALERT_TEXT.foreignSubscription('sub_Q1'),
+  unknownPrice: BILLING_ALERT_TEXT.unknownPrice('sub_Q1'),
+  cancelFailed: BILLING_ALERT_TEXT.cancelFailed('sub_Q1'),
+  switchCancelFailed: BILLING_ALERT_TEXT.switchCancelFailed('sub_Q1'),
+  switchCancelNotRecorded: BILLING_ALERT_TEXT.switchCancelNotRecorded('sub_Q1'),
+  duplicateCancelFailed: BILLING_ALERT_TEXT.duplicateCancelFailed('sub_Q1'),
+  duplicateRefundFailed: BILLING_ALERT_TEXT.duplicateRefundFailed('sub_Q1'),
+  duplicateRefunded: BILLING_ALERT_TEXT.duplicateRefunded('sub_Q1', 14_999_950, 'rfnd_R1'),
+  duplicateNothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid('sub_Q1'),
+  duplicatePartlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_Q1'),
+  archivedCancelFailed: BILLING_ALERT_TEXT.archivedCancelFailed('sub_Q1'),
+  archivedRefundFailed: BILLING_ALERT_TEXT.archivedRefundFailed('sub_Q1'),
+  archivedRefunded: BILLING_ALERT_TEXT.archivedRefunded('sub_Q1', 99_900, 'rfnd_R1'),
+  archivedNothingPaid: BILLING_ALERT_TEXT.archivedNothingPaid('sub_Q1'),
+  archivedPartlyRefunded: BILLING_ALERT_TEXT.archivedPartlyRefunded('sub_Q1'),
+  subscriptionCompleted: BILLING_ALERT_TEXT.subscriptionCompleted('sub_Q1'),
+  lateSwitchRefunded: BILLING_ALERT_TEXT.lateSwitchRefunded('sub_Q2', 'sub_Q1'),
+  activeWithoutPeriodEnd: BILLING_ALERT_TEXT.activeWithoutPeriodEnd('sub_Q1'),
+  trialEndConflict: BILLING_ALERT_TEXT.trialEndConflict(),
+  trialEndReadFailed: BILLING_ALERT_TEXT.trialEndReadFailed(),
+  trialEndUnknownSubscription: BILLING_ALERT_TEXT.trialEndUnknownSubscription(),
+  lifecycleCancelFailed: BILLING_ALERT_TEXT.lifecycleCancelFailed('sub_Q1'),
+  lifecycleCheckoutReadFailed: BILLING_ALERT_TEXT.lifecycleCheckoutReadFailed('sub_Q1'),
+  lifecycleCheckoutSyncFailed: BILLING_ALERT_TEXT.lifecycleCheckoutSyncFailed(),
+  reconcileListFailed: BILLING_ALERT_TEXT.reconcileListFailed('2026-10-27'),
+  disputeStatusUnread: BILLING_ALERT_TEXT.disputeStatusUnread('pay_P1'),
+  paidSubscriptionUnheld: BILLING_ALERT_TEXT.paidSubscriptionUnheld('sub_Q1'),
+  disputeUnheld: BILLING_ALERT_TEXT.disputeUnheld('pay_P1'),
+  disputeOpen: BILLING_ALERT_TEXT.disputeOpen('pay_P1'),
+  webhookFailed: BILLING_ALERT_TEXT.webhookFailed('evt_E1', 'subscription.charged'),
+  stillRetrying: BILLING_ALERT_TEXT.stillRetrying('Razorpay event evt_E1 (subscription.charged)'),
+}
+
+/**
  * What breaks the rules in one piece of copy.
  * @param text - The copy.
  * @returns Each problem, or none.
@@ -674,5 +717,10 @@ describe('user-facing copy', () => {
 
   it('breaks no copy rule in any email template', () => {
     expect(offenders(templateCopy())).toEqual([])
+  })
+
+  it('breaks no copy rule in any staff billing alert', () => {
+    const copy = Object.entries(ALERTS).map(([key, text]) => ({ where: `alert ${key}`, text }))
+    expect(offenders(copy)).toEqual([])
   })
 })

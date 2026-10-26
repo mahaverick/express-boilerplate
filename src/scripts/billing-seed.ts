@@ -41,6 +41,7 @@ import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.se
 import { closeDatabase, db, withTransaction } from '@/services/database.service'
 import { closeRedis } from '@/services/redis.service'
 import type { ProviderSubscription } from '@/types/billing'
+import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { effectiveBillingState } from '@/utilities/billing-rules.utilities'
 
 const billingRepository = new BillingRepository()
@@ -348,14 +349,17 @@ export const SEED_TENANTS: readonly SeedTenant[] = [
       const duplicate = await paidFakeSubscription(context, tenantId, 'month')
       await context.fake.fakeAdvance(duplicate.id, 'cancelled')
       const refund = await context.fake.refundLatestPayment(duplicate.id)
-      const refunded =
-        refund.status === 'refunded'
-          ? `refunded ${String(refund.amountMinor)} paise in ${refund.refundId}`
-          : 'refunded its payment'
       return {
         billing: payingColumns(context, sub, 'month'),
         history: paidHistory(0),
-        alert: `Cancelled duplicate subscription ${duplicate.id} and ${refunded}.`,
+        alert:
+          refund.status === 'refunded'
+            ? BILLING_ALERT_TEXT.duplicateRefunded(
+                duplicate.id,
+                refund.amountMinor,
+                refund.refundId
+              )
+            : BILLING_ALERT_TEXT.duplicateNothingPaid(duplicate.id),
       }
     },
   },

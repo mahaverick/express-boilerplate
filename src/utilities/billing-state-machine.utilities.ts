@@ -25,6 +25,7 @@
 import type { BillingAlertKind, BillingState } from '@/constants/billing.constants'
 import type { NewTenantBilling, TenantBillingRecord } from '@/database/models/billing.model'
 import type { ProviderSubscription, ProviderSubscriptionStatus } from '@/types/billing'
+import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { effectiveBillingState, graceEndsAt } from '@/utilities/billing-rules.utilities'
 
 /**
@@ -400,7 +401,7 @@ class BillingMapping {
         this.actions.push({
           kind: 'alert',
           alert: 'subscription_completed',
-          message: `Subscription ${sub.id} billed its last cycle, so the workspace moved to Free.`,
+          message: BILLING_ALERT_TEXT.subscriptionCompleted(sub.id),
         })
         return
       }
@@ -486,7 +487,7 @@ class BillingMapping {
         {
           kind: 'alert',
           alert: 'reconcile_repair',
-          message: `Interval switch ${next.id} was paid after subscription ${current.id} renewed, so the switch was cancelled and refunded and ${current.id} kept.`,
+          message: BILLING_ALERT_TEXT.lateSwitchRefunded(next.id, current.id),
           subscriptionId: next.id,
         }
       )
@@ -636,7 +637,7 @@ export function nextBillingRow(
     mapping.actions.push({
       kind: 'alert',
       alert: 'reconcile_repair',
-      message: `Workspace is active on subscription ${draft.providerSubscriptionId} with no paid period end. Check its invoices.`,
+      message: BILLING_ALERT_TEXT.activeWithoutPeriodEnd(draft.providerSubscriptionId),
       subscriptionId: draft.providerSubscriptionId,
     })
   }

@@ -478,7 +478,7 @@ describe('nextBillingRow: a switch paid after the current subscription renewed',
         kind: 'alert',
         alert: 'reconcile_repair',
         message:
-          'Interval switch sub_next was paid after subscription sub_cur renewed, so the switch was cancelled and refunded and sub_cur kept.',
+          'Interval switch sub_next was paid after subscription sub_cur renewed. We cancelled and refunded sub_next and kept sub_cur.',
         subscriptionId: 'sub_next',
       },
     ])
@@ -793,7 +793,8 @@ describe('nextBillingRow: the current subscription', () => {
       {
         kind: 'alert',
         alert: 'subscription_completed',
-        message: 'Subscription sub_cur billed its last cycle, so the workspace moved to Free.',
+        message:
+          'Subscription sub_cur billed its last cycle, so the workspace moved to Free. No action needed.',
       },
     ])
   })
@@ -903,7 +904,7 @@ describe('nextBillingRow: the current subscription', () => {
         kind: 'alert',
         alert: 'reconcile_repair',
         message:
-          'Workspace is active on subscription sub_cur with no paid period end. Check its invoices.',
+          'The workspace is active on subscription sub_cur with no paid period end. Check its invoices in Razorpay.',
         subscriptionId: 'sub_cur',
       },
     ])

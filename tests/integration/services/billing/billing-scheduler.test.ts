@@ -589,7 +589,7 @@ describe('runFrequentBilling', () => {
       expect(await stateOf(tenantId)).toBe('trialing')
       const alerts = await alertsOf(tenantId)
       expect(alerts).toHaveLength(1)
-      expect(alerts[0]?.message).toContain('could not read')
+      expect(alerts[0]?.message).toContain('reading its subscriptions from Razorpay failed')
     }
   )
 
@@ -616,8 +616,8 @@ describe('runFrequentBilling', () => {
     expect(await stateOf(tenantId)).toBe('trialing')
     const alerts = await alertsOf(tenantId)
     expect(alerts).toHaveLength(1)
-    expect(alerts[0]?.message).toContain('kept changing')
-    expect(alerts[0]?.message).not.toContain('could not read')
+    expect(alerts[0]?.message).toContain('changed during every sync attempt')
+    expect(alerts[0]?.message).not.toContain('reading its subscriptions from Razorpay failed')
   })
 
   it('moves a lapsed trial to Free when the provider does not know its subscription, and alerts staff once', async () => {
@@ -975,23 +975,32 @@ describe('runDailyBilling', () => {
     expect(report.reconcile?.skipped).toBeGreaterThanOrEqual(1)
   })
 
-  it('syncs a Free row whose current subscription a failed cancel left running, so the cancel is tried again', async () => {
-    const now = new Date()
-    const { tenant } = await workspace()
-    const { subscriptionId } = await makePaying(tenant.id)
-    await fake.fakeAdvance(subscriptionId, 'halted')
-    await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
-    await billingRepository.insertAlert({
-      kind: 'reconcile_repair',
-      tenantId: tenant.id,
-      message: `Could not cancel subscription ${subscriptionId}. Cancel it at the provider.`,
-    })
+  it.each([
+    ['the current', (id: string) => `Cancelling subscription ${id} failed. Cancel it in Razorpay.`],
+    [
+      'an earlier',
+      (id: string) => `Could not cancel subscription ${id}. Cancel it at the provider.`,
+    ],
+  ])(
+    'syncs a Free row whose current subscription a failed cancel left running, named in %s wording, so the cancel is tried again',
+    async (_wording, messageFor) => {
+      const now = new Date()
+      const { tenant } = await workspace()
+      const { subscriptionId } = await makePaying(tenant.id)
+      await fake.fakeAdvance(subscriptionId, 'halted')
+      await setBilling(tenant.id, { state: 'free', planId: plans.freeId, priceId: null })
+      await billingRepository.insertAlert({
+        kind: 'reconcile_repair',
+        tenantId: tenant.id,
+        message: messageFor(subscriptionId),
+      })
 
-    await runDailyBilling(now)
-    await runSyncJobsFor(tenant.id)
+      await runDailyBilling(now)
+      await runSyncJobsFor(tenant.id)
 
-    expect(await statusOf(subscriptionId)).toBe('cancelled')
-  })
+      expect(await statusOf(subscriptionId)).toBe('cancelled')
+    }
+  )
 
   it('skips and counts a fake-provider row when the running provider is Razorpay', async () => {
     const now = new Date()
@@ -1078,7 +1087,7 @@ describe('runDailyBilling', () => {
     const now = new Date()
     const { tenant } = await workspace()
     await makePaying(tenant.id)
-    tenantlessAlertTexts.push('could not list')
+    tenantlessAlertTexts.push('Listing recent subscriptions from Razorpay failed')
 
     const reports: BillingRunReport[] = []
     await withMutatedMethod(
@@ -1093,7 +1102,7 @@ describe('runDailyBilling', () => {
     expect(reports[0]?.sweep?.status).toBe('failed')
     expect(reports[0]?.reconcile?.status).toBe('ok')
     const alerts = await sql<{ kind: string }[]>`
-      select kind from billing_alerts where tenant_id is null and strpos(message, 'could not list') > 0`
+      select kind from billing_alerts where tenant_id is null and strpos(message, 'Listing recent subscriptions from Razorpay failed') > 0`
     expect([...alerts]).toStrictEqual([{ kind: 'reconcile_repair' }])
     const queued = await syncJobsFor(tenant.id)
     expect(queued.length).toBeGreaterThanOrEqual(1)

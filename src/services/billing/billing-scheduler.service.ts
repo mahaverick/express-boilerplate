@@ -56,6 +56,12 @@ import {
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import {
+  BILLING_ALERT_TEXT,
+  cancelFailedMarker,
+  legacyCancelFailedMarker,
+  LIFECYCLE_ALERT_TEXT,
+} from '@/utilities/billing-alert-text.utilities'
 import { isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { isRunning } from '@/utilities/billing-state-machine.utilities'
 import { formatDateInZone } from '@/utilities/date-text.utilities'
@@ -274,27 +280,18 @@ async function endTrial(
       await syncTenantBilling(row.tenantId, 'job', { now })
     } catch (error) {
       if (error instanceof BillingSyncConflictError) {
-        await alertOnce(
-          row.tenantId,
-          'The trial ended, but its billing record kept changing during the sync, so it is not on Free yet. The next run tries again.'
-        )
+        await alertOnce(row.tenantId, BILLING_ALERT_TEXT.trialEndConflict())
         throw error
       }
       if (!isUnknownIdError(error)) {
-        await alertOnce(
-          row.tenantId,
-          'The trial ended, but the provider could not read its subscriptions, so it is not on Free yet. Check the provider, then resync the workspace.'
-        )
+        await alertOnce(row.tenantId, BILLING_ALERT_TEXT.trialEndReadFailed())
         throw error
       }
       logger.warn('A lapsed trial holds a subscription the provider does not know', {
         error,
         tenantId: row.tenantId,
       })
-      await alertOnce(
-        row.tenantId,
-        'The trial ended holding a subscription the provider does not know, so the workspace moved to Free. Check its billing.'
-      )
+      await alertOnce(row.tenantId, BILLING_ALERT_TEXT.trialEndUnknownSubscription())
     }
   }
   const written = await withTransaction(async (tx) => {
@@ -323,21 +320,6 @@ async function endTrial(
   if (written === undefined) return 'skipped'
   await emitBillingDiff(written.before, written.after, 'job')
   return 'acted'
-}
-
-/**
- * The text every alert about a lifecycle cancel that did not go through
- * carries, by which the frequent run finds the claims to retry.
- */
-const LIFECYCLE_ALERT_TEXT = 'of a suspended or archived workspace'
-
-/**
- * The alert raised when a lifecycle cancel could not be made.
- * @param subscriptionId - The subscription.
- * @returns The message.
- */
-function lifecycleCancelFailure(subscriptionId: string): string {
-  return `Could not cancel subscription ${subscriptionId} ${LIFECYCLE_ALERT_TEXT}. Cancel it at the provider.`
 }
 
 /**
@@ -375,7 +357,7 @@ async function didCancelForLifecycle(
       tenantId,
       subscriptionId,
     })
-    await alertOnce(tenantId, lifecycleCancelFailure(subscriptionId))
+    await alertOnce(tenantId, BILLING_ALERT_TEXT.lifecycleCancelFailed(subscriptionId))
     return false
   }
 }
@@ -431,20 +413,14 @@ async function bringInPaidCheckouts(
         tenantId,
         subscriptionId: id,
       })
-      await alertOnce(
-        tenantId,
-        `Could not read checkout ${id} ${LIFECYCLE_ALERT_TEXT} before cancelling it. Check whether it was paid, and refund it if so.`
-      )
+      await alertOnce(tenantId, BILLING_ALERT_TEXT.lifecycleCheckoutReadFailed(id))
     }
   }
   if (!isPaid) return { row, hasSynced: false }
   try {
     await syncTenantBilling(tenantId, 'job', { now })
   } catch (error) {
-    await alertOnce(
-      tenantId,
-      `A paid checkout ${LIFECYCLE_ALERT_TEXT} could not be brought in, so nothing was cancelled. Resync the workspace.`
-    )
+    await alertOnce(tenantId, BILLING_ALERT_TEXT.lifecycleCheckoutSyncFailed())
     throw error
   }
   return { row: (await billingRepository.findByTenantId(tenantId)) ?? row, hasSynced: true }
@@ -537,7 +513,7 @@ async function cancelLifecycleRow(
         subscriptionId: currentId,
       })
       if (isArchived) await didCancelForLifecycle(provider, tenantId, currentId, false)
-      else await alertOnce(tenantId, lifecycleCancelFailure(currentId))
+      else await alertOnce(tenantId, BILLING_ALERT_TEXT.lifecycleCancelFailed(currentId))
     }
     if (current !== undefined && !ENDED_STATUSES.has(current.status)) {
       const hasCycle = current.status !== 'created' && current.status !== 'authenticated'
@@ -844,11 +820,14 @@ async function isEndedFree(row: TenantBillingRecord): Promise<boolean> {
   if (row.state !== 'free' || row.pendingSubscriptionId !== null) return false
   if (row.nextSubscriptionId !== null) return false
   if (row.providerSubscriptionId === null) return true
-  return !(await billingRepository.hasAlertNaming(
-    row.tenantId,
-    'reconcile_repair',
-    `Could not cancel subscription ${row.providerSubscriptionId}`
-  ))
+  const id = row.providerSubscriptionId
+  // An alert raised before the current wording names the failed cancel in its own words.
+  for (const marker of [cancelFailedMarker(id), legacyCancelFailedMarker(id)]) {
+    if (await billingRepository.hasAlertNaming(row.tenantId, 'reconcile_repair', marker)) {
+      return false
+    }
+  }
+  return true
 }
 
 /**
@@ -897,10 +876,7 @@ async function sweepSubscriptions(
       new Date(now.getTime() - RECONCILE_LOOKBACK_DAYS * DAY_MS)
     )
   } catch (error) {
-    await alertOnce(
-      null,
-      `The reconcile could not list recent subscriptions on ${now.toISOString().slice(0, 10)}. Check the provider, then resync workspaces with a recent checkout.`
-    )
+    await alertOnce(null, BILLING_ALERT_TEXT.reconcileListFailed(now.toISOString().slice(0, 10)))
     throw error
   }
   const { APP_ENV } = getEnv()
