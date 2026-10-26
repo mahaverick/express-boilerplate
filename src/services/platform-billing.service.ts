@@ -59,7 +59,12 @@ import {
   type EntitlementKey,
   type EntitlementValue,
 } from '@/constants/entitlements.constants'
-import type { BillingSettingsRecord, EntitlementGrant, Plan } from '@/database/models/billing.model'
+import type {
+  BillingSettingsRecord,
+  EntitlementGrant,
+  Plan,
+  TenantBillingRecord,
+} from '@/database/models/billing.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
@@ -426,9 +431,10 @@ export async function resyncTenantBilling(
  * keeps meeting a concurrent write is left to that write: the caller decides
  * under its own lock either way.
  * @param tenantId - The tenant.
+ * @returns The row after the sync, or undefined when the row was not lapsed.
  * @throws {HttpError} 503 or 502 when the provider fails, with nothing written.
  */
-async function syncIfLapsed(tenantId: string): Promise<void> {
+async function syncIfLapsed(tenantId: string): Promise<TenantBillingRecord | undefined> {
   const row = await billingRepository.findByTenantId(tenantId)
   if (row === undefined || (row.state !== 'active' && row.state !== 'past_due')) return
   const { pastDueGraceDays } = await planRepository.getSettings()
@@ -438,6 +444,7 @@ async function syncIfLapsed(tenantId: string): Promise<void> {
   } catch (error) {
     if (!(error instanceof HttpError) || error.code !== BILLING_BUSY_CODE) throw error
   }
+  return billingRepository.findByTenantId(tenantId)
 }
 
 /**
@@ -654,7 +661,10 @@ export async function revokeGrant(
  * cancelling, or now, which moves the tenant to Free. A deferred start that
  * has not charged yet is always cancelled now and goes back to its trial,
  * or to Free when the trial is over. A scheduled switch or resubscribe is
- * cancelled too. A sync follows, so the row matches the provider; its
+ * cancelled too. A row its paid time has outlived is synced first
+ * (`syncIfLapsed`), so its move to Free carries the billing job's cause
+ * rather than this cancel's; when that sync moves it to Free, its
+ * subscription has ended and the cancel is only audited. A sync follows, so the row matches the provider; its
  * failure is logged, since the cancel itself is done. A subscription that
  * had already ended is only synced, and the cancel is still audited.
  *
@@ -693,28 +703,44 @@ export async function cancelByStaff(
       PAYMENT_PROVIDER_UNAVAILABLE_CODE
     )
   }
+  /**
+   * Record the staff cancel in the write's transaction.
+   * @param tx - The write's transaction.
+   */
+  const audit = async (tx: DbTransaction): Promise<void> => {
+    await record(
+      {
+        action: 'billing.cancelled_by_staff',
+        actor,
+        access: 'platform',
+        tenantId,
+        targetId: tenantId,
+        metadata: { when, reason },
+      },
+      tx
+    )
+  }
+  // As the extension does: a lapsed row moves to Free by the job's cause before the cancel reads it.
+  const synced = await syncIfLapsed(tenantId)
+  if (synced?.state === 'free' && synced.nextSubscriptionId === null) {
+    // The sync moves to Free only on a subscription that ended: as for one that ended before, the cancel is only audited.
+    await withTransaction(async (tx) => {
+      await lockStaffAndBilling(actor, 'admin', tenantId, tx)
+      await audit(tx)
+    })
+    return staffView(tenantId)
+  }
   await cancelSubscriptions(provider, {
     tenantId,
     source: 'staff',
     when,
     lock: (tx) => lockStaffAndBilling(actor, 'admin', tenantId, tx),
-    audit: async (tx) => {
-      await record(
-        {
-          action: 'billing.cancelled_by_staff',
-          actor,
-          access: 'platform',
-          tenantId,
-          targetId: tenantId,
-          metadata: { when, reason },
-        },
-        tx
-      )
-    },
+    audit,
     shouldAuditWhenEnded: true,
     nothingToCancel: (row) =>
       Promise.resolve(
-        row.cancelAtPeriodEnd
+        // A Free row keeps the flag from its ended subscription: there is no period end left to wait for.
+        row.cancelAtPeriodEnd && row.state !== 'free'
           ? new HttpError(
               'This subscription already ends at its period end. Cancel it now to end it sooner.',
               409,

@@ -268,7 +268,10 @@ async function lapsedCancellingWorkspace() {
 }
 
 /**
- * A tenant's billing state history, oldest first.
+ * A tenant's billing state history, in the order it was written. It sorts by
+ * the uuidv7 id, which is stamped at the insert, not by `at`, which is the
+ * writing transaction's start: two extensions that race both begin before
+ * either takes the row lock, so their `at` order need not be their write order.
  * @param tenantId - The tenant.
  * @returns Each row's states, cause and source.
  */
@@ -277,7 +280,7 @@ async function historyOf(
 ): Promise<{ fromState: string; toState: string; cause: string; source: string }[]> {
   return sql<{ fromState: string; toState: string; cause: string; source: string }[]>`
     select from_state as "fromState", to_state as "toState", cause, source
-    from billing_state_history where tenant_id = ${tenantId} order by at, id`
+    from billing_state_history where tenant_id = ${tenantId} order by id`
 }
 
 describe('GET /api/v1/platform/tenants/:id/billing', () => {
@@ -1036,6 +1039,77 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
       where properties->'$groups'->>'tenant' = ${tenant.id} and event not like 'billing_%'
         and event <> '$groupidentify'`
     expect(productEvents.map((row) => row.distinctId)).not.toContain(user.id)
+  })
+
+  it.each(['cycle_end', 'now'] as const)(
+    'moves a lapsed cancelling tenant to Free as the job does on a %s cancel, and audits the cancel',
+    async (when) => {
+      const { tenant } = await lapsedCancellingWorkspace()
+      const { token, user } = await staff('admin')
+      const cancel = vi.spyOn(fake, 'cancelSubscription')
+
+      const response = await postAs(token, tenant.id, '/cancel', { when, reason: REASON })
+
+      expect(response.status).toBe(200)
+      expect(cancel).not.toHaveBeenCalled()
+      cancel.mockRestore()
+      expect(dataOf(response.body)).toMatchObject({ state: 'free', plan: { key: 'free' } })
+      expect(await historyOf(tenant.id)).toEqual([
+        { fromState: 'active', toState: 'free', cause: 'cancelled', source: 'staff' },
+      ])
+      expect(await billingAudit(tenant.id)).toEqual([
+        {
+          action: 'billing.cancelled_by_staff',
+          access: 'platform',
+          actorId: user.id,
+          metadata: { when, reason: REASON },
+        },
+      ])
+    }
+  )
+
+  it('refuses a cycle-end cancel of a tenant the job moved to Free as having nothing to cancel', async () => {
+    const { tenant } = await lapsedCancellingWorkspace()
+    await syncTenantBilling(tenant.id, 'job')
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free', cancelAtPeriodEnd: true })
+    const { token } = await staff('admin')
+
+    const response = await postAs(token, tenant.id, '/cancel', {
+      when: 'cycle_end',
+      reason: REASON,
+    })
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: 'NO_SUBSCRIPTION',
+      message: 'This tenant has no subscription to cancel. Resync it if the provider shows one.',
+    })
+    expect(await billingAudit(tenant.id)).toEqual([])
+  })
+
+  it("cancels a past-due tenant whose grace has ended by the job's cause, grace_ended", async () => {
+    const { tenant, subscriptionId } = await payingWorkspace()
+    const longAgo = new Date(Date.now() - 30 * DAY_MS)
+    await fake.fakeAdvance(subscriptionId, 'halted')
+    await setBilling(tenant.id, { state: 'past_due', pastDueSince: longAgo, haltedAt: longAgo })
+    const { token, user } = await staff('admin')
+
+    const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+
+    expect(response.status).toBe(200)
+    expect(await readBilling(tenant.id)).toMatchObject({ state: 'free', planId: plans.freeId })
+    expect(await subscriptionStatus(subscriptionId)).toBe('cancelled')
+    expect(await historyOf(tenant.id)).toEqual([
+      { fromState: 'past_due', toState: 'free', cause: 'grace_ended', source: 'staff' },
+    ])
+    expect(await billingAudit(tenant.id)).toEqual([
+      {
+        action: 'billing.cancelled_by_staff',
+        access: 'platform',
+        actorId: user.id,
+        metadata: { when: 'now', reason: REASON },
+      },
+    ])
   })
 
   it('cancels a past-due tenant now: Free, with the failed-payment stamps cleared', async () => {
