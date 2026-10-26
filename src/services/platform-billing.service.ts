@@ -510,10 +510,10 @@ function notConfirmedEnded(row: TenantBillingRecord): HttpError {
     "The payment provider hasn't confirmed this tenant's subscription ended. Resync the tenant, then try again."
   if (provider === null) {
     message =
-      "Payments are off on this server, so we can't confirm this tenant's paid time ended. Try again once payments are on."
+      "Payments are off on this server, so we can't confirm this tenant's paid time ended. Ask engineering to turn payments on, then try again."
   } else if (isOtherProvider(row, provider)) {
     message =
-      "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Try again from the server that uses that account."
+      "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Ask engineering to check it in that payment account."
   }
   return new HttpError(message, 409, TRIAL_NOT_EXTENDABLE_CODE)
 }
@@ -745,8 +745,8 @@ export async function revokeGrant(
 
 /**
  * The 409 a staff cancel answers when it finds nothing to end, worded for
- * the row. A paying row whose cancel is already scheduled says so. A row off
- * Paid that still holds a subscription id names it: the cancel ends only a
+ * the row. A paying row whose cancel is already scheduled says so. A row
+ * not paying (Free, or a trial) that still holds a subscription id names it: the cancel ends only a
  * paying row's subscription, and the id most often names one that ended, but
  * a resync ends one that still runs.
  * @param row - The locked row.
@@ -764,7 +764,7 @@ function staffNothingToCancel(row: TenantBillingRecord, fallback: HttpError): Ht
   }
   if (!isPaying && row.providerSubscriptionId !== null) {
     return new HttpError(
-      `This tenant isn't on Paid, so a cancel has nothing to end. If the provider shows subscription ${row.providerSubscriptionId} running, resync the tenant.`,
+      `This tenant isn't paying, so a cancel has nothing to end. If the provider shows subscription ${row.providerSubscriptionId} running, resync the tenant.`,
       409,
       NO_SUBSCRIPTION_CODE
     )
@@ -843,8 +843,12 @@ export async function cancelByStaff(
     // As for a subscription that ended before, the cancel is only audited.
     const isAudited = await withTransaction(async (tx) => {
       const locked = await lockStaffAndBilling(actor, 'admin', tenantId, tx)
-      // A write since the check (an adopted checkout, an extension) may have left something to cancel.
-      if (locked.version !== synced.version) return false
+      // A write since the check that changed what a cancel ends (an adopted checkout, an extension, a switch) sends it down the normal path; a sync that only stamped the row does not.
+      const isUnchanged =
+        locked.state === synced.state &&
+        locked.providerSubscriptionId === synced.providerSubscriptionId &&
+        locked.nextSubscriptionId === synced.nextSubscriptionId
+      if (!isUnchanged) return false
       await audit(tx)
       return true
     })

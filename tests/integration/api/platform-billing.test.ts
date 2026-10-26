@@ -596,7 +596,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
     expect(response.body).toMatchObject({
       code: 'TRIAL_NOT_EXTENDABLE',
       message:
-        "Payments are off on this server, so we can't confirm this tenant's paid time ended. Try again once payments are on.",
+        "Payments are off on this server, so we can't confirm this tenant's paid time ended. Ask engineering to turn payments on, then try again.",
     })
     const after = await readBilling(tenant.id)
     expect(after.version).toBe(before.version)
@@ -616,7 +616,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/extend-trial', () => {
     expect(response.body).toMatchObject({
       code: 'TRIAL_NOT_EXTENDABLE',
       message:
-        "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Try again from the server that uses that account.",
+        "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Ask engineering to check it in that payment account.",
     })
     const after = await readBilling(tenant.id)
     expect(after.version).toBe(before.version)
@@ -1275,7 +1275,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(response?.status).toBe(409)
     expect(response?.body).toMatchObject({
       code: 'NO_SUBSCRIPTION',
-      message: `This tenant isn't on Paid, so a cancel has nothing to end. If the provider shows subscription ${subscriptionId} running, resync the tenant.`,
+      message: `This tenant isn't paying, so a cancel has nothing to end. If the provider shows subscription ${subscriptionId} running, resync the tenant.`,
     })
     expect(await billingAudit(tenant.id)).toEqual([])
   })
@@ -1414,6 +1414,46 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(await billingAudit(tenant.id)).toHaveLength(1)
   })
 
+  it('still only audits a lapsed cancel when a sync that changes nothing lands during its check', async () => {
+    const { tenant, subscriptionId } = await lapsedCancellingWorkspace()
+    const { token, user } = await staff('admin')
+    const original = fake.fetchSubscription.bind(fake)
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+    let reads = 0
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+
+    // A webhook's sync lands during the check before the audit: it stamps syncedAt and moves the version, nothing else.
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => {
+        if (id === subscriptionId) {
+          reads += 1
+          if (reads === 2) {
+            const moving = await readBilling(tenant.id)
+            await setBilling(tenant.id, { version: moving.version + 1, syncedAt: new Date() })
+          }
+        }
+        return original(id)
+      },
+      async () => {
+        response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
+      }
+    )
+
+    expect(reads).toBe(2)
+    expect(response?.status).toBe(200)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(await billingAudit(tenant.id)).toEqual([
+      {
+        action: 'billing.cancelled_by_staff',
+        access: 'platform',
+        actorId: user.id,
+        metadata: { when: 'now', reason: REASON },
+      },
+    ])
+  })
+
   it('cancels a checkout adopted after the current subscription read as ended, rather than only auditing', async () => {
     const { tenant, subscriptionId } = await payingWorkspace()
     await fake.fakeAdvance(subscriptionId, 'cancelled')
@@ -1467,7 +1507,7 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     expect(response.status).toBe(409)
     expect(response.body).toMatchObject({
       code: 'NO_SUBSCRIPTION',
-      message: `This tenant isn't on Paid, so a cancel has nothing to end. If the provider shows subscription ${subscriptionId} running, resync the tenant.`,
+      message: `This tenant isn't paying, so a cancel has nothing to end. If the provider shows subscription ${subscriptionId} running, resync the tenant.`,
     })
     expect(await billingAudit(tenant.id)).toEqual([])
   })

@@ -961,6 +961,51 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
 })
 
 describe('POST /api/v1/tenants/:slug/billing/cancel when the provider moves or fails', () => {
+  it('schedules the cancel of a checkout adopted after the current subscription read as ended', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    const adoptedId = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    const adopted = await fake.fakeAdvance(adoptedId, 'active')
+    const realFetch = fake.fetchSubscription.bind(fake)
+    const cancel = vi.spyOn(fake, 'cancelSubscription')
+    let isAdopted = false
+
+    let response: Awaited<ReturnType<typeof postAs>> | undefined
+    await withMutatedMethod(
+      fake,
+      'fetchSubscription',
+      async (id: string) => {
+        const sub = await realFetch(id)
+        // The owner's paid checkout is adopted right after the cancel reads the old subscription ended.
+        if (id === subscriptionId && !isAdopted) {
+          isAdopted = true
+          const moving = await readBilling(tenant.id)
+          await setBilling(tenant.id, {
+            version: moving.version + 1,
+            providerSubscriptionId: adoptedId,
+            currentPeriodEnd: adopted.currentEnd,
+          })
+        }
+        return sub
+      },
+      async () => {
+        response = await postAs(owner, `${tenant.slug}/billing/cancel`)
+      }
+    )
+
+    expect(isAdopted).toBe(true)
+    expect(response?.status).toBe(200)
+    expect(cancel.mock.calls).toEqual([[adoptedId, true]])
+    cancel.mockRestore()
+    expect(await readBilling(tenant.id)).toMatchObject({
+      state: 'active',
+      providerSubscriptionId: adoptedId,
+      cancelAtPeriodEnd: true,
+    })
+    expect(await subscriptionStatus(adoptedId)).toBe('active')
+  })
+
   it('cancels at the cycle end when a deferred start was charged just before the cancel', async () => {
     const { tenant, owner } = await workspace()
     const trialEndsAt = new Date(Date.now() + 5 * DAY_MS)
