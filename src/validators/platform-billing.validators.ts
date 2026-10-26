@@ -115,7 +115,7 @@ export const grantBodySchema = z
       context.addIssue({
         code: 'custom',
         path: ['expiresAt'],
-        message: 'Choose today or a later date, or leave it empty for no end date.',
+        message: 'Choose today or a date after it, or leave it empty for no end date.',
       })
     }
   })
