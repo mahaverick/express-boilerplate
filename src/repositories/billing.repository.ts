@@ -381,12 +381,17 @@ export class BillingRepository {
   }
 
   /**
-   * Append one state change to a workspace's history.
-   * @param entry - The change.
+   * Append one state change to a workspace's history. `at` is the moment of
+   * the insert (`clock_timestamp()`), not the column default's transaction
+   * start: a writer waiting on the row lock began before the one holding it,
+   * and the history must list their changes in the order they were made.
+   * @param entry - The change; an explicit `at` (a seed's backdated row) wins.
    * @param tx - The open transaction.
    */
   async appendHistory(entry: NewBillingStateHistory, tx: DbTransaction): Promise<void> {
-    await tx.insert(billingStateHistoryModel).values(entry)
+    await tx
+      .insert(billingStateHistoryModel)
+      .values({ ...entry, at: entry.at ?? sql`clock_timestamp()` })
   }
 
   /**
