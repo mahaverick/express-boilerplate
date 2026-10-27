@@ -33,8 +33,9 @@ import {
   makePaying,
   workspace,
 } from '../../../helpers/billing-api'
-import { deleteTrackedUsers } from '../../../helpers/platform-users'
+import { createTrackedStaff, deleteTrackedUsers } from '../../../helpers/platform-users'
 import { resetTaxDocuments } from '../../../helpers/tax'
+import { FIXTURE_SELLER } from '../../../helpers/tax-seller'
 
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
@@ -60,8 +61,11 @@ vi.mock('@/services/billing/billing-provider.service', async (importOriginal) =>
 const NOW = new Date('2026-10-27T06:30:00.000Z')
 const BUYER_GSTIN = '29ABCDE1234F1ZW'
 const BUYER_NAME = 'Acme Traders'
-const BUYER_ADDRESS = '12 MG Road'
-const NUMBER_SHAPE = /[A-Z]{2,4}\/\d{2}-\d{2}\//
+// Not the seller's address, so a leak of either is told apart.
+const BUYER_ADDRESS = '4 Residency Road'
+const BUYER_CITY = 'Bengaluru'
+const BUYER_PINCODE = '560025'
+const NUMBER_SHAPE = /[A-Z0-9]{1,3}\/\d{2}-\d{2}\//
 const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
 
 beforeAll(async () => {
@@ -110,8 +114,8 @@ describe('tax analytics events', () => {
         gstin: BUYER_GSTIN,
         legalName: BUYER_NAME,
         addressLine1: BUYER_ADDRESS,
-        city: 'Bengaluru',
-        pincode: '560001',
+        city: BUYER_CITY,
+        pincode: BUYER_PINCODE,
         stateCode: '29',
       },
       { access: 'member', reason: null }
@@ -122,6 +126,8 @@ describe('tax analytics events', () => {
     const [document] = documents
     if (document === undefined || documents.length !== 1) throw new Error('setup: no invoice')
     await getDocumentPdf(tenant.id, document.id, { userId: owner.id }, 'web')
+    const { user: staff } = await createTrackedStaff('viewer')
+    await getDocumentPdf(tenant.id, document.id, { userId: staff.id }, 'apex')
 
     const all = await outboxRows()
     const rows = all.filter(
@@ -135,10 +141,12 @@ describe('tax analytics events', () => {
     const byEvent = (name: string) => rows.filter((row) => row.event === name)
     expect(byEvent('tax_details_saved')).toHaveLength(1)
     expect(byEvent('tax_document_issued')).toHaveLength(1)
-    expect(byEvent('tax_document_downloaded')).toHaveLength(1)
+    expect(byEvent('tax_document_downloaded')).toHaveLength(2)
     const [saved] = byEvent('tax_details_saved')
     const [issued] = byEvent('tax_document_issued')
-    const [downloaded] = byEvent('tax_document_downloaded')
+    const downloads = byEvent('tax_document_downloaded')
+    const downloaded = downloads.find((row) => row.properties.surface === 'web')
+    const staffDownload = downloads.find((row) => row.properties.surface === 'apex')
 
     expect(saved?.distinctId).toBe(owner.id)
     expect(saved?.properties).toMatchObject({
@@ -157,17 +165,26 @@ describe('tax analytics events', () => {
       type: 'invoice',
       surface: 'web',
     })
+    expect(staffDownload?.distinctId).toBe(staff.id)
+    expect(staffDownload?.properties).toMatchObject({
+      $groups: { tenant: tenant.id },
+      type: 'invoice',
+      surface: 'apex',
+    })
 
     const forbidden = [
       BUYER_GSTIN,
-      '29AABCE1234F1Z1',
+      FIXTURE_SELLER.gstin,
       BUYER_NAME,
-      'Mahaverick Labs',
+      FIXTURE_SELLER.legalName,
+      ...FIXTURE_SELLER.addressLines,
       BUYER_ADDRESS,
+      BUYER_CITY,
+      BUYER_PINCODE,
       document.number,
       String(document.total_minor),
     ]
-    for (const row of [saved, issued, downloaded]) {
+    for (const row of [saved, issued, downloaded, staffDownload]) {
       for (const [key, value] of Object.entries(row?.properties ?? {})) {
         expect(PII_KEYS.has(key), key).toBe(false)
         const text = JSON.stringify(value)
