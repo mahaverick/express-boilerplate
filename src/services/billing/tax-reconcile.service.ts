@@ -14,7 +14,10 @@
  *
  * A charge paid less than `TAX_UNDATED_CHARGE_WAIT_MINUTES` ago that still
  * has no billing period is left for a later run, since an issued invoice is
- * never rewritten; the sync after the subscription's activation triggers it.
+ * never rewritten; the sync after the subscription's activation triggers it,
+ * or the daily reconcile's sync if that one is missed. A workspace that ends
+ * on Free while a charge waits has no automatic trigger left: run
+ * `pnpm billing:tax-reconcile -- --apply` for it.
  */
 import { gstSellerConfig } from '@/configs/billing.config'
 import type { BillingAlertKind } from '@/constants/billing.constants'
@@ -441,7 +444,7 @@ export async function planTaxDocuments(
       now.getTime() - dated.paidAt.getTime() < TAX_UNDATED_CHARGE_WAIT_MINUTES * 60_000
     ) {
       logger.info(
-        'A paid charge has no billing period yet; its invoice waits for the next tax run',
+        'A paid charge has no billing period yet; its invoice waits for a later tax run',
         {
           tenantId,
           paymentId: dated.paymentId,

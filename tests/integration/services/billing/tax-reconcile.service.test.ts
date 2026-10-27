@@ -677,6 +677,48 @@ describe('reconcileTaxDocuments provider refusals and limits', () => {
     expect(waiting[0]?.[1]).toStrictEqual({ tenantId, paymentId, subscriptionId })
   })
 
+  it('neither holds nor invoices a recent undated charge of an SEZ buyer', async () => {
+    const { tenantId, ownerId } = await paying(new Date(NOW.getTime() - 5 * 60 * 1000))
+    await saveDetails(tenantId, ownerId, true)
+
+    let report: Awaited<ReturnType<typeof reconcileTaxDocuments>> | undefined
+    await withUndatedCharges(null, 0, async () => {
+      report = await reconcileTaxDocuments(tenantId, { now: NOW })
+    })
+
+    expect(report?.held).toBe(0)
+    expect(await documentsOf(tenantId)).toStrictEqual([])
+    expect(await alertsOf(tenantId, 'tax_held_sez')).toStrictEqual([])
+    const held = await sql`select 1 from tax_held_charges where tenant_id = ${tenantId}`
+    expect(held).toHaveLength(0)
+  })
+
+  it('credits nothing for a processed refund hinted on a waiting charge', async () => {
+    const { tenantId, paymentId } = await paying(new Date(NOW.getTime() - 5 * 60 * 1000))
+    await fake.fakeRefund(paymentId, 50_000)
+
+    let report: Awaited<ReturnType<typeof reconcileTaxDocuments>> | undefined
+    await withUndatedCharges(null, 0, async () => {
+      report = await reconcileTaxDocuments(tenantId, { now: NOW, paymentIds: [paymentId] })
+    })
+
+    expect(report?.issued).toStrictEqual({ invoices: 0, creditNotes: 0 })
+    expect(report?.overCredits).toBe(0)
+    expect(await documentsOf(tenantId)).toStrictEqual([])
+    for (const kind of ['tax_issue_failed', 'tax_held_sez', 'tax_credit_note_late']) {
+      expect(await alertsOf(tenantId, kind)).toStrictEqual([])
+    }
+  })
+
+  it('issues a recent charge with its own dates at once', async () => {
+    const { tenantId } = await paying(new Date(NOW.getTime() - 5 * 60 * 1000))
+
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.snapshot.billingPeriod).not.toBeNull()
+  })
+
   it('issues an undated charge paid an hour ago or longer without a period', async () => {
     const MIN = 60 * 1000
     const old = await paying(new Date(NOW.getTime() - 61 * MIN))

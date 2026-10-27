@@ -131,7 +131,7 @@ export type TaxDetailField = (typeof TAX_DETAIL_FIELDS)[number]
  * How many minutes a tax run waits for a paid charge's billing period before
  * it invoices the charge without one: Razorpay fills the period within
  * seconds, when the subscription activates, and the activation webhook's sync
- * runs the tax run again; after this wait the invoice is issued with no
- * period, which a GST invoice allows.
+ * runs the tax run again; the first tax run after this wait issues
+ * the invoice with no period, which a GST invoice allows.
  */
 export const TAX_UNDATED_CHARGE_WAIT_MINUTES = 60
