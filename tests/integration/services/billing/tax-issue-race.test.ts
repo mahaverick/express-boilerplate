@@ -186,6 +186,29 @@ describe('issuing under concurrency', () => {
     ).toBe(60_000)
   })
 
+  it('credits one refund once when two notes for it race', async () => {
+    const { tenant } = await workspace()
+    const invoice = await issueInvoice(tenant.id, charge(), scope, ISSUED_AT)
+    if (invoice.outcome !== 'issued') throw new Error('not issued')
+    const credit = { amountMinor: 30_000, refundId: 'rfnd_SAME', reason: 'Refund' }
+
+    const results = await Promise.all([
+      issueCreditNote(tenant.id, invoice.document.id, credit, ISSUED_AT),
+      issueCreditNote(tenant.id, invoice.document.id, credit, ISSUED_AT),
+    ])
+
+    expect(results.map((result) => result.outcome).toSorted()).toStrictEqual(['exists', 'issued'])
+    expect(results.find((result) => result.outcome === 'exists')).toStrictEqual({
+      outcome: 'exists',
+      remainingMinor: 69_900,
+    })
+    const rows = await sql<{ last_number: number }[]>`
+      select last_number from tax_document_counters
+      where type = 'credit_note' and financial_year = '26-27'
+    `
+    expect(rows[0]?.last_number).toBe(1)
+  })
+
   it('queues an issue and an invite on the billing row and settles both without a deadlock', async () => {
     const { tenant, owner } = await workspace()
     const holder = await holdBillingRow(tenant.id)
