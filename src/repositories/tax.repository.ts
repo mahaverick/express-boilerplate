@@ -7,6 +7,10 @@ import { and, asc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
  * `tenant_id` is nulled when its workspace is purged. Consumers create their
  * own instance at module scope.
  */
+import {
+  TAX_DETAILS_VERSION_CONFLICT_CODE,
+  TAX_DETAILS_VERSION_CONFLICT_MESSAGE,
+} from '@/constants/billing.constants'
 import type { TaxDocumentType } from '@/constants/gst.constants'
 import {
   taxDocumentCounterModel,
@@ -148,9 +152,9 @@ export class TaxRepository {
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new HttpError(
-          'Someone changed these tax details since you opened them. Reload to see them, then save again.',
+          TAX_DETAILS_VERSION_CONFLICT_MESSAGE,
           409,
-          'TAX_DETAILS_VERSION_CONFLICT'
+          TAX_DETAILS_VERSION_CONFLICT_CODE
         )
       }
       throw error

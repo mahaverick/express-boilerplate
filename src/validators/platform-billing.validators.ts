@@ -198,7 +198,7 @@ const MAX_PLAN_DESCRIPTION_LENGTH = 280
 /**
  * A stored row's `version`, as the client read it.
  */
-const versionSchema = z
+export const versionSchema = z
   .number({ error: 'Send the version you loaded, a whole number.' })
   .int('Send the version you loaded, a whole number.')
   .min(1, 'Send the version you loaded, a whole number.')

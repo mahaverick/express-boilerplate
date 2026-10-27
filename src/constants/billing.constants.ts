@@ -321,3 +321,137 @@ export const PLAN_VERSION_CONFLICT_CODE = 'PLAN_VERSION_CONFLICT'
  * confirm it, in case of a slipped digit.
  */
 export const PRICE_WARNING_ABOVE_MINOR = 1_500_000
+
+/**
+ * What anyone but an owner by membership reads when they ask for tax
+ * details or tax documents, staff acting through platform access included.
+ */
+export const TAX_DOCUMENTS_OWNER_ONLY_MESSAGE =
+  'Only a workspace owner can see tax documents. Ask an owner.'
+
+/**
+ * What anyone but an owner by membership reads when they try to change tax
+ * details, staff acting through platform access included.
+ */
+export const TAX_DETAILS_OWNER_ONLY_MESSAGE =
+  'Only a workspace owner can change tax details. Ask an owner.'
+
+/**
+ * The tax documents 404 on a read while registration is off and the
+ * workspace has no documents.
+ */
+export const TAX_DOCUMENTS_READ_DISABLED_MESSAGE =
+  'Tax documents are off, and this workspace has none to download.'
+
+/**
+ * The tax documents 404 on a write (tax details, a manual credit note) while
+ * registration is off.
+ */
+export const TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE =
+  "Tax documents are off, so tax details and credit notes can't change. Issued documents stay available to download."
+
+/**
+ * Error code: a tax details PATCH sent a `version` that no longer matches:
+ * stale, null when details exist, or a number when none exist.
+ */
+export const TAX_DETAILS_VERSION_CONFLICT_CODE = 'TAX_DETAILS_VERSION_CONFLICT'
+
+/**
+ * What a tax details PATCH with a stale version reads.
+ */
+export const TAX_DETAILS_VERSION_CONFLICT_MESSAGE =
+  'Someone changed these tax details since you opened them. Reload to see them, then save again.'
+
+/**
+ * What an owner reads after saving tax details.
+ */
+export const TAX_DETAILS_SAVED_MESSAGE =
+  'Tax details saved. They apply to invoices issued from now on.'
+
+/**
+ * Tax details: the legal name is missing on the first save, or sent blank.
+ */
+export const TAX_LEGAL_NAME_REQUIRED_MESSAGE = 'Enter the legal name to print on your tax invoices.'
+
+/**
+ * Tax details: a legal name or address line over 100 characters.
+ */
+export const TAX_TEXT_TOO_LONG_MESSAGE = 'Use 100 characters or fewer.'
+
+/**
+ * Tax details: a city over 60 characters.
+ */
+export const TAX_CITY_TOO_LONG_MESSAGE = 'Use 60 characters or fewer.'
+
+/**
+ * Tax details: a character the invoice font can't draw.
+ */
+export const TAX_TEXT_CHARACTERS_MESSAGE = 'Use English letters, digits and common punctuation.'
+
+/**
+ * Tax details: a GSTIN of the wrong shape.
+ */
+export const GSTIN_SHAPE_MESSAGE = 'Enter the 15-character GSTIN, such as 29ABCDE1234F1ZW.'
+
+/**
+ * Tax details: a GSTIN whose check character is wrong.
+ */
+export const GSTIN_CHECKSUM_MESSAGE =
+  "This GSTIN's last character doesn't match the rest. Check it against your registration certificate."
+
+/**
+ * Tax details: a GSTIN whose first two digits are no selectable state.
+ */
+export const GSTIN_STATE_MESSAGE = "This GSTIN's first two digits aren't a state code."
+
+/**
+ * Tax details: address line 1 is missing with a GSTIN.
+ */
+export const TAX_ADDRESS_REQUIRED_MESSAGE =
+  'Enter address line 1. Invoices with a GSTIN need your registered address.'
+
+/**
+ * Tax details: the city is missing with a GSTIN.
+ */
+export const TAX_CITY_REQUIRED_MESSAGE = 'Enter the city. Invoices with a GSTIN need it.'
+
+/**
+ * Tax details: the PIN code is missing with a GSTIN.
+ */
+export const TAX_PINCODE_REQUIRED_MESSAGE =
+  'Enter the 6-digit PIN code. Invoices with a GSTIN need it.'
+
+/**
+ * Tax details: the state is missing on the first save, or sent null.
+ */
+export const TAX_STATE_REQUIRED_MESSAGE =
+  'Choose the state of your billing address. It sets the tax split on your invoices.'
+
+/**
+ * Tax details: an unknown or retired state code.
+ */
+export const TAX_STATE_UNKNOWN_MESSAGE = 'Choose a state from the list.'
+
+/**
+ * Tax details: a PIN code that isn't six digits with a non-zero first.
+ */
+export const TAX_PINCODE_FORMAT_MESSAGE = 'Enter the 6-digit PIN code.'
+
+/**
+ * Tax details: an SEZ unit with no GSTIN.
+ */
+export const TAX_SEZ_NEEDS_GSTIN_MESSAGE = 'An SEZ unit has a GSTIN. Enter it first.'
+
+/**
+ * Tax details: a PATCH that changes nothing.
+ */
+export const TAX_DETAILS_NO_CHANGE_MESSAGE = 'Change at least one tax detail before saving.'
+
+/**
+ * Tax details: the GSTIN's state is not the chosen state.
+ * @param stateName - The state the GSTIN is registered in.
+ * @returns The message, on `stateCode`.
+ */
+export function gstinStateMismatchMessage(stateName: string): string {
+  return `This GSTIN is registered in ${stateName}. Choose ${stateName} as the state.`
+}

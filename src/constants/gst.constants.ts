@@ -95,3 +95,21 @@ export const TAX_REFUND_SWEEP_DAYS = 3
 
 /** The most tracked subscriptions one tax run reads charges for. */
 export const TAX_MAX_TRACKED_SUBSCRIPTIONS = 50
+
+/**
+ * The tax details fields a PATCH may send, in the order an audit entry
+ * lists the changed ones.
+ */
+export const TAX_DETAIL_FIELDS = [
+  'gstin',
+  'legalName',
+  'addressLine1',
+  'addressLine2',
+  'city',
+  'pincode',
+  'stateCode',
+  'isSez',
+] as const
+
+/** One of the tax details fields. */
+export type TaxDetailField = (typeof TAX_DETAIL_FIELDS)[number]

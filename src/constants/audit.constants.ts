@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
-import { TAX_DOCUMENT_TYPES } from '@/constants/gst.constants'
+import { TAX_DETAIL_FIELDS, TAX_DOCUMENT_TYPES } from '@/constants/gst.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
   ONBOARDING_STEP_KEY_MAX_LENGTH,
@@ -322,6 +322,14 @@ export const AUDIT_ACTIONS = {
   'billing.cancelled_by_staff': {
     target: 'billing',
     metadata: z.strictObject({ when: z.enum(STAFF_CANCEL_WHEN), reason }),
+  },
+  // An owner, or staff with a reason, saved a workspace's tax details; the changed field names only, never their values.
+  'billing.tax_details_updated': {
+    target: 'billing',
+    metadata: z.strictObject({
+      changedFields: z.array(z.enum(TAX_DETAIL_FIELDS)).min(1).max(TAX_DETAIL_FIELDS.length),
+      reason: reason.optional(),
+    }),
   },
   // The tax job issued an invoice or a credit note for a refund; the actor is the system.
   'billing.tax_document_issued': {

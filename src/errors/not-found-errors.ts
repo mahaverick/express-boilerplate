@@ -4,6 +4,7 @@
  * what to do. `tests/unit/errors/not-found-codes.test.ts` fails on a 404
  * thrown without a code.
  */
+import { TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE } from '@/constants/billing.constants'
 import { HttpError } from '@/errors/http-error'
 
 /**
@@ -87,6 +88,21 @@ export const NOT_FOUND = {
     message:
       "We couldn't find this suppression. It may have been lifted already. Refresh the suppression list.",
   },
+  // Registration is off. The caller passes the read or export message; the write's is the default.
+  taxDocumentsDisabled: {
+    code: 'tax_documents_disabled',
+    message: TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
+  },
+  taxDocument: {
+    code: 'tax_document_not_found',
+    message:
+      'This workspace has no tax document with that ID. Reload the page to see its documents.',
+  },
+  taxHeldCharge: {
+    code: 'tax_held_charge_not_found',
+    message:
+      'This workspace has no held charge with that ID. Reload the page to see its held charges.',
+  },
 } as const satisfies Record<string, NotFoundAnswer>
 
 /**
@@ -97,9 +113,10 @@ export type NotFoundKind = keyof typeof NOT_FOUND
 /**
  * The 404 for one kind of thing not found.
  * @param kind - What was not found.
+ * @param message - What the caller reads instead of the kind's message, for a kind whose wording depends on where it is answered (`taxDocumentsDisabled`).
  * @returns The error to throw or pass to `next`.
  */
-export function notFoundError(kind: NotFoundKind): HttpError {
-  const { message, code } = NOT_FOUND[kind]
-  return new HttpError(message, 404, code)
+export function notFoundError(kind: NotFoundKind, message?: string): HttpError {
+  const answer = NOT_FOUND[kind]
+  return new HttpError(message ?? answer.message, 404, answer.code)
 }
