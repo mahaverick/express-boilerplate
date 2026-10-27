@@ -1,5 +1,16 @@
 # Changelog
 
+## [10.0.0](https://github.com/mahaverick/express-boilerplate/compare/v9.1.4...v10.0.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **billing:** with `BILLING_GST_REGISTERED=true` the API now needs `BILLING_SELLER_GSTIN`, `BILLING_SELLER_LEGAL_NAME`, `BILLING_SELLER_ADDRESS`, `BILLING_SELLER_STATE_CODE`, `BILLING_SAC_CODE` and `BILLING_GST_EFFECTIVE_FROM` to start, and refuses to start with `BILLING_EINVOICE_REQUIRED=true`. Document number prefixes are now at most 3 characters. Run migrations 0038 and 0039.
+
+### Features
+
+* **billing:** tax invoices and credit notes under GST ([83b6dd9](https://github.com/mahaverick/express-boilerplate/commit/83b6dd9557276067bb929fa14204defc1af5ed4b))
+
 ## [9.1.4](https://github.com/mahaverick/express-boilerplate/compare/v9.1.3...v9.1.4) (2026-10-27)
 
 
