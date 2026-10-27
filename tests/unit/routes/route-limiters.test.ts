@@ -167,7 +167,7 @@ describe('every write route carries a rate limiter', () => {
     expect(marks).toContain(RATE_LIMITS.emailWebhookRejected.name)
   })
 
-  it('gives every billing write one shared billing-write limiter and the invoice list billing-read', () => {
+  it('gives every billing write one shared billing-write limiter and the invoice list and tax details billing-read', () => {
     const app = createApp()
     const writes = writeRoutesOf(app).filter((route) => route.path.startsWith('/:slug/billing'))
     expect(writes.map((route) => route.path).toSorted()).toEqual([
@@ -176,6 +176,7 @@ describe('every write route carries a rate limiter', () => {
       '/:slug/billing/checkout/confirm',
       '/:slug/billing/interval',
       '/:slug/billing/payment-method',
+      '/:slug/billing/tax-details',
     ])
     for (const route of writes)
       expect(limiterMarksOf(route)).toEqual([RATE_LIMITS.billingWrite.name])
@@ -184,12 +185,16 @@ describe('every write route carries a rate limiter', () => {
         route.handlers.find((handler) => Object.hasOwn(handler, RATE_LIMITER_MARK))
       )
     )
-    // One instance across the five writes, so the in-memory fallback keeps one budget.
+    // One instance across the six writes, so the in-memory fallback keeps one budget.
     expect(limiters.size).toBe(1)
     const invoices = routesOf(app, new Set(['get'])).find(
       (route) => route.path === '/:slug/billing/invoices'
     )
     expect(limiterMarksOf(invoices)).toEqual([RATE_LIMITS.billingRead.name])
+    const taxDetails = routesOf(app, new Set(['get'])).find(
+      (route) => route.path === '/:slug/billing/tax-details'
+    )
+    expect(limiterMarksOf(taxDetails)).toEqual([RATE_LIMITS.billingRead.name])
   })
 
   it('limits an upgrade request on its own budget, a banner dismissal on authenticated-write, and the public plans per IP', () => {

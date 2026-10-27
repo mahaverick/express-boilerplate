@@ -789,6 +789,21 @@ export function buildPreviewMessage(
           },
         }
       }
+      case 'tax_document_issued': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            appName: fill('appName'),
+            tenantName: fill('tenantName'),
+            documentType: fill('documentType'),
+            documentNumber: fill('documentNumber'),
+            invoiceNumber: fill('invoiceNumber'),
+            issuedOn: fill('issuedOn'),
+            billingLink: fill('billingLink'),
+          },
+        }
+      }
     }
   })()
   return { message, isPartial }

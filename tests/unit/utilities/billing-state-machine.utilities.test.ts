@@ -473,7 +473,7 @@ describe('nextBillingRow: a switch paid after the current subscription renewed',
     })
     expect(result.cause).toBeNull()
     expect(result.actions).toStrictEqual([
-      { kind: 'refund_duplicate', subscriptionId: 'sub_next' },
+      { kind: 'refund_duplicate', subscriptionId: 'sub_next', cause: 'late_switch' },
       {
         kind: 'alert',
         alert: 'reconcile_repair',
@@ -497,7 +497,11 @@ describe('nextBillingRow: a switch paid after the current subscription renewed',
       nextAuthenticatedAt: null,
     })
     expect(result.patch).not.toHaveProperty('providerSubscriptionId')
-    expect(result.actions).toContainEqual({ kind: 'refund_duplicate', subscriptionId: 'sub_next' })
+    expect(result.actions).toContainEqual({
+      kind: 'refund_duplicate',
+      subscriptionId: 'sub_next',
+      cause: 'late_switch',
+    })
     expect(result.actions).not.toContainEqual({
       kind: 'cancel_current_at_cycle_end',
       subscriptionId: 'sub_cur',

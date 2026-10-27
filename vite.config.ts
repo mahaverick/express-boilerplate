@@ -45,6 +45,8 @@ const platformRepositoryBan = {
         '**/platform-onboarding.repository',
         '@/repositories/platform-billing.repository',
         '**/platform-billing.repository',
+        '@/repositories/platform-tax.repository',
+        '**/platform-tax.repository',
       ],
       message:
         'Only services/platform-*.service.ts may import the cross-tenant platform repositories.',

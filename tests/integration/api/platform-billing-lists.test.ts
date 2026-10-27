@@ -17,7 +17,7 @@ import { ProviderError } from '@/errors/billing-provider-errors'
 import { sql } from '@/services/database.service'
 import { closeQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
-import type { InvoiceListOptions, InvoiceView, ProviderInvoicePage } from '@/types/billing'
+import type { InvoiceListOptions, ProviderInvoice, ProviderInvoicePage } from '@/types/billing'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   deleteTrackedTenants,
@@ -385,6 +385,20 @@ describe('GET /api/v1/platform/tenants/:id/billing/subscriptions', () => {
     expect(itemsOf(response.body).map((item) => item.standing)).toStrictEqual(['earlier'])
   })
 
+  it('omits refunded duplicate and late-switch subscriptions', async () => {
+    const { tenant } = await workspace()
+    await storeHeld(tenant.id, 'sub_HELD1', 30)
+    await storeHeld(tenant.id, 'sub_DUP1', 20)
+    await storeHeld(tenant.id, 'sub_LATE1', 10)
+    await sql`update tenant_billing_subscriptions set role = 'duplicate' where subscription_id = 'sub_DUP1'`
+    await sql`update tenant_billing_subscriptions set role = 'late_switch' where subscription_id = 'sub_LATE1'`
+    const { token } = await viewer()
+
+    const response = await listAs(token, tenant.id, 'subscriptions')
+
+    expect(itemsOf(response.body).map((item) => item.subscriptionId)).toStrictEqual(['sub_HELD1'])
+  })
+
   it('searches the subscription id', async () => {
     const { tenant } = await workspace()
     await storeHeld(tenant.id, 'sub_ALPHA1', 20)
@@ -418,7 +432,7 @@ function pageOf(body: unknown): {
  * @param subscriptionId - The subscription it bills.
  * @returns The invoice.
  */
-function invoice(id: string, subscriptionId: string): InvoiceView & { subscriptionId: string } {
+function invoice(id: string, subscriptionId: string): ProviderInvoice {
   return {
     id,
     subscriptionId,
@@ -428,6 +442,7 @@ function invoice(id: string, subscriptionId: string): InvoiceView & { subscripti
     issuedAt: new Date().toISOString(),
     paidAt: new Date().toISOString(),
     url: 'https://rzp.io/i/payer-page',
+    paymentId: 'pay_INTERNAL',
   }
 }
 
@@ -464,12 +479,15 @@ describe('GET /api/v1/platform/tenants/:id/billing/invoices', () => {
     expect(items.map((item) => item.subscriptionId)).toStrictEqual([subscriptionId, earlier])
     expect(Object.keys(items[0] ?? {}).toSorted()).toStrictEqual([
       'amountMinor',
+      'creditNotes',
       'currency',
       'id',
       'issuedAt',
       'paidAt',
       'status',
       'subscriptionId',
+      'taxDocument',
+      'taxStatus',
     ])
     expect(pageOf(response.body)).toStrictEqual({
       nextCursor: null,
@@ -579,6 +597,36 @@ describe('GET /api/v1/platform/tenants/:id/billing/invoices', () => {
     for (const response of refusals) {
       expect(response.status).toBe(400)
       expect(response.body).toMatchObject({ code: 'CURSOR_INVALID' })
+    }
+  })
+
+  it('keeps the internal payment id out of the staff and owner invoice bodies', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    const { token } = await viewer()
+    const calls: { ids: string[]; cursor: string | null; options: unknown }[] = []
+    let staffText = ''
+    let ownerText = ''
+
+    await withMutatedMethod(
+      fake,
+      'listInvoices',
+      pagedInvoices(calls, { items: [invoice('inv_A', subscriptionId)], nextCursor: null }),
+      async () => {
+        const staffPage = await listAs(token, tenant.id, 'invoices')
+        const ownerPage = await request(app)
+          .get(`/api/v1/tenants/${tenant.slug}/billing/invoices`)
+          .set('Authorization', `Bearer ${tokenFor(owner)}`)
+        staffText = JSON.stringify(staffPage.body)
+        ownerText = JSON.stringify(ownerPage.body)
+      }
+    )
+
+    expect(staffText).toContain('inv_A')
+    expect(ownerText).toContain('inv_A')
+    for (const text of [staffText, ownerText]) {
+      expect(text).not.toContain('paymentId')
+      expect(text).not.toContain('pay_INTERNAL')
     }
   })
 

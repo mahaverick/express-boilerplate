@@ -32,6 +32,7 @@
  * A failed send is logged with ids only and never fails the billing change.
  */
 import { createHash } from 'node:crypto'
+import { gstSellerConfig } from '@/configs/billing.config'
 import { getEnv } from '@/configs/env.config'
 import type { BillingHistorySource } from '@/constants/billing.constants'
 import {
@@ -39,12 +40,14 @@ import {
   type EntitlementDefinition,
   type EntitlementKey,
 } from '@/constants/entitlements.constants'
+import { TAX_EMAIL_MAX_AGE_DAYS } from '@/constants/gst.constants'
 import type { NotificationType } from '@/constants/notification.constants'
 import type {
   PlanPrice,
   TenantBillingRecord,
   UpgradeRequest,
 } from '@/database/models/billing.model'
+import type { TaxDocumentRecord } from '@/database/models/tax.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJobOnce } from '@/jobs/email.job'
@@ -1337,5 +1340,67 @@ export async function sendPayerLeftEverywhere(
     } catch (error) {
       logSendFailure(error, tenantId, 'payer_left')
     }
+  }
+}
+
+/**
+ * The zone a tax document's date is written in: India Standard Time, as the
+ * document prints it.
+ */
+const TAX_DOCUMENT_TIME_ZONE = 'Asia/Kolkata'
+
+/**
+ * Tell the owners and the billing address that a tax invoice or credit note
+ * was issued, with a link to Billing and no attachment. Sent after the
+ * issuing transaction commits; once per document and recipient (the stamp is
+ * the document id). Skipped with registration off, for a document with no
+ * workspace, and for an automatic document whose payment or refund is more
+ * than `TAX_EMAIL_MAX_AGE_DAYS` old at `now`, so a backfill stays out of
+ * inboxes. A credit note staff issued by hand has no refund and always
+ * mails. Never rejects.
+ * @param document - The committed document.
+ * @param now - The send time; defaults to now.
+ * @param occurredAt - When the payment (invoice) or refund (credit note) happened; null for a manual note. An automatic document without it is skipped, never mailed on a guess.
+ */
+export async function sendTaxDocumentIssued(
+  document: TaxDocumentRecord,
+  now: Date = new Date(),
+  occurredAt: Date | null = null
+): Promise<void> {
+  const { tenantId } = document
+  try {
+    if (tenantId === null || gstSellerConfig() === null) return
+    const isManualNote = document.type === 'credit_note' && document.refundId === null
+    if (!isManualNote) {
+      if (occurredAt === null) {
+        logger.warn('A tax document email was skipped: no payment or refund time came with it', {
+          tenantId,
+          documentId: document.id,
+        })
+        return
+      }
+      if (now.getTime() - occurredAt.getTime() > TAX_EMAIL_MAX_AGE_DAYS * DAY_MS) return
+    }
+    const row = await billingRepository.findByTenantId(tenantId)
+    if (row === undefined) return
+    const context = await activeContext(tenantId, row)
+    if (context === undefined) return
+    const { tenant, appName } = context
+    const isCreditNote = document.type === 'credit_note'
+    await mailOwners(context, 'tax_document_issued', document.id, (to) => ({
+      to,
+      templateKey: 'tax_document_issued',
+      variables: {
+        appName,
+        tenantName: tenant.name,
+        documentType: document.type,
+        documentNumber: document.number,
+        invoiceNumber: isCreditNote ? (document.snapshot.original?.number ?? '') : '',
+        issuedOn: formatDateInZone(document.issuedAt, TAX_DOCUMENT_TIME_ZONE),
+        billingLink: buildBillingLink(tenant.slug, 'tax_document_issued'),
+      },
+    }))
+  } catch (error) {
+    logSendFailure(error, tenantId ?? '', 'tax_document_issued')
   }
 }

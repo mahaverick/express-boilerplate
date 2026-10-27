@@ -40,9 +40,10 @@ export type SyncAction =
       subscriptionId: string
       /**
        * `archived` for a subscription an archived workspace adopted, which it
-       * can't use; a duplicate otherwise.
+       * can't use; `late_switch` for an interval switch paid after the
+       * current subscription renewed; a duplicate otherwise.
        */
-      cause?: 'archived'
+      cause?: 'archived' | 'late_switch'
     }
   | {
       kind: 'alert'
@@ -483,7 +484,7 @@ class BillingMapping {
     if (next.status !== 'authenticated' && next.status !== 'active') return
     if (current !== undefined && this.hasRenewedPast(current, next)) {
       this.actions.push(
-        { kind: 'refund_duplicate', subscriptionId: next.id },
+        { kind: 'refund_duplicate', subscriptionId: next.id, cause: 'late_switch' },
         {
           kind: 'alert',
           alert: 'reconcile_repair',

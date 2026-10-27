@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
+import { TAX_DETAIL_FIELDS, TAX_DOCUMENT_TYPES } from '@/constants/gst.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
   ONBOARDING_STEP_KEY_MAX_LENGTH,
@@ -50,6 +51,7 @@ export const AUDIT_TARGET_TYPES = [
   'platform',
   'plan',
   'billing',
+  'tax_document',
 ] as const
 
 /**
@@ -321,6 +323,29 @@ export const AUDIT_ACTIONS = {
     target: 'billing',
     metadata: z.strictObject({ when: z.enum(STAFF_CANCEL_WHEN), reason }),
   },
+  // An owner, or staff with a reason, saved a workspace's tax details; the changed field names only, never their values.
+  'billing.tax_details_updated': {
+    target: 'billing',
+    metadata: z.strictObject({
+      changedFields: z.array(z.enum(TAX_DETAIL_FIELDS)).min(1).max(TAX_DETAIL_FIELDS.length),
+      reason: reason.optional(),
+    }),
+  },
+  // The tax job issued an invoice or a credit note for a refund; the actor is the system.
+  'billing.tax_document_issued': {
+    target: 'tax_document',
+    metadata: z.strictObject({ type: z.enum(TAX_DOCUMENT_TYPES) }),
+  },
+  // Staff issued a credit note by hand against an invoice; the target is the new note.
+  'billing.credit_note_issued_by_staff': {
+    target: 'tax_document',
+    metadata: z.strictObject({ invoiceId: id, reason }),
+  },
+  // Staff recorded that they issued a held SEZ charge's invoice by hand; nothing is issued.
+  'billing.held_charge_resolved': {
+    target: 'billing',
+    metadata: z.strictObject({ heldChargeId: id, reason }),
+  },
   // Staff edited a plan's name, description or entitlements; `affected` counts the tenants on it by stored state.
   'plan.updated': {
     target: 'plan',
@@ -344,6 +369,11 @@ export const AUDIT_ACTIONS = {
   'billing.settings_updated': {
     target: 'platform',
     metadata: z.strictObject({ changedFields, reason }),
+  },
+  // Staff downloaded a month or quarter of tax documents as GSTR-1 CSVs; the period only.
+  'billing.tax_export_downloaded': {
+    target: 'platform',
+    metadata: z.strictObject({ period: z.string().regex(/^\d{4}-(?:0[1-9]|1[0-2]|Q[1-4])$/) }),
   },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {

@@ -1,8 +1,9 @@
 /**
  * @file The billing queue's jobs: one per Razorpay webhook event, a sync of
  * one workspace, the push of an entitlements change after a staff plan or
- * grace edit, and the two scheduler runs: the frequent one every 15
- * minutes and the daily one at 03:30 UTC. Each job carries ids only, never a
+ * grace edit, a workspace's tax document run, and the two scheduler runs:
+ * the frequent one every 15 minutes and the daily one at 03:30 UTC. Each
+ * job carries ids only, never a
  * payload body, an address or card details. A webhook job's id is derived
  * from its stored event, so a second delivery of the same event queues
  * nothing new while the first job is still on the queue. The schedulers live
@@ -34,6 +35,18 @@ export const BILLING_LIFECYCLE_CANCEL_JOB = 'lifecycle-cancel'
  * edit changed, a page at a time, after the edit answered.
  */
 export const BILLING_PUBLISH_ENTITLEMENTS_JOB = 'publish-entitlements'
+
+/**
+ * The job that issues a workspace's missing tax invoices and credit notes.
+ */
+export const BILLING_TAX_RECONCILE_JOB = 'tax-reconcile'
+
+/**
+ * A tax run's priority. BullMQ runs a job with no priority (a webhook, a
+ * sync) before any prioritised one, so a burst of tax runs after the daily
+ * reconcile never holds up a webhook.
+ */
+const TAX_RECONCILE_PRIORITY = 10
 
 /**
  * The frequent billing run's job name, and the id of its scheduler.
@@ -93,6 +106,20 @@ export interface BillingSyncTenantJobData {
    * that its row does not hold.
    */
   extraSubscriptionIds?: string[]
+}
+
+/**
+ * A tax run's payload: ids only.
+ */
+export interface BillingTaxReconcileJobData {
+  /**
+   * The workspace to issue tax documents for.
+   */
+  tenantId: string
+  /**
+   * Payments whose refunds the run reads whatever their age or credit.
+   */
+  paymentIds?: string[]
 }
 
 /**
@@ -263,6 +290,20 @@ export async function addBillingPublishEntitlementsJob(
   data: BillingPublishEntitlementsJobData
 ): Promise<void> {
   await addJob(getBillingQueue(), BILLING_PUBLISH_ENTITLEMENTS_JOB, data, BILLING_JOB_OPTIONS)
+}
+
+/**
+ * Queue a workspace's tax run, after webhooks and syncs. It carries no job
+ * id: an id would drop a trigger that arrives while a run is active, and a
+ * second run only costs provider reads.
+ * @param data - The workspace and any payments to read refunds for.
+ * @returns Resolves once the job is in Redis.
+ */
+export async function addTaxReconcileJob(data: BillingTaxReconcileJobData): Promise<void> {
+  await addJob(getBillingQueue(), BILLING_TAX_RECONCILE_JOB, data, {
+    ...BILLING_JOB_OPTIONS,
+    priority: TAX_RECONCILE_PRIORITY,
+  })
 }
 
 /**

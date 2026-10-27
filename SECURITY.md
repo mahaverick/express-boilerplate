@@ -763,6 +763,16 @@ their role there is their platform role (`src/services/platform.service.ts`).
   `409 PLAN_VERSION_CONFLICT` when someone saved first. A plan edit reaches
   every tenant on the plan at once; a new price never moves a subscriber off
   the price it pays.
+  A tenant's tax records follow the same gates
+  (`…/billing/tax-details`, `tax-documents`, `tax-held-charges`): a viewer
+  reads the tax details, the documents with their PDFs and the held SEZ
+  charges, inside the same audit window; a manager saves the tax details
+  under the owner's rules, with a reason; an admin issues a manual credit
+  note (for a lost dispute) and marks a held charge resolved. The credit note
+  re-checks the admin role in the transaction that locks the billing row,
+  the invoice and the number counter, so a role lowered mid-request writes
+  nothing. A held charge's resolve records the staff member's note and issues
+  nothing.
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
@@ -785,7 +795,8 @@ Step-up guards:
 - on `/platform`: deactivating, deleting and purging a user; suspending,
   archiving and purging a tenant; re-inviting a tenant's owner; changing the
   maintenance mode; every write to a tenant's billing (resync, trial
-  extension, a grant and its revocation, the staff cancel); a plan edit, a
+  extension, a grant and its revocation, the staff cancel, a tax details
+  save, a manual credit note, a held charge's resolve); a plan edit, a
   new price and a billing settings change (a plan preview writes nothing and
   needs none); and an email
   resend of an invitation, which the service checks because the route cannot
@@ -1242,6 +1253,21 @@ workspace's billing is under [Platform staff](#platform-staff). The rest:
   ([Boot-time consistency checks](ARCHITECTURE.md#boot-time-consistency-checks)).
   `pnpm billing:seed` and `pnpm billing:time-travel` refuse to run elsewhere,
   and time travel refuses a workspace whose row names a real provider.
+- **Tax details are personal data.** A buyer's legal name, address and GSTIN
+  sit in `tenant_tax_details` and in each document's snapshot. They go in no
+  log line (ids only), no job payload (a tax job carries a workspace id and
+  payment ids), no alert text and no analytics property or audit metadata
+  (field names and document types only). Only the workspace's owner reads its
+  details, documents and PDFs; a member gets the owner-only 403 and another
+  workspace's document the document 404.
+- **The tax export is a bulk read of that data.** It is admin only, needs
+  step-up like a write, and records `billing.tax_export_downloaded` with the
+  period. Every text cell goes through a formula guard (`csvCell`): a value
+  starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading
+  `'`, so a buyer named `=HYPERLINK(…)` stays text in a spreadsheet.
+- **Documents are immutable.** No code path updates or deletes a
+  `tax_documents` row, and a fix is a credit note, so the record an auditor
+  reads is the record issued.
 
 ## Maintenance mode
 

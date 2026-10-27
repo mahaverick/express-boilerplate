@@ -460,6 +460,52 @@ describe('syncTenantBilling', () => {
     expect(alerts).toHaveLength(1)
     expect(alerts[0]?.kind).toBe('duplicate_refunded')
     expect(alerts[0]?.message).toContain(duplicateId)
+    expect(await trackedRole(duplicateId)).toBe('duplicate')
+    // The owner's invoice list reads held subscriptions only, so the refunded one is not in it.
+    expect(
+      await new BillingRepository().listHeldSubscriptionIds(
+        tenantId,
+        { kind: fake.kind, mode: fake.mode },
+        10
+      )
+    ).not.toContain(duplicateId)
+  })
+
+  it('keeps a duplicate tracked when its refund fails', async () => {
+    const { tenantId } = await createPayingWorkspace()
+    const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(duplicateId, 'active')
+    await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'refundLatestPayment',
+      () => Promise.reject(new ProviderError('POST /refunds', 502)),
+      async () => {
+        await syncTenantBilling(tenantId, 'confirm')
+      }
+    )
+
+    expect(await trackedRole(duplicateId)).toBe('duplicate')
+  })
+
+  it('keeps a duplicate tracked when its cancel fails', async () => {
+    const { tenantId } = await createPayingWorkspace()
+    const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(duplicateId, 'active')
+    await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'cancelSubscription',
+      () => Promise.reject(new ProviderError('POST /subscriptions/x/cancel', 502)),
+      async () => {
+        await syncTenantBilling(tenantId, 'confirm')
+      }
+    )
+
+    expect(await trackedRole(duplicateId)).toBe('duplicate')
+    expect(await fake.fetchSubscription(duplicateId)).toMatchObject({ status: 'active' })
   })
 
   it('adopts a paid subscription the sweep found for a workspace on Free', async () => {
@@ -864,6 +910,7 @@ describe('syncTenantBilling', () => {
     })
     expect(await fake.fetchSubscription(nextId)).toMatchObject({ status: 'cancelled' })
     expect(await fake.fetchSubscription(subscriptionId)).toMatchObject({ status: 'active' })
+    expect(await trackedRole(nextId)).toBe('late_switch')
     const alerts = await alertsOf(tenantId)
     expect(alerts).toContainEqual({
       kind: 'reconcile_repair',
@@ -913,3 +960,14 @@ describe('syncTenantBilling', () => {
     })
   })
 })
+
+/**
+ * The role a subscription is tracked under.
+ * @param subscriptionId - The provider's subscription id.
+ * @returns The role, or undefined when nothing tracks it.
+ */
+async function trackedRole(subscriptionId: string): Promise<string | undefined> {
+  const rows = await sql<{ role: string }[]>`
+    select role from tenant_billing_subscriptions where subscription_id = ${subscriptionId}`
+  return rows[0]?.role
+}

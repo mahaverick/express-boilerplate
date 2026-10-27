@@ -133,6 +133,27 @@ export const BILLING_ALERT_TEXT = {
     `Razorpay event ${eventId} (${eventType}) failed after every retry. Resync the workspace.`,
   stillRetrying: (what: string) =>
     `${what} is still retrying after an hour of provider outage. It retries for 24 hours. Check Razorpay's status page.`,
+
+  // Tax documents.
+  taxHeldSez: (paymentId: string, amountMinor: number) =>
+    `Payment ${paymentId} of ₹${formatRupees(amountMinor)} is held: this workspace is an SEZ unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab.`,
+  taxHeldSezRefunded: (paymentId: string, amountMinor: number, refundId: string) =>
+    `Payment ${paymentId} of a held SEZ invoice was refunded ₹${formatRupees(amountMinor)} (refund ${refundId}). Issue a credit note by hand.`,
+  taxIssueFailed: (tenantId: string, date: string) =>
+    `Tax documents for workspace ${tenantId} were not issued on ${date}. Check the error log for this workspace, then resync it.`,
+  taxRefundOverCredit: (
+    refundId: string,
+    amountMinor: number,
+    remainingMinor: number,
+    invoiceNumber: string
+  ) =>
+    `Refund ${refundId} of ₹${formatRupees(amountMinor)} is more than the ₹${formatRupees(remainingMinor)} left to credit on ${invoiceNumber}. No credit note was issued. Check this invoice's manual credit notes.`,
+  taxInvoiceLate: (count: number, first: string, last: string) =>
+    count === 1
+      ? `1 tax invoice, ${first}, was issued more than 30 days after payment. Tell your CA.`
+      : `${count} tax invoices, ${first} to ${last}, were issued more than 30 days after payment. Tell your CA.`,
+  taxCreditNoteLate: (number: string, invoiceNumber: string, year: number) =>
+    `Credit note ${number} for ${invoiceNumber} was issued after 30 November ${year}, so it gives no tax reduction. Tell your CA.`,
 } as const
 
 /**

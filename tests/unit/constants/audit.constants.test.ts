@@ -100,6 +100,11 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   },
   'plan.price_created': { interval: 'month', amountMinor: 129_900, reason: 'Price rise' },
   'billing.settings_updated': { changedFields: ['trialDays'], reason: 'Longer trials' },
+  'billing.tax_details_updated': { changedFields: ['gstin', 'city'] },
+  'billing.tax_document_issued': { type: 'invoice' },
+  'billing.credit_note_issued_by_staff': { invoiceId: 'doc-1', reason: 'Goodwill credit' },
+  'billing.held_charge_resolved': { heldChargeId: 'held-1', reason: 'Issued by hand' },
+  'billing.tax_export_downloaded': { period: '2026-Q4' },
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
     from: 'off',
@@ -126,12 +131,17 @@ describe('AUDIT_ACTIONS', () => {
       'billing.cancelled_by_staff',
       'billing.card_change_started',
       'billing.checkout_started',
+      'billing.credit_note_issued_by_staff',
       'billing.grant_added',
       'billing.grant_expired',
       'billing.grant_revoked',
+      'billing.held_charge_resolved',
       'billing.interval_switch_scheduled',
       'billing.resynced',
       'billing.settings_updated',
+      'billing.tax_details_updated',
+      'billing.tax_document_issued',
+      'billing.tax_export_downloaded',
       'billing.trial_extended',
       'billing.viewed',
       'email.resent',
@@ -404,6 +414,7 @@ describe('audit value sets', () => {
       'platform',
       'plan',
       'billing',
+      'tax_document',
     ])
   })
 

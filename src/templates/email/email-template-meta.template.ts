@@ -19,6 +19,7 @@ import { PAYMENT_FAILED_TEMPLATE_META } from '@/templates/email/payment-failed.t
 import { RENEWAL_UPCOMING_TEMPLATE_META } from '@/templates/email/renewal-upcoming.template'
 import { SIGN_IN_LINK_TEMPLATE_META } from '@/templates/email/sign-in-link.template'
 import { STEP_UP_LINK_TEMPLATE_META } from '@/templates/email/step-up-link.template'
+import { TAX_DOCUMENT_ISSUED_TEMPLATE_META } from '@/templates/email/tax-document-issued.template'
 import { TENANT_INVITATION_TEMPLATE_META } from '@/templates/email/tenant-invitation.template'
 import { TRIAL_ENDED_TEMPLATE_META } from '@/templates/email/trial-ended.template'
 import { TRIAL_ENDING_TEMPLATE_META } from '@/templates/email/trial-ending.template'
@@ -72,6 +73,7 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     passkey_created: PASSKEY_CREATED_TEMPLATE_META,
     passkey_deleted: PASSKEY_DELETED_TEMPLATE_META,
     trial_started: TRIAL_STARTED_TEMPLATE_META,
+    tax_document_issued: TAX_DOCUMENT_ISSUED_TEMPLATE_META,
     trial_midpoint: TRIAL_MIDPOINT_TEMPLATE_META,
     trial_ending: TRIAL_ENDING_TEMPLATE_META,
     trial_ends_today: TRIAL_ENDS_TODAY_TEMPLATE_META,

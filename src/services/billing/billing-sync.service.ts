@@ -17,7 +17,9 @@
  *    members and sends its emails (`emitBillingDiff`, which also tells each
  *    member whose upgrade request the write fulfilled), syncs once more
  *    after a handover or a cancel so the new provider state lands at once,
- *    and queues the prompt lifecycle cancel when it released the claim.
+ *    and queues the prompt lifecycle cancel when it released the claim;
+ * 5. once the whole call (its follow-up sync included) ends `synced`, queues
+ *    one tax run for the workspace.
  *
  * A subscription whose notes name another workspace is never adopted, and one
  * whose notes name an unknown price is never made current: both are ignored
@@ -37,6 +39,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
+import { queueTaxReconcile } from '@/services/billing/tax-reconcile.service'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type {
@@ -599,6 +602,13 @@ const REFUND_ALERTS = {
     nothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid,
     partlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded,
   },
+  late_switch: {
+    cancelFailed: BILLING_ALERT_TEXT.duplicateCancelFailed,
+    refundFailed: BILLING_ALERT_TEXT.duplicateRefundFailed,
+    refunded: BILLING_ALERT_TEXT.duplicateRefunded,
+    nothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid,
+    partlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded,
+  },
   archived: {
     cancelFailed: BILLING_ALERT_TEXT.archivedCancelFailed,
     refundFailed: BILLING_ALERT_TEXT.archivedRefundFailed,
@@ -618,6 +628,11 @@ const REFUND_ALERTS = {
  * (staff refund the rest), or a cancel or refund that failed (staff act at
  * the provider). Only a refund is reported to analytics, with its cause,
  * timed at the sync's write that found it.
+ *
+ * A duplicate or late switch is recorded for the tax run before the cancel.
+ * If that record fails, the cancel and refund don't run and the error
+ * reaches the caller; the next reconcile finds the subscription still
+ * running and tries again, so a refund never goes out untracked.
  * @param provider - The payment provider.
  * @param reported - The workspace's row as the sync's write left it.
  * @param subscriptionId - The subscription.
@@ -627,10 +642,19 @@ async function refundDuplicate(
   provider: BillingProviderClient,
   reported: TenantBillingRecord,
   subscriptionId: string,
-  cause: 'duplicate' | 'archived'
+  cause: 'duplicate' | 'archived' | 'late_switch'
 ): Promise<void> {
   const { tenantId } = reported
   const alerts = REFUND_ALERTS[cause]
+  // Recorded before the cancel, so a cancel or refund failure still leaves the charge tracked for tax.
+  if (cause !== 'archived') {
+    await billingRepository.recordTrackedSubscription(
+      tenantId,
+      { kind: provider.kind, mode: provider.mode },
+      subscriptionId,
+      cause
+    )
+  }
   try {
     await provider.cancelSubscription(subscriptionId, false)
   } catch (error) {
@@ -663,7 +687,7 @@ async function refundDuplicate(
     return
   }
   // A duplicate's outcome is a duplicate_refunded alert; an archived workspace's is a repair note.
-  const doneKind = cause === 'duplicate' ? 'duplicate_refunded' : 'reconcile_repair'
+  const doneKind = cause === 'archived' ? 'reconcile_repair' : 'duplicate_refunded'
   switch (outcome.status) {
     case 'refunded': {
       await insertAlert(tenantId, {
@@ -828,7 +852,9 @@ async function runSync(run: SyncRun): Promise<SyncResult> {
  * a row of another provider or mode, it changes nothing. Every sync that
  * writes stamps `syncedAt`, so it moves the row's version; a concurrent writer
  * can therefore make a sync give up with `BillingSyncConflictError`, which a
- * job absorbs by retrying.
+ * job absorbs by retrying. A sync that ends `synced` queues one tax run,
+ * here and not in the recursive `runSync`, so a follow-up sync queues none
+ * of its own.
  * @param tenantId - The workspace.
  * @param source - What asked for the sync, for the history.
  * @param options - Optional inputs.
@@ -843,11 +869,13 @@ export async function syncTenantBilling(
   source: BillingHistorySource,
   options: { now?: Date; extraSubscriptionIds?: readonly string[] } = {}
 ): Promise<SyncResult> {
-  return runSync({
+  const result = await runSync({
     tenantId,
     source,
     now: options.now ?? new Date(),
     extraSubscriptionIds: options.extraSubscriptionIds ?? [],
     mayFollowUp: true,
   })
+  if (result.outcome === 'synced') await queueTaxReconcile(tenantId)
+  return result
 }
