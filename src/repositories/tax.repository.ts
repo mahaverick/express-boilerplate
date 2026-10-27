@@ -1,3 +1,4 @@
+import { and, asc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
 /**
  * @file Query access to a workspace's tax details, the tax documents issued
  * to it, their gap-free number counters and its held SEZ charges. It does
@@ -6,7 +7,6 @@
  * `tenant_id` is nulled when its workspace is purged. Consumers create their
  * own instance at module scope.
  */
-import { and, asc, eq, inArray, or, sql } from 'drizzle-orm'
 import type { TaxDocumentType } from '@/constants/gst.constants'
 import {
   taxDocumentCounterModel,
@@ -31,7 +31,9 @@ import { defineList, timestampKey, timestampSort } from '@/utilities/list-page.u
  * The columns a versioned details update may change: everything but the
  * key, the version and the update time, which the update sets itself.
  */
-type TaxDetailsPatch = Partial<Omit<NewTenantTaxDetails, 'tenantId' | 'version' | 'updatedAt'>>
+type TaxDetailsPatch = Partial<
+  Omit<NewTenantTaxDetails, 'tenantId' | 'version' | 'updatedAt' | 'updatedBy'>
+>
 
 /**
  * The tax references a page of documents needs, built by `listRefsFor`.
@@ -130,13 +132,13 @@ export class TaxRepository {
 
   /**
    * Insert a workspace's first tax details.
-   * @param row - The row's column values.
+   * @param row - The row's column values; `updatedBy` is the user who saved it.
    * @param tx - The open transaction.
    * @returns The inserted row.
    * @throws {HttpError} 409 `TAX_DETAILS_VERSION_CONFLICT`, when the workspace already has details.
    */
   async insertDetails(
-    row: NewTenantTaxDetails,
+    row: NewTenantTaxDetails & { updatedBy: string },
     tx: DbTransaction
   ): Promise<TenantTaxDetailsRecord> {
     try {
@@ -161,7 +163,8 @@ export class TaxRepository {
    * `version` and sets `updated_at`.
    * @param tenantId - The workspace.
    * @param expectedVersion - The version the caller read.
-   * @param patch - The columns to change, with `updatedBy`.
+   * @param patch - The columns to change.
+   * @param updatedBy - The user id saving the change.
    * @param tx - The open transaction.
    * @returns The updated row, or undefined when the version was stale.
    */
@@ -169,12 +172,14 @@ export class TaxRepository {
     tenantId: string,
     expectedVersion: number,
     patch: TaxDetailsPatch,
+    updatedBy: string,
     tx: DbTransaction
   ): Promise<TenantTaxDetailsRecord | undefined> {
     const [row] = await tx
       .update(tenantTaxDetailsModel)
       .set({
         ...patch,
+        updatedBy,
         version: sql`${tenantTaxDetailsModel.version} + 1`,
         updatedAt: sql`now()`,
       })
@@ -333,12 +338,21 @@ export class TaxRepository {
     executor: DbExecutor = db
   ): Promise<Array<TaxDocumentRecord & { creditedMinor: number }>> {
     if (paymentIds.length === 0) return []
-    const note = sql`(select coalesce(sum(n.total_minor), 0)::int from tax_documents n where n.original_document_id = ${taxDocumentModel.id})`
-    const rows = await executor
-      .select({ document: taxDocumentModel, creditedMinor: sql<number>`${note}` })
+    const credits = executor
+      .select({
+        originalId: taxDocumentModel.originalDocumentId,
+        total: sql<string | null>`sum(${taxDocumentModel.totalMinor})::bigint`.as('total'),
+      })
       .from(taxDocumentModel)
+      .where(isNotNull(taxDocumentModel.originalDocumentId))
+      .groupBy(taxDocumentModel.originalDocumentId)
+      .as('credits')
+    const rows = await executor
+      .select({ document: taxDocumentModel, credited: credits.total })
+      .from(taxDocumentModel)
+      .leftJoin(credits, eq(credits.originalId, taxDocumentModel.id))
       .where(and(invoiceOfProvider(scope), inArray(taxDocumentModel.paymentId, [...paymentIds])))
-    return rows.map((row) => ({ ...row.document, creditedMinor: row.creditedMinor }))
+    return rows.map((row) => ({ ...row.document, creditedMinor: Number(row.credited ?? 0) }))
   }
 
   /**
@@ -350,10 +364,10 @@ export class TaxRepository {
    */
   async creditedBefore(invoiceId: string, tx: DbTransaction): Promise<number> {
     const [row] = await tx
-      .select({ total: sql<number>`coalesce(sum(${taxDocumentModel.totalMinor}), 0)::int` })
+      .select({ total: sql<string>`coalesce(sum(${taxDocumentModel.totalMinor}), 0)::bigint` })
       .from(taxDocumentModel)
       .where(eq(taxDocumentModel.originalDocumentId, invoiceId))
-    return row?.total ?? 0
+    return Number(row?.total ?? 0)
   }
 
   /**

@@ -166,7 +166,7 @@ function statusCondition(isOpenWanted: boolean, isResolvedWanted: boolean): SQL 
  * One workspace's held charges, newest held first; the only sort is
  * `-heldAt`. Its cursors are bound to the workspace.
  * @param tenantId - The workspace.
- * @param statuses - The statuses to keep, or undefined for both.
+ * @param statuses - The statuses to keep. Undefined or empty keeps both.
  * @returns The list definition.
  */
 export function heldChargeList(tenantId: string, statuses: HeldChargeStatus[] | undefined) {
@@ -229,10 +229,10 @@ export class PlatformTaxRepository {
    * @returns True when at least one exists.
    */
   async hasAnyDocuments(executor: DbExecutor = db): Promise<boolean> {
-    const [row] = await executor
-      .select({ found: sql<boolean>`exists (select 1 from ${taxDocumentModel})` })
-      .from(sql`(select 1) as one`)
-    return row?.found ?? false
+    const rows = await executor.execute<{ found: boolean }>(
+      sql`select exists (select 1 from ${taxDocumentModel}) as found`
+    )
+    return rows[0]?.found ?? false
   }
 
   /**

@@ -2,9 +2,11 @@
  * @file Clears the tax tables a test fills, in foreign-key order.
  */
 import { randomUUID } from 'node:crypto'
-import type { NewTaxDocument } from '@/database/models/tax.model'
-import { sql } from '@/services/database.service'
+import { and, eq } from 'drizzle-orm'
+import { taxDocumentCounterModel, type NewTaxDocument } from '@/database/models/tax.model'
+import { sql, withTransaction, type DbTransaction } from '@/services/database.service'
 import type { TaxDocumentSnapshot } from '@/types/tax'
+import { backendPid, deferred, waitForWaiter } from './lock-probe'
 
 /**
  * Empty the tax documents, their counters and the held charges in this
@@ -80,4 +82,56 @@ export function taxDocumentRow(
     snapshot,
     ...overrides,
   }
+}
+
+/**
+ * Overlaps an allocation with a holder of the invoice series' counter row
+ * lock. A committed allocation first makes the row exist. The holder locks
+ * the row with `FOR NO KEY UPDATE`, the allocation starts and queues, then
+ * the holder takes the next number by hand and commits. The conflict-check
+ * insert does not wait on a row that is only locked, so the allocation can
+ * only wait at its own locking read; an allocator that skips the lock reads
+ * the old count and hands out the holder's number again.
+ * @param allocate - Takes the next number of the invoice series for 26-27 in a transaction.
+ * @returns Whether the allocation was seen queued behind the holder, the number the holder took and the number the allocation got.
+ */
+export async function allocateBehindLockHolder(
+  allocate: (tx: DbTransaction) => Promise<number>
+): Promise<{ queued: boolean; holderNumber: number; allocatedNumber: number }> {
+  const seeded = await withTransaction(allocate)
+  const locked = deferred()
+  const release = deferred()
+  let holderPid = 0
+  const holder = withTransaction(async (tx) => {
+    holderPid = await backendPid(tx)
+    await tx
+      .select()
+      .from(taxDocumentCounterModel)
+      .where(
+        and(
+          eq(taxDocumentCounterModel.type, 'invoice'),
+          eq(taxDocumentCounterModel.financialYear, '26-27')
+        )
+      )
+      .for('no key update')
+    locked.resolve()
+    await release.promise
+    const holderNumber = seeded + 1
+    await tx
+      .update(taxDocumentCounterModel)
+      .set({ lastNumber: holderNumber })
+      .where(
+        and(
+          eq(taxDocumentCounterModel.type, 'invoice'),
+          eq(taxDocumentCounterModel.financialYear, '26-27')
+        )
+      )
+    return holderNumber
+  })
+  await locked.promise
+  const allocation = withTransaction(allocate)
+  const queued = await waitForWaiter(holderPid, allocation)
+  release.resolve()
+  const [holderNumber, allocatedNumber] = await Promise.all([holder, allocation])
+  return { queued, holderNumber, allocatedNumber }
 }

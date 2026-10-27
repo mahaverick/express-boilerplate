@@ -6,13 +6,14 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import { TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { sql, withTransaction } from '@/services/database.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
-import { backendPid, deferred, waitForWaiter } from '../../helpers/lock-probe'
-import { resetTaxDocuments, taxDocumentRow } from '../../helpers/tax'
+import { allocateBehindLockHolder, resetTaxDocuments, taxDocumentRow } from '../../helpers/tax'
 
 const repository = new TaxRepository()
 const tenantRepository = new TenantRepository()
+const userRepository = new UserRepository()
 const scope = { kind: 'razorpay', mode: 'test' } as const
 
 /**
@@ -41,7 +42,13 @@ async function invoice(tenantId: string, paymentId = `pay_${randomUUID().slice(0
 /**
  * Inserts a credit note against an invoice, `at` seconds after the epoch of its series.
  */
-async function creditNote(tenantId: string, original: string, totalMinor: number, at: number) {
+async function creditNote(
+  tenantId: string,
+  original: string,
+  totalMinor: number,
+  at: number,
+  isManual = false
+) {
   return withTransaction(async (tx) => {
     const number = await repository.allocateNumber('credit_note', '26-27', tx)
     return repository.insertDocument(
@@ -49,7 +56,7 @@ async function creditNote(tenantId: string, original: string, totalMinor: number
         type: 'credit_note',
         number: `CN/26-27/${String(number).padStart(5, '0')}`,
         paymentId: null,
-        refundId: totalMinor === 1180 ? null : `rfnd_${randomUUID().slice(0, 12)}`,
+        refundId: isManual ? null : `rfnd_${randomUUID().slice(0, 12)}`,
         originalDocumentId: original,
         totalMinor,
         taxableMinor: totalMinor,
@@ -64,14 +71,26 @@ async function creditNote(tenantId: string, original: string, totalMinor: number
 
 describe('TaxRepository', () => {
   const tenantIds: string[] = []
+  const userIds: string[] = []
 
   beforeEach(resetTaxDocuments)
   afterEach(async () => {
     await resetTaxDocuments()
     await truncateAuditLogs()
     if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
+    if (userIds.length > 0) await sql`delete from users where id = any(${userIds})`
     tenantIds.length = 0
+    userIds.length = 0
   })
+
+  /**
+   * Creates a user, tracked for cleanup.
+   */
+  async function user(): Promise<string> {
+    const created = await userRepository.create({ email: `tax-repo-${randomUUID()}@example.test` })
+    userIds.push(created.id)
+    return created.id
+  }
 
   /**
    * Creates a tenant, tracked for cleanup.
@@ -86,22 +105,11 @@ describe('TaxRepository', () => {
     return created.id
   }
 
-  it('allocates numbers from concurrent transactions one after the other', async () => {
-    const holderReady = deferred()
-    const release = deferred()
-    let holderPid = 0
-    const first = withTransaction(async (tx) => {
-      holderPid = await backendPid(tx)
-      const n = await repository.allocateNumber('invoice', '26-27', tx)
-      holderReady.resolve()
-      await release.promise
-      return n
-    })
-    await holderReady.promise
-    const second = withTransaction((tx) => repository.allocateNumber('invoice', '26-27', tx))
-    expect(await waitForWaiter(holderPid, second)).toBe(true)
-    release.resolve()
-    expect(await Promise.all([first, second])).toStrictEqual([1, 2])
+  it('waits at the counter row lock and numbers after the holder', async () => {
+    const result = await allocateBehindLockHolder((tx) =>
+      repository.allocateNumber('invoice', '26-27', tx)
+    )
+    expect(result).toStrictEqual({ queued: true, holderNumber: 2, allocatedNumber: 3 })
   })
 
   it('leaves no gap when an allocating transaction rolls back', async () => {
@@ -120,21 +128,34 @@ describe('TaxRepository', () => {
 
   it('writes details versioned and refuses a stale version', async () => {
     const tenantId = await tenant()
+    const userId = await user()
+    const editorId = await user()
     const inserted = await withTransaction((tx) =>
-      repository.insertDetails({ tenantId, legalName: 'Acme', stateCode: '29' }, tx)
+      repository.insertDetails(
+        { tenantId, legalName: 'Acme', stateCode: '29', updatedBy: userId },
+        tx
+      )
     )
     expect(inserted.version).toBe(1)
     await expect(
       withTransaction((tx) =>
-        repository.insertDetails({ tenantId, legalName: 'Again', stateCode: '29' }, tx)
+        repository.insertDetails(
+          { tenantId, legalName: 'Again', stateCode: '29', updatedBy: userId },
+          tx
+        )
       )
     ).rejects.toMatchObject({ statusCode: 409, code: 'TAX_DETAILS_VERSION_CONFLICT' })
     const updated = await withTransaction((tx) =>
-      repository.updateDetailsVersioned(tenantId, 1, { city: 'Bengaluru' }, tx)
+      repository.updateDetailsVersioned(tenantId, 1, { city: 'Bengaluru' }, editorId, tx)
     )
-    expect(updated).toMatchObject({ version: 2, city: 'Bengaluru', legalName: 'Acme' })
+    expect(updated).toMatchObject({
+      version: 2,
+      city: 'Bengaluru',
+      legalName: 'Acme',
+      updatedBy: editorId,
+    })
     const stale = await withTransaction((tx) =>
-      repository.updateDetailsVersioned(tenantId, 1, { city: 'Pune' }, tx)
+      repository.updateDetailsVersioned(tenantId, 1, { city: 'Pune' }, editorId, tx)
     )
     expect(stale).toBeUndefined()
     const found1 = await repository.findDetails(tenantId)
@@ -165,7 +186,7 @@ describe('TaxRepository', () => {
   it('sums manual and automatic notes in creditedBefore and listInvoicesByPayments', async () => {
     const tenantId = await tenant()
     const document = await invoice(tenantId, 'pay_b')
-    await creditNote(tenantId, document.id, 1180, 1)
+    await creditNote(tenantId, document.id, 1180, 1, true)
     await creditNote(tenantId, document.id, 2000, 2)
     expect(await withTransaction((tx) => repository.creditedBefore(document.id, tx))).toBe(3180)
     const [listed] = await repository.listInvoicesByPayments(scope, ['pay_b', 'pay_none'])

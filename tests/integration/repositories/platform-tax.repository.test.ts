@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
+import type { NewTaxDocument } from '@/database/models/tax.model'
 import {
   heldChargeList,
   PlatformTaxRepository,
@@ -40,7 +41,12 @@ function params(sort: string, search?: string): ListParams {
 /**
  * Inserts a document with the given number and time.
  */
-async function document(tenantId: string | null, number: string, issuedAt: Date, extra = {}) {
+async function document(
+  tenantId: string | null,
+  number: string,
+  issuedAt: Date,
+  extra: Partial<NewTaxDocument> = {}
+) {
   return withTransaction((tx) =>
     taxRepository.insertDocument(taxDocumentRow(tenantId, { number, issuedAt, ...extra }), tx)
   )
@@ -50,11 +56,22 @@ async function document(tenantId: string | null, number: string, issuedAt: Date,
  * Holds a charge.
  */
 async function held(tenantId: string, paymentId: string, heldAt: Date) {
-  const [row] = await sql<{ id: string }[]>`
-    insert into tax_held_charges (tenant_id, provider, provider_mode, payment_id, amount_minor, paid_at, held_at)
-    values (${tenantId}, 'razorpay', 'test', ${paymentId}, 100, now(), ${heldAt.toISOString()})
-    returning id`
-  return row!.id
+  const row = await withTransaction((tx) =>
+    taxRepository.insertHeld(
+      {
+        tenantId,
+        provider: 'razorpay',
+        providerMode: 'test',
+        paymentId,
+        amountMinor: 100,
+        paidAt: new Date('2026-09-30T00:00:00Z'),
+        heldAt,
+      },
+      tx
+    )
+  )
+  if (row === undefined) throw new Error('setup: the payment was already held')
+  return row.id
 }
 
 describe('PlatformTaxRepository', () => {
