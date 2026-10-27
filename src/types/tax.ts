@@ -28,3 +28,11 @@ export interface TaxDocumentSnapshot {
   original: { number: string; issuedAt: string } | null
   reason: string | null
 }
+
+/**
+ * A pointer to a tax document: its id and number.
+ */
+export interface TaxDocumentReference {
+  id: string
+  number: string
+}

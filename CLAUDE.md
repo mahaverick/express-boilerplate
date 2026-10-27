@@ -141,7 +141,7 @@ points at the code or doc that holds the detail. How things work is in
   unknown sibling path, not with `/api/v1/<unknown>`:
   `tests/integration/api/platform-route-gates.test.ts`.
   See [SECURITY.md](SECURITY.md#platform-staff).
-- **Only `src/services/platform-*.service.ts` import the six cross-tenant
+- **Only `src/services/platform-*.service.ts` import the seven cross-tenant
   `platform-*` repositories** (lint enforces it). "Your tenants" stays on
   `TenantRepository.listForUser`; never serve it from a query that sees every
   tenant.

@@ -33,8 +33,10 @@ import {
   platformSuppressionList,
 } from '@/repositories/platform-email.repository'
 import { onboardingTenantList } from '@/repositories/platform-onboarding.repository'
+import { heldChargeList, staffTaxDocumentList } from '@/repositories/platform-tax.repository'
 import { platformTenantList } from '@/repositories/platform-tenant.repository'
 import { platformUserList } from '@/repositories/platform-user.repository'
+import { ownerDocumentList } from '@/repositories/tax.repository'
 import { invitationList } from '@/repositories/tenant-invitation.repository'
 import { myTenantList } from '@/repositories/tenant.repository'
 import { memberList } from '@/repositories/user-membership.repository'
@@ -408,6 +410,49 @@ const ordered: OrderedCase[] = [
     'billing_state_history_tenant_at_idx',
   ],
   [
+    'tenant tax documents -issued',
+    () => listPageQuery(db, ownerDocumentList(ID, undefined), first('-issued')).toSQL(),
+    'tax_documents_tenant_issued_idx',
+    // Without stats the platform-wide index looks as cheap, filtering by tenant.
+    ['tax_documents_issued_idx'],
+  ],
+  [
+    'tenant tax documents issued',
+    () => listPageQuery(db, ownerDocumentList(ID, undefined), first('issued')).toSQL(),
+    'tax_documents_tenant_issued_idx',
+    // Without stats the platform-wide index looks as cheap, filtering by tenant.
+    ['tax_documents_issued_idx'],
+  ],
+  [
+    'staff tax documents -issued',
+    () =>
+      listPageQuery(
+        db,
+        staffTaxDocumentList(ID, undefined, { types: undefined }),
+        first('-issued')
+      ).toSQL(),
+    'tax_documents_tenant_issued_idx',
+    // Without stats the platform-wide index looks as cheap, filtering by tenant.
+    ['tax_documents_issued_idx'],
+  ],
+  [
+    'staff tax documents issued',
+    () =>
+      listPageQuery(
+        db,
+        staffTaxDocumentList(ID, undefined, { types: undefined }),
+        first('issued')
+      ).toSQL(),
+    'tax_documents_tenant_issued_idx',
+    // Without stats the platform-wide index looks as cheap, filtering by tenant.
+    ['tax_documents_issued_idx'],
+  ],
+  [
+    'tax held charges -heldAt',
+    () => listPageQuery(db, heldChargeList(ID, undefined), first('-heldAt')).toSQL(),
+    'tax_held_charges_tenant_held_idx',
+  ],
+  [
     'billing events -at',
     () => listPageQuery(db, billingEventList(ID, undefined, noStatuses), first('-at')).toSQL(),
     'billing_events_tenant_received_sort_idx',
@@ -677,6 +722,9 @@ describe('list names', () => {
       billingHistoryList(ID, undefined, noSources),
       billingEventList(ID, undefined, noStatuses),
       billingSubscriptionList(ID, undefined, noHeldFilters),
+      ownerDocumentList(ID, undefined),
+      staffTaxDocumentList(ID, undefined, { types: undefined }),
+      heldChargeList(ID, undefined),
       memberList(ID, undefined, noRoles),
       invitationList(ID, undefined, noRoles),
       myTenantList(ID, undefined, noRoles),
