@@ -26,6 +26,7 @@ import {
   type BillingWebhookJobData,
 } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
+import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { TaxRepository } from '@/repositories/tax.repository'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { processBillingWebhookEvent } from '@/services/billing/billing-webhook.service'
@@ -33,7 +34,7 @@ import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.se
 import { issueCreditNote } from '@/services/billing/tax-documents.service'
 import { planTaxDocuments, reconcileTaxDocuments } from '@/services/billing/tax-reconcile.service'
 import { sql, withTransaction } from '@/services/database.service'
-import { closeQueue, getBillingQueue } from '@/services/queue.service'
+import { closeQueue, getBillingQueue, getEmailQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { processBillingJob } from '@/workers/billing.worker'
@@ -92,6 +93,7 @@ afterEach(async () => {
   paymentsSwitch.on = true
   await resetTaxDocuments()
   await getBillingQueue().obliterate({ force: true })
+  await getEmailQueue().obliterate({ force: true })
   if (eventIds.length > 0) {
     await sql`delete from billing_events where provider_event_id = any(${eventIds})`
     eventIds.length = 0
@@ -463,6 +465,80 @@ describe('reconcileTaxDocuments', () => {
     expect(await fieldOf(tenantId, 'type')).toStrictEqual(['invoice'])
     await processBillingJob(job)
     expect(await fieldOf(tenantId, 'type')).toStrictEqual(['invoice', 'credit_note'])
+  })
+})
+
+/**
+ * The document numbers a workspace was mailed about, sorted.
+ * @param tenantId - The workspace.
+ * @returns One number per mail.
+ */
+async function mailedNumbersOf(tenantId: string): Promise<string[]> {
+  const rows = await sql<{ number: string }[]>`
+    select variables->>'documentNumber' as number from email_messages
+    where tenant_id = ${tenantId} and template_key = 'tax_document_issued'`
+  return rows.map((row) => row.number).toSorted()
+}
+
+describe('reconcileTaxDocuments emails', () => {
+  it('mails the owner a link to each invoice and credit note a run issues, once', async () => {
+    const { tenantId, paymentId } = await paying()
+    await fake.fakeRefund(paymentId, 50_000)
+
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+
+    expect(await mailedNumbersOf(tenantId)).toStrictEqual(['CN/26-27/00001', 'INV/26-27/00001'])
+  })
+
+  it('issues a backfilled charge paid 8 days before and mails nothing for it', async () => {
+    const { tenantId } = await paying(new Date(NOW.getTime() - 8 * DAY))
+
+    const report = await reconcileTaxDocuments(tenantId, { now: NOW })
+
+    expect(report.issued.invoices).toBe(1)
+    expect(await mailedNumbersOf(tenantId)).toStrictEqual([])
+  })
+
+  it('mails a charge paid 6 days before', async () => {
+    const { tenantId } = await paying(new Date(NOW.getTime() - 6 * DAY))
+
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+
+    expect(await mailedNumbersOf(tenantId)).toStrictEqual(['INV/26-27/00001'])
+  })
+
+  it('finishes the run when a mail cannot be queued', async () => {
+    const { tenantId } = await paying()
+
+    await withMutatedMethod(
+      EmailMessageRepository.prototype,
+      'createQueued',
+      () => Promise.reject(new Error('probe: the insert failed')),
+      async () => {
+        const report = await reconcileTaxDocuments(tenantId, { now: NOW })
+        expect(report.issued.invoices).toBe(1)
+      }
+    )
+
+    expect(await fieldOf(tenantId, 'type')).toStrictEqual(['invoice'])
+  })
+
+  it('mails what committed before a later issue fails the run', async () => {
+    const { tenantId, paymentId } = await paying()
+    await fake.fakeRefund(paymentId, 50_000)
+    const failure = new Error('the credit note failed')
+
+    await withMutatedModule(
+      '@/services/billing/tax-documents.service',
+      { issueCreditNote: () => Promise.reject(failure) },
+      () => import('@/services/billing/tax-reconcile.service'),
+      async (subject) => {
+        await expect(subject.reconcileTaxDocuments(tenantId, { now: NOW })).rejects.toBe(failure)
+      }
+    )
+
+    expect(await mailedNumbersOf(tenantId)).toStrictEqual(['INV/26-27/00001'])
   })
 })
 

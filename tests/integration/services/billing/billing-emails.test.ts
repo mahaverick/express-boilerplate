@@ -10,18 +10,30 @@ import type { Job } from 'bullmq'
  * change. No worker runs: the test reads the `email_messages` rows and the
  * queued jobs, and runs a notification job through its processor by hand.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
+import type { NewTaxDocument, TaxDocumentRecord } from '@/database/models/tax.model'
 import type { User } from '@/database/models/user.model'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
+import { TaxRepository } from '@/repositories/tax.repository'
+import { sendTaxDocumentIssued } from '@/services/billing/billing-emails.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { runFrequentBilling } from '@/services/billing/billing-scheduler.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { cancelPaid } from '@/services/billing/checkout.service'
-import { sql } from '@/services/database.service'
+import { sql, withTransaction } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { deleteUser } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -48,6 +60,20 @@ import {
   deleteTrackedUsers,
 } from '../../../helpers/platform-users'
 import { queuedJobs } from '../../../helpers/queue-jobs'
+import { resetTaxDocuments, taxDocumentRow } from '../../../helpers/tax'
+
+/**
+ * Whether GST registration is on; the tax document tests turn it on and the hooks reset it.
+ */
+const gst = vi.hoisted(() => ({ on: false }))
+
+vi.mock('@/configs/billing.config', async (importOriginal) => {
+  const { FIXTURE_SELLER: seller } = await import('../../../helpers/tax-seller')
+  return {
+    ...(await importOriginal<typeof import('@/configs/billing.config')>()),
+    gstSellerConfig: () => (gst.on ? seller : null),
+  }
+})
 
 vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
   const { fakeProviderModule } = await import('../../../helpers/billing-api')
@@ -71,6 +97,8 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
+  gst.on = false
+  await resetTaxDocuments()
   await getEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await truncateAuditLogs()
@@ -677,5 +705,185 @@ describe('billing emails', () => {
       }
     )
     expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(0)
+  })
+})
+
+const TAX_NOW = new Date('2026-10-27T06:30:00.000Z')
+const TAX_DAY = 24 * 60 * 60 * 1000
+const taxRepository = new TaxRepository()
+
+/**
+ * Insert a tax document for a workspace, as the issuing transaction would.
+ * @param tenantId - The workspace, or null for a purged one.
+ * @param overrides - Columns to change.
+ * @returns The stored document.
+ */
+async function documentFor(
+  tenantId: string | null,
+  overrides: Partial<NewTaxDocument> = {}
+): Promise<TaxDocumentRecord> {
+  return withTransaction((tx) =>
+    taxRepository.insertDocument(
+      taxDocumentRow(tenantId, { number: 'INV/26-27/00001', issuedAt: TAX_NOW, ...overrides }),
+      tx
+    )
+  )
+}
+
+/**
+ * Insert a credit note for an invoice.
+ * @param tenantId - The workspace.
+ * @param invoice - The invoice it reduces.
+ * @param refundId - The refund it is for; null for a note staff issued by hand.
+ * @returns The stored note.
+ */
+async function noteFor(
+  tenantId: string,
+  invoice: TaxDocumentRecord,
+  refundId: string | null
+): Promise<TaxDocumentRecord> {
+  const row = taxDocumentRow(tenantId, {
+    type: 'credit_note',
+    number: 'CN/26-27/00001',
+    issuedAt: TAX_NOW,
+    paymentId: null,
+    refundId,
+    originalDocumentId: invoice.id,
+    totalMinor: 5900,
+    taxableMinor: 5000,
+    cgstMinor: 450,
+    sgstMinor: 450,
+  })
+  return withTransaction((tx) =>
+    taxRepository.insertDocument(
+      {
+        ...row,
+        snapshot: {
+          ...row.snapshot,
+          original: { number: invoice.number, issuedAt: invoice.issuedAt.toISOString() },
+          reference: { paymentId: null, refundId },
+        },
+      },
+      tx
+    )
+  )
+}
+
+describe('tax document emails', () => {
+  beforeEach(async () => {
+    gst.on = true
+    await resetTaxDocuments()
+  })
+
+  it('mails each owner and the billing address a link to a new invoice, and sends nothing more on a second call', async () => {
+    const { tenantId, owner, coOwner } = await team()
+    const invoice = await documentFor(tenantId)
+    const paidAt = new Date(TAX_NOW.getTime() - TAX_DAY)
+
+    await sendTaxDocumentIssued(invoice, TAX_NOW, paidAt)
+    await sendTaxDocumentIssued(invoice, TAX_NOW, paidAt)
+
+    expect(await recipientsOf(tenantId, 'tax_document_issued')).toEqual(
+      ['accounts@example.test', owner.email, coOwner.email].toSorted()
+    )
+    const variables = await variablesOf(tenantId, 'tax_document_issued')
+    expect(variables).toMatchObject({
+      documentType: 'invoice',
+      documentNumber: 'INV/26-27/00001',
+      invoiceNumber: '',
+      issuedOn: '27 October 2026',
+    })
+    const link = new URL(variables?.billingLink ?? '')
+    expect(link.searchParams.get('utm_campaign')).toBe('tax_document_issued')
+    expect(link.searchParams.get('utm_content')).toBe('primary_button')
+    const jobs = await queuedJobs<{ templateKey: string }>(getEmailQueue())
+    expect(jobs.filter((job) => job.data.templateKey === 'tax_document_issued')).toHaveLength(3)
+  })
+
+  it('names the invoice a credit note reduces', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId)
+    const note = await noteFor(tenantId, invoice, 'rfnd_1')
+
+    await sendTaxDocumentIssued(note, TAX_NOW, TAX_NOW)
+
+    expect(await variablesOf(tenantId, 'tax_document_issued')).toMatchObject({
+      documentType: 'credit_note',
+      documentNumber: 'CN/26-27/00001',
+      invoiceNumber: 'INV/26-27/00001',
+    })
+  })
+
+  it('writes the issue date in IST', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId, {
+      issuedAt: new Date('2026-10-27T20:00:00.000Z'),
+    })
+
+    await sendTaxDocumentIssued(invoice, TAX_NOW, TAX_NOW)
+
+    const variables = await variablesOf(tenantId, 'tax_document_issued')
+    expect(variables?.issuedOn).toBe('28 October 2026')
+  })
+
+  it('skips an invoice whose payment is more than 7 days old and mails one that is 7 days old', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId)
+
+    await sendTaxDocumentIssued(invoice, TAX_NOW, new Date(TAX_NOW.getTime() - 8 * TAX_DAY))
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(0)
+
+    await sendTaxDocumentIssued(invoice, TAX_NOW, new Date(TAX_NOW.getTime() - 7 * TAX_DAY))
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(3)
+  })
+
+  it('skips a credit note whose refund is more than 7 days old, and mails a manual note whatever its age', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId)
+    const refunded = await noteFor(tenantId, invoice, 'rfnd_1')
+    const old = new Date(TAX_NOW.getTime() - 30 * TAX_DAY)
+
+    await sendTaxDocumentIssued(refunded, TAX_NOW, old)
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(0)
+
+    await sql`delete from tax_documents where id = ${refunded.id}`
+    const manual = await noteFor(tenantId, invoice, null)
+    await sendTaxDocumentIssued(manual, TAX_NOW)
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(3)
+  })
+
+  it('skips an automatic document that comes with no payment or refund time', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId)
+
+    await sendTaxDocumentIssued(invoice, TAX_NOW)
+
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(0)
+  })
+
+  it('sends nothing for a document with no workspace, or with registration off', async () => {
+    const { tenantId } = await team()
+    const purged = await documentFor(null)
+    await sendTaxDocumentIssued(purged, TAX_NOW, TAX_NOW)
+
+    const invoice = await documentFor(tenantId, { number: 'INV/26-27/00002' })
+    gst.on = false
+    await sendTaxDocumentIssued(invoice, TAX_NOW, TAX_NOW)
+
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(0)
+  })
+
+  it('never rejects when the queue write fails', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId)
+    await withMutatedMethod(
+      EmailMessageRepository.prototype,
+      'createQueued',
+      () => Promise.reject(new Error('probe: the insert failed')),
+      async () => {
+        await expect(sendTaxDocumentIssued(invoice, TAX_NOW, TAX_NOW)).resolves.toBeUndefined()
+      }
+    )
+    expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(0)
   })
 })

@@ -100,6 +100,12 @@ export const TAX_REFUND_LOOKBACK_DAYS = 200
 /** The daily refund sweep reads refunds created in this many past days. */
 export const TAX_REFUND_SWEEP_DAYS = 3
 
+/**
+ * The email for a new document is skipped when its payment or refund is more
+ * than this many days old at issue, so a backfill stays out of inboxes.
+ */
+export const TAX_EMAIL_MAX_AGE_DAYS = 7
+
 /** The most tracked subscriptions one tax run reads charges for. */
 export const TAX_MAX_TRACKED_SUBSCRIPTIONS = 50
 

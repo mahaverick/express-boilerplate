@@ -26,7 +26,7 @@ import { TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { issueInvoice } from '@/services/billing/tax-documents.service'
 import { sql, withTransaction } from '@/services/database.service'
-import { closeQueue } from '@/services/queue.service'
+import { closeQueue, getEmailQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
 import type { ProviderCharge, ProviderInvoice } from '@/types/billing'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -90,6 +90,7 @@ afterEach(async () => {
   gst.on = true
   gst.effectiveFrom = '2026-04-01'
   await resetTaxDocuments()
+  await getEmailQueue().obliterate({ force: true })
   await sql`delete from billing_alerts where kind = 'tax_credit_note_late'`
   await truncateAuditLogs()
   await deleteTrackedTenants()
@@ -496,6 +497,35 @@ describe('the manual credit note', () => {
     ])
     const search = await getAs(token, `${path}?search=00001&type=credit_note`)
     expect(itemsOf(search.body).map((item) => item.number)).toStrictEqual(['CN/26-27/00001'])
+  })
+
+  it('mails the owner a link to the note once it commits, and mails nothing for a refused note', async () => {
+    const { tenant, owner } = await workspace()
+    const invoice = await invoiced(tenant.id)
+    const { token } = await staff('admin')
+    const path = `/tenants/${tenant.id}/billing/tax-documents/${invoice.id}/credit-notes`
+    /**
+     * The workspace's tax document mails.
+     * @returns Each mail's recipient and stored variables.
+     */
+    const mails = () => sql<{ recipient: string; variables: Record<string, string> }[]>`
+      select recipient, variables from email_messages
+      where tenant_id = ${tenant.id} and template_key = 'tax_document_issued'`
+
+    const tooMuch = await sendAs('post', token, path, { amountMinor: 150_000, reason: REASON })
+    const refused = await mails()
+    await sendAs('post', token, path, { amountMinor: 20_000, reason: REASON })
+    const sent = await mails()
+
+    expect(tooMuch.status).toBe(409)
+    expect(refused).toHaveLength(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.recipient).toBe(owner.email)
+    expect(sent[0]?.variables).toMatchObject({
+      documentType: 'credit_note',
+      documentNumber: 'CN/26-27/00001',
+      invoiceNumber: invoice.number,
+    })
   })
 
   it.each([0, 99, 1.5, '20000'])('refuses an amount of %s', async (amountMinor) => {

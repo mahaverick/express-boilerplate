@@ -49,6 +49,7 @@ import {
 import { TaxRepository } from '@/repositories/tax.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
+import { sendTaxDocumentIssued } from '@/services/billing/billing-emails.service'
 import {
   assertTaxReadable,
   assertTaxWritable,
@@ -275,6 +276,7 @@ export async function issueManualCreditNote(
     case 'issued': {
       const { document } = result
       await alertIfLate(tenantId, document)
+      await sendTaxDocumentIssued(document)
       const creator = await personOf(actor.userId)
       const [item] = await staffItems([document], new Map([[document.id, creator]]))
       if (item === undefined) throw new Error('A presented credit note went missing')

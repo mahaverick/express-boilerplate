@@ -207,6 +207,15 @@ const SAMPLE_VARIABLES: {
     monthlyPrice: '999',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
+  tax_document_issued: {
+    appName: 'App',
+    tenantName: 'Acme',
+    documentType: 'invoice',
+    documentNumber: 'INV/26-27/00001',
+    invoiceNumber: '',
+    issuedOn: '27 October 2026',
+    billingLink: 'https://x.test/settings/workspace/acme/billing',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -402,6 +411,19 @@ describe('EMAIL_TEMPLATE_META', () => {
       winback: {
         senderClass: 'general',
         previewVariables: ['appName', 'tenantName', 'memberLimit', 'monthlyPrice', 'billingLink'],
+        resendAction: null,
+      },
+      tax_document_issued: {
+        senderClass: 'general',
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'documentType',
+          'documentNumber',
+          'invoiceNumber',
+          'issuedOn',
+          'billingLink',
+        ],
         resendAction: null,
       },
     })

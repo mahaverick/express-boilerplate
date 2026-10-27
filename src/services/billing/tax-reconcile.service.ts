@@ -15,11 +15,13 @@
 import { gstSellerConfig } from '@/configs/billing.config'
 import type { BillingAlertKind } from '@/constants/billing.constants'
 import { TAX_MAX_TRACKED_SUBSCRIPTIONS, TAX_REFUND_LOOKBACK_DAYS } from '@/constants/gst.constants'
+import type { TaxDocumentRecord } from '@/database/models/tax.model'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { addTaxReconcileJob, type BillingTaxReconcileJobData } from '@/jobs/billing.job'
 import { BillingRepository, type ProviderScope } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
 import { TaxRepository } from '@/repositories/tax.repository'
+import { sendTaxDocumentIssued } from '@/services/billing/billing-emails.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { issueCreditNote, issueInvoice } from '@/services/billing/tax-documents.service'
 import { logger } from '@/services/logger.service'
@@ -386,6 +388,15 @@ interface OverCredit {
 }
 
 /**
+ * A document a run issued, with when its payment or refund happened, for the
+ * owners' email.
+ */
+interface IssuedDocument {
+  document: TaxDocumentRecord
+  occurredAt: Date
+}
+
+/**
  * What a run committed that staff hear about.
  */
 interface RunAlerts {
@@ -396,6 +407,22 @@ interface RunAlerts {
   lateNotes: { number: string; invoiceNumber: string; year: number }[]
   newHolds: ProviderCharge[]
   overCredits: OverCredit[]
+  /**
+   * Every document the run issued, in issue order.
+   */
+  issued: IssuedDocument[]
+}
+
+/**
+ * Email the owners a link to each document a run issued, after the commits.
+ * Never rejects: `sendTaxDocumentIssued` logs a failure and goes on.
+ * @param issued - What the run issued.
+ * @param now - The run time.
+ */
+async function mailIssuedDocuments(issued: readonly IssuedDocument[], now: Date): Promise<void> {
+  for (const { document, occurredAt } of issued) {
+    await sendTaxDocumentIssued(document, now, occurredAt)
+  }
 }
 
 /**
@@ -456,9 +483,10 @@ async function raiseRunAlerts(tenantId: string, alerts: RunAlerts): Promise<void
 /**
  * Run a workspace's tax run: plan it, issue each invoice (or hold), then
  * each credit note, then raise the alerts for what committed
- * (`raiseRunAlerts`). The alerts are raised even when an issue fails part
- * way, before its error is rethrown: the retry finds those documents issued
- * and would never raise them.
+ * (`raiseRunAlerts`) and email the owners a link to each
+ * (`mailIssuedDocuments`). Both run even when an issue fails part way, before
+ * its error is rethrown: the retry finds those documents issued and would
+ * never raise or send them.
  * @param tenantId - The workspace.
  * @param options - Payments to read refunds for whatever their age or credit, and the run time.
  * @param options.paymentIds - The hinted payments.
@@ -482,11 +510,18 @@ export async function reconcileTaxDocuments(
   const provider = getBillingProvider()
   if (plan.skipped !== null || provider === null) return report
   const scope: ProviderScope = { kind: provider.kind, mode: provider.mode }
-  const alerts: RunAlerts = { lateInvoiceNumbers: [], lateNotes: [], newHolds: [], overCredits: [] }
+  const alerts: RunAlerts = {
+    lateInvoiceNumbers: [],
+    lateNotes: [],
+    newHolds: [],
+    overCredits: [],
+    issued: [],
+  }
   try {
     await issuePlan(tenantId, plan, scope, now, report, alerts)
   } finally {
     await raiseRunAlerts(tenantId, alerts)
+    await mailIssuedDocuments(alerts.issued, now)
   }
   report.late = { invoices: alerts.lateInvoiceNumbers.length, creditNotes: alerts.lateNotes.length }
   report.overCredits = alerts.overCredits.length
@@ -518,6 +553,7 @@ async function issuePlan(
     if (result.outcome === 'issued') {
       report.issued.invoices += 1
       invoiceIdByPayment.set(charge.paymentId, result.document.id)
+      alerts.issued.push({ document: result.document, occurredAt: charge.paidAt })
       if (isLateInvoice(charge.paidAt, now)) alerts.lateInvoiceNumbers.push(result.document.number)
     } else if (result.outcome === 'held') {
       report.held += 1
@@ -562,6 +598,7 @@ async function issuePlan(
     if (result.outcome === 'issued') {
       report.issued.creditNotes += 1
       const { document } = result
+      alerts.issued.push({ document, occurredAt: refund.createdAt })
       const original = document.snapshot.original
       if (document.noTaxReduction && original !== null) {
         const invoiceYear = financialYearOf(new Date(original.issuedAt))

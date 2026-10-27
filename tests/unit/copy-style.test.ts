@@ -34,6 +34,7 @@ import { renderPaymentFailedTemplate } from '@/templates/email/payment-failed.te
 import { renderRenewalUpcomingTemplate } from '@/templates/email/renewal-upcoming.template'
 import { renderSignInLinkTemplate } from '@/templates/email/sign-in-link.template'
 import { renderStepUpLinkTemplate } from '@/templates/email/step-up-link.template'
+import { renderTaxDocumentIssuedTemplate } from '@/templates/email/tax-document-issued.template'
 import { renderTenantInvitationTemplate } from '@/templates/email/tenant-invitation.template'
 import { renderTrialEndedTemplate } from '@/templates/email/trial-ended.template'
 import { renderTrialEndingTemplate } from '@/templates/email/trial-ending.template'
@@ -592,6 +593,26 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       tenantName: 'Acme Robotics',
       memberLimit: '3',
       monthlyPrice: '999',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
+  tax_document_issued: [
+    renderTaxDocumentIssuedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      documentType: 'invoice',
+      documentNumber: 'INV/26-27/00001',
+      invoiceNumber: '',
+      issuedOn: '27 October 2026',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+    renderTaxDocumentIssuedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      documentType: 'credit_note',
+      documentNumber: 'CN/26-27/00001',
+      invoiceNumber: 'INV/26-27/00001',
+      issuedOn: '27 October 2026',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
   ],
