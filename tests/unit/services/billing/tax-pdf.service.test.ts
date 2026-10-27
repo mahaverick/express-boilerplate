@@ -323,6 +323,26 @@ describe('renderTaxDocumentPdf', () => {
     expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(1)
   })
 
+  it('fits the longest legal inputs on one page', async () => {
+    const name = 'N'.repeat(100)
+    const line = 'A'.repeat(100)
+    const row = creditNoteRow({
+      noTaxReduction: true,
+      reason: 'R'.repeat(500),
+      snapshot: {
+        ...creditNoteRow().snapshot,
+        seller: { ...INTRA_SNAPSHOT.seller, legalName: name, addressLines: [line, line, line] },
+        buyer: { ...INTRA_SNAPSHOT.buyer, legalName: name, addressLines: [line, line, line] },
+        description: 'D'.repeat(100),
+        reason: 'R'.repeat(500),
+      },
+    })
+
+    const pdf = await renderTaxDocumentPdf(row)
+
+    expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(1)
+  })
+
   it('renders one row to the same bytes every time, in any time zone and at any clock time', async () => {
     const row = creditNoteRow()
     vi.stubEnv('TZ', 'UTC')

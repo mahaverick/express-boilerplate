@@ -48,7 +48,6 @@ import {
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 import { resetTaxDocuments } from '../../helpers/tax'
-import { settle } from '../../helpers/timing'
 
 /**
  * Whether GST registration is on, and the effective date a test sets; the
@@ -360,14 +359,29 @@ describe('GET /api/v1/tenants/:slug/billing/tax-documents', () => {
     expect(itemsOf(invoices.body).map((item) => item.taxDocument)).toStrictEqual([null])
   })
 
-  it('refuses a search or a total, which the owner list has neither of', async () => {
+  it('ignores a search or a total, which the owner list has neither of, as the invoice list ignores them', async () => {
     const { tenant, owner } = await workspace()
+    const first = await invoiced(tenant.id, charge(), new Date('2026-10-20T06:30:00.000Z'))
+    const second = await invoiced(tenant.id, charge(), new Date('2026-10-27T06:30:00.000Z'))
 
-    const search = await getAs(owner, `${tenant.slug}/billing/tax-documents?search=INV`)
-    const total = await getAs(owner, `${tenant.slug}/billing/tax-documents?total=1`)
+    const response = await getAs(
+      owner,
+      `${tenant.slug}/billing/tax-documents?search=no-such-number&total=1&limit=1`
+    )
+    const plain = await getAs(owner, `${tenant.slug}/billing/tax-documents?limit=1`)
+    const cursor = (dataOf(response.body).page as { nextCursor: string }).nextCursor
+    const next = await getAs(
+      owner,
+      `${tenant.slug}/billing/tax-documents?limit=1&cursor=${encodeURIComponent(cursor)}`
+    )
 
-    expect(search.status).toBe(400)
-    expect(total.status).toBe(400)
+    expect(response.status).toBe(200)
+    expect(itemsOf(response.body).map((item) => item.id)).toStrictEqual([second.id])
+    expect(dataOf(response.body)).not.toHaveProperty('total')
+    // The ignored parameters leave the cursor scope alone, so a plain request resumes the page.
+    expect(itemsOf(plain.body).map((item) => item.id)).toStrictEqual([second.id])
+    expect(next.status).toBe(200)
+    expect(itemsOf(next.body).map((item) => item.id)).toStrictEqual([first.id])
   })
 
   it('answers the read 404 while registration is off and the workspace has no documents, and lists them once it has some', async () => {
@@ -408,13 +422,12 @@ describe('GET /api/v1/tenants/:slug/billing/tax-documents', () => {
 })
 
 describe('GET /api/v1/tenants/:slug/billing/tax-documents/:id/pdf', () => {
-  it('sends the PDF as a download that renders the same bytes 1 s later and in any time zone', async () => {
+  it('sends the PDF as a download that renders the same bytes in any time zone', async () => {
     const { tenant, owner } = await workspace()
     const document = await invoiced(tenant.id)
 
     vi.stubEnv('TZ', 'UTC')
     const first = await pdfAs(owner, tenant.slug, document.id)
-    await settle(1000, 'the second render must start on a later clock second')
     vi.stubEnv('TZ', 'Asia/Kolkata')
     const second = await pdfAs(owner, tenant.slug, document.id)
 
@@ -427,7 +440,7 @@ describe('GET /api/v1/tenants/:slug/billing/tax-documents/:id/pdf', () => {
     expect((second.body as Buffer).equals(bytes)).toBe(true)
   })
 
-  it("answers 404 tax_document_not_found for another workspace's document and an unknown id", async () => {
+  it("answers 404 tax_document_not_found for another workspace's document, an unknown id and a malformed one", async () => {
     const mine = await workspace()
     const theirs = await workspace()
     await invoiced(mine.tenant.id)
@@ -435,8 +448,9 @@ describe('GET /api/v1/tenants/:slug/billing/tax-documents/:id/pdf', () => {
 
     const crossed = await pdfAs(mine.owner, mine.tenant.slug, other.id)
     const unknown = await pdfAs(mine.owner, mine.tenant.slug, randomUUID())
+    const malformed = await pdfAs(mine.owner, mine.tenant.slug, 'not-a-uuid')
 
-    for (const response of [crossed, unknown]) {
+    for (const response of [crossed, unknown, malformed]) {
       expect(response.status).toBe(404)
       expect(JSON.parse((response.body as Buffer).toString('utf8'))).toMatchObject({
         code: 'tax_document_not_found',
@@ -597,6 +611,7 @@ describe('invoice rows', () => {
 
   it('gives staff the same links and status, with no payment id', async () => {
     const { tenant, rows, invoice } = await everyState()
+    gst.effectiveFrom = EFFECTIVE_FROM
     const { token } = await createTrackedStaff('viewer')
     let response: Awaited<ReturnType<typeof getAs>> | undefined
 

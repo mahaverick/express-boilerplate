@@ -16,6 +16,7 @@ import {
 import { getDocumentPdf, listTaxDocuments } from '@/services/billing/tax-documents.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
+import { parseIdParameter } from '@/validators/platform.validators'
 import { taxDetailsPatchSchema, taxDocumentListSchema } from '@/validators/tax.validators'
 
 /**
@@ -60,7 +61,12 @@ class TaxController extends BaseController {
    */
   getTaxDocumentPdf = this.handle(async (request, response) => {
     const { tenantId } = tenantPrincipal(request)
-    const pdf = await getDocumentPdf(tenantId, String(request.params.id), actorFrom(request), 'web')
+    const pdf = await getDocumentPdf(
+      tenantId,
+      parseIdParameter(request.params.id, 'taxDocument'),
+      actorFrom(request),
+      'web'
+    )
     response
       .status(200)
       .set({

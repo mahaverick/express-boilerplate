@@ -257,28 +257,23 @@ export function taxDetailsRuleIssues(
 /**
  * `GET /tenants/:slug/billing/tax-documents` query: the shared list params,
  * newest issued first by default, and `type` picking invoices or credit
- * notes. The owner list has no search and no total, so either is refused.
+ * notes. The owner list has no search and no total: like any other
+ * parameter the list doesn't take (as the owner invoice list does), a sent
+ * `search` or `total` is dropped before parsing, so it changes neither the
+ * page nor the cursor scope.
  */
-export const taxDocumentListSchema = listParamsSchema({
-  sorts: ['-issued', 'issued'],
-  defaultSort: '-issued',
-  filters: { type: listFilter('type', TAX_DOCUMENT_TYPES).optional() },
-}).superRefine((query, context) => {
-  if (query.params.search !== undefined) {
-    context.addIssue({
-      code: 'custom',
-      path: ['search'],
-      message: 'This list has no search. Remove search from the request.',
-    })
-  }
-  if (query.params.total) {
-    context.addIssue({
-      code: 'custom',
-      path: ['total'],
-      message: 'This list has no total. Remove total from the request.',
-    })
-  }
-})
+export const taxDocumentListSchema = z.preprocess(
+  (query) => {
+    if (typeof query !== 'object' || query === null) return query
+    const { search: _search, total: _total, ...rest } = query as Record<string, unknown>
+    return rest
+  },
+  listParamsSchema({
+    sorts: ['-issued', 'issued'],
+    defaultSort: '-issued',
+    filters: { type: listFilter('type', TAX_DOCUMENT_TYPES).optional() },
+  })
+)
 
 /**
  * A parsed owner tax documents list query.
