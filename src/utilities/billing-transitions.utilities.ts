@@ -76,10 +76,11 @@ export interface TransitionContext {
    */
   intervalOf: (priceId: string | null) => BillingInterval | undefined
   /**
-   * Whether the row's current subscription became current in a move to
-   * `active` from another state (`wasActivatedWithSubscription`). Only a
-   * welcome deferred for a missing period end needs it; false or absent
-   * means the period-end rule never fires.
+   * Whether the workspace has any move to `active` from another state at or
+   * after the moment the row's current subscription was first seen
+   * (`wasActivatedWithSubscription`). Only a welcome deferred for a missing
+   * period end needs it; false or absent means the period-end rule never
+   * fires.
    */
   isActivationPending?: boolean
   /**

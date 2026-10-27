@@ -345,6 +345,18 @@ async function historyTimes(id: string): Promise<number[]> {
   return rows.map((row) => Number(row.ms))
 }
 
+/**
+ * The times a workspace's subscriptions were first seen, oldest first.
+ * @param id - The workspace.
+ * @returns Each time in milliseconds.
+ */
+async function firstSeenTimes(id: string): Promise<number[]> {
+  const rows = await sql<{ ms: string }[]>`
+    select (extract(epoch from first_seen_at) * 1000)::bigint::text as ms
+    from tenant_billing_subscriptions where tenant_id = ${id} order by first_seen_at, id`
+  return rows.map((row) => Number(row.ms))
+}
+
 describe('runBillingTimeTravel', () => {
   it('moves a trial past its end, queues a sync and a run, and the run moves it to Free', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
@@ -402,6 +414,8 @@ describe('runBillingTimeTravel', () => {
     const before = await readBilling(id)
     const historyBefore = await historyTimes(id)
     expect(historyBefore.length).toBeGreaterThan(0)
+    const seenBefore = await firstSeenTimes(id)
+    expect(seenBefore.length).toBeGreaterThan(0)
 
     expect(
       await runBillingTimeTravel(['--tenant', 'billing-past-due-halted', '--days', '1'], SEED_ENV)
@@ -414,6 +428,7 @@ describe('runBillingTimeTravel', () => {
     // Still the same period end, so a reminder already sent stays sent.
     expect(after.renewalReminderForPeriodEnd).toStrictEqual(after.currentPeriodEnd)
     expect(await historyTimes(id)).toStrictEqual(historyBefore.map((at) => at - DAY_MS))
+    expect(await firstSeenTimes(id)).toStrictEqual(seenBefore.map((at) => at - DAY_MS))
   })
 
   it('changes no row when the fake subscriptions cannot be moved', async () => {

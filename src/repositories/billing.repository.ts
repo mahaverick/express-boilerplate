@@ -357,11 +357,10 @@ export class BillingRepository {
   }
 
   /**
-   * Whether a workspace moved to Paid from another state at or after the
-   * moment a subscription became its current one: the move that made that
-   * subscription current also made the row active, so its first payment is
-   * a new start, not a resubscribe during a cancel buffer that left the row
-   * active throughout.
+   * Whether the workspace has any move to `active` from another state at or
+   * after the moment a subscription was first seen as its current one. Such a
+   * move means the subscription started Paid; a row that stayed active (a
+   * resubscribe during a cancel buffer, or a handover) has none after it.
    * @param tenantId - The workspace.
    * @param scope - The provider and mode the subscription belongs to.
    * @param subscriptionId - The subscription.
@@ -435,9 +434,12 @@ export class BillingRepository {
   }
 
   /**
-   * Move every history row of one workspace back in time, for
+   * Move every history row of one workspace, and the moment each of its
+   * subscriptions was first seen, back in time, for
    * `pnpm billing:time-travel` on local only: the win-back emails count from
-   * the latest move to Free, so it moves with the row's dates.
+   * the latest move to Free, and the deferred welcome compares a move to
+   * active with when its subscription was first seen, so both move with the
+   * row's dates.
    * @param tenantId - The workspace.
    * @param ms - How far back, in milliseconds.
    * @param tx - The open transaction that moves the row's dates.
@@ -447,6 +449,12 @@ export class BillingRepository {
       .update(billingStateHistoryModel)
       .set({ at: sql`${billingStateHistoryModel.at} - make_interval(secs => ${ms / 1000})` })
       .where(eq(billingStateHistoryModel.tenantId, tenantId))
+    await tx
+      .update(tenantBillingSubscriptionModel)
+      .set({
+        firstSeenAt: sql`${tenantBillingSubscriptionModel.firstSeenAt} - make_interval(secs => ${ms / 1000})`,
+      })
+      .where(eq(tenantBillingSubscriptionModel.tenantId, tenantId))
   }
 
   /**

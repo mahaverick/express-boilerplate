@@ -143,14 +143,18 @@ function onFake(row: TenantBillingRecord): TenantBillingRecord {
  * @param options - When the subscription was first seen and the state it left, if any.
  * @param options.from - The state the row left in that write, or null when it stayed active.
  * @param options.seenAt - When the subscription became current.
+ * @param options.gapSeconds - Seconds from the subscription to the move; defaults to 1.
+ * @param options.skipSubscription - Write only the history row.
  */
 async function recordStart(
   row: TenantBillingRecord,
-  options: { from: string | null; seenAt: string }
+  options: { from: string | null; seenAt: string; skipSubscription?: boolean; gapSeconds?: number }
 ): Promise<void> {
-  await sql`insert into tenant_billing_subscriptions (tenant_id, provider, mode, subscription_id, first_seen_at) values (${row.tenantId}, ${row.provider ?? 'fake'}, ${row.providerMode ?? 'test'}, ${row.providerSubscriptionId ?? ''}, ${options.seenAt})`
+  if (options.skipSubscription !== true) {
+    await sql`insert into tenant_billing_subscriptions (tenant_id, provider, mode, subscription_id, first_seen_at) values (${row.tenantId}, ${row.provider ?? 'fake'}, ${row.providerMode ?? 'test'}, ${row.providerSubscriptionId ?? ''}, ${options.seenAt})`
+  }
   if (options.from === null) return
-  await sql`insert into billing_state_history (tenant_id, from_state, to_state, cause, source, at) values (${row.tenantId}, ${options.from}, 'active', 'upgraded', 'webhook', ${options.seenAt}::timestamptz + interval '1 second')`
+  await sql`insert into billing_state_history (tenant_id, from_state, to_state, cause, source, at) values (${row.tenantId}, ${options.from}, 'active', 'upgraded', 'webhook', ${options.seenAt}::timestamptz + ${options.gapSeconds ?? 1} * interval '1 second')`
 }
 
 /**
@@ -319,6 +323,17 @@ describe('billing emails', () => {
     }
   })
 
+  it('welcomes when the move to active and the subscription share one timestamp', async () => {
+    const { tenantId, row } = await team()
+    const early = { ...onFake(paidFrom(row)), currentPeriodEnd: null }
+    const full = { ...early, currentPeriodEnd: PERIOD_END, version: early.version + 1 }
+    await recordStart(early, { from: 'free', seenAt: '2026-10-01T10:00:00Z', gapSeconds: 0 })
+
+    await emitBillingDiff(early, full, 'webhook')
+
+    expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(3)
+  })
+
   it('sends no welcome for a resubscribe in the cancel buffer, whichever webhook comes first', async () => {
     const { tenantId, row } = await team()
     const warn = vi.spyOn(logger, 'warn')
@@ -339,6 +354,12 @@ describe('billing emails', () => {
       const full = { ...early, currentPeriodEnd: PERIOD_END, version: early.version + 1 }
       await recordStart(cancelling, { from: 'free', seenAt: '2026-09-01T10:00:00Z' })
       await recordStart(early, { from: null, seenAt: '2026-10-01T10:00:00Z' })
+      // An interval-switch handover writes an active-to-active row after the takeover.
+      await recordStart(early, {
+        from: 'active',
+        seenAt: '2026-10-01T10:00:00Z',
+        skipSubscription: true,
+      })
 
       // The invoice first: the takeover leaves the end empty, the activation fills it.
       await emitBillingDiff(cancelling, early, 'webhook')
