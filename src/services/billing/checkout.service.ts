@@ -1708,7 +1708,9 @@ export async function listInvoices(
   const page = await invoicePage(provider, tenantId, cursor, INVOICE_LIST, {})
   return {
     ...page,
-    items: page.items.map(({ subscriptionId: _subscription, ...invoice }) => invoice),
+    items: page.items.map(
+      ({ subscriptionId: _subscription, paymentId: _payment, ...invoice }) => invoice
+    ),
   }
 }
 

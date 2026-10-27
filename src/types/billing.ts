@@ -290,11 +290,44 @@ export interface InvoiceView {
 }
 
 /**
- * One invoice as the provider lists it: the owner's view and the
- * subscription it bills.
+ * One invoice as the provider lists it: the owner's view, the subscription
+ * it bills and the payment that paid it. The payment id is internal: no
+ * owner or staff response carries it.
  */
 export interface ProviderInvoice extends InvoiceView {
   subscriptionId: string
+  /**
+   * The payment that paid the invoice, or null when unpaid or unknown.
+   */
+  paymentId: string | null
+}
+
+/**
+ * One paid charge of a subscription: the invoice, the payment that paid it
+ * and the period it bills.
+ */
+export interface ProviderCharge {
+  invoiceId: string
+  subscriptionId: string
+  paymentId: string
+  /**
+   * What was paid, in minor units.
+   */
+  amountMinor: number
+  paidAt: Date
+  billingStart: Date | null
+  billingEnd: Date | null
+}
+
+/**
+ * One refund of a payment. A pending refund can still fail.
+ */
+export interface ProviderRefund {
+  id: string
+  paymentId: string
+  amountMinor: number
+  status: 'pending' | 'processed' | 'failed'
+  createdAt: Date
 }
 
 /**
@@ -427,6 +460,25 @@ export interface BillingProviderClient {
     cursor: string | null,
     options?: InvoiceListOptions
   ): Promise<ProviderInvoicePage>
+  /**
+   * Every paid charge of a subscription, all pages read, oldest paid first.
+   * @param subscriptionId - The provider's subscription id.
+   * @returns The charges.
+   */
+  listPaidCharges(subscriptionId: string): Promise<ProviderCharge[]>
+  /**
+   * Every refund of a payment, all pages read, oldest first.
+   * @param paymentId - The provider's payment id.
+   * @returns The refunds, whatever their status.
+   */
+  listRefunds(paymentId: string): Promise<ProviderRefund[]>
+  /**
+   * Every refund created since a time across the account, all pages read,
+   * oldest first.
+   * @param since - The earliest creation time.
+   * @returns The refunds, whatever their status.
+   */
+  listRecentRefunds(since: Date): Promise<ProviderRefund[]>
   /**
    * The subscription a payment was taken for, through the payment's invoice:
    * a dispute or a refund names only the payment.

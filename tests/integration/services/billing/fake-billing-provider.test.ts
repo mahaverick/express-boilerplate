@@ -265,4 +265,122 @@ describe('FakeBillingProvider', () => {
     expect(provider.verifyWebhook(body, signature)).toBe(true)
     expect(provider.verifyWebhook(body, undefined)).toBe(false)
   })
+
+  it('records a charge per cycle with distinct payment ids and billing periods', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    await provider.fakeAdvance(id, 'active')
+
+    const charges = await provider.listPaidCharges(id)
+
+    expect(charges).toHaveLength(2)
+    expect(charges[0]?.paymentId).toMatch(/^pay_FAKE/)
+    expect(charges[1]?.paymentId).not.toBe(charges[0]?.paymentId)
+    expect(charges[0]).toMatchObject({ subscriptionId: id, amountMinor: 99_900 })
+    expect(charges[0]?.billingStart).toBeInstanceOf(Date)
+    expect(charges[0]?.billingEnd?.getTime()).toBeGreaterThan(
+      charges[0]?.billingStart?.getTime() ?? Number.POSITIVE_INFINITY
+    )
+    const page = await provider.listInvoices([id], null)
+    expect(
+      page.items.map((item) => item.paymentId ?? '').toSorted((a, b) => a.localeCompare(b))
+    ).toStrictEqual(
+      charges.map((charge) => charge.paymentId).toSorted((a, b) => a.localeCompare(b))
+    )
+    for (const item of page.items) {
+      expect(Object.keys(item)).not.toContain('billingStart')
+      expect(Object.keys(item)).not.toContain('billingEnd')
+    }
+  })
+
+  it('lists a refund added with fakeRefund as processed, with its amount', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const [charge] = await provider.listPaidCharges(id)
+    const paymentId = charge?.paymentId ?? ''
+
+    await provider.fakeRefund(paymentId, 50_000)
+
+    expect(await provider.listRefunds(paymentId)).toStrictEqual([
+      {
+        id: expect.stringMatching(/^rfnd_FAKE/) as unknown,
+        paymentId,
+        amountMinor: 50_000,
+        status: 'processed',
+        createdAt: expect.any(Date) as unknown,
+      },
+    ])
+    expect(await provider.listRefunds('pay_FAKEother')).toStrictEqual([])
+  })
+
+  it('lists refundLatestPayment as a processed refund', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const outcome = await provider.refundLatestPayment(id)
+    const [charge] = await provider.listPaidCharges(id)
+
+    const refunds = await provider.listRefunds(charge?.paymentId ?? '')
+
+    expect(outcome).toMatchObject({ status: 'refunded' })
+    expect(refunds).toStrictEqual([
+      expect.objectContaining({ status: 'processed', amountMinor: 99_900 }) as unknown,
+    ])
+    expect(refunds[0]?.id).toBe((outcome as { refundId: string }).refundId)
+  })
+
+  it('lists recent refunds across payments, only those since the time', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    await provider.fakeAdvance(id, 'active')
+    const [first, second] = await provider.listPaidCharges(id)
+    await provider.fakeRefund(first?.paymentId ?? '', 10_000)
+    await provider.fakeRefund(second?.paymentId ?? '', 20_000)
+
+    const all = await provider.listRecentRefunds(new Date(Date.now() - 60_000))
+    const none = await provider.listRecentRefunds(new Date(Date.now() + 60_000))
+
+    expect(all.map((refund) => refund.amountMinor).toSorted((a, b) => a - b)).toStrictEqual([
+      10_000, 20_000,
+    ])
+    expect(none).toStrictEqual([])
+  })
+
+  it('shifts a charge and its refund back together', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const [before] = await provider.listPaidCharges(id)
+    await provider.fakeRefund(before?.paymentId ?? '', 50_000)
+    const [refundBefore] = await provider.listRefunds(before?.paymentId ?? '')
+    const week = 7 * 86_400_000
+
+    await provider.fakeShiftBack(id, week)
+
+    const [after] = await provider.listPaidCharges(id)
+    const [refundAfter] = await provider.listRefunds(before?.paymentId ?? '')
+    expect(before?.paidAt.getTime() ?? 0).toBe((after?.paidAt.getTime() ?? 0) + week)
+    expect(before?.billingStart?.getTime() ?? 0).toBe((after?.billingStart?.getTime() ?? 0) + week)
+    expect(before?.billingEnd?.getTime() ?? 0).toBe((after?.billingEnd?.getTime() ?? 0) + week)
+    expect(refundBefore?.createdAt.getTime() ?? 0).toBe(
+      (refundAfter?.createdAt.getTime() ?? 0) + week
+    )
+  })
+
+  it('reads a stored invoice without a payment id as null', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const redis = await getRedis()
+    const stored = JSON.parse(
+      (await redis.hGet(redisKey('billing-fake'), `sub:${id}`)) ?? '{}'
+    ) as {
+      invoices: Record<string, unknown>[]
+    }
+    stored.invoices = stored.invoices.map(
+      ({ paymentId: _payment, billingStart: _start, billingEnd: _end, ...old }) => old
+    )
+    await redis.hSet(redisKey('billing-fake'), `sub:${id}`, JSON.stringify(stored))
+
+    const page = await provider.listInvoices([id], null)
+
+    expect(page.items[0]).toMatchObject({ paymentId: null })
+  })
 })

@@ -139,9 +139,9 @@ export function toEventView(event: BillingEventRecord): StaffTenantBillingView['
 /**
  * One invoice as staff see it: the owner's view without its link, since the
  * provider's hosted invoice page shows the payer's contact details, and with
- * the subscription it bills.
+ * the subscription it bills. The internal payment id is left out too.
  */
-export type StaffInvoiceView = Omit<ProviderInvoice, 'url'>
+export type StaffInvoiceView = Omit<ProviderInvoice, 'url' | 'paymentId'>
 
 /**
  * Project a provider invoice for staff.

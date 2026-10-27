@@ -23,7 +23,9 @@ import type {
   InvoiceListOptions,
   InvoiceView,
   ProviderInvoice,
+  ProviderCharge,
   ProviderInvoicePage,
+  ProviderRefund,
   ProviderPlanPrice,
   ProviderRefundOutcome,
   ProviderSubscription,
@@ -75,6 +77,30 @@ const MAX_SUBSCRIPTION_PAGES = 100
  * How many of a subscription's newest invoices the paid check reads.
  */
 const RECENT_INVOICE_COUNT = 25
+
+/**
+ * The most invoice pages one paid-charge read pages through.
+ */
+const MAX_CHARGE_PAGES = 100
+
+/**
+ * How many refunds one refund page reads (Razorpay's maximum).
+ */
+const REFUND_PAGE_SIZE = 100
+
+/**
+ * The most pages one refund read pages through.
+ */
+const MAX_REFUND_PAGES = 100
+
+/**
+ * The refund statuses billing reads; any other is dropped.
+ */
+const REFUND_STATUSES: ReadonlySet<string> = new Set<ProviderRefund['status']>([
+  'pending',
+  'processed',
+  'failed',
+])
 
 /**
  * A parsed JSON object.
@@ -169,6 +195,32 @@ function invoiceView(invoice: JsonRecord): InvoiceView | null {
     issuedAt: issuedAt.toISOString(),
     paidAt: dateFrom(invoice.paid_at)?.toISOString() ?? null,
     url: stringOrNull(invoice.short_url),
+  }
+}
+
+/**
+ * Map a Razorpay refund.
+ * @param refund - The refund.
+ * @returns The refund, or null for an unknown status or a malformed one.
+ */
+function toRefund(refund: JsonRecord): ProviderRefund | null {
+  const createdAt = dateFrom(refund.created_at)
+  if (
+    typeof refund.id !== 'string' ||
+    typeof refund.payment_id !== 'string' ||
+    typeof refund.amount !== 'number' ||
+    typeof refund.status !== 'string' ||
+    !REFUND_STATUSES.has(refund.status) ||
+    createdAt === null
+  ) {
+    return null
+  }
+  return {
+    id: refund.id,
+    paymentId: refund.payment_id,
+    amountMinor: refund.amount,
+    status: refund.status as ProviderRefund['status'],
+    createdAt,
   }
 }
 
@@ -586,7 +638,11 @@ export class RazorpayProvider implements BillingProviderClient {
       for (const [position, item] of raw.entries()) {
         const view = invoiceView(item)
         if (view !== null && (shown === undefined || shown.has(view.status))) {
-          items.push({ ...view, subscriptionId })
+          items.push({
+            ...view,
+            subscriptionId,
+            paymentId: stringOrNull(item.payment_id),
+          })
         }
         if (items.length < INVOICE_PAGE_SIZE) continue
         // A full page: resume after this invoice, in this subscription or the next.
@@ -607,6 +663,108 @@ export class RazorpayProvider implements BillingProviderClient {
       }
     }
     return { items, nextCursor: null }
+  }
+
+  /**
+   * Every paid charge of a subscription, oldest paid first. An invoice
+   * counts when it is paid and names a payment. Razorpay lists a
+   * subscription's invoices newest first, `RECENT_INVOICE_COUNT` a page.
+   * @param subscriptionId - The subscription id.
+   * @returns The charges.
+   * @throws {ProviderError} A non-retryable error when a paid invoice has no paid time.
+   */
+  async listPaidCharges(subscriptionId: string): Promise<ProviderCharge[]> {
+    const charges: ProviderCharge[] = []
+    let isComplete = false
+    for (let page = 0; page < MAX_CHARGE_PAGES && !isComplete; page += 1) {
+      const items = itemsOf(
+        await this.#call('GET', '/invoices', {
+          query: {
+            subscription_id: subscriptionId,
+            count: String(RECENT_INVOICE_COUNT),
+            skip: String(page * RECENT_INVOICE_COUNT),
+          },
+        })
+      )
+      for (const item of items) {
+        const paymentId = stringOrNull(item.payment_id)
+        if (item.status !== 'paid' || paymentId === null) continue
+        const paidAt = dateFrom(item.paid_at)
+        const amount = item.amount_paid ?? item.amount
+        if (typeof item.id !== 'string' || paidAt === null || typeof amount !== 'number') {
+          throw new ProviderError('charge answer', 200, { code: 'UNEXPECTED_ANSWER' })
+        }
+        charges.push({
+          invoiceId: item.id,
+          subscriptionId,
+          paymentId,
+          amountMinor: amount,
+          paidAt,
+          billingStart: dateFrom(item.billing_start),
+          billingEnd: dateFrom(item.billing_end),
+        })
+      }
+      isComplete = items.length < RECENT_INVOICE_COUNT
+    }
+    if (!isComplete) {
+      logger.warn('A Razorpay paid-charge read stopped at its page limit', {
+        subscriptionId,
+        pages: MAX_CHARGE_PAGES,
+      })
+    }
+    return charges.toSorted((a, b) => a.paidAt.getTime() - b.paidAt.getTime())
+  }
+
+  /**
+   * Read every page of a refund list.
+   * @param path - The list path under the base.
+   * @param query - The query besides the page.
+   * @returns The refunds, oldest first.
+   */
+  async #refundPages(path: string, query: Record<string, string>): Promise<ProviderRefund[]> {
+    const refunds: ProviderRefund[] = []
+    let isComplete = false
+    for (let page = 0; page < MAX_REFUND_PAGES && !isComplete; page += 1) {
+      const items = itemsOf(
+        await this.#call('GET', path, {
+          query: {
+            ...query,
+            count: String(REFUND_PAGE_SIZE),
+            skip: String(page * REFUND_PAGE_SIZE),
+          },
+        })
+      )
+      for (const item of items) {
+        const refund = toRefund(item)
+        if (refund !== null) refunds.push(refund)
+      }
+      isComplete = items.length < REFUND_PAGE_SIZE
+    }
+    if (!isComplete) {
+      logger.warn('A Razorpay refund read stopped at its page limit', {
+        pages: MAX_REFUND_PAGES,
+      })
+    }
+    return refunds.toSorted((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+  }
+
+  /**
+   * Every refund of a payment, oldest first.
+   * @param paymentId - The payment id.
+   * @returns The refunds, whatever their status.
+   */
+  async listRefunds(paymentId: string): Promise<ProviderRefund[]> {
+    return this.#refundPages(`/payments/${encodeURIComponent(paymentId)}/refunds`, {})
+  }
+
+  /**
+   * Every refund created since a time across the account, oldest first.
+   * @param since - The earliest creation time.
+   * @returns The refunds, whatever their status.
+   */
+  async listRecentRefunds(since: Date): Promise<ProviderRefund[]> {
+    const from = String(Math.floor(since.getTime() / 1000))
+    return this.#refundPages('/refunds', { from })
   }
 
   /**
