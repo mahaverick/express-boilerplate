@@ -22,6 +22,7 @@ import { runFrequentBilling } from '@/services/billing/billing-scheduler.service
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { cancelPaid } from '@/services/billing/checkout.service'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { deleteUser } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -259,6 +260,31 @@ describe('billing emails', () => {
     expect(mails).toHaveLength(3)
     expect(mails.every((mail) => mail.status === 'sent')).toBe(true)
     expect(await queuedJobs(getEmailQueue())).toHaveLength(0)
+  })
+
+  it('welcomes once when the period end arrives in a later sync than the activation', async () => {
+    const { tenantId, row } = await team()
+    const warn = vi.spyOn(logger, 'warn')
+    const early = { ...paidFrom(row), currentPeriodEnd: null }
+    const full = { ...early, currentPeriodEnd: PERIOD_END, version: early.version + 1 }
+
+    await emitBillingDiff(row, early, 'webhook')
+    expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(0)
+
+    await emitBillingDiff(early, full, 'webhook')
+    await emitBillingDiff(early, full, 'reconcile')
+
+    const mails = await mailsOf(tenantId, 'paid_welcome')
+    expect(mails).toHaveLength(3)
+    expect(new Set(mails.map((mail) => mail.recipient)).size).toBe(3)
+    for (const mail of mails) {
+      expect(mail.variables).toMatchObject({ nextChargeOn: '1 November 2026' })
+    }
+    expect(warn).not.toHaveBeenCalledWith(
+      'A billing email had no date or price to send with',
+      expect.anything()
+    )
+    warn.mockRestore()
   })
 
   it('sends nothing for a write that repeats the same state', async () => {

@@ -144,6 +144,33 @@ export function isContinued(after: TenantBillingRecord): boolean {
 }
 
 /**
+ * Whether the change completes a welcome to Paid: the row is active on a
+ * subscription with a known period end, and either the subscription just
+ * became current or the period end just became known on it. Razorpay can
+ * report the first payment before it activates the subscription, so the
+ * period end may arrive one sync after the subscription does.
+ * @param before - The row before the change.
+ * @param after - The row after it.
+ * @returns True when the welcome is due.
+ */
+function isWelcomed(before: TenantBillingRecord, after: TenantBillingRecord): boolean {
+  if (
+    after.state !== 'active' ||
+    after.providerSubscriptionId === null ||
+    after.currentPeriodEnd === null
+  ) {
+    return false
+  }
+  const isNewSubscription =
+    before.state !== 'active' && after.providerSubscriptionId !== before.providerSubscriptionId
+  const isPeriodEndKnownNow =
+    before.state === 'active' &&
+    after.providerSubscriptionId === before.providerSubscriptionId &&
+    before.currentPeriodEnd === null
+  return isNewSubscription || isPeriodEndKnownNow
+}
+
+/**
  * The email-worthy changes between two rows, in the order they are sent.
  * @param before - The row before the change.
  * @param after - The row after it.
@@ -159,14 +186,7 @@ export function billingTransitions(
 ): BillingTransition[] {
   if (!context.isWorkspaceActive) return inactiveTransitions(before, after)
   const transitions: BillingTransition[] = []
-  if (
-    before.state !== 'active' &&
-    after.state === 'active' &&
-    after.providerSubscriptionId !== null &&
-    after.providerSubscriptionId !== before.providerSubscriptionId
-  ) {
-    transitions.push({ kind: 'paid_welcome' })
-  }
+  if (isWelcomed(before, after)) transitions.push({ kind: 'paid_welcome' })
   if (before.haltedAt === null && after.haltedAt !== null) {
     transitions.push({ kind: 'payment_failed', stoppedBy: 'halted' })
   }
