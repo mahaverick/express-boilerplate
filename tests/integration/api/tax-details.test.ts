@@ -6,6 +6,7 @@
  * routes, the audit entry and its forwarded event, and maintenance mode.
  * Registration is switched per test through a mocked `gstSellerConfig`.
  */
+import { sql as sqlTag } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
 import {
@@ -16,11 +17,12 @@ import { taxDocumentModel } from '@/database/models/tax.model'
 import type { User } from '@/database/models/user.model'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { saveTaxDetails } from '@/services/billing/tax-details.service'
-import { db, sql, type DbExecutor } from '@/services/database.service'
+import { db, sql, withTransaction, type DbExecutor } from '@/services/database.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { clearOutbox, outboxRowsOf } from '../../helpers/analytics-outbox'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deleteTrackedTenants, workspace } from '../../helpers/billing-api'
+import { backendPid, deferred, waitForWaiter } from '../../helpers/lock-probe'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
 import { withMutatedMethod } from '../../helpers/mutate'
 import {
@@ -493,6 +495,41 @@ describe('PATCH /api/v1/tenants/:slug/billing/tax-details', () => {
       select city, version from tenant_tax_details where tenant_id = ${tenant.id}`
     expect(rows).toEqual([{ city: 'Bengaluru', version: 1 }])
     expect(await detailsAudit(tenant.id)).toEqual(auditBefore)
+  })
+
+  it('re-reads the owner role under its row lock: a demotion committed while the save waits refuses it', async () => {
+    const { tenant, owner } = await savedWorkspace()
+    const membership = await membershipRepository.findByUserAndTenant(owner.id, tenant.id)
+    if (membership === undefined) throw new Error('setup: the owner has no membership')
+    const locked = deferred<number>()
+    const demote = deferred()
+    // Holds the owner's membership row, then demotes them and commits once the save queues behind it.
+    const holder = withTransaction(async (tx) => {
+      await tx.execute(
+        sqlTag`select id from user_memberships where id = ${membership.id} for no key update`
+      )
+      locked.resolve(await backendPid(tx))
+      await demote.promise
+      await tx.execute(
+        sqlTag`update user_memberships set role = 'admin' where id = ${membership.id}`
+      )
+    })
+    const holderPid = await locked.promise
+
+    // An async wrapper starts the request now, so it can queue while the holder waits.
+    const save = (async () => patchDetails(owner, tenant.slug, { version: 1, city: 'Mysuru' }))()
+    // An unlocked re-read would not queue here, and would save with the old role.
+    const queued = await waitForWaiter(holderPid, save)
+    demote.resolve()
+    await holder
+    const response = await save
+
+    expect(queued).toBe(true)
+    expect(response.status).toBe(403)
+    expect(response.body).toMatchObject({ message: TAX_DETAILS_OWNER_ONLY_MESSAGE })
+    const rows = await sql<{ city: string }[]>`
+      select city from tenant_tax_details where tenant_id = ${tenant.id}`
+    expect(rows).toEqual([{ city: 'Bengaluru' }])
   })
 
   it('refuses a state change next to a stored GSTIN whose prefix is no longer a state', async () => {
