@@ -1373,7 +1373,10 @@ export async function sendTaxDocumentIssued(
     const isManualNote = document.type === 'credit_note' && document.refundId === null
     if (!isManualNote) {
       if (occurredAt === null) {
-        logSkipped(tenantId, 'tax_document_issued')
+        logger.warn('A tax document email was skipped: no payment or refund time came with it', {
+          tenantId,
+          documentId: document.id,
+        })
         return
       }
       if (now.getTime() - occurredAt.getTime() > TAX_EMAIL_MAX_AGE_DAYS * DAY_MS) return

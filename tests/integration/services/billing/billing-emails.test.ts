@@ -34,6 +34,7 @@ import { runFrequentBilling } from '@/services/billing/billing-scheduler.service
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { cancelPaid } from '@/services/billing/checkout.service'
 import { sql, withTransaction } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { deleteUser } from '@/services/platform-user.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -852,13 +853,33 @@ describe('tax document emails', () => {
     expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(3)
   })
 
-  it('skips an automatic document that comes with no payment or refund time', async () => {
+  it('skips an automatic document that comes with no payment or refund time, and says why', async () => {
     const { tenantId } = await team()
     const invoice = await documentFor(tenantId)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
     await sendTaxDocumentIssued(invoice, TAX_NOW)
 
     expect(await mailsOf(tenantId, 'tax_document_issued')).toHaveLength(0)
+    expect(warn).toHaveBeenCalledWith(
+      'A tax document email was skipped: no payment or refund time came with it',
+      { tenantId, documentId: invoice.id }
+    )
+    warn.mockRestore()
+  })
+
+  it('names no invoice for a credit note whose snapshot has no original', async () => {
+    const { tenantId } = await team()
+    const invoice = await documentFor(tenantId)
+    const note = await noteFor(tenantId, invoice, 'rfnd_2')
+    const bare = { ...note, snapshot: { ...note.snapshot, original: null } }
+
+    await sendTaxDocumentIssued(bare, TAX_NOW, TAX_NOW)
+
+    expect(await variablesOf(tenantId, 'tax_document_issued')).toMatchObject({
+      documentType: 'credit_note',
+      invoiceNumber: '',
+    })
   })
 
   it('sends nothing for a document with no workspace, or with registration off', async () => {
