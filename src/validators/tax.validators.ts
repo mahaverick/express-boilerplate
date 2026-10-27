@@ -70,7 +70,8 @@ function blankToNull(value: unknown): unknown {
 
 /**
  * A text field the invoice prints: trimmed, curly quotes made straight, then
- * held to the characters the PDF font draws and to its column's width.
+ * held to the characters the PDF font draws and to its column's width. Only
+ * the first rule broken is reported, as for a GSTIN.
  * @param max - The longest value.
  * @param tooLong - What a longer value reads.
  * @param wrongType - What a value that isn't text reads.
@@ -81,8 +82,8 @@ function taxText(max: number, tooLong: string, wrongType: string) {
     .string({ error: wrongType })
     .trim()
     .overwrite(normaliseQuotes)
-    .regex(TAX_TEXT_PATTERN, TAX_TEXT_CHARACTERS_MESSAGE)
-    .max(max, tooLong)
+    .regex(TAX_TEXT_PATTERN, { message: TAX_TEXT_CHARACTERS_MESSAGE, abort: true })
+    .max(max, { message: tooLong, abort: true })
 }
 
 /**
@@ -213,8 +214,8 @@ const GSTIN_REQUIRED_FIELDS = [
  * The rules across tax details fields, run on the stored row with the sent
  * fields applied. Each runs only when the body sent a field it names, so a
  * stored value that today's rules refuse never blocks an unrelated
- * correction: the GSTIN's state is the chosen state (checked only when the
- * GSTIN starts with a selectable state code); a GSTIN needs address line 1,
+ * correction: the GSTIN's state is the chosen state (a stored GSTIN whose
+ * prefix is no longer a selectable state is refused on `gstin`); a GSTIN needs address line 1,
  * the city and the PIN code; an SEZ unit needs a GSTIN.
  * @param merged - The details as they would be saved.
  * @param sent - The fields the body sent.
@@ -228,7 +229,10 @@ export function taxDetailsRuleIssues(
   const { gstin } = merged
   if (gstin !== null && (sent.has('gstin') || sent.has('stateCode'))) {
     const gstinState = stateOf(gstin.slice(0, 2))
-    if (gstinState !== undefined && gstinState.code !== merged.stateCode) {
+    if (gstinState === undefined) {
+      // A stored GSTIN whose prefix is no longer a state: no state can match it.
+      issues.push({ field: 'gstin', message: GSTIN_STATE_MESSAGE })
+    } else if (gstinState.code !== merged.stateCode) {
       issues.push({ field: 'stateCode', message: gstinStateMismatchMessage(gstinState.name) })
     }
   }

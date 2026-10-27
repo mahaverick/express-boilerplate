@@ -2,8 +2,8 @@
  * @file A workspace's tax details: the gates when GST registration is off,
  * the read, and the save shared by the owner route and the staff route. A
  * save is a PATCH of the changed fields under a version check, in one
- * transaction that locks only the details row (after the staff role
- * re-check), applies the cross-field rules to the merged row, writes only
+ * transaction that re-reads the actor's role under lock, locks the details
+ * row, applies the cross-field rules to the merged row, writes only
  * the columns that changed and records the audit entry.
  */
 import { gstSellerConfig } from '@/configs/billing.config'
@@ -12,7 +12,6 @@ import {
   TAX_DETAILS_OWNER_ONLY_MESSAGE,
   TAX_DETAILS_VERSION_CONFLICT_CODE,
   TAX_DETAILS_VERSION_CONFLICT_MESSAGE,
-  TAX_DOCUMENTS_READ_DISABLED_MESSAGE,
   TAX_LEGAL_NAME_REQUIRED_MESSAGE,
   TAX_STATE_REQUIRED_MESSAGE,
 } from '@/constants/billing.constants'
@@ -22,10 +21,10 @@ import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { presentTaxDetails, type TaxDetailsView } from '@/presenters/tax.presenter'
 import { TaxRepository } from '@/repositories/tax.repository'
-import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
-import { withTransaction } from '@/services/database.service'
+import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
+import { lockActorRole } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
 import { VALIDATION_FAILED_MESSAGE } from '@/validators/parse.validators'
 import {
@@ -36,7 +35,6 @@ import {
 } from '@/validators/tax.validators'
 
 const taxRepository = new TaxRepository()
-const membershipRepository = new UserMembershipRepository()
 
 /**
  * Who is saving and how they reached the workspace: an owner by membership,
@@ -80,7 +78,7 @@ function isRegistered(): boolean {
  */
 export async function assertTaxReadable(tenantId: string): Promise<void> {
   if (isRegistered() || (await taxRepository.hasDocuments(tenantId))) return
-  throw notFoundError('taxDocumentsDisabled', TAX_DOCUMENTS_READ_DISABLED_MESSAGE)
+  throw notFoundError('taxDocumentsDisabled', 'read')
 }
 
 /**
@@ -88,7 +86,7 @@ export async function assertTaxReadable(tenantId: string): Promise<void> {
  * @throws {HttpError} 404 `tax_documents_disabled` with the write message.
  */
 export function assertTaxWritable(): void {
-  if (!isRegistered()) throw notFoundError('taxDocumentsDisabled')
+  if (!isRegistered()) throw notFoundError('taxDocumentsDisabled', 'write')
 }
 
 /**
@@ -128,6 +126,29 @@ function validationError(issues: readonly TaxDetailsRuleIssue[]): HttpError {
   const errors: Record<string, string[]> = {}
   for (const { field, message } of issues) (errors[field] ??= []).push(message)
   return new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, errors)
+}
+
+/**
+ * Re-read the owner's access under lock and refuse anyone but an owner by
+ * membership, with the refusal the route's gate gives: a role lowered after
+ * the gate still refuses the write.
+ * @param actor - The signed-in user.
+ * @param tenantId - The workspace.
+ * @param tx - The transaction to hold the locks in.
+ * @throws {HttpError} 404 when the actor lost access; 403 below owner or through platform access.
+ */
+async function lockMemberOwner(actor: Actor, tenantId: string, tx: DbTransaction): Promise<void> {
+  const { role, access } = await lockActorRole(actor, tenantId, 'owner', tx).catch(
+    (error: unknown) => {
+      if (error instanceof HttpError && error.statusCode === 403) {
+        throw new HttpError(TAX_DETAILS_OWNER_ONLY_MESSAGE, 403)
+      }
+      throw error
+    }
+  )
+  if (access !== 'member' || role !== 'owner') {
+    throw new HttpError(TAX_DETAILS_OWNER_ONLY_MESSAGE, 403)
+  }
 }
 
 /**
@@ -176,8 +197,9 @@ function mergeAndCheck(
  * member's reason) in the same transaction. Nothing is written when no
  * value changes.
  *
- * Lock order: for staff, the platform-role and user rows
- * (`assertStillPlatformRole`), then the details row only.
+ * Lock order: the actor's access first (an owner's owner and membership
+ * rows through `lockActorRole`; staff's platform-role and user rows through
+ * `assertStillPlatformRole`), then the details row.
  * @param actor - The owner or staff member saving.
  * @param tenantId - The workspace.
  * @param patch - The validated PATCH body, without a staff reason.
@@ -195,10 +217,6 @@ export async function saveTaxDetails(
   if (options.access === 'platform' && options.reason === null) {
     throw new Error('A staff tax details save needs a reason.')
   }
-  if (options.access === 'member') {
-    const membership = await membershipRepository.findByUserAndTenant(actor.userId, tenantId)
-    if (membership?.role !== 'owner') throw new HttpError(TAX_DETAILS_OWNER_ONLY_MESSAGE, 403)
-  }
   const { version, ...fields } = patch
   const sentFields: Partial<TaxDetailsValues> = Object.fromEntries(
     Object.entries(fields).filter(([, value]) => value !== undefined)
@@ -207,6 +225,7 @@ export async function saveTaxDetails(
 
   return withTransaction(async (tx) => {
     if (options.access === 'platform') await assertStillPlatformRole(actor, 'manager', tx)
+    else await lockMemberOwner(actor, tenantId, tx)
     const stored = await taxRepository.lockDetails(tenantId, tx)
     if (stored === undefined ? version !== null : version !== stored.version) {
       throw versionConflict()

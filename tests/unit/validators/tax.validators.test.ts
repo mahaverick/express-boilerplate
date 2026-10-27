@@ -132,6 +132,13 @@ describe('taxDetailsPatchSchema', () => {
     }
   )
 
+  it('reports only the first rule a text field breaks', () => {
+    expect(errorsOf({ version: 1, city: 'न'.repeat(61) }).fieldErrors.city).toHaveLength(1)
+    expect(errorsOf({ version: 1, legalName: 'न'.repeat(101) }).fieldErrors.legalName).toHaveLength(
+      1
+    )
+  })
+
   it('accepts Latin-1 letters', () => {
     expect(taxDetailsPatchSchema.parse({ version: 1, city: 'Zürich' }).city).toBe('Zürich')
   })
@@ -235,9 +242,12 @@ describe('taxDetailsRuleIssues', () => {
     expect(taxDetailsRuleIssues(merged, new Set(['city']))).toEqual([])
   })
 
-  it('skips the state match when the GSTIN does not start with a selectable code', () => {
+  it('refuses a stored GSTIN whose prefix is no longer a state, on the GSTIN, when the state rule runs', () => {
     const merged = { ...registered, gstin: '25ABCDE1234F1Z4', stateCode: '27' }
-    expect(taxDetailsRuleIssues(merged, new Set(['stateCode']))).toEqual([])
+    expect(taxDetailsRuleIssues(merged, new Set(['stateCode']))).toEqual([
+      { field: 'gstin', message: GSTIN_STATE },
+    ])
+    expect(taxDetailsRuleIssues(merged, new Set(['city']))).toEqual([])
   })
 
   it('needs the address, city and PIN code with a GSTIN, each on its own field', () => {

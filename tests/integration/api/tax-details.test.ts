@@ -16,12 +16,13 @@ import { taxDocumentModel } from '@/database/models/tax.model'
 import type { User } from '@/database/models/user.model'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { saveTaxDetails } from '@/services/billing/tax-details.service'
-import { db, sql } from '@/services/database.service'
+import { db, sql, type DbExecutor } from '@/services/database.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { clearOutbox, outboxRowsOf } from '../../helpers/analytics-outbox'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deleteTrackedTenants, workspace } from '../../helpers/billing-api'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
+import { withMutatedMethod } from '../../helpers/mutate'
 import {
   createTrackedStaff,
   createTrackedUser,
@@ -447,6 +448,89 @@ describe('PATCH /api/v1/tenants/:slug/billing/tax-details', () => {
 
     expect(response.status).toBe(400)
     expect(errorsOf(response.body).formErrors).toHaveLength(1)
+  })
+
+  it('refuses an owner demoted to admin after the route gate, writing nothing', async () => {
+    const { tenant, owner } = await savedWorkspace()
+    const auditBefore = await detailsAudit(tenant.id)
+    const realFind = UserMembershipRepository.prototype.findByUserAndTenant
+    let hasDemoted = false
+    /**
+     * Returns the real read's row, and after resolveTenant's own pool read of
+     * the owner demotes them once, so the route gate saw the old role.
+     */
+    const demotingFind: typeof realFind = async function (
+      this: UserMembershipRepository,
+      userId: string,
+      tenantId: string,
+      executor?: DbExecutor
+    ) {
+      const row = await realFind.call(this, userId, tenantId, executor)
+      if (!hasDemoted && row && executor === undefined && userId === owner.id) {
+        hasDemoted = true
+        await membershipRepository.updateRole(row.id, 'admin')
+      }
+      return row
+    }
+
+    let status = 0
+    let body: unknown
+    await withMutatedMethod(
+      UserMembershipRepository.prototype,
+      'findByUserAndTenant',
+      demotingFind,
+      async () => {
+        const response = await patchDetails(owner, tenant.slug, { version: 1, city: 'Mysuru' })
+        status = response.status
+        body = response.body
+      }
+    )
+
+    expect(hasDemoted).toBe(true)
+    expect(status).toBe(403)
+    expect(body).toMatchObject({ message: TAX_DETAILS_OWNER_ONLY_MESSAGE })
+    const rows = await sql<{ city: string; version: number }[]>`
+      select city, version from tenant_tax_details where tenant_id = ${tenant.id}`
+    expect(rows).toEqual([{ city: 'Bengaluru', version: 1 }])
+    expect(await detailsAudit(tenant.id)).toEqual(auditBefore)
+  })
+
+  it('refuses a state change next to a stored GSTIN whose prefix is no longer a state', async () => {
+    const { tenant, owner } = await savedWorkspace()
+    // A row written before code 25 was retired: the table allows it.
+    await sql`
+      update tenant_tax_details set gstin = '25ABCDE1234F1Z4', state_code = '25'
+      where tenant_id = ${tenant.id}`
+
+    const state = await patchDetails(owner, tenant.slug, { version: 1, stateCode: '27' })
+    const city = await patchDetails(owner, tenant.slug, { version: 1, city: 'Mysuru' })
+
+    expect(state.status).toBe(400)
+    expect(errorsOf(state.body)).toStrictEqual({
+      gstin: ["This GSTIN's first two digits aren't a state code."],
+    })
+    expect(city.status).toBe(200)
+    expect(dataOf(city.body)).toMatchObject({
+      gstin: '25ABCDE1234F1Z4',
+      state: { code: '25', name: '25' },
+      city: 'Mysuru',
+    })
+  })
+
+  it('reads a retyped curly apostrophe as no change, writing and auditing nothing', async () => {
+    const { tenant, owner } = await savedWorkspace()
+    await patchDetails(owner, tenant.slug, { version: 1, legalName: "O'Brien Ltd" })
+    const auditBefore = await detailsAudit(tenant.id)
+
+    const response = await patchDetails(owner, tenant.slug, {
+      version: 2,
+      legalName: 'O\u2019Brien Ltd',
+    })
+
+    expect(response.status).toBe(400)
+    expect(errorsOf(response.body)).toStrictEqual({ formErrors: [NO_CHANGE] })
+    expect(await detailsAudit(tenant.id)).toEqual(auditBefore)
+    expect(await storedView(owner, tenant.slug)).toMatchObject({ version: 2 })
   })
 
   it('refuses an admin and staff with platform access', async () => {

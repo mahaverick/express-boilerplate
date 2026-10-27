@@ -351,9 +351,11 @@ in this order:
    note first takes the actor's platform-role and user rows
    (`assertStillPlatformRole`, the staff-write exception below), then the
    billing row, invoice row and counter, all in that one transaction. A tax
-   details write locks only its own row (`lockDetails`, then a versioned
-   `UPDATE`), after `assertStillPlatformRole` for staff. No issue
-   transaction calls the payment provider;
+   details write first re-reads the actor's role under lock (an owner's
+   owner and membership rows through `lockActorRole`, 2 and 3 above; staff's
+   platform-role and user rows through `assertStillPlatformRole`), then
+   locks its own row (`lockDetails`, then a versioned `UPDATE`) and nothing
+   else. No issue transaction calls the payment provider;
 7. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
 8. a user's notification preference rows, in `NOTIFICATION_TYPES` order
