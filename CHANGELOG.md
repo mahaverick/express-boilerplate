@@ -1,5 +1,12 @@
 # Changelog
 
+## [9.1.4](https://github.com/mahaverick/express-boilerplate/compare/v9.1.3...v9.1.4) (2026-10-27)
+
+
+### Bug Fixes
+
+* **billing:** name nameless staff by email and word alerts in rupees ([#162](https://github.com/mahaverick/express-boilerplate/issues/162)) ([cb589b9](https://github.com/mahaverick/express-boilerplate/commit/cb589b9ff6ca23c0ab6ec3d96deb98913418abef))
+
 ## [9.1.3](https://github.com/mahaverick/express-boilerplate/compare/v9.1.2...v9.1.3) (2026-10-26)
 
 
