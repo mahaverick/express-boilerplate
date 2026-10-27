@@ -1,0 +1,258 @@
+/** @file Table-driven tests for the pure GST rules. */
+import { describe, expect, it } from 'vitest'
+import {
+  amountInWords,
+  creditNoteAmounts,
+  exportPeriodRange,
+  financialYearEnd,
+  financialYearOf,
+  formatDocumentNumber,
+  gstinCheckCharacter,
+  gstinProblem,
+  isLateCreditNote,
+  isLateInvoice,
+  istDate,
+  istMidnight,
+  normaliseGstin,
+  placeOfSupply,
+  splitInclusive,
+  stateOf,
+  supplyKind,
+} from '@/utilities/gst.utilities'
+
+describe('gstin', () => {
+  it.each([
+    ['27AAPFU0939F1ZV', null],
+    ['29ABCDE1234F1ZW', null],
+    ['27ABCDE1234F1Z0', null],
+    ['29ABCDE1234F1ZX', 'checksum'],
+    ['25ABCDE1234F1Z4', 'state'],
+    ['99ABCDE1234F1ZP', 'state'],
+    ['29ABCDE1234F1Z', 'shape'],
+    ['29ABCDE1234F0ZW', 'shape'],
+  ])('gstinProblem(%s) is %s', (gstin, problem) => {
+    expect(gstinProblem(gstin)).toBe(problem)
+  })
+
+  it('computes V for 27AAPFU0939F1Z', () => {
+    expect(gstinCheckCharacter('27AAPFU0939F1Z')).toBe('V')
+  })
+
+  it('normalises case', () => {
+    expect(gstinProblem(normaliseGstin(' 29abcde1234f1zw '))).toBeNull()
+  })
+
+  it('stateOf finds selectable codes only', () => {
+    expect(stateOf('29')?.name).toBe('Karnataka')
+    expect(stateOf('25')).toBeUndefined()
+    expect(stateOf('28')).toBeUndefined()
+    expect(stateOf('99')).toBeUndefined()
+  })
+})
+
+describe('splitInclusive', () => {
+  it('splits 99900 intra', () => {
+    expect(splitInclusive(99_900, 'intra')).toEqual({
+      totalMinor: 99_900,
+      taxableMinor: 84_661,
+      cgstMinor: 7619,
+      sgstMinor: 7620,
+      igstMinor: 0,
+      ratePercent: 18,
+    })
+  })
+
+  it('splits 99900 inter', () => {
+    expect(splitInclusive(99_900, 'inter')).toMatchObject({
+      taxableMinor: 84_661,
+      igstMinor: 15_239,
+      cgstMinor: 0,
+      sgstMinor: 0,
+    })
+  })
+
+  it('splits 999000 intra', () => {
+    expect(splitInclusive(999_000, 'intra')).toMatchObject({
+      taxableMinor: 846_610,
+      cgstMinor: 76_195,
+      sgstMinor: 76_195,
+    })
+  })
+
+  it('every total from 1 to 200000 adds up and taxable is the rounded share', () => {
+    const failures: number[] = []
+    for (let total = 1; total <= 200_000; total++) {
+      const a = splitInclusive(total, 'intra')
+      const isSumOk = a.taxableMinor + a.cgstMinor + a.sgstMinor === total
+      const isTaxableOk = a.taxableMinor === Math.round((total * 100) / 118)
+      const isSplitOk = a.sgstMinor - a.cgstMinor === (total - a.taxableMinor) % 2
+      if (!(isSumOk && isTaxableOk && isSplitOk)) failures.push(total)
+    }
+    expect(failures).toEqual([])
+  })
+
+  it('1 paisa has taxable 1 and no tax', () => {
+    expect(splitInclusive(1, 'intra')).toMatchObject({
+      taxableMinor: 1,
+      cgstMinor: 0,
+      sgstMinor: 0,
+    })
+  })
+})
+
+describe('creditNoteAmounts', () => {
+  const inv = { ...splitInclusive(99_900, 'intra'), supply: 'intra' as const }
+
+  it('adds 50000 then 49900 up to the invoice', () => {
+    expect(creditNoteAmounts(inv, 0, 50_000)).toMatchObject({
+      totalMinor: 50_000,
+      taxableMinor: 42_373,
+      cgstMinor: 3813,
+      sgstMinor: 3814,
+    })
+    expect(creditNoteAmounts(inv, 50_000, 49_900)).toMatchObject({
+      totalMinor: 49_900,
+      taxableMinor: 42_288,
+      cgstMinor: 3806,
+      sgstMinor: 3806,
+    })
+  })
+
+  it('a full refund equals the invoice', () => {
+    expect(creditNoteAmounts(inv, 0, 99_900)).toMatchObject({
+      taxableMinor: 84_661,
+      cgstMinor: 7619,
+      sgstMinor: 7620,
+    })
+  })
+
+  it('49950 twice', () => {
+    expect(creditNoteAmounts(inv, 0, 49_950)).toMatchObject({
+      taxableMinor: 42_331,
+      cgstMinor: 3809,
+      sgstMinor: 3810,
+    })
+    expect(creditNoteAmounts(inv, 49_950, 49_950)).toMatchObject({
+      taxableMinor: 42_330,
+      cgstMinor: 3810,
+      sgstMinor: 3810,
+    })
+  })
+
+  it('an inter-state note carries igst only', () => {
+    const interInv = { ...splitInclusive(99_900, 'inter'), supply: 'inter' as const }
+    expect(creditNoteAmounts(interInv, 0, 99_900)).toMatchObject({
+      igstMinor: 15_239,
+      cgstMinor: 0,
+      sgstMinor: 0,
+    })
+  })
+
+  it('1 paisa has taxable 1 and no tax', () => {
+    expect(creditNoteAmounts(inv, 0, 1)).toMatchObject({
+      totalMinor: 1,
+      taxableMinor: 1,
+      cgstMinor: 0,
+      sgstMinor: 0,
+    })
+  })
+
+  it('does not lose precision at 1e7 x 1e7', () => {
+    const big = { ...splitInclusive(10_000_000, 'intra'), supply: 'intra' as const }
+    const note = creditNoteAmounts(big, 0, 10_000_000)
+    expect(note.taxableMinor).toBe(big.taxableMinor)
+    expect(note.cgstMinor).toBe(big.cgstMinor)
+  })
+})
+
+describe('supply and place', () => {
+  it('supplyKind compares state codes', () => {
+    expect(supplyKind('29', '29')).toBe('intra')
+    expect(supplyKind('29', '27')).toBe('inter')
+  })
+
+  it('place of supply: GSTIN state > billing state > seller state', () => {
+    expect(placeOfSupply({ gstin: '27ABCDE1234F1Z0', stateCode: '29' }, '33')).toBe('27')
+    expect(placeOfSupply({ gstin: null, stateCode: '29' }, '33')).toBe('29')
+    expect(placeOfSupply({ gstin: null, stateCode: null }, '33')).toBe('33')
+  })
+})
+
+describe('dates', () => {
+  it.each([
+    ['2027-03-31T18:29:59Z', '26-27'],
+    ['2027-03-31T18:30:00Z', '27-28'],
+    ['2026-04-01T00:00:00Z', '26-27'],
+  ])('financialYearOf(%s) = %s', (iso, fy) => {
+    expect(financialYearOf(new Date(iso))).toBe(fy)
+  })
+
+  it('istMidnight(2026-04-01) is 2026-03-31T18:30:00Z', () => {
+    expect(istMidnight('2026-04-01').toISOString()).toBe('2026-03-31T18:30:00.000Z')
+  })
+
+  it('istDate converts to the IST day', () => {
+    expect(istDate(new Date('2026-10-31T20:00:00Z'))).toBe('2026-11-01')
+    expect(istDate(new Date('2026-10-31T18:29:59Z'))).toBe('2026-10-31')
+  })
+
+  it('financialYearEnd(26-27) is 2027-03-31T18:30:00.000Z', () => {
+    expect(financialYearEnd('26-27').toISOString()).toBe('2027-03-31T18:30:00.000Z')
+  })
+
+  it('late credit note: FY 26-27 deadline is the start of 1 December 2027 IST', () => {
+    expect(isLateCreditNote('26-27', new Date('2027-11-30T18:29:59Z'))).toBe(false)
+    expect(isLateCreditNote('26-27', new Date('2027-11-30T18:30:00Z'))).toBe(true)
+  })
+
+  it('late invoice: 30 days exactly is not late, 30 days + 1 ms is', () => {
+    const paid = new Date('2026-10-01T00:00:00Z')
+    const exact = new Date(paid.getTime() + 30 * 86_400_000)
+    const over = new Date(exact.getTime() + 1)
+    expect(isLateInvoice(paid, exact)).toBe(false)
+    expect(isLateInvoice(paid, over)).toBe(true)
+  })
+})
+
+describe('formatDocumentNumber', () => {
+  it('pads to five digits and caps at 16 characters', () => {
+    expect(formatDocumentNumber('INV', '26-27', 1)).toBe('INV/26-27/00001')
+    expect(formatDocumentNumber('INV', '26-27', 100_000)).toBe('INV/26-27/100000')
+    expect(formatDocumentNumber('INV', '26-27', 100_000)).toHaveLength(16)
+    expect(() => formatDocumentNumber('ABCD', '26-27', 100_000)).toThrow(RangeError)
+  })
+})
+
+describe('amountInWords', () => {
+  it.each([
+    [99_900, 'Rupees Nine Hundred Ninety-Nine Only'],
+    [84_661, 'Rupees Eight Hundred Forty-Six and Sixty-One Paise Only'],
+    [999_000, 'Rupees Nine Thousand Nine Hundred Ninety Only'],
+    [15_000_050, 'Rupees One Lakh Fifty Thousand and Fifty Paise Only'],
+    [
+      1_234_567_890,
+      'Rupees One Crore Twenty-Three Lakh Forty-Five Thousand Six Hundred Seventy-Eight and Ninety Paise Only',
+    ],
+    [50, 'Rupees Zero and Fifty Paise Only'],
+  ])('amountInWords(%i)', (minor, words) => {
+    expect(amountInWords(minor)).toBe(words)
+  })
+})
+
+describe('exportPeriodRange', () => {
+  it('reads a month and a financial-year quarter as half-open IST ranges', () => {
+    const m = exportPeriodRange('2026-10')
+    expect(m?.from.toISOString()).toBe('2026-09-30T18:30:00.000Z')
+    expect(m?.to.toISOString()).toBe('2026-10-31T18:30:00.000Z')
+    expect(m?.label).toBe('2026-10')
+    const q = exportPeriodRange('2026-Q4')
+    expect(q?.from.toISOString()).toBe('2026-12-31T18:30:00.000Z')
+    expect(q?.to.toISOString()).toBe('2027-03-31T18:30:00.000Z')
+    expect(exportPeriodRange('2026-Q1')?.from.toISOString()).toBe('2026-03-31T18:30:00.000Z')
+    expect(exportPeriodRange('2026-12')?.to.toISOString()).toBe('2026-12-31T18:30:00.000Z')
+  })
+
+  it.each(['2026-13', '2026-00', '2026-Q5', '2026-Q0', '26-10', 'x', ''])('%s is null', (p) => {
+    expect(exportPeriodRange(p)).toBeNull()
+  })
+})
