@@ -273,6 +273,24 @@ describe('buildGstr1Csvs', () => {
     ])
   })
 
+  it('writes one b2cs.csv row per place of supply, in code order', () => {
+    const delhi = documentOf({
+      type: 'invoice',
+      number: 'INV/26-27/00006',
+      issuedAt: '2026-10-27T09:00:00.000Z',
+      totalMinor: 99_900,
+      buyerGstin: null,
+      buyerName: 'Delhi Co',
+      placeOfSupply: '07',
+    })
+
+    // Delhi (07) sorts before Karnataka (29) though it comes last.
+    expect(rowsOf(buildGstr1Csvs([...PERIOD, delhi])['b2cs.csv'])).toEqual([
+      'OE,07-Delhi,,18,846.61,0.00,',
+      'OE,29-Karnataka,,18,1269.49,0.00,',
+    ])
+  })
+
   it('writes a negative B2C summary unguarded when a period holds only a note', () => {
     expect(rowsOf(buildGstr1Csvs([B2C_NOTE])['b2cs.csv'])).toEqual([
       'OE,29-Karnataka,,18,-423.73,0.00,',

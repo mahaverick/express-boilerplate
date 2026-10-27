@@ -280,30 +280,50 @@ export function amountInWords(minor: number): string {
 }
 
 /**
+ * The first year an export period may start in: GST began in July 2017.
+ */
+const EXPORT_FIRST_YEAR = 2017
+
+/**
+ * The first year an export period may not start in: a zip's DOS date stops at 2099.
+ */
+const EXPORT_END_YEAR = 2100
+
+/**
  * Reads an export period ('YYYY-MM' or 'YYYY-Qn', n of the financial year that
- * starts in April of YYYY) as a half-open IST range, or null when malformed.
+ * starts in April of YYYY) as a half-open IST range, or null when malformed or
+ * when it starts outside 2017 to 2099 (before GST, or past what a zip can
+ * date). The years are checked as numbers before any `Date` is built, since
+ * `Date.UTC` reads years 0 to 99 as 1900 to 1999.
  */
 export function exportPeriodRange(period: string): { from: Date; to: Date; label: string } | null {
+  const start = exportPeriodStart(period)
+  if (start === null || start.year < EXPORT_FIRST_YEAR || start.year >= EXPORT_END_YEAR) {
+    return null
+  }
+  const endMonth = start.month + start.months
+  return {
+    from: istStartOf(start.year, start.month),
+    to: istStartOf(start.year + Math.floor((endMonth - 1) / 12), ((endMonth - 1) % 12) + 1),
+    label: period,
+  }
+}
+
+/**
+ * The calendar year and month an export period starts in, and how many months it spans.
+ * @param period - 'YYYY-MM' or 'YYYY-Qn'.
+ * @returns The start and length, or null when malformed.
+ */
+function exportPeriodStart(period: string): { year: number; month: number; months: number } | null {
   const month = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(period)
-  if (month) {
-    const year = Number(month[1])
-    const m = Number(month[2])
-    return {
-      from: istStartOf(year, m),
-      to: istStartOf(m === 12 ? year + 1 : year, (m % 12) + 1),
-      label: period,
-    }
-  }
+  if (month) return { year: Number(month[1]), month: Number(month[2]), months: 1 }
   const quarter = /^(\d{4})-Q([1-4])$/.exec(period)
-  if (quarter) {
-    const year = Number(quarter[1])
-    const startMonth = 4 + (Number(quarter[2]) - 1) * 3
-    const endMonth = startMonth + 3
-    return {
-      from: istStartOf(year + Math.floor((startMonth - 1) / 12), ((startMonth - 1) % 12) + 1),
-      to: istStartOf(year + Math.floor((endMonth - 1) / 12), ((endMonth - 1) % 12) + 1),
-      label: period,
-    }
+  if (!quarter) return null
+  // Q1 starts in April; Q4 is January to March of the next year.
+  const startMonth = 4 + (Number(quarter[2]) - 1) * 3
+  return {
+    year: Number(quarter[1]) + Math.floor((startMonth - 1) / 12),
+    month: ((startMonth - 1) % 12) + 1,
+    months: 3,
   }
-  return null
 }

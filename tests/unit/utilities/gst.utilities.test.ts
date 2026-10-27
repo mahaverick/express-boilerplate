@@ -256,6 +256,21 @@ describe('exportPeriodRange', () => {
   it.each(['2026-13', '2026-00', '2026-Q5', '2026-Q0', '26-10', 'x', ''])('%s is null', (p) => {
     expect(exportPeriodRange(p)).toBeNull()
   })
+
+  // GST began in 2017, and a zip's DOS date stops at 2099; years 0000–0099 would also read as 19xx.
+  it.each(['0000-01', '0099-Q1', '1979-12', '2016-12', '2016-Q3', '2099-Q4', '2100-01', '9999-Q1'])(
+    '%s, outside 2017 to 2099, is null',
+    (p) => {
+      expect(exportPeriodRange(p)).toBeNull()
+    }
+  )
+
+  it.each(['2017-01', '2016-Q4', '2099-12', '2099-Q3'])(
+    '%s, the edge of the range, is read',
+    (p) => {
+      expect(exportPeriodRange(p)?.label).toBe(p)
+    }
+  )
 })
 
 describe('taxStatusOf', () => {

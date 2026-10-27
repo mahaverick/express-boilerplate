@@ -210,17 +210,24 @@ describe('GET /platform/billing/tax-export', () => {
     }
   })
 
-  it.each(['2026-13', '2026-Q5', '26-10', '2026-10-01', ''])(
-    'refuses the period %j with a field error',
-    async (period) => {
-      const { token } = await createTrackedStaff('admin')
+  it.each([
+    '2026-13',
+    '2026-Q5',
+    '26-10',
+    '2026-10-01',
+    '',
+    '1979-12',
+    '2016-12',
+    '2100-01',
+    '2099-Q4',
+  ])('refuses the period %j with a field error', async (period) => {
+    const { token } = await createTrackedStaff('admin')
 
-      const response = await exportAs(token, period)
+    const response = await exportAs(token, period)
 
-      expect(response.status).toBe(400)
-      expect(jsonOf(response.body).errors).toEqual({ period: [PERIOD_MESSAGE] })
-    }
-  )
+    expect(response.status).toBe(400)
+    expect(jsonOf(response.body).errors).toEqual({ period: [PERIOD_MESSAGE] })
+  })
 
   it('refuses a missing period with the same field error', async () => {
     const { token } = await createTrackedStaff('admin')
@@ -327,6 +334,18 @@ describe('GET /platform/billing/tax-export', () => {
       code: 'tax_documents_disabled',
       message: EXPORT_DISABLED,
     })
+  })
+
+  it('records nothing for the registration-off 404', async () => {
+    gst.on = false
+    const { token } = await createTrackedStaff('admin')
+
+    const response = await exportAs(token, '2026-10')
+
+    expect(response.status).toBe(404)
+    const [row] = await sql<{ count: number }[]>`
+      select count(*)::int as count from audit_logs where action = 'billing.tax_export_downloaded'`
+    expect(row?.count).toBe(0)
   })
 
   it('keeps exporting while registration is off and documents exist', async () => {

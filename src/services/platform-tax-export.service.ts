@@ -11,6 +11,11 @@
  * formula guard keeps a buyer name such as `=HYPERLINK(…)` inert; amounts
  * are written by `rupees` and skip it, so a negative B2C summary stays a
  * number.
+ *
+ * Scale: the export loads the period's full document rows (snapshots
+ * included) and builds the CSVs and the zip in memory. That suits a quarter
+ * of a few thousand documents, a few megabytes. Far beyond that, select only
+ * the exported columns and stream the zip.
  */
 import { strToU8, zipSync, type Zippable } from 'fflate'
 import { gstSellerConfig } from '@/configs/billing.config'
