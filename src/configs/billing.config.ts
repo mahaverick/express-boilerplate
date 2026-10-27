@@ -156,3 +156,16 @@ export function gstSellerConfig(env: GstEnv = getEnv()): GstSellerConfig | null 
     creditNotePrefix: env.BILLING_CREDIT_NOTE_PREFIX,
   }
 }
+
+/**
+ * The configured first day tax documents cover, whether or not registration
+ * is on, so a server turned off with documents still bounds the export
+ * picker.
+ * @param env - The settings to read; defaults to the validated environment.
+ * @returns The `YYYY-MM-DD` date, or null when unset.
+ */
+export function gstEffectiveFromSetting(
+  env: Pick<Env, 'BILLING_GST_EFFECTIVE_FROM'> = getEnv()
+): string | null {
+  return env.BILLING_GST_EFFECTIVE_FROM ?? null
+}

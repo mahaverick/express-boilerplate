@@ -224,6 +224,21 @@ export class PlatformTaxRepository {
   }
 
   /**
+   * Whether a workspace has any held charge, open or resolved.
+   * @param tenantId - The workspace.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns True when at least one exists.
+   */
+  async hasHeld(tenantId: string, executor: DbExecutor = db): Promise<boolean> {
+    const [row] = await executor
+      .select({ id: taxHeldChargeModel.id })
+      .from(taxHeldChargeModel)
+      .where(eq(taxHeldChargeModel.tenantId, tenantId))
+      .limit(1)
+    return row !== undefined
+  }
+
+  /**
    * Whether any tax document exists on the platform, purged workspaces' too.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when at least one exists.

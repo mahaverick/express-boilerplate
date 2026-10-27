@@ -1,10 +1,14 @@
 /**
- * @file A workspace's tax details and tax documents as the owner and staff
- * routes answer them. Dates go out as `Date`s, which the JSON response
+ * @file A workspace's tax details, tax documents and held SEZ charges as the
+ * owner and staff routes answer them. Dates go out as `Date`s, which the JSON response
  * writes as ISO strings.
  */
 import type { GstState, TaxDocumentType } from '@/constants/gst.constants'
-import type { TaxDocumentRecord, TenantTaxDetailsRecord } from '@/database/models/tax.model'
+import type {
+  TaxDocumentRecord,
+  TaxHeldChargeRecord,
+  TenantTaxDetailsRecord,
+} from '@/database/models/tax.model'
 import type { TaxDocumentReferences } from '@/repositories/tax.repository'
 import type { TaxDocumentReference } from '@/types/tax'
 import { stateOf, type TaxAmounts } from '@/utilities/gst.utilities'
@@ -120,5 +124,102 @@ export function presentTaxDocument(
     reason: isInvoice ? null : document.reason,
     paymentId: document.paymentId,
     refundId: document.refundId,
+  }
+}
+
+/**
+ * A staff member or user as staff read them: their id and name (or email).
+ */
+interface PersonView {
+  userId: string
+  name: string
+}
+
+/**
+ * A workspace's tax details as staff read them, with who saved them last.
+ */
+export interface StaffTaxDetailsView extends TaxDetailsView {
+  /**
+   * Null when the account is no longer on record.
+   */
+  updatedBy: PersonView | null
+}
+
+/**
+ * A tax document on the staff list: the owner's view, whether staff issued
+ * it by hand, and who did.
+ */
+export interface StaffTaxDocumentItem extends TaxDocumentView {
+  /**
+   * A credit note staff issued by hand, with no refund behind it.
+   */
+  manual: boolean
+  /**
+   * Who issued a manual note; null for any other document or a purged account.
+   */
+  createdBy: PersonView | null
+}
+
+/**
+ * Present a stored tax document for staff.
+ * @param document - The row.
+ * @param references - The links `listRefsFor` read for the page it is on.
+ * @param createdBy - Who issued it by hand, if anyone still on record.
+ * @returns The view.
+ */
+export function presentStaffTaxDocument(
+  document: TaxDocumentRecord,
+  references: TaxDocumentReferences,
+  createdBy: PersonView | null
+): StaffTaxDocumentItem {
+  return {
+    ...presentTaxDocument(document, references),
+    manual: document.type === 'credit_note' && document.refundId === null,
+    createdBy,
+  }
+}
+
+/**
+ * An SEZ buyer's charge held for staff to invoice by hand, and its
+ * resolution.
+ */
+export interface TaxHeldChargeView {
+  id: string
+  paymentId: string
+  subscriptionId: string | null
+  amountMinor: number
+  paidAt: Date
+  heldAt: Date
+  resolvedAt: Date | null
+  /**
+   * Null while open, or when the account is no longer on record.
+   */
+  resolvedBy: PersonView | null
+  /**
+   * The staff member's note when they resolved it.
+   */
+  resolution: string | null
+}
+
+/**
+ * Present a held charge.
+ * @param charge - The row.
+ * @param resolvedBy - Who resolved it, if anyone still on record.
+ * @returns The view.
+ */
+export function presentHeldCharge(
+  charge: TaxHeldChargeRecord,
+  resolvedBy: PersonView | null
+): TaxHeldChargeView {
+  return {
+    id: charge.id,
+    paymentId: charge.paymentId,
+    subscriptionId: charge.subscriptionId,
+    amountMinor: charge.amountMinor,
+    paidAt: charge.paidAt,
+    heldAt: charge.heldAt,
+    resolvedAt: charge.resolvedAt,
+    resolvedBy,
+    resolution: charge.resolution,
   }
 }

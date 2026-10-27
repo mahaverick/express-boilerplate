@@ -37,6 +37,7 @@
  * the change; the past-due grace applies at once to every past-due tenant,
  * since its end is computed on each read.
  */
+import { gstEffectiveFromSetting, gstSellerConfig } from '@/configs/billing.config'
 import {
   BILLING_STATES,
   NO_SUBSCRIPTION_CODE,
@@ -98,6 +99,7 @@ import {
   type BillingSubscriptionListItem,
   type TenantBillingStateRow,
 } from '@/repositories/platform-billing.repository'
+import { PlatformTaxRepository } from '@/repositories/platform-tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
@@ -156,6 +158,7 @@ import type {
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
 const platformBillingRepository = new PlatformBillingRepository()
+const platformTaxRepository = new PlatformTaxRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 
@@ -171,7 +174,7 @@ const OTHER_PROVIDER_STAFF_MESSAGE =
  * @returns The tenant.
  * @throws {HttpError} 404 `tenant_not_found` for an unknown tenant; 404 `tenant_billing_not_found` for the platform tenant.
  */
-async function customerTenant(tenantId: string): Promise<Tenant> {
+export async function customerTenant(tenantId: string): Promise<Tenant> {
   const tenant = await tenantRepository.findByIdIncludingDeleted(tenantId)
   if (tenant === undefined) throw notFoundError('platformTenant')
   if (tenant.isPlatform) throw notFoundError('tenantBilling')
@@ -246,6 +249,7 @@ async function staffView(tenantId: string): Promise<StaffTenantBillingView> {
     ),
     history: history.map((entry) => toHistoryView(entry)),
     events: events.map((event) => toEventView(event)),
+    openHeldCharges: await platformTaxRepository.countOpenHeld(tenantId),
   }
 }
 
@@ -276,7 +280,7 @@ export async function getStaffTenantBilling(
  * @param actor - The staff member.
  * @param tenantId - The tenant.
  */
-async function auditBillingView(actor: Actor, tenantId: string): Promise<void> {
+export async function auditBillingView(actor: Actor, tenantId: string): Promise<void> {
   await auditThrottledView({
     key: redisKey(
       'billing',
@@ -1265,6 +1269,9 @@ async function settingsView(settings: BillingSettingsRecord): Promise<BillingSet
     version: settings.version,
     updatedAt: settings.updatedAt,
     updatedBy: editor === undefined ? null : { userId: editor.id, name: nameOrEmail(editor) },
+    taxDocumentsEnabled: gstSellerConfig() !== null,
+    hasTaxDocuments: await platformTaxRepository.hasAnyDocuments(),
+    gstEffectiveFrom: gstEffectiveFromSetting(),
   }
 }
 

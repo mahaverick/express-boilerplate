@@ -357,7 +357,7 @@ export async function planTaxDocuments(
  * @param dedupeText - The id or text a repeat would name too.
  * @param message - The message.
  */
-async function alertOnce(
+export async function alertOnce(
   tenantId: string,
   kind: BillingAlertKind,
   dedupeText: string,

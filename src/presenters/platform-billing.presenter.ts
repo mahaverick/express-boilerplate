@@ -75,6 +75,10 @@ export interface StaffTenantBillingView extends TenantBillingView {
     at: Date
   }[]
   events: { type: string; receivedAt: Date; processedAt: Date | null; error: string | null }[]
+  /**
+   * The workspace's unresolved held SEZ charges, for the "Held: SEZ" badge.
+   */
+  openHeldCharges: number
 }
 
 /**
@@ -230,6 +234,19 @@ export interface BillingSettingsView {
    * The name falls back to their email when they have none.
    */
   updatedBy: { userId: string; name: string } | null
+  /**
+   * GST registration is on.
+   */
+  taxDocumentsEnabled: boolean
+  /**
+   * At least one tax document exists on the platform, purged workspaces' included.
+   */
+  hasTaxDocuments: boolean
+  /**
+   * The configured first day tax documents cover (`YYYY-MM-DD`), whether or
+   * not registration is on; null when unset.
+   */
+  gstEffectiveFrom: string | null
 }
 
 /**

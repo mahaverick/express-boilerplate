@@ -3,11 +3,13 @@
  * across its fields. A PATCH sends only the fields that changed plus the
  * `version` it read; each sent field is checked here on its own, and the
  * cross-field rules run in the service on the stored row with the sent
- * fields applied (`taxDetailsRuleIssues`). Also the owner's tax documents
- * list query.
+ * fields applied (`taxDetailsRuleIssues`). Also the owner's and staff's
+ * tax documents list queries, the staff held-charge list query and the
+ * staff manual credit note body.
  */
 import { z } from 'zod'
 import {
+  CREDIT_NOTE_AMOUNT_MESSAGE,
   GSTIN_CHECKSUM_MESSAGE,
   GSTIN_SHAPE_MESSAGE,
   GSTIN_STATE_MESSAGE,
@@ -279,3 +281,73 @@ export const taxDocumentListSchema = z.preprocess(
  * A parsed owner tax documents list query.
  */
 export type TaxDocumentListQuery = z.output<typeof taxDocumentListSchema>
+
+/**
+ * `GET /platform/tenants/:id/billing/tax-documents` query: the shared list
+ * params with `search` (part of the number) and `total`, newest issued first
+ * by default, and `type` picking invoices or credit notes.
+ */
+export const staffTaxDocumentListSchema = listParamsSchema({
+  sorts: ['-issued', 'issued'],
+  defaultSort: '-issued',
+  filters: { type: listFilter('type', TAX_DOCUMENT_TYPES).optional() },
+})
+
+/**
+ * A parsed staff tax documents list query.
+ */
+export type StaffTaxDocumentListQuery = z.output<typeof staffTaxDocumentListSchema>
+
+/**
+ * Whether a held charge is waiting for staff or already resolved.
+ */
+const HELD_CHARGE_STATUSES = ['open', 'resolved'] as const
+
+/**
+ * `GET /platform/tenants/:id/billing/tax-held-charges` query: newest held
+ * first, the only sort, and `status` picking open or resolved charges (both
+ * by default). The list has no search, so a sent `search` is dropped before
+ * parsing and changes neither the page nor the cursor scope.
+ */
+export const heldChargeListSchema = z.preprocess(
+  (query) => {
+    if (typeof query !== 'object' || query === null) return query
+    const { search: _search, ...rest } = query as Record<string, unknown>
+    return rest
+  },
+  listParamsSchema({
+    sorts: ['-heldAt'],
+    defaultSort: '-heldAt',
+    filters: { status: listFilter('status', HELD_CHARGE_STATUSES).optional() },
+  })
+)
+
+/**
+ * A parsed held-charge list query.
+ */
+export type HeldChargeListQuery = z.output<typeof heldChargeListSchema>
+
+/**
+ * The largest manual credit note, in paise: the largest price staff can set,
+ * so no invoice is larger.
+ */
+const MAX_CREDIT_NOTE_MINOR = 10_000_000
+
+/**
+ * `POST /platform/tenants/:id/billing/tax-documents/:docId/credit-notes`:
+ * the amount in paise, ₹1 at least, and why. Whether it fits what is left on
+ * the invoice is checked under the invoice's lock.
+ */
+export const manualCreditNoteBodySchema = z.strictObject({
+  amountMinor: z
+    .number({ error: CREDIT_NOTE_AMOUNT_MESSAGE })
+    .int(CREDIT_NOTE_AMOUNT_MESSAGE)
+    .min(100, CREDIT_NOTE_AMOUNT_MESSAGE)
+    .max(MAX_CREDIT_NOTE_MINOR, CREDIT_NOTE_AMOUNT_MESSAGE),
+  reason: reasonSchema,
+})
+
+/**
+ * A validated manual credit note body.
+ */
+export type ManualCreditNoteBody = z.output<typeof manualCreditNoteBodySchema>

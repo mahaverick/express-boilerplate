@@ -103,6 +103,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'billing.tax_details_updated': { changedFields: ['gstin', 'city'] },
   'billing.tax_document_issued': { type: 'invoice' },
   'billing.credit_note_issued_by_staff': { invoiceId: 'doc-1', reason: 'Goodwill credit' },
+  'billing.held_charge_resolved': { heldChargeId: 'held-1', reason: 'Issued by hand' },
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
   'platform.maintenance_mode_changed': {
     from: 'off',
@@ -133,6 +134,7 @@ describe('AUDIT_ACTIONS', () => {
       'billing.grant_added',
       'billing.grant_expired',
       'billing.grant_revoked',
+      'billing.held_charge_resolved',
       'billing.interval_switch_scheduled',
       'billing.resynced',
       'billing.settings_updated',

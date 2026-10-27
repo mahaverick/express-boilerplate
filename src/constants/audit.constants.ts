@@ -341,6 +341,11 @@ export const AUDIT_ACTIONS = {
     target: 'tax_document',
     metadata: z.strictObject({ invoiceId: id, reason }),
   },
+  // Staff recorded that they issued a held SEZ charge's invoice by hand; nothing is issued.
+  'billing.held_charge_resolved': {
+    target: 'billing',
+    metadata: z.strictObject({ heldChargeId: id, reason }),
+  },
   // Staff edited a plan's name, description or entitlements; `affected` counts the tenants on it by stored state.
   'plan.updated': {
     target: 'plan',

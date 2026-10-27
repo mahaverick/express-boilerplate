@@ -763,6 +763,16 @@ their role there is their platform role (`src/services/platform.service.ts`).
   `409 PLAN_VERSION_CONFLICT` when someone saved first. A plan edit reaches
   every tenant on the plan at once; a new price never moves a subscriber off
   the price it pays.
+  A tenant's tax records follow the same gates
+  (`…/billing/tax-details`, `tax-documents`, `tax-held-charges`): a viewer
+  reads the tax details, the documents with their PDFs and the held SEZ
+  charges, inside the same audit window; a manager saves the tax details
+  under the owner's rules, with a reason; an admin issues a manual credit
+  note (for a lost dispute) and marks a held charge resolved. The credit note
+  re-checks the admin role in the transaction that locks the billing row,
+  the invoice and the number counter, so a role lowered mid-request writes
+  nothing. A held charge's resolve records the staff member's note and issues
+  nothing.
 - **Staff writes leave a log line.** Each successful `/platform` write the role
   gate admitted logs one `Staff write` line: method, path, status, actor id and
   the target named in the path, never the body, so never a reason or an
@@ -785,7 +795,8 @@ Step-up guards:
 - on `/platform`: deactivating, deleting and purging a user; suspending,
   archiving and purging a tenant; re-inviting a tenant's owner; changing the
   maintenance mode; every write to a tenant's billing (resync, trial
-  extension, a grant and its revocation, the staff cancel); a plan edit, a
+  extension, a grant and its revocation, the staff cancel, a tax details
+  save, a manual credit note, a held charge's resolve); a plan edit, a
   new price and a billing settings change (a plan preview writes nothing and
   needs none); and an email
   resend of an invitation, which the service checks because the route cannot

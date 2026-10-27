@@ -369,6 +369,75 @@ export const TAX_DETAILS_SAVED_MESSAGE =
   'Tax details saved. They apply to invoices issued from now on.'
 
 /**
+ * What staff read after saving a workspace's tax details.
+ * @param workspaceName - The workspace's name.
+ * @returns The message.
+ */
+export function staffTaxDetailsSavedMessage(workspaceName: string): string {
+  return `Tax details for ${workspaceName} saved. They apply to invoices issued from now on.`
+}
+
+/**
+ * Error code: a manual credit note named a credit note, not an invoice.
+ */
+export const NOT_AN_INVOICE_CODE = 'NOT_AN_INVOICE'
+
+/**
+ * What a manual credit note against a credit note reads.
+ */
+export const NOT_AN_INVOICE_MESSAGE = 'Credit notes reduce invoices only. Pick the invoice instead.'
+
+/**
+ * Error code: a manual credit note is more than what is left to credit on its
+ * invoice; `details.remainingMinor` says what is left.
+ */
+export const CREDIT_EXCEEDS_INVOICE_CODE = 'CREDIT_EXCEEDS_INVOICE'
+
+/**
+ * What a manual credit note larger than what is left reads.
+ * @param remaining - What is left to credit, in rupees as `formatRupees` writes them.
+ * @returns The message.
+ */
+export function creditExceedsInvoiceMessage(remaining: string): string {
+  return `This invoice has ₹${remaining} left to credit. Enter ₹${remaining} or less.`
+}
+
+/**
+ * What staff read after issuing a credit note by hand.
+ * @param number - The note's number.
+ * @param amount - Its amount, in rupees as `formatRupees` writes them.
+ * @returns The message.
+ */
+export function creditNoteIssuedMessage(number: string, amount: string): string {
+  return `Credit note ${number} issued for ₹${amount}.`
+}
+
+/**
+ * What a manual credit note amount outside the range reads.
+ */
+export const CREDIT_NOTE_AMOUNT_MESSAGE =
+  'Enter the credit in paise as a whole number from 100 (₹1) to 1,00,00,000 (₹1,00,000).'
+
+/**
+ * Error code: a held charge staff tried to resolve is already resolved.
+ */
+export const HELD_CHARGE_RESOLVED_CODE = 'HELD_CHARGE_RESOLVED'
+
+/**
+ * What resolving an already resolved held charge reads.
+ * @param date - The day it was resolved, as a person reads it.
+ * @returns The message.
+ */
+export function heldChargeResolvedMessage(date: string): string {
+  return `This held charge was resolved on ${date}. Nothing changed.`
+}
+
+/**
+ * What staff read after marking a held charge resolved.
+ */
+export const HELD_CHARGE_MARKED_RESOLVED_MESSAGE = 'Held charge marked resolved.'
+
+/**
  * Tax details: the legal name is missing on the first save, or sent blank.
  */
 export const TAX_LEGAL_NAME_REQUIRED_MESSAGE = 'Enter the legal name to print on your tax invoices.'

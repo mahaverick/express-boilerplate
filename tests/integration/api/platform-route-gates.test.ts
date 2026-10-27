@@ -21,10 +21,11 @@ import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { NOT_FOUND } from '@/errors/not-found-errors'
+import { TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { createPlatformRouter } from '@/routes/platform.routes'
-import { sql } from '@/services/database.service'
+import { sql, withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -36,6 +37,16 @@ import {
 } from '../../helpers/email-messages'
 import { makeStaff } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
+import { resetTaxDocuments, taxDocumentRow } from '../../helpers/tax'
+
+// Registration on, so an admitted tax route reaches its handler rather than the registration-off 404.
+vi.mock('@/configs/billing.config', async (importOriginal) => {
+  const { FIXTURE_SELLER } = await import('../../helpers/tax-seller')
+  return {
+    ...(await importOriginal<typeof import('@/configs/billing.config')>()),
+    gstSellerConfig: () => FIXTURE_SELLER,
+  }
+})
 
 // Apex has no experiment flag, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
 vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
@@ -281,6 +292,55 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: true,
     target: 'tenant',
   },
+  {
+    method: 'get',
+    path: '/tenants/:id/billing/tax-details',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  {
+    method: 'patch',
+    path: '/tenants/:id/billing/tax-details',
+    minRole: 'manager',
+    requiresStepUp: true,
+    target: 'tenant',
+  },
+  {
+    method: 'get',
+    path: '/tenants/:id/billing/tax-documents',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  {
+    method: 'get',
+    path: '/tenants/:id/billing/tax-documents/:docId/pdf',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  {
+    method: 'post',
+    path: '/tenants/:id/billing/tax-documents/:docId/credit-notes',
+    minRole: 'admin',
+    requiresStepUp: true,
+    target: 'tenant',
+  },
+  {
+    method: 'get',
+    path: '/tenants/:id/billing/tax-held-charges',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  {
+    method: 'post',
+    path: '/tenants/:id/billing/tax-held-charges/:heldId/resolve',
+    minRole: 'admin',
+    requiresStepUp: true,
+    target: 'tenant',
+  },
   { method: 'get', path: '/plans', minRole: 'viewer', requiresStepUp: false },
   // A preview writes nothing and takes no reason, so it needs no step-up.
   {
@@ -343,6 +403,7 @@ const app = createApp()
 
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
+const taxRepository = new TaxRepository()
 
 /**
  * The mount points of the platform router's sub-routers. A sub-router mounted
@@ -444,7 +505,16 @@ describe('the platform route walker', () => {
 describe('/api/v1/platform route gates', () => {
   const userIds: string[] = []
   const tenantIds: string[] = []
-  const ids = { user: '', tenant: '', email: '', suppression: '', grant: '', plan: '' }
+  const ids = {
+    user: '',
+    tenant: '',
+    email: '',
+    suppression: '',
+    grant: '',
+    plan: '',
+    document: '',
+    held: '',
+  }
 
   /**
    * A fresh verified user with a token for a sign-in at `authenticatedAt`, tracked for cleanup.
@@ -474,14 +544,16 @@ describe('/api/v1/platform route gates', () => {
   }
 
   /**
-   * A row's request path, with `:id` and `:key` filled in.
+   * A row's request path, with `:id`, `:key` and the nested ids filled in.
    */
   function pathOf(row: GateRow): string {
     const id = row.target ? ids[row.target] : ''
     return `/api/v1/platform${row.path
       .replace(':id', () => id)
       .replace(':key', () => STEP_KEY)
-      .replace(':grantId', () => ids.grant)}`
+      .replace(':grantId', () => ids.grant)
+      .replace(':docId', () => ids.document)
+      .replace(':heldId', () => ids.held)}`
   }
 
   /**
@@ -516,6 +588,26 @@ describe('/api/v1/platform route gates', () => {
     const [plan] = await sql<{ id: string }[]>`select id from plans where key = 'free'`
     if (!plan) throw new Error('setup: the billing migration seeds the free plan')
     ids.plan = plan.id
+    // A real document and held charge of the tenant, so the PDF answers 200 and the resolve reaches its body check.
+    const document = await withTransaction((tx) =>
+      taxRepository.insertDocument(taxDocumentRow(tenant.id), tx)
+    )
+    ids.document = document.id
+    const held = await withTransaction((tx) =>
+      taxRepository.insertHeld(
+        {
+          tenantId: tenant.id,
+          provider: 'fake',
+          providerMode: 'test',
+          paymentId: `pay_${randomUUID().slice(0, 12)}`,
+          amountMinor: 99_900,
+          paidAt: new Date(),
+        },
+        tx
+      )
+    )
+    if (!held) throw new Error('setup: the held charge was not stored')
+    ids.held = held.id
     // A security notice: its detail and preview answer 200, and a resend never reaches a delegate.
     const message = await createTrackedMessage({
       templateKey: 'password_changed',
@@ -528,6 +620,7 @@ describe('/api/v1/platform route gates', () => {
 
   afterAll(async () => {
     await deleteTrackedEmailRows()
+    await resetTaxDocuments()
     await truncateAuditLogs()
     await sql`delete from tenants where id = any(${tenantIds})`
     await sql`delete from users where id = any(${userIds})`

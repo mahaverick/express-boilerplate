@@ -3,7 +3,11 @@
  * case here is a crafted env, never the memoised getEnv().
  */
 import { describe, expect, it } from 'vite-plus/test'
-import { billingProviderConfig, isGstRegistered } from '@/configs/billing.config'
+import {
+  billingProviderConfig,
+  gstEffectiveFromSetting,
+  isGstRegistered,
+} from '@/configs/billing.config'
 import { parseEnv } from '@/configs/env.config'
 
 const base: Record<string, string> = {
@@ -81,5 +85,14 @@ describe('isGstRegistered', () => {
   it('defaults to false and reads BILLING_GST_REGISTERED', () => {
     expect(isGstRegistered(env({}))).toBe(false)
     expect(isGstRegistered(env({ BILLING_GST_REGISTERED: 'true' }))).toBe(true)
+  })
+})
+
+describe('gstEffectiveFromSetting', () => {
+  it('reads the date whether or not registration is on, and null when unset', () => {
+    expect(gstEffectiveFromSetting(env({ BILLING_GST_EFFECTIVE_FROM: '2026-04-01' }))).toBe(
+      '2026-04-01'
+    )
+    expect(gstEffectiveFromSetting(env({}))).toBeNull()
   })
 })

@@ -690,6 +690,10 @@ describe('/api/v1/platform/billing-settings', () => {
       version,
       updatedAt: ANY_STRING,
       updatedBy: null,
+      // The test env leaves registration off and its date unset.
+      taxDocumentsEnabled: false,
+      hasTaxDocuments: false,
+      gstEffectiveFrom: null,
     })
   })
 
