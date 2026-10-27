@@ -15,6 +15,7 @@ import {
 import { taxDocumentModel } from '@/database/models/tax.model'
 import type { User } from '@/database/models/user.model'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { saveTaxDetails } from '@/services/billing/tax-details.service'
 import { db, sql } from '@/services/database.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { clearOutbox, outboxRowsOf } from '../../helpers/analytics-outbox'
@@ -459,6 +460,59 @@ describe('PATCH /api/v1/tenants/:slug/billing/tax-details', () => {
       expect(response.status).toBe(403)
       expect(response.body).toMatchObject({ message: TAX_DETAILS_OWNER_ONLY_MESSAGE })
     }
+  })
+})
+
+describe('saveTaxDetails for staff', () => {
+  it('records the reason with the changed fields', async () => {
+    const { tenant } = await savedWorkspace()
+    const { user: staff } = await createTrackedStaff('manager')
+
+    const saved = await saveTaxDetails(
+      { userId: staff.id },
+      tenant.id,
+      { version: 1, city: 'Mysuru' },
+      { access: 'platform', reason: 'Customer asked' }
+    )
+
+    const audit = await detailsAudit(tenant.id)
+
+    expect(saved).toMatchObject({ city: 'Mysuru', version: 2 })
+    expect(audit.at(-1)).toEqual({
+      access: 'platform',
+      metadata: { changedFields: ['city'], reason: 'Customer asked' },
+    })
+  })
+
+  it('refuses staff below manager with the unknown-route 404, writing nothing', async () => {
+    const { tenant } = await savedWorkspace()
+    const { user: staff } = await createTrackedStaff('editor')
+
+    await expect(
+      saveTaxDetails(
+        { userId: staff.id },
+        tenant.id,
+        { version: 1, city: 'Mysuru' },
+        { access: 'platform', reason: 'Customer asked' }
+      )
+    ).rejects.toMatchObject({ statusCode: 404, code: 'not_found' })
+    const rows = await sql<{ city: string; version: number }[]>`
+      select city, version from tenant_tax_details where tenant_id = ${tenant.id}`
+    expect(rows).toEqual([{ city: 'Bengaluru', version: 1 }])
+  })
+
+  it('refuses a staff save with no reason', async () => {
+    const { tenant } = await savedWorkspace()
+    const { user: staff } = await createTrackedStaff('manager')
+
+    await expect(
+      saveTaxDetails(
+        { userId: staff.id },
+        tenant.id,
+        { version: 1, city: 'Mysuru' },
+        { access: 'platform', reason: null }
+      )
+    ).rejects.toThrow('A staff tax details save needs a reason.')
   })
 })
 
