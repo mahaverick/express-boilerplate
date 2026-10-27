@@ -127,6 +127,33 @@ function paidFrom(row: TenantBillingRecord): TenantBillingRecord {
 }
 
 /**
+ * The row as a provider-held one: the fake provider in test mode.
+ * @param row - The row.
+ * @returns The row with its provider set.
+ */
+function onFake(row: TenantBillingRecord): TenantBillingRecord {
+  return { ...row, provider: 'fake', providerMode: 'test' }
+}
+
+/**
+ * Record, as the billing repository does, that a subscription became a
+ * workspace's current one and, when the row moved from another state, the
+ * move to active that came with it.
+ * @param row - The row that holds the subscription.
+ * @param options - When the subscription was first seen and the state it left, if any.
+ * @param options.from - The state the row left in that write, or null when it stayed active.
+ * @param options.seenAt - When the subscription became current.
+ */
+async function recordStart(
+  row: TenantBillingRecord,
+  options: { from: string | null; seenAt: string }
+): Promise<void> {
+  await sql`insert into tenant_billing_subscriptions (tenant_id, provider, mode, subscription_id, first_seen_at) values (${row.tenantId}, ${row.provider ?? 'fake'}, ${row.providerMode ?? 'test'}, ${row.providerSubscriptionId ?? ''}, ${options.seenAt})`
+  if (options.from === null) return
+  await sql`insert into billing_state_history (tenant_id, from_state, to_state, cause, source, at) values (${row.tenantId}, ${options.from}, 'active', 'upgraded', 'webhook', ${options.seenAt}::timestamptz + interval '1 second')`
+}
+
+/**
  * One workspace's mail of one template, by recipient.
  * @param tenantId - The workspace.
  * @param templateKey - The template.
@@ -265,26 +292,68 @@ describe('billing emails', () => {
   it('welcomes once when the period end arrives in a later sync than the activation', async () => {
     const { tenantId, row } = await team()
     const warn = vi.spyOn(logger, 'warn')
-    const early = { ...paidFrom(row), currentPeriodEnd: null }
-    const full = { ...early, currentPeriodEnd: PERIOD_END, version: early.version + 1 }
+    try {
+      const early = { ...onFake(paidFrom(row)), currentPeriodEnd: null }
+      const full = { ...early, currentPeriodEnd: PERIOD_END, version: early.version + 1 }
+      // The first sync made the subscription current and the row active, as the repository records it.
+      await recordStart(early, { from: 'free', seenAt: '2026-10-01T10:00:00Z' })
 
-    await emitBillingDiff(row, early, 'webhook')
-    expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(0)
+      await emitBillingDiff(row, early, 'webhook')
+      expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(0)
 
-    await emitBillingDiff(early, full, 'webhook')
-    await emitBillingDiff(early, full, 'reconcile')
+      await emitBillingDiff(early, full, 'webhook')
+      await emitBillingDiff(early, full, 'reconcile')
 
-    const mails = await mailsOf(tenantId, 'paid_welcome')
-    expect(mails).toHaveLength(3)
-    expect(new Set(mails.map((mail) => mail.recipient)).size).toBe(3)
-    for (const mail of mails) {
-      expect(mail.variables).toMatchObject({ nextChargeOn: '1 November 2026' })
+      const mails = await mailsOf(tenantId, 'paid_welcome')
+      expect(mails).toHaveLength(3)
+      expect(new Set(mails.map((mail) => mail.recipient)).size).toBe(3)
+      for (const mail of mails) {
+        expect(mail.variables).toMatchObject({ nextChargeOn: '1 November 2026' })
+      }
+      expect(warn).not.toHaveBeenCalledWith(
+        'A billing email had no date or price to send with',
+        expect.anything()
+      )
+    } finally {
+      warn.mockRestore()
     }
-    expect(warn).not.toHaveBeenCalledWith(
-      'A billing email had no date or price to send with',
-      expect.anything()
-    )
-    warn.mockRestore()
+  })
+
+  it('sends no welcome for a resubscribe in the cancel buffer, whichever webhook comes first', async () => {
+    const { tenantId, row } = await team()
+    const warn = vi.spyOn(logger, 'warn')
+    try {
+      // The row went active long ago and stayed active; the new subscription took over later.
+      const cancelling = {
+        ...paidFrom(row),
+        providerSubscriptionId: 'sub_FAKEold',
+        cancelAtPeriodEnd: true,
+      }
+      const early = {
+        ...cancelling,
+        providerSubscriptionId: 'sub_FAKEnew',
+        cancelAtPeriodEnd: false,
+        currentPeriodEnd: null,
+        version: cancelling.version + 1,
+      }
+      const full = { ...early, currentPeriodEnd: PERIOD_END, version: early.version + 1 }
+      await recordStart(cancelling, { from: 'free', seenAt: '2026-09-01T10:00:00Z' })
+      await recordStart(early, { from: null, seenAt: '2026-10-01T10:00:00Z' })
+
+      // The invoice first: the takeover leaves the end empty, the activation fills it.
+      await emitBillingDiff(cancelling, early, 'webhook')
+      await emitBillingDiff(early, full, 'webhook')
+      // The activation first: the takeover already knows the end.
+      await emitBillingDiff(cancelling, full, 'reconcile')
+
+      expect(await mailsOf(tenantId, 'paid_welcome')).toHaveLength(0)
+      expect(warn).not.toHaveBeenCalledWith(
+        'A billing email had no date or price to send with',
+        expect.anything()
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('sends nothing for a write that repeats the same state', async () => {

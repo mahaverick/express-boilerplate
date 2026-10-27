@@ -357,6 +357,46 @@ export class BillingRepository {
   }
 
   /**
+   * Whether a workspace moved to Paid from another state at or after the
+   * moment a subscription became its current one: the move that made that
+   * subscription current also made the row active, so its first payment is
+   * a new start, not a resubscribe during a cancel buffer that left the row
+   * active throughout.
+   * @param tenantId - The workspace.
+   * @param scope - The provider and mode the subscription belongs to.
+   * @param subscriptionId - The subscription.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns True when such a move is on record.
+   */
+  async wasActivatedWithSubscription(
+    tenantId: string,
+    scope: ProviderScope,
+    subscriptionId: string,
+    executor: DbExecutor = db
+  ): Promise<boolean> {
+    const [found] = await executor
+      .select({ id: billingStateHistoryModel.id })
+      .from(billingStateHistoryModel)
+      .innerJoin(
+        tenantBillingSubscriptionModel,
+        eq(tenantBillingSubscriptionModel.tenantId, billingStateHistoryModel.tenantId)
+      )
+      .where(
+        and(
+          eq(billingStateHistoryModel.tenantId, tenantId),
+          eq(billingStateHistoryModel.toState, 'active'),
+          sql`${billingStateHistoryModel.fromState} is distinct from 'active'`,
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId),
+          sql`${billingStateHistoryModel.at} >= ${tenantBillingSubscriptionModel.firstSeenAt}`
+        )
+      )
+      .limit(1)
+    return found !== undefined
+  }
+
+  /**
    * Find the record that holds a provider subscription as its current,
    * pending or next subscription.
    * @param subscriptionId - The provider's subscription id.
