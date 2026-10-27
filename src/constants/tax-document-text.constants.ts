@@ -18,13 +18,13 @@ export const CREDIT_NOTE_TITLE = 'Credit Note'
 /**
  * The reverse-charge line every document prints: the seller pays the tax.
  */
-export const REVERSE_CHARGE_LINE = 'Reverse charge: No'
+export const REVERSE_CHARGE_SENTENCE = 'Reverse charge: No'
 
 /**
  * The line a credit note prints when it was issued after the s.34(2)
  * deadline, so it gives the buyer no tax reduction.
  */
-export const NO_TAX_REDUCTION_LINE = 'No tax reduction (s.34(2))'
+export const NO_TAX_REDUCTION_SENTENCE = 'No tax reduction (s.34(2))'
 
 /**
  * The last line of every document: it needs no signature.

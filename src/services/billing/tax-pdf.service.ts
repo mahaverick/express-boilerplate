@@ -11,8 +11,8 @@ import type { GstState } from '@/constants/gst.constants'
 import {
   COMPUTER_GENERATED_SENTENCE,
   CREDIT_NOTE_TITLE,
-  NO_TAX_REDUCTION_LINE,
-  REVERSE_CHARGE_LINE,
+  NO_TAX_REDUCTION_SENTENCE,
+  REVERSE_CHARGE_SENTENCE,
   TAX_DOCUMENT_PDF_PRODUCER,
   TAX_INVOICE_TITLE,
 } from '@/constants/tax-document-text.constants'
@@ -187,7 +187,7 @@ export function taxDocumentLines(document: TaxDocumentRecord): TaxDocumentLines 
       {
         heading: null,
         lines: [
-          REVERSE_CHARGE_LINE,
+          REVERSE_CHARGE_SENTENCE,
           ...(snapshot.reference.paymentId === null
             ? []
             : [`Payment reference: ${snapshot.reference.paymentId}`]),
@@ -195,7 +195,7 @@ export function taxDocumentLines(document: TaxDocumentRecord): TaxDocumentLines 
             ? []
             : [`Refund reference: ${snapshot.reference.refundId}`]),
           ...(isCreditNote && snapshot.reason !== null ? [`Reason: ${snapshot.reason}`] : []),
-          ...(document.noTaxReduction ? [NO_TAX_REDUCTION_LINE] : []),
+          ...(document.noTaxReduction ? [NO_TAX_REDUCTION_SENTENCE] : []),
           COMPUTER_GENERATED_SENTENCE,
         ],
       },
