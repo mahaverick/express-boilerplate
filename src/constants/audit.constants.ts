@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import { BILLING_INTERVALS, MAX_TRIAL_DAYS, STAFF_CANCEL_WHEN } from '@/constants/billing.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
+import { TAX_DOCUMENT_TYPES } from '@/constants/gst.constants'
 import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
   ONBOARDING_STEP_KEY_MAX_LENGTH,
@@ -321,6 +322,16 @@ export const AUDIT_ACTIONS = {
   'billing.cancelled_by_staff': {
     target: 'billing',
     metadata: z.strictObject({ when: z.enum(STAFF_CANCEL_WHEN), reason }),
+  },
+  // The tax job issued an invoice or a credit note for a refund; the actor is the system.
+  'billing.tax_document_issued': {
+    target: 'tax_document',
+    metadata: z.strictObject({ type: z.enum(TAX_DOCUMENT_TYPES) }),
+  },
+  // Staff issued a credit note by hand against an invoice; the target is the new note.
+  'billing.credit_note_issued_by_staff': {
+    target: 'tax_document',
+    metadata: z.strictObject({ invoiceId: id, reason }),
   },
   // Staff edited a plan's name, description or entitlements; `affected` counts the tenants on it by stored state.
   'plan.updated': {

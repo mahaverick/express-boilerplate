@@ -606,6 +606,10 @@ const CANDIDATES: readonly unknown[] = [
   '2026-11-02T10:00:00.000Z',
   'react',
   'apex',
+  // A tax document's type and a document id.
+  'invoice',
+  'credit_note',
+  '0192f6a4-3c1e-7b2a-9d4e-5f6a7b8c9d0e',
   true,
   false,
   0,

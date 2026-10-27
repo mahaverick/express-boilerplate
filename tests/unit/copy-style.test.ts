@@ -649,7 +649,31 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
   disputeOpen: BILLING_ALERT_TEXT.disputeOpen('pay_P1'),
   webhookFailed: BILLING_ALERT_TEXT.webhookFailed('evt_E1', 'subscription.charged'),
   stillRetrying: BILLING_ALERT_TEXT.stillRetrying('Razorpay event evt_E1 (subscription.charged)'),
+  taxHeldSez: BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900),
+  taxIssueFailed: BILLING_ALERT_TEXT.taxIssueFailed('tenant-1', '2026-10-27'),
+  taxRefundOverCredit: BILLING_ALERT_TEXT.taxRefundOverCredit(
+    'rfnd_R1',
+    50_000,
+    20_000,
+    'INV/26-27/00001'
+  ),
+  taxInvoiceLate: BILLING_ALERT_TEXT.taxInvoiceLate(3, 'INV/26-27/00001', 'INV/26-27/00003'),
+  taxCreditNoteLate: BILLING_ALERT_TEXT.taxCreditNoteLate(
+    'CN/27-28/00001',
+    'INV/26-27/00001',
+    2027
+  ),
 }
+
+/**
+ * Alert wordings a key renders only for some arguments, checked beside `ALERTS`.
+ */
+const ALERT_VARIANTS: ReadonlyArray<[string, string]> = [
+  [
+    'taxInvoiceLate (one)',
+    BILLING_ALERT_TEXT.taxInvoiceLate(1, 'INV/26-27/00001', 'INV/26-27/00001'),
+  ],
+]
 
 /**
  * What breaks the rules in one piece of copy.
@@ -721,7 +745,10 @@ describe('user-facing copy', () => {
   })
 
   it('breaks no copy rule in any staff billing alert', () => {
-    const copy = Object.entries(ALERTS).map(([key, text]) => ({ where: `alert ${key}`, text }))
+    const copy = [...Object.entries(ALERTS), ...ALERT_VARIANTS].map(([key, text]) => ({
+      where: `alert ${key}`,
+      text,
+    }))
     expect(offenders(copy)).toEqual([])
   })
 })

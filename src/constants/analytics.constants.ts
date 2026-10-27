@@ -15,13 +15,16 @@ export const POSTHOG_SESSION_ID_PATTERN =
 /**
  * Audit actions whose mechanical event name (`.` to `_`) would mislead, and
  * the name each is sent under instead. A staff-forced sign-out must not
- * share a name with a user signing themselves out (`user_signed_out`).
+ * share a name with a user signing themselves out (`user_signed_out`). An
+ * issued tax document is sent as `tax_document_issued`, the name the
+ * analytics contract gives it.
  */
 export const AUDIT_EVENT_RENAMES = {
   'user.signed_out': 'user_sessions_revoked',
   'user.passkey_created': 'passkey_created',
   'user.passkey_deleted': 'passkey_deleted',
   'user.passkeys_cleared_on_claim': 'passkeys_cleared_on_claim',
+  'billing.tax_document_issued': 'tax_document_issued',
 } as const satisfies Partial<Record<AuditAction, string>>
 
 /**

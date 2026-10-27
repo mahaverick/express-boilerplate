@@ -337,9 +337,26 @@ in this order:
    transaction before the provider call, takes the cancelling owner's user
    row `FOR KEY SHARE` first, so its foreign key never locks that row after
    the billing row;
-6. the tenant or settings row a write changes (`lockById` in
+6. for a tax document (`issueInvoice`, `issueCreditNote`,
+   `src/services/billing/tax-documents.service.ts`), after that billing row
+   (`lockByTenantId`, `FOR NO KEY UPDATE`): for a credit note, the invoice's
+   `tax_documents` row (`lockInvoice`, `FOR NO KEY UPDATE`: the row is never
+   deleted or re-keyed, and `FOR UPDATE` would conflict with the
+   `FOR KEY SHARE` the credit note's foreign key takes on it), then, last,
+   the series counter (`allocateNumber`, `tax_document_counters`,
+   `FOR NO KEY UPDATE`: it only bumps `last_number`). The counter is shared
+   by every tenant, so it is held for one insert only, and its bump and the
+   insert commit or roll back together, so a series has no gap. The tax
+   details are read unlocked and frozen into the document. A staff credit
+   note first takes the actor's platform-role and user rows
+   (`assertStillPlatformRole`, the staff-write exception below), then the
+   billing row, invoice row and counter, all in that one transaction. A tax
+   details write locks only its own row (`lockDetails`, then a versioned
+   `UPDATE`), after `assertStillPlatformRole` for staff. No issue
+   transaction calls the payment provider;
+7. the tenant or settings row a write changes (`lockById` in
    `tenant.repository.ts`, `lockByTenantId` in `tenant-settings.repository.ts`);
-7. a user's notification preference rows, in `NOTIFICATION_TYPES` order
+8. a user's notification preference rows, in `NOTIFICATION_TYPES` order
    (`updatePreferences`, `notification.service.ts`); that transaction locks
    nothing else (its foreign key takes `FOR KEY SHARE` on the user row).
 
@@ -375,7 +392,8 @@ the JSDoc of each lock method states its place, and deadlock regression tests
 (`tests/integration/services/tenant-membership.service.test.ts`,
 `tests/integration/services/billing/cancel-marker.service.test.ts`,
 `tests/integration/api/platform-user-race.test.ts`,
-`tests/integration/services/billing/seat-lock-order.test.ts`) hold it.
+`tests/integration/services/billing/seat-lock-order.test.ts`,
+`tests/integration/services/billing/tax-issue-race.test.ts`) hold it.
 
 **Lock modes.** A lock that only guards a read-then-write takes
 `FOR NO KEY UPDATE`, because `FOR UPDATE` conflicts with the `FOR KEY SHARE`
