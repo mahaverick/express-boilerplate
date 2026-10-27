@@ -5,6 +5,7 @@
  * thrown without a code.
  */
 import {
+  TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE,
   TAX_DOCUMENTS_READ_DISABLED_MESSAGE,
   TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
 } from '@/constants/billing.constants'
@@ -116,7 +117,7 @@ export type NotFoundKind = keyof typeof NOT_FOUND
 /**
  * Where a `tax_documents_disabled` 404 is answered, which picks its message.
  */
-export type TaxDocumentsDisabledWhere = 'read' | 'write'
+export type TaxDocumentsDisabledWhere = 'read' | 'write' | 'export'
 
 /**
  * The `tax_documents_disabled` message for each place it is answered.
@@ -124,12 +125,13 @@ export type TaxDocumentsDisabledWhere = 'read' | 'write'
 const TAX_DOCUMENTS_DISABLED_MESSAGES = {
   read: TAX_DOCUMENTS_READ_DISABLED_MESSAGE,
   write: TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
+  export: TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE,
 } as const satisfies Record<TaxDocumentsDisabledWhere, string>
 
 /**
  * The 404 registration answers while it is off, worded for where it is answered.
  * @param kind - `taxDocumentsDisabled`.
- * @param where - A read or a write.
+ * @param where - A read, a write or the export.
  * @returns The error to throw or pass to `next`.
  */
 export function notFoundError(
@@ -145,7 +147,7 @@ export function notFoundError(kind: Exclude<NotFoundKind, 'taxDocumentsDisabled'
 /**
  * The 404 for one kind of thing not found; `taxDocumentsDisabled` also takes where it is answered.
  * @param kind - What was not found.
- * @param where - For `taxDocumentsDisabled`, a read or a write.
+ * @param where - For `taxDocumentsDisabled`, a read, a write or the export.
  * @returns The error to throw or pass to `next`.
  */
 export function notFoundError(kind: NotFoundKind, where?: TaxDocumentsDisabledWhere): HttpError {

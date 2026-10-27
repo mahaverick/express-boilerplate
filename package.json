@@ -77,6 +77,7 @@
     "express": "5.2.1",
     "express-rate-limit": "^8.7.0",
     "express-session": "^1.19.0",
+    "fflate": "0.8.3",
     "helmet": "8.3.0",
     "http-proxy-middleware": "^4.2.0",
     "ioredis": "^6.0.0",

@@ -8,8 +8,10 @@
  * and held charges are a viewer's to read, the tax details save a
  * manager's, the manual credit note and the held-charge resolve an
  * admin's. `addPlatformPlanRoutes` registers the plans,
- * prices, billing settings and alerts flat on the platform router: the plan
- * and settings reads are a viewer's, everything else an admin's. Each route
+ * prices, billing settings, alerts and the tax export flat on the platform
+ * router: the plan and settings reads are a viewer's, everything else an
+ * admin's. The tax export is a read but takes step-up, since it downloads
+ * every buyer's GSTIN, name and address. Each route
  * names its own role gate and runs it first, so a refused caller gets the
  * plain 404: then, on a write, the JSON gate, the step-up check and the
  * limiter. Every write needs a recent sign-in, since each changes what
@@ -154,7 +156,7 @@ export function createPlatformTenantBillingRouter(limiters: PlatformLimiters): R
 }
 
 /**
- * Register the plans, prices, billing settings and alerts routes on the
+ * Register the plans, prices, billing settings, alerts and tax export routes on the
  * platform router, flat, so the route walk sees each one under its full path.
  * @param router - The platform router.
  * @param limiters - The shared `platformSearch` and `platformWrite` limiters.
@@ -208,5 +210,13 @@ export function addPlatformPlanRoutes(router: Router, limiters: PlatformLimiters
     requirePlatformRole('admin'),
     limiters.searchLimiter,
     platformBillingController.listAlerts
+  )
+  // A bulk download of every buyer's GSTIN, name and address, so it takes step-up like a write.
+  router.get(
+    '/billing/tax-export',
+    requirePlatformRole('admin'),
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformTaxController.exportTaxDocuments
   )
 }

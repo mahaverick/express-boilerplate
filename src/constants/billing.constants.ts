@@ -351,6 +351,19 @@ export const TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE =
   "Tax documents are off, so tax details and credit notes can't change. Issued documents stay available to download."
 
 /**
+ * The tax export's 404 while registration is off and no workspace has a
+ * tax document.
+ */
+export const TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE =
+  'Tax documents are off, and no workspace has any, so there is nothing to export.'
+
+/**
+ * The field error for a tax export period that is missing or malformed.
+ */
+export const TAX_EXPORT_PERIOD_MESSAGE =
+  'Use YYYY-MM for a month or YYYY-Q1 to YYYY-Q4 for a quarter.'
+
+/**
  * Error code: a tax details PATCH sent a `version` that no longer matches:
  * stale, null when details exist, or a number when none exist.
  */

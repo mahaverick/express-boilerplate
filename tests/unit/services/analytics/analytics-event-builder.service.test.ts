@@ -613,6 +613,8 @@ const CANDIDATES: readonly unknown[] = [
   '0192f6a4-3c1e-7b2a-9d4e-5f6a7b8c9d0f',
   // The tax details fields a save changed.
   ['gstin', 'city'],
+  // A tax export period.
+  '2026-10',
   true,
   false,
   0,

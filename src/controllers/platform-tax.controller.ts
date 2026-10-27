@@ -1,7 +1,9 @@
 /**
  * @file Handlers for the staff tax routes under
  * `/api/v1/platform/tenants/:id/billing`: tax details, tax documents and
- * their PDFs, the manual credit note, and held SEZ charges. Every route runs
+ * their PDFs, the manual credit note, and held SEZ charges; and the
+ * platform-wide GSTR-1 export at `/api/v1/platform/billing/tax-export`
+ * (admin, with step-up). Every route runs
  * behind `requireAuth` and `requirePlatformRole` (platform-billing.routes.ts),
  * and every write behind `requireRecentAuth`. A write answers the
  * workspace's 404s and registration's before it reads the body.
@@ -9,6 +11,7 @@
 import { HELD_CHARGE_MARKED_RESOLVED_MESSAGE } from '@/constants/billing.constants'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
+import { exportTaxPeriod } from '@/services/platform-tax-export.service'
 import {
   assertStaffTaxWritable,
   getStaffDocumentPdf,
@@ -130,6 +133,24 @@ class PlatformTaxController extends BaseController {
       await resolveHeldCharge(actorFrom(request), tenantId, heldId, reason),
       HELD_CHARGE_MARKED_RESOLVED_MESSAGE
     )
+  })
+
+  /**
+   * `GET /platform/billing/tax-export?period=`: a month or quarter of tax
+   * documents as a zip of GSTR-1 CSVs. Private and never cached, since it
+   * names every buyer.
+   */
+  exportTaxDocuments = this.handle(async (request, response) => {
+    const { period } = request.query
+    const zip = await exportTaxPeriod(actorFrom(request), typeof period === 'string' ? period : '')
+    response
+      .status(200)
+      .set({
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${zip.filename}"`,
+        'Cache-Control': 'private, no-store',
+      })
+      .send(Buffer.from(zip.body.buffer, zip.body.byteOffset, zip.body.byteLength))
   })
 }
 

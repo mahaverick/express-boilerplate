@@ -61,6 +61,8 @@ const MACHINE_FACING = new Set([
   'src/controllers/email-webhook.controller.ts',
   'src/services/billing/billing-webhook.service.ts',
   'src/controllers/billing-webhook.controller.ts',
+  // GSTR-1 column headers and cell values, named as the GST offline tool reads them.
+  'src/constants/gst-export.constants.ts',
 ])
 
 /**

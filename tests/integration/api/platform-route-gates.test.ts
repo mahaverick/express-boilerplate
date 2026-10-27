@@ -361,6 +361,8 @@ const ROUTES: readonly GateRow[] = [
   { method: 'get', path: '/billing-settings', minRole: 'viewer', requiresStepUp: false },
   { method: 'patch', path: '/billing-settings', minRole: 'admin', requiresStepUp: true },
   { method: 'get', path: '/billing/alerts', minRole: 'admin', requiresStepUp: false },
+  // A bulk download of every buyer's GSTIN, name and address, so it takes step-up like a write.
+  { method: 'get', path: '/billing/tax-export', minRole: 'admin', requiresStepUp: true },
   { method: 'get', path: '/me/flags', minRole: 'viewer', requiresStepUp: false },
   // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, so the route takes no step-up; it is neither audited nor logged as a staff write.
   {

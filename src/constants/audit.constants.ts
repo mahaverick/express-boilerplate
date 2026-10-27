@@ -370,6 +370,11 @@ export const AUDIT_ACTIONS = {
     target: 'platform',
     metadata: z.strictObject({ changedFields, reason }),
   },
+  // Staff downloaded a month or quarter of tax documents as GSTR-1 CSVs; the period only.
+  'billing.tax_export_downloaded': {
+    target: 'platform',
+    metadata: z.strictObject({ period: z.string().regex(/^\d{4}-(?:0[1-9]|1[0-2]|Q[1-4])$/) }),
+  },
   // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
   'user.flags_evaluated': {
     target: 'user',
