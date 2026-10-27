@@ -12,6 +12,7 @@ import type { BillingProviderConfig } from '@/configs/billing.config'
 import { INVOICE_PAGE_SIZE, RAZORPAY_API_TIMEOUT_MS } from '@/constants/billing.constants'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { RazorpayProvider } from '@/services/billing/razorpay-provider.service'
+import { logger } from '@/services/logger.service'
 import type { ProviderPlanPrice } from '@/types/billing'
 import { startFakeRazorpay, type FakeRazorpay } from '../../../helpers/fake-razorpay'
 
@@ -889,14 +890,47 @@ describe('listPaidCharges', () => {
     expect(await provider.listPaidCharges('sub_A')).toStrictEqual([])
   })
 
-  it('fails without retry for a paid invoice with no paid_at', async () => {
+  it('fails without retry for a paid invoice with no id, no paid_at or no amount, naming which', async () => {
     const { paid_at: _paidAt, ...unstamped } = paidInvoice(0)
-    fake.reply('GET', '/invoices', 200, collection([unstamped]))
+    const { id: _id, ...unnamed } = paidInvoice(1)
+    const { amount: _amount, amount_paid: _amountPaid, ...unpriced } = paidInvoice(2)
+    const errors: unknown[] = []
 
-    const error = await rejectionOf(provider.listPaidCharges('sub_A'))
+    for (const invoice of [unstamped, unnamed, unpriced]) {
+      fake.reply('GET', '/invoices', 200, collection([invoice]))
+      errors.push(await rejectionOf(provider.listPaidCharges('sub_A')))
+    }
 
-    expect(error).toBeInstanceOf(ProviderError)
-    expect(error).toMatchObject({ status: 200, retryable: false, code: 'UNEXPECTED_ANSWER' })
+    for (const error of errors) expect(error).toBeInstanceOf(ProviderError)
+    expect(errors).toMatchObject([
+      { description: 'a paid invoice has no paid time' },
+      { description: 'a paid invoice has no id' },
+      { description: 'a paid invoice has no amount' },
+    ])
+    expect(errors).toMatchObject(
+      Array.from({ length: 3 }, () => ({
+        status: 200,
+        retryable: false,
+        code: 'UNEXPECTED_ANSWER',
+      }))
+    )
+  })
+
+  it('stops after 100 full pages with a warning and keeps what it read', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const full = [paidInvoice(0), ...Array.from({ length: 24 }, (_, n) => issued(n + 10))]
+    fake.reply('GET', '/invoices', 200, collection(full))
+
+    const charges = await provider.listPaidCharges('sub_A')
+
+    expect(queriesOf('/v1/invoices?')).toHaveLength(100)
+    // Every page answers the same paid invoice, so the read keeps one charge a page.
+    expect(charges).toHaveLength(100)
+    expect(warn).toHaveBeenCalledWith('A Razorpay paid-charge read stopped at its page limit', {
+      subscriptionId: 'sub_A',
+      pages: 100,
+    })
+    warn.mockRestore()
   })
 
   it('throws a retryable ProviderError for a 502', async () => {
@@ -972,6 +1006,21 @@ describe('listRefunds', () => {
       '0',
       '100',
     ])
+  })
+
+  it('stops after 100 full pages with a warning and keeps what it read', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const full = Array.from({ length: 100 }, (_, n) => refund(`rfnd_P${String(n)}`, 'processed'))
+    fake.reply('GET', '/payments/pay_X/refunds', 200, collection(full))
+
+    const refunds = await provider.listRefunds('pay_X')
+
+    expect(queriesOf('/v1/payments/pay_X/refunds?')).toHaveLength(100)
+    expect(refunds).toHaveLength(10_000)
+    expect(warn).toHaveBeenCalledWith('A Razorpay refund read stopped at its page limit', {
+      pages: 100,
+    })
+    warn.mockRestore()
   })
 
   it('throws a retryable ProviderError for a 502', async () => {

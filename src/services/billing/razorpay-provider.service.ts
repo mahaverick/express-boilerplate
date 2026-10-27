@@ -199,6 +199,18 @@ function invoiceView(invoice: JsonRecord): InvoiceView | null {
 }
 
 /**
+ * The error for a paid invoice a charge read can't use.
+ * @param problem - What is wrong with it, kept as the error's description.
+ * @returns A non-retryable `UNEXPECTED_ANSWER`.
+ */
+function unexpectedCharge(problem: string): ProviderError {
+  return new ProviderError('charge answer', 200, {
+    code: 'UNEXPECTED_ANSWER',
+    description: problem,
+  })
+}
+
+/**
  * Map a Razorpay refund.
  * @param refund - The refund.
  * @returns The refund, or null for an unknown status or a malformed one.
@@ -669,9 +681,12 @@ export class RazorpayProvider implements BillingProviderClient {
    * Every paid charge of a subscription, oldest paid first. An invoice
    * counts when it is paid and names a payment. Razorpay lists a
    * subscription's invoices newest first, `RECENT_INVOICE_COUNT` a page.
+   * The read stops after `MAX_CHARGE_PAGES` pages (2,500 invoices) with a
+   * logged warning, so a subscription with more loses its oldest charges,
+   * the ones least likely to still need an invoice.
    * @param subscriptionId - The subscription id.
    * @returns The charges.
-   * @throws {ProviderError} A non-retryable error when a paid invoice has no paid time.
+   * @throws {ProviderError} A non-retryable `UNEXPECTED_ANSWER` when a paid invoice has no id, no paid time or no amount; its description names which.
    */
   async listPaidCharges(subscriptionId: string): Promise<ProviderCharge[]> {
     const charges: ProviderCharge[] = []
@@ -691,9 +706,9 @@ export class RazorpayProvider implements BillingProviderClient {
         if (item.status !== 'paid' || paymentId === null) continue
         const paidAt = dateFrom(item.paid_at)
         const amount = item.amount_paid ?? item.amount
-        if (typeof item.id !== 'string' || paidAt === null || typeof amount !== 'number') {
-          throw new ProviderError('charge answer', 200, { code: 'UNEXPECTED_ANSWER' })
-        }
+        if (typeof item.id !== 'string') throw unexpectedCharge('a paid invoice has no id')
+        if (paidAt === null) throw unexpectedCharge('a paid invoice has no paid time')
+        if (typeof amount !== 'number') throw unexpectedCharge('a paid invoice has no amount')
         charges.push({
           invoiceId: item.id,
           subscriptionId,
@@ -716,7 +731,9 @@ export class RazorpayProvider implements BillingProviderClient {
   }
 
   /**
-   * Read every page of a refund list.
+   * Read every page of a refund list. It stops after `MAX_REFUND_PAGES`
+   * pages (10,000 refunds) with a logged warning; Razorpay lists the newest
+   * first, so what is lost is the oldest.
    * @param path - The list path under the base.
    * @param query - The query besides the page.
    * @returns The refunds, oldest first.

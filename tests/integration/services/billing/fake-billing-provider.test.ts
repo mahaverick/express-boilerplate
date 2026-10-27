@@ -293,6 +293,28 @@ describe('FakeBillingProvider', () => {
     }
   })
 
+  it('lists no paid charges for a subscription it does not know, as its invoice list reads it', async () => {
+    expect(await provider.listPaidCharges('sub_FAKEunknown0002')).toStrictEqual([])
+  })
+
+  it('keeps both refunds of one payment added at the same time', async () => {
+    const id = await createOne()
+    await provider.fakeAdvance(id, 'active')
+    const [charge] = await provider.listPaidCharges(id)
+    const paymentId = charge?.paymentId ?? ''
+
+    await Promise.all([
+      provider.fakeRefund(paymentId, 10_000),
+      provider.fakeRefund(paymentId, 20_000),
+      provider.fakeRefund(paymentId, 30_000),
+    ])
+
+    const refunds = await provider.listRefunds(paymentId)
+    expect(refunds.map((refund) => refund.amountMinor).toSorted((a, b) => a - b)).toStrictEqual([
+      10_000, 20_000, 30_000,
+    ])
+  })
+
   it('lists a refund added with fakeRefund as processed, with its amount', async () => {
     const id = await createOne()
     await provider.fakeAdvance(id, 'active')

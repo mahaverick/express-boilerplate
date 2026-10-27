@@ -80,6 +80,21 @@ function refundsField(paymentId: string): string {
 }
 
 /**
+ * Appends one JSON refund (ARGV[2]) to the JSON list in a hash field
+ * (ARGV[1]) of the fake's hash (KEYS[1]) as one atomic step. It splices the
+ * text rather than decoding it, so no number loses precision.
+ */
+const APPEND_REFUND_SCRIPT = `
+local stored = redis.call('HGET', KEYS[1], ARGV[1])
+if not stored or stored == '[]' then
+  redis.call('HSET', KEYS[1], ARGV[1], '[' .. ARGV[2] .. ']')
+else
+  redis.call('HSET', KEYS[1], ARGV[1], string.sub(stored, 1, -2) .. ',' .. ARGV[2] .. ']')
+end
+return 1
+`
+
+/**
  * A stored refund as the provider shape.
  * @param record - The stored refund.
  * @returns The refund.
@@ -416,23 +431,28 @@ export class FakeBillingProvider implements BillingProviderClient {
   }
 
   /**
-   * Append a refund to its payment's stored list.
+   * Append a refund to its payment's stored list in one Redis script, so two
+   * refunds of one payment at once both land.
    * @param refund - The refund.
    */
   async #addRefund(refund: FakeRefundRecord): Promise<void> {
-    const field = refundsField(refund.paymentId)
-    const stored = (await this.#read<FakeRefundRecord[]>(field)) ?? []
-    await this.#write(field, [...stored, refund])
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.eval(APPEND_REFUND_SCRIPT, {
+        keys: [redisKey('billing-fake')],
+        arguments: [refundsField(refund.paymentId), JSON.stringify(refund)],
+      })
+    }, 'fake billing refund append')
   }
 
   /**
    * Every paid charge of a subscription, oldest first.
    * @param subscriptionId - The subscription id.
-   * @returns The charges; an invoice stored without a payment is not one.
-   * @throws {ProviderError} A non-retryable 400 for an unknown id, as Razorpay answers.
+   * @returns The charges; an invoice stored without a payment is not one. An unknown id has none, as `listInvoices` reads it.
    */
   async listPaidCharges(subscriptionId: string): Promise<ProviderCharge[]> {
-    const record = await this.#subscription(subscriptionId)
+    const record = await this.#read<FakeSubscriptionRecord>(`sub:${subscriptionId}`)
+    if (record === undefined) return []
     const charges: ProviderCharge[] = []
     for (const invoice of record.invoices) {
       if (invoice.status !== 'paid' || invoice.paymentId == null || invoice.paidAt === null) {
