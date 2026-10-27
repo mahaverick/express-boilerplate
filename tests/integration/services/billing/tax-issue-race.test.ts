@@ -11,6 +11,8 @@
  * the billing-row lock the second would not queue and each such test fails.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
+import { sql as sqlTag } from 'drizzle-orm'
+import { PgTransaction } from 'drizzle-orm/pg-core'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { NewTaxDocument } from '@/database/models/tax.model'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -146,7 +148,14 @@ function pauseFirstCall<TArguments extends unknown[], TResult>(
     implementation: async function (this: unknown, ...arguments_: TArguments): Promise<TResult> {
       if (isFirst) {
         isFirst = false
-        reached.resolve(await backendPid(arguments_.at(-1) as DbExecutor))
+        const tx = arguments_.at(-1)
+        // Every paused seam takes its transaction last; anything else would probe the wrong backend.
+        if (!(tx instanceof PgTransaction)) {
+          throw new TypeError(
+            'pauseFirstCall: the paused call got no transaction as its last argument'
+          )
+        }
+        reached.resolve(await backendPid(tx as DbExecutor))
         await released.promise
       }
       return original.apply(this, arguments_)
@@ -189,14 +198,33 @@ describe('issuing under concurrency', () => {
     expect(await invoiceCounter()).toBe(1)
   })
 
-  it('numbers 10 parallel invoices across 3 workspaces 1 to 10, each once', async () => {
+  it('numbers 10 parallel invoices across 3 workspaces 1 to 10, each once, queued at the counter', async () => {
     const tenants = await Promise.all([workspace(), workspace(), workspace()])
+    await sql`insert into tax_document_counters (type, financial_year, last_number)
+      values ('invoice', '26-27', 0)`
+    const locked = deferred<number>()
+    const released = deferred()
+    openSeams.push(() => released.resolve())
+    // A barrier: hold the counter, so the issues start together and the first one queues on it.
+    const holder = withTransaction(async (tx) => {
+      await tx.execute(
+        sqlTag`select 1 from tax_document_counters
+          where type = 'invoice' and financial_year = '26-27' for no key update`
+      )
+      locked.resolve(await backendPid(tx))
+      await released.promise
+    })
+    const holderPid = await locked.promise
 
-    const results = await Promise.all(
+    const issues = Promise.all(
       Array.from({ length: 10 }, (_, index) =>
         issueInvoice(tenants[index % 3]!.tenant.id, charge(), scope, ISSUED_AT)
       )
     )
+    expect(await waitForWaiter(holderPid, issues)).toBe(true)
+    released.resolve()
+    await holder
+    const results = await issues
 
     const numbers = results.map((result) => {
       if (result.outcome !== 'issued') throw new Error(`expected issued, got ${result.outcome}`)
