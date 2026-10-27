@@ -1574,7 +1574,51 @@ map; the detail lives in the sections it links.
   `refund.processed` webhook and one that reaches no workspace's sync (hinted
   with the payment, after the handling resolves, so a retried attempt queues
   none), and the two daily tax steps. A provider error fails the run for a
-  retry; what it issued stays.
+  retry; what it issued stays. `pnpm billing:tax-reconcile` plans every
+  workspace that tracks a subscription (or the one named with `--tenant`) and
+  prints counts; it writes nothing until `--apply` queues the same job
+  ([README.md](README.md#tax-documents-dry-run-and-backfill)).
+  - _Tables._ `tenant_tax_details` (the buyer's legal name, address, state,
+    GSTIN and SEZ flag, one row per workspace), `tax_documents` (every invoice
+    and credit note, with a frozen snapshot of each printed field),
+    `tax_document_counters` (the last number per type and financial year) and
+    `tax_held_charges` (an SEZ buyer's charges, held for staff).
+  - _Numbering._ A number is `PREFIX/YY-YY/NNNNN` (financial year from the IST
+    issue date, five digits at least, 16 characters at most), one series per
+    type and year. It is allocated only inside the transaction that inserts the
+    document, under the counter's row lock taken last
+    (see [Lock order](#layers)), so a failed insert rolls the number back and a
+    series has no gap.
+  - _Immutability._ No code updates or deletes a `tax_documents` row. A fix is
+    a credit note against the invoice, never an edit. The snapshot holds the
+    seller, buyer, place of supply, amounts and description as issued, so a
+    document prints the same after the workspace changes its details.
+  - _PDF._ `tax-pdf.service.ts` lays one A4 page out in built-in Helvetica from
+    the stored row alone; the PDF dates come from the issue time and the
+    producer is a fixed string, so one row always renders the same bytes. The
+    rupee sign has no glyph in those fonts, so PDFs print `Rs.`; input fields
+    take Latin text only so every character renders. Only the workspace's
+    owner downloads a PDF (staff through their audited route).
+  - _Export._ `GET /platform/billing/tax-export?period=YYYY-MM|YYYY-Qn`
+    (`platform-tax-export.service.ts`) returns a zip of GSTR-1 CSVs for every
+    document issued in an IST month or financial-year quarter, purged
+    workspaces' documents included. It is admin only, takes step-up and is
+    audited. It builds the zip in memory, which suits a few thousand documents.
+  - _Registration off._ With `BILLING_GST_REGISTERED=false`, issuing stops: a
+    run does nothing, the owner's tax-details write and every staff write
+    answer 404 `tax_documents_disabled`. Reads and PDFs stay for a workspace
+    that already has documents, so a customer keeps what was issued.
+  - _E-invoicing._ This app does not get an IRN, so it fits a seller below the
+    e-invoicing turnover limit (₹5 crore). `BILLING_EINVOICE_REQUIRED=true`
+    stops boot while registration is on.
+  - _Known limit._ A refunded duplicate or late-switch subscription from before
+    this release is not tracked, so a `BILLING_GST_EFFECTIVE_FROM` earlier than
+    the deploy can miss its charges and refunds. Set the date on or after the
+    deploy, or have an accountant issue those documents by hand.
+  - _Purge._ `tax_documents.tenant_id` is `ON DELETE SET NULL`: GST records
+    are kept 72 months, so documents survive a tenant purge and stay in the
+    export. `tenant_tax_details` and `tax_held_charges` are deleted with the
+    tenant.
 - **Events and pushes.** Every change emits its product events
   ([Billing events](#billing-events)) and tells the workspace's open apps over
   SSE ([Realtime (SSE)](#realtime-sse)).

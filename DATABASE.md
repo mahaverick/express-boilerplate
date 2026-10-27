@@ -269,7 +269,17 @@ marked by a comment in its file (0024's has none):
   `tenant_billing_subscriptions.role` (`held`, `duplicate` or `late_switch`,
   checked; every existing row reads `held`), and re-creates the
   `audit_logs_target_type_check` (gains `tax_document`) and
-  `billing_alerts_kind_check` (gains the four `tax_*` kinds) CHECKs.
+  `billing_alerts_kind_check` (gains the four `tax_*` kinds) CHECKs. Rebuilding
+  `audit_logs_target_type_check` takes an `ACCESS EXCLUSIVE` lock on
+  `audit_logs` and rescans it, as `0033` did, so apply it in a quiet window on
+  a large log.
+  Tax documents survive their tenant: `tax_documents.tenant_id` is
+  `ON DELETE SET NULL`, because GST records are kept 72 months and each
+  document's snapshot holds every printed field. A tenant purge therefore
+  leaves its invoices and credit notes in place (and in the tax export), and
+  the number series stays gap-free. `tenant_tax_details` and
+  `tax_held_charges` are deleted with the tenant. No code updates or deletes a
+  `tax_documents` row.
 
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send

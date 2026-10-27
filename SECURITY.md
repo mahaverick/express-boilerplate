@@ -1253,6 +1253,21 @@ workspace's billing is under [Platform staff](#platform-staff). The rest:
   ([Boot-time consistency checks](ARCHITECTURE.md#boot-time-consistency-checks)).
   `pnpm billing:seed` and `pnpm billing:time-travel` refuse to run elsewhere,
   and time travel refuses a workspace whose row names a real provider.
+- **Tax details are personal data.** A buyer's legal name, address and GSTIN
+  sit in `tenant_tax_details` and in each document's snapshot. They go in no
+  log line (ids only), no job payload (a tax job carries a workspace id and
+  payment ids), no alert text and no analytics property or audit metadata
+  (field names and document types only). Only the workspace's owner reads its
+  details, documents and PDFs; a member gets the owner-only 403 and another
+  workspace's document the document 404.
+- **The tax export is a bulk read of that data.** It is admin only, needs
+  step-up like a write, and records `billing.tax_export_downloaded` with the
+  period. Every text cell goes through a formula guard (`csvCell`): a value
+  starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading
+  `'`, so a buyer named `=HYPERLINK(…)` stays text in a spreadsheet.
+- **Documents are immutable.** No code path updates or deletes a
+  `tax_documents` row, and a fix is a credit note, so the record an auditor
+  reads is the record issued.
 
 ## Maintenance mode
 

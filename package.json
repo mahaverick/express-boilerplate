@@ -41,6 +41,7 @@
     "onboarding:reconcile": "tsx --env-file-if-exists=.env src/scripts/onboarding-reconcile.ts",
     "analytics:backfill-groups": "tsx --env-file-if-exists=.env src/scripts/analytics-backfill-groups.ts",
     "flags:sync": "tsx --env-file-if-exists=.env src/scripts/flags-sync.ts",
+    "billing:tax-reconcile": "tsx --env-file-if-exists=.env src/scripts/billing-tax-reconcile.ts",
     "billing:seed": "tsx --env-file-if-exists=.env src/scripts/billing-seed.ts",
     "billing:time-travel": "tsx --env-file-if-exists=.env src/scripts/billing-time-travel.ts",
     "test": "vp test run",

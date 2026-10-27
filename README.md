@@ -173,40 +173,41 @@ deployment behind a proxy. `RATE_LIMIT_SCALE`, for end-to-end runs on
 
 ## Available scripts
 
-| Script                              | What it does                                                                                          |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.          |
-| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias` on `tsconfig.build.json`, and copies the migrations.      |
-| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                             |
-| `pnpm lint`                         | `vp check` (Oxlint, Oxfmt), the untyped ESLint, then `tsc --noEmit` (`tsconfig.json`).                |
-| `pnpm lint:fix`                     | `vp check --fix`, then `eslint . --fix`.                                                              |
-| `pnpm typecheck`                    | `tsc --noEmit` over `src/`, `tests/` and `drizzle.config.ts` (`tsconfig.json`).                       |
-| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                                 |
-| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                         |
-| `pnpm format`                       | `vp fmt .` (Oxfmt) over the whole repo.                                                               |
-| `pnpm format:check`                 | `vp fmt --check .`.                                                                                   |
-| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                       |
-| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                       |
-| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                               |
-| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                    |
-| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                          |
-| `pnpm platform:grant -- <e> <role>` | Gives an address a role in the platform tenant, creating its account; see below.                      |
-| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).            |
-| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).                |
-| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).        |
-| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags).           |
-| `pnpm billing:seed`                 | Creates 13 workspaces, one per billing state (local only); see [Billing dev seed](#billing-dev-seed). |
-| `pnpm billing:time-travel -- …`     | Moves one workspace's billing dates back (local only); see [Billing dev seed](#billing-dev-seed).     |
-| `pnpm test`                         | `vp test run`: both Vitest projects. Needs the compose stack.                                         |
-| `pnpm test:unit`                    | The `unit` project: every test but `tests/integration/**`, no global setup; runs with Docker down.    |
-| `pnpm test:integration`             | The `integration` project: `tests/integration/**`, with the per-worker databases. Needs the stack.    |
-| `pnpm test:watch`                   | `vp test watch`.                                                                                      |
-| `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                  |
-| `pnpm gate`                         | The pre-push gate: lint, docs, knip, domain terms, coverage, build. Needs the compose stack.          |
-| `pnpm push [args]`                  | Runs `pnpm gate`, then `git push --no-verify` with your arguments.                                    |
-| `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`).   |
-| `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                        |
-| `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                   |
+| Script                              | What it does                                                                                                      |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                          | `tsx watch` on `src/index.ts`, loading `.env` and then `src/observability/tracing.ts` first.                      |
+| `pnpm build`                        | Removes `dist/`, runs `tsc` and `tsc-alias` on `tsconfig.build.json`, and copies the migrations.                  |
+| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                                         |
+| `pnpm lint`                         | `vp check` (Oxlint, Oxfmt), the untyped ESLint, then `tsc --noEmit` (`tsconfig.json`).                            |
+| `pnpm lint:fix`                     | `vp check --fix`, then `eslint . --fix`.                                                                          |
+| `pnpm typecheck`                    | `tsc --noEmit` over `src/`, `tests/` and `drizzle.config.ts` (`tsconfig.json`).                                   |
+| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                                             |
+| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                                                     |
+| `pnpm format`                       | `vp fmt .` (Oxfmt) over the whole repo.                                                                           |
+| `pnpm format:check`                 | `vp fmt --check .`.                                                                                               |
+| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                                   |
+| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                                                   |
+| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                                           |
+| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                                                |
+| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js` from the build.                                                      |
+| `pnpm platform:grant -- <e> <role>` | Gives an address a role in the platform tenant, creating its account; see below.                                  |
+| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).                        |
+| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).                            |
+| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics (PostHog)](#analytics-posthog).                    |
+| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags).                       |
+| `pnpm billing:seed`                 | Creates 13 workspaces, one per billing state (local only); see [Billing dev seed](#billing-dev-seed).             |
+| `pnpm billing:time-travel -- …`     | Moves one workspace's billing dates back (local only); see [Billing dev seed](#billing-dev-seed).                 |
+| `pnpm billing:tax-reconcile`        | Dry-runs the tax documents owed; `--apply` queues them; see [Tax documents](#tax-documents-dry-run-and-backfill). |
+| `pnpm test`                         | `vp test run`: both Vitest projects. Needs the compose stack.                                                     |
+| `pnpm test:unit`                    | The `unit` project: every test but `tests/integration/**`, no global setup; runs with Docker down.                |
+| `pnpm test:integration`             | The `integration` project: `tests/integration/**`, with the per-worker databases. Needs the stack.                |
+| `pnpm test:watch`                   | `vp test watch`.                                                                                                  |
+| `pnpm test:coverage`                | `vp test run --coverage`, gated at 80% on lines, functions, branches and statements.                              |
+| `pnpm gate`                         | The pre-push gate: lint, docs, knip, domain terms, coverage, build. Needs the compose stack.                      |
+| `pnpm push [args]`                  | Runs `pnpm gate`, then `git push --no-verify` with your arguments.                                                |
+| `pnpm scrub:gate <mode>`            | The error scrubber's differential gate, run by hand at review time (`tests/helpers/scrub-gate.ts`).               |
+| `pnpm commit`                       | Interactive conventional-commit prompt (`cz`).                                                                    |
+| `pnpm prepare`                      | Installs the Vite+ git hooks (`vp config`); `pnpm install` runs it.                                               |
 
 `pnpm platform:grant -- <email> <role>` gives the account at an address a role
 (`owner` to `viewer`) in the platform tenant, audited as
@@ -261,6 +262,26 @@ stays sent, and one not yet sent goes out on the next run once its time has
 come.
 It refuses a workspace on a real provider, so a real subscription's dates
 never move.
+
+### Tax documents: dry run and backfill
+
+With `BILLING_GST_REGISTERED=true`, the billing worker issues a numbered tax
+invoice for each paid charge and a credit note for each processed refund. A
+sync, a `refund.processed` webhook and two daily steps queue the work.
+`pnpm billing:tax-reconcile` shows what is owed and queues it on demand:
+
+- `pnpm billing:tax-reconcile` is a dry run. It reads the payment provider and
+  prints one line per workspace with a tracked subscription: invoices, credit
+  notes, held charges, invoices late (paid over 30 days before issue) and
+  refunds larger than what is left to credit. It writes and queues nothing.
+- `pnpm billing:tax-reconcile -- --apply` queues one `tax-reconcile` job per
+  workspace with work. The billing worker (`pnpm dev`) issues the documents.
+- `-- --tenant <slug>` limits either mode to one workspace.
+
+It exits 1 when registration or payments are off. Set
+`BILLING_GST_EFFECTIVE_FROM` on or after the day you deploy: earlier charges of
+refunded duplicate subscriptions are not tracked
+([ARCHITECTURE.md](ARCHITECTURE.md#billing)).
 
 The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

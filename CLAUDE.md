@@ -366,6 +366,23 @@ The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
 - **Never store a webhook or provider payload body.** `billing_events` holds
   the event's ids, type and outcome only, and a billing job carries ids only:
   the body names the payer's address, phone and card. Log ids, never the body.
+- **Never update or delete a `tax_documents` row.** An issued invoice or credit
+  note is a legal record; a correction is a credit note
+  (`src/services/billing/tax-documents.service.ts`). Documents outlive their
+  tenant (`tenant_id` is `ON DELETE SET NULL`), so never add a cascade.
+- **Allocate a document number only inside the transaction that inserts the
+  document.** The counter bump and the insert commit or roll back together;
+  that is what keeps the series gap-free. A number allocated outside, or kept
+  after a failed insert, leaves a gap the tax authority can see.
+- **The counter lock comes last.** An issue transaction locks the billing row,
+  then (for a credit note) the invoice row, then the counter, which every
+  workspace shares, so it is held for one insert only
+  ([ARCHITECTURE.md](ARCHITECTURE.md#layers)).
+- **No provider call inside an issue transaction.** The run plans from the
+  provider with no lock held, then issues; a provider call under the billing
+  row lock would hold every workspace's numbering behind a network wait.
+- **Tax details are personal data:** keep GSTIN, legal name and address out of
+  logs, job payloads, alert text, analytics and audit metadata.
 
 ## Maintenance mode
 
