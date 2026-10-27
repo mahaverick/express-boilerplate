@@ -154,7 +154,10 @@ const idParameterSchema = z.uuid()
  * @returns The id.
  * @throws {HttpError} 404 when `raw` is not a uuid.
  */
-export function parseIdParameter(raw: unknown, notFound: NotFoundKind): string {
+export function parseIdParameter(
+  raw: unknown,
+  notFound: Exclude<NotFoundKind, 'taxDocumentsDisabled'>
+): string {
   const parsed = idParameterSchema.safeParse(raw)
   if (!parsed.success) throw notFoundError(notFound)
   return parsed.data

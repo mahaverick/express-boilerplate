@@ -440,6 +440,9 @@ function productProperties(
     case 'onboarding_step_completed': {
       return { step_key: event.stepKey, how: event.how, required: event.required }
     }
+    case 'tax_document_downloaded': {
+      return { type: event.documentType, surface: event.surface }
+    }
     default: {
       return {}
     }

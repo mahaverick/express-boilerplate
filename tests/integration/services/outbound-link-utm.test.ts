@@ -403,6 +403,22 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
     },
     contents: ['primary_button'],
   }),
+  tax_document_issued: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'tax_document_issued',
+      variables: {
+        appName: 'App',
+        tenantName: 'Acme',
+        documentType: 'invoice',
+        documentNumber: 'INV/26-27/00001',
+        invoiceNumber: '',
+        issuedOn: '27 October 2026',
+        billingLink: buildBillingLink('acme', 'tax_document_issued', getEnv().WEB_URL),
+      },
+    },
+    contents: ['primary_button'],
+  }),
 }
 
 /**

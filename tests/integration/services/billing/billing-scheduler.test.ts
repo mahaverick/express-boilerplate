@@ -10,14 +10,25 @@
 import { randomUUID } from 'node:crypto'
 import type { Job } from 'bullmq'
 import { sql as drizzleSql } from 'drizzle-orm'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test'
 import { getEnv } from '@/configs/env.config'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
   BILLING_SCHEDULER_DAILY_JOB,
   BILLING_SCHEDULER_FREQUENT_JOB,
+  BILLING_TAX_RECONCILE_JOB,
   ensureBillingSchedules,
   type BillingSyncTenantJobData,
+  type BillingTaxReconcileJobData,
 } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
@@ -28,7 +39,9 @@ import {
   runLifecycleCancelFor,
   type BillingRunReport,
 } from '@/services/billing/billing-scheduler.service'
+import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.service'
+import { reconcileTaxDocuments } from '@/services/billing/tax-reconcile.service'
 import { sql, withTransaction } from '@/services/database.service'
 import {
   closeNotificationSubscriber,
@@ -41,6 +54,7 @@ import {
 import { closeQueue, getBillingQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import { istDate } from '@/utilities/gst.utilities'
 import { processBillingJob } from '@/workers/billing.worker'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
 import {
@@ -60,6 +74,8 @@ import { withMutatedMethod } from '../../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../../helpers/notification-subscriber'
 import { deleteTrackedUsers } from '../../../helpers/platform-users'
 import { queuedJobs } from '../../../helpers/queue-jobs'
+import { resetTaxDocuments } from '../../../helpers/tax'
+import { FIXTURE_SELLER } from '../../../helpers/tax-seller'
 import { waitUntil } from '../../../helpers/timing'
 
 /**
@@ -73,6 +89,19 @@ vi.mock('@/services/billing/billing-provider.service', async (importOriginal) =>
   return {
     ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
     getBillingProvider: () => override.provider ?? base.getBillingProvider(),
+  }
+})
+
+/**
+ * Whether GST registration is on: off, except in the tax steps' tests.
+ */
+const gst = vi.hoisted(() => ({ on: false }))
+
+vi.mock('@/configs/billing.config', async (importOriginal) => {
+  const { FIXTURE_SELLER: seller } = await import('../../../helpers/tax-seller')
+  return {
+    ...(await importOriginal<typeof import('@/configs/billing.config')>()),
+    gstSellerConfig: () => (gst.on ? seller : null),
   }
 })
 
@@ -91,8 +120,12 @@ beforeAll(async () => {
   await waitForNotificationSubscriber({ onNotification, offNotification }, getRedis)
 })
 
+beforeEach(resetTaxDocuments)
+
 afterEach(async () => {
   override.provider = undefined
+  gst.on = false
+  await resetTaxDocuments()
   for (const text of tenantlessAlertTexts) {
     await sql`delete from billing_alerts where tenant_id is null and strpos(message, ${text}) > 0`
   }
@@ -103,6 +136,7 @@ afterEach(async () => {
   await deleteTrackedUsers()
   const redis = await getRedis()
   await redis.del(redisKey('billing-fake'))
+  await redis.del(redisKey('billing-tax-backfill', istDate(FIXTURE_SELLER.effectiveFrom)))
 })
 
 afterAll(async () => {
@@ -297,7 +331,21 @@ async function notedSubscription(tenantId: string, appEnv: string): Promise<stri
  */
 async function syncJobsFor(tenantId: string): Promise<Job<BillingSyncTenantJobData>[]> {
   const jobs = await queuedJobs<BillingSyncTenantJobData>(getBillingQueue())
-  return jobs.filter((job) => job.data.tenantId === tenantId)
+  return jobs.filter(
+    (job) => job.name !== BILLING_TAX_RECONCILE_JOB && job.data.tenantId === tenantId
+  )
+}
+
+/**
+ * The tax runs queued for a workspace.
+ * @param tenantId - The workspace.
+ * @returns Each job's payload.
+ */
+async function taxJobsFor(tenantId: string): Promise<BillingTaxReconcileJobData[]> {
+  const jobs = await queuedJobs<BillingTaxReconcileJobData>(getBillingQueue())
+  return jobs
+    .filter((job) => job.name === BILLING_TAX_RECONCILE_JOB && job.data.tenantId === tenantId)
+    .map((job) => job.data)
 }
 
 /**
@@ -1135,6 +1183,106 @@ describe('runDailyBilling', () => {
     expect(await syncJobsFor(recent.id)).toHaveLength(1)
     expect(await syncJobsFor(old.id)).toStrictEqual([])
     expect(await syncJobsFor(done.id)).toStrictEqual([])
+  })
+})
+
+describe('the daily tax steps', () => {
+  it('queues one tax run per workspace with processed refunds, naming their payments', async () => {
+    gst.on = true
+    const issueAt = new Date(Date.now() + 60_000)
+    const { tenant: first } = await workspace()
+    const firstSub = await makePaying(first.id)
+    await reconcileTaxDocuments(first.id, { now: issueAt })
+    const { tenant: second } = await workspace()
+    const secondSub = await makePaying(second.id)
+    await reconcileTaxDocuments(second.id, { now: issueAt })
+    const { tenant: uninvoiced } = await workspace()
+    const uninvoicedSub = await makePaying(uninvoiced.id)
+    const [firstCharge] = await fake.listPaidCharges(firstSub.subscriptionId)
+    const [secondCharge] = await fake.listPaidCharges(secondSub.subscriptionId)
+    const [uninvoicedCharge] = await fake.listPaidCharges(uninvoicedSub.subscriptionId)
+    const firstPayment = firstCharge?.paymentId ?? ''
+    const secondPayment = secondCharge?.paymentId ?? ''
+    await fake.fakeRefund(firstPayment, 10_000)
+    await fake.fakeRefund(firstPayment, 10_000)
+    await fake.fakeRefund(secondPayment, 10_000)
+    await fake.fakeRefund(secondPayment, 5000, 'pending')
+    await fake.fakeRefund(uninvoicedCharge?.paymentId ?? '', 10_000)
+    await getBillingQueue().obliterate({ force: true })
+
+    const report = await runDailyBilling(new Date())
+
+    expect(report.tax_refunds).toMatchObject({ status: 'ok', acted: 2 })
+    expect(await taxJobsFor(first.id)).toStrictEqual([
+      { tenantId: first.id, paymentIds: [firstPayment] },
+    ])
+    expect(await taxJobsFor(second.id)).toStrictEqual([
+      { tenantId: second.id, paymentIds: [secondPayment] },
+    ])
+    expect(await taxJobsFor(uninvoiced.id)).toStrictEqual([])
+  })
+
+  it('queues a tax run once for a workspace whose subscription ended before registration', async () => {
+    const { tenant } = await workspace()
+    const subscriptionId = await fakeSubscription({
+      tenantId: tenant.id,
+      priceId: plans.monthPriceId,
+    })
+    await fake.fakeAdvance(subscriptionId, 'active')
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId })
+    await syncTenantBilling(tenant.id, 'confirm')
+    await fake.fakeAdvance(subscriptionId, 'cancelled')
+    await syncTenantBilling(tenant.id, 'job')
+    expect(
+      await billingRepository.listTrackedSubscriptionIds(
+        tenant.id,
+        { kind: 'fake', mode: 'test' },
+        5
+      )
+    ).toStrictEqual([subscriptionId])
+    await runDailyBilling(new Date())
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([])
+
+    gst.on = true
+    await getBillingQueue().obliterate({ force: true })
+    const report = await runDailyBilling(new Date())
+    expect(report.tax_backfill).toMatchObject({ status: 'ok' })
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([{ tenantId: tenant.id }])
+
+    await getBillingQueue().obliterate({ force: true })
+    await runDailyBilling(new Date())
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([])
+  })
+
+  it('sets no backfill marker when the step fails before it has queued every workspace, so the next run backfills', async () => {
+    const { tenant } = await workspace()
+    const subscriptionId = await fakeSubscription({
+      tenantId: tenant.id,
+      priceId: plans.monthPriceId,
+    })
+    await fake.fakeAdvance(subscriptionId, 'active')
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId })
+    await syncTenantBilling(tenant.id, 'confirm')
+    gst.on = true
+    await getBillingQueue().obliterate({ force: true })
+    const marker = redisKey('billing-tax-backfill', istDate(FIXTURE_SELLER.effectiveFrom))
+
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'listTenantIdsWithTrackedSubscriptions',
+      () => Promise.reject(new Error('the list failed')),
+      async () => {
+        const report = await runDailyBilling(new Date())
+        expect(report.tax_backfill).toMatchObject({ status: 'failed' })
+      }
+    )
+    const redis = await getRedis()
+    expect(await redis.get(marker)).toBeNull()
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([])
+
+    await runDailyBilling(new Date())
+
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([{ tenantId: tenant.id }])
   })
 })
 

@@ -544,7 +544,8 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   },
   /**
    * Per owner, the invoice list, which reads the payment provider on every
-   * page. 30 a minute covers paging through years of invoices.
+   * page, and the tax reads (the tax details). 30 a minute covers paging
+   * through years of invoices.
    */
   billingRead: {
     name: 'billing-read',

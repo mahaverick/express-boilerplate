@@ -82,6 +82,11 @@ import {
   type StepUpLinkVariables,
 } from '@/templates/email/step-up-link.template'
 import {
+  TAX_DOCUMENT_ISSUED_TEMPLATE_KEY,
+  renderTaxDocumentIssuedTemplate,
+  type TaxDocumentIssuedVariables,
+} from '@/templates/email/tax-document-issued.template'
+import {
   renderTenantInvitationTemplate,
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
@@ -268,6 +273,11 @@ export type MailMessage =
       templateKey: typeof WINBACK_TEMPLATE_KEY
       variables: WinbackVariables
     }
+  | {
+      to: string
+      templateKey: typeof TAX_DOCUMENT_ISSUED_TEMPLATE_KEY
+      variables: TaxDocumentIssuedVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -366,6 +376,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case WINBACK_TEMPLATE_KEY: {
       return renderWinbackTemplate(message.variables)
+    }
+    case TAX_DOCUMENT_ISSUED_TEMPLATE_KEY: {
+      return renderTaxDocumentIssuedTemplate(message.variables)
     }
     default: {
       throw new Error(

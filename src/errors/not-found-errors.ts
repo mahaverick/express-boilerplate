@@ -4,6 +4,11 @@
  * what to do. `tests/unit/errors/not-found-codes.test.ts` fails on a 404
  * thrown without a code.
  */
+import {
+  TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE,
+  TAX_DOCUMENTS_READ_DISABLED_MESSAGE,
+  TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
+} from '@/constants/billing.constants'
 import { HttpError } from '@/errors/http-error'
 
 /**
@@ -87,6 +92,21 @@ export const NOT_FOUND = {
     message:
       "We couldn't find this suppression. It may have been lifted already. Refresh the suppression list.",
   },
+  // Registration is off. `notFoundError` takes where it is answered and words it for that.
+  taxDocumentsDisabled: {
+    code: 'tax_documents_disabled',
+    message: TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
+  },
+  taxDocument: {
+    code: 'tax_document_not_found',
+    message:
+      'This workspace has no tax document with that ID. Reload the page to see its documents.',
+  },
+  taxHeldCharge: {
+    code: 'tax_held_charge_not_found',
+    message:
+      'This workspace has no held charge with that ID. Reload the page to see its held charges.',
+  },
 } as const satisfies Record<string, NotFoundAnswer>
 
 /**
@@ -95,11 +115,43 @@ export const NOT_FOUND = {
 export type NotFoundKind = keyof typeof NOT_FOUND
 
 /**
+ * Where a `tax_documents_disabled` 404 is answered, which picks its message.
+ */
+export type TaxDocumentsDisabledWhere = 'read' | 'write' | 'export'
+
+/**
+ * The `tax_documents_disabled` message for each place it is answered.
+ */
+const TAX_DOCUMENTS_DISABLED_MESSAGES = {
+  read: TAX_DOCUMENTS_READ_DISABLED_MESSAGE,
+  write: TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
+  export: TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE,
+} as const satisfies Record<TaxDocumentsDisabledWhere, string>
+
+/**
+ * The 404 registration answers while it is off, worded for where it is answered.
+ * @param kind - `taxDocumentsDisabled`.
+ * @param where - A read, a write or the export.
+ * @returns The error to throw or pass to `next`.
+ */
+export function notFoundError(
+  kind: 'taxDocumentsDisabled',
+  where: TaxDocumentsDisabledWhere
+): HttpError
+/**
  * The 404 for one kind of thing not found.
  * @param kind - What was not found.
  * @returns The error to throw or pass to `next`.
  */
-export function notFoundError(kind: NotFoundKind): HttpError {
-  const { message, code } = NOT_FOUND[kind]
-  return new HttpError(message, 404, code)
+export function notFoundError(kind: Exclude<NotFoundKind, 'taxDocumentsDisabled'>): HttpError
+/**
+ * The 404 for one kind of thing not found; `taxDocumentsDisabled` also takes where it is answered.
+ * @param kind - What was not found.
+ * @param where - For `taxDocumentsDisabled`, a read, a write or the export.
+ * @returns The error to throw or pass to `next`.
+ */
+export function notFoundError(kind: NotFoundKind, where?: TaxDocumentsDisabledWhere): HttpError {
+  const answer = NOT_FOUND[kind]
+  const message = where === undefined ? answer.message : TAX_DOCUMENTS_DISABLED_MESSAGES[where]
+  return new HttpError(message, 404, answer.code)
 }

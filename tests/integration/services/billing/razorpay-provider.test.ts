@@ -12,6 +12,7 @@ import type { BillingProviderConfig } from '@/configs/billing.config'
 import { INVOICE_PAGE_SIZE, RAZORPAY_API_TIMEOUT_MS } from '@/constants/billing.constants'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { RazorpayProvider } from '@/services/billing/razorpay-provider.service'
+import { logger } from '@/services/logger.service'
 import type { ProviderPlanPrice } from '@/types/billing'
 import { startFakeRazorpay, type FakeRazorpay } from '../../../helpers/fake-razorpay'
 
@@ -528,6 +529,7 @@ describe('listInvoices', () => {
           paidAt: new Date(1_792_812_308_000).toISOString(),
           url: 'https://rzp.io/rzp/uvAO0vx',
           subscriptionId: 'sub_Trax7OfeENGU9N',
+          paymentId: 'pay_Traz18reMgTm3F',
         },
       ],
       nextCursor: null,
@@ -803,5 +805,253 @@ describe('verifyWebhook', () => {
     expect(provider.verifyWebhook(body, `${String(signature)}00`)).toBe(false)
     const altered = Buffer.concat([body, Buffer.from(' ')])
     expect(provider.verifyWebhook(altered, signature)).toBe(false)
+  })
+})
+
+/**
+ * The query of every request to a path so far.
+ * @param prefix - The path with its query start, such as `/v1/invoices?`.
+ * @returns One parsed query per call, oldest first.
+ */
+function queriesOf(prefix: string): URLSearchParams[] {
+  return fake.requests
+    .filter((r) => r.method === 'GET' && r.path.startsWith(prefix))
+    .map((r) => new URLSearchParams(r.path.split('?')[1] ?? ''))
+}
+
+/**
+ * An issued, unpaid invoice.
+ * @param n - A number that makes its id unique.
+ * @returns The invoice.
+ */
+function issued(n: number): Record<string, unknown> {
+  return { ...paidInvoice(n), status: 'issued', payment_id: null }
+}
+
+describe('listPaidCharges', () => {
+  it('pages through 30 invoices and keeps the paid ones with the amount paid', async () => {
+    const paid = paidInvoice(0)
+    const partly = {
+      ...paidInvoice(1),
+      amount: 120_000,
+      amount_paid: 99_900,
+    }
+    const first = [paid, ...Array.from({ length: 24 }, (_, n) => issued(n + 10))]
+    const second = [partly, ...Array.from({ length: 4 }, (_, n) => issued(n + 50))]
+    fake.replyInTurn('GET', '/invoices', [
+      { status: 200, json: collection(first) },
+      { status: 200, json: collection(second) },
+    ])
+
+    const charges = await provider.listPaidCharges('sub_Trax7OfeENGU9N')
+
+    expect(charges).toStrictEqual([
+      {
+        invoiceId: 'inv_N0',
+        subscriptionId: 'sub_Trax7OfeENGU9N',
+        paymentId: 'pay_Traz18reMgTm3F',
+        amountMinor: 99_900,
+        paidAt: new Date(1_792_812_308_000),
+        billingStart: new Date(1_792_812_180_000),
+        billingEnd: new Date(1_795_458_600_000),
+      },
+      expect.objectContaining({ invoiceId: 'inv_N1', amountMinor: 99_900 }) as unknown,
+    ])
+    const queries = queriesOf('/v1/invoices?')
+    expect(
+      queries.map((q) => [q.get('subscription_id'), q.get('count'), q.get('skip')])
+    ).toStrictEqual([
+      ['sub_Trax7OfeENGU9N', '25', '0'],
+      ['sub_Trax7OfeENGU9N', '25', '25'],
+    ])
+  })
+
+  it('returns the oldest paid charge first', async () => {
+    const older = { ...paidInvoice(1), paid_at: 1_700_000_000 }
+    const newer = { ...paidInvoice(2), paid_at: 1_800_000_000 }
+    fake.reply('GET', '/invoices', 200, collection([newer, older]))
+
+    const charges = await provider.listPaidCharges('sub_A')
+
+    expect(charges.map((charge) => charge.invoiceId)).toStrictEqual(['inv_N1', 'inv_N2'])
+  })
+
+  it('reads a missing billing period as null', async () => {
+    const { billing_start: _start, billing_end: _end, ...bare } = paidInvoice(0)
+    fake.reply('GET', '/invoices', 200, collection([bare]))
+
+    const [charge] = await provider.listPaidCharges('sub_A')
+
+    expect(charge).toMatchObject({ billingStart: null, billingEnd: null })
+  })
+
+  it('skips a paid invoice with no payment id', async () => {
+    fake.reply('GET', '/invoices', 200, collection([{ ...paidInvoice(0), payment_id: null }]))
+    expect(await provider.listPaidCharges('sub_A')).toStrictEqual([])
+  })
+
+  it('fails without retry for a paid invoice with no id, no paid_at or no amount, naming which', async () => {
+    const { paid_at: _paidAt, ...unstamped } = paidInvoice(0)
+    const { id: _id, ...unnamed } = paidInvoice(1)
+    const { amount: _amount, amount_paid: _amountPaid, ...unpriced } = paidInvoice(2)
+    const errors: unknown[] = []
+
+    for (const invoice of [unstamped, unnamed, unpriced]) {
+      fake.reply('GET', '/invoices', 200, collection([invoice]))
+      errors.push(await rejectionOf(provider.listPaidCharges('sub_A')))
+    }
+
+    for (const error of errors) expect(error).toBeInstanceOf(ProviderError)
+    expect(errors).toMatchObject([
+      { description: 'a paid invoice has no paid time' },
+      { description: 'a paid invoice has no id' },
+      { description: 'a paid invoice has no amount' },
+    ])
+    expect(errors).toMatchObject(
+      Array.from({ length: 3 }, () => ({
+        status: 200,
+        retryable: false,
+        code: 'UNEXPECTED_ANSWER',
+      }))
+    )
+  })
+
+  it('stops after 100 full pages with a warning and keeps what it read', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const full = [paidInvoice(0), ...Array.from({ length: 24 }, (_, n) => issued(n + 10))]
+    fake.reply('GET', '/invoices', 200, collection(full))
+
+    const charges = await provider.listPaidCharges('sub_A')
+
+    expect(queriesOf('/v1/invoices?')).toHaveLength(100)
+    // Every page answers the same paid invoice, so the read keeps one charge a page.
+    expect(charges).toHaveLength(100)
+    expect(warn).toHaveBeenCalledWith('A Razorpay paid-charge read stopped at its page limit', {
+      subscriptionId: 'sub_A',
+      pages: 100,
+    })
+    warn.mockRestore()
+  })
+
+  it('throws a retryable ProviderError for a 502', async () => {
+    fake.respondWith(502, {})
+    const error = await rejectionOf(provider.listPaidCharges('sub_A'))
+    expect(error).toBeInstanceOf(ProviderError)
+    expect(error).toMatchObject({ status: 502, retryable: true })
+  })
+})
+
+/**
+ * A Razorpay refund as the list answers it.
+ * @param id - The refund id.
+ * @param status - Its status.
+ * @returns The refund.
+ */
+function refund(id: string, status: string): Record<string, unknown> {
+  return {
+    ...fixture('api-refund').json,
+    id,
+    status,
+  }
+}
+
+describe('listRefunds', () => {
+  it('maps pending, processed and failed, drops an unknown status, and sends count 100', async () => {
+    fake.reply(
+      'GET',
+      '/payments/pay_Trb81VXuK03iPb/refunds',
+      200,
+      collection([
+        refund('rfnd_1', 'pending'),
+        refund('rfnd_2', 'processed'),
+        refund('rfnd_3', 'failed'),
+        refund('rfnd_4', 'mystery'),
+      ])
+    )
+
+    const refunds = await provider.listRefunds('pay_Trb81VXuK03iPb')
+
+    expect(refunds).toStrictEqual(
+      ['pending', 'processed', 'failed'].map((status, n) => ({
+        id: `rfnd_${String(n + 1)}`,
+        paymentId: 'pay_Trb81VXuK03iPb',
+        amountMinor: 99_900,
+        status,
+        createdAt: new Date(1_792_812_799_000),
+      }))
+    )
+    const [query] = queriesOf('/v1/payments/pay_Trb81VXuK03iPb/refunds?')
+    expect(query?.get('count')).toBe('100')
+    expect(query?.get('skip')).toBe('0')
+  })
+
+  it('pages while a page is full and lists the oldest first', async () => {
+    const full = Array.from({ length: 100 }, (_, n) => ({
+      ...refund(`rfnd_A${String(n)}`, 'processed'),
+      created_at: 1_800_000_000 - n,
+    }))
+    fake.replyInTurn('GET', '/payments/pay_X/refunds', [
+      { status: 200, json: collection(full) },
+      {
+        status: 200,
+        json: collection([{ ...refund('rfnd_B', 'processed'), created_at: 1_700_000_000 }]),
+      },
+    ])
+
+    const refunds = await provider.listRefunds('pay_X')
+
+    expect(refunds).toHaveLength(101)
+    expect(refunds[0]?.id).toBe('rfnd_B')
+    expect(queriesOf('/v1/payments/pay_X/refunds?').map((q) => q.get('skip'))).toStrictEqual([
+      '0',
+      '100',
+    ])
+  })
+
+  it('stops after 100 full pages with a warning and keeps what it read', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const full = Array.from({ length: 100 }, (_, n) => refund(`rfnd_P${String(n)}`, 'processed'))
+    fake.reply('GET', '/payments/pay_X/refunds', 200, collection(full))
+
+    const refunds = await provider.listRefunds('pay_X')
+
+    expect(queriesOf('/v1/payments/pay_X/refunds?')).toHaveLength(100)
+    expect(refunds).toHaveLength(10_000)
+    expect(warn).toHaveBeenCalledWith('A Razorpay refund read stopped at its page limit', {
+      pages: 100,
+    })
+    warn.mockRestore()
+  })
+
+  it('throws a retryable ProviderError for a 502', async () => {
+    fake.respondWith(502, {})
+    const error = await rejectionOf(provider.listRefunds('pay_X'))
+    expect(error).toMatchObject({ status: 502, retryable: true })
+  })
+})
+
+describe('listRecentRefunds', () => {
+  it('sends from in unix seconds and count 100', async () => {
+    fake.reply(
+      'GET',
+      '/refunds',
+      200,
+      collection([{ ...fixture('api-refund').json, status: 'processed' }])
+    )
+    const since = new Date('2026-10-20T10:00:00.000Z')
+
+    const refunds = await provider.listRecentRefunds(since)
+
+    expect(refunds).toHaveLength(1)
+    const [query] = queriesOf('/v1/refunds?')
+    expect(query?.get('from')).toBe(String(since.getTime() / 1000))
+    expect(query?.get('count')).toBe('100')
+    expect(query?.get('skip')).toBe('0')
+  })
+
+  it('throws a retryable ProviderError for a 502', async () => {
+    fake.respondWith(502, {})
+    const error = await rejectionOf(provider.listRecentRefunds(new Date()))
+    expect(error).toMatchObject({ status: 502, retryable: true })
   })
 })

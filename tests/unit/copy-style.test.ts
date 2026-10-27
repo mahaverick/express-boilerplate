@@ -34,6 +34,7 @@ import { renderPaymentFailedTemplate } from '@/templates/email/payment-failed.te
 import { renderRenewalUpcomingTemplate } from '@/templates/email/renewal-upcoming.template'
 import { renderSignInLinkTemplate } from '@/templates/email/sign-in-link.template'
 import { renderStepUpLinkTemplate } from '@/templates/email/step-up-link.template'
+import { renderTaxDocumentIssuedTemplate } from '@/templates/email/tax-document-issued.template'
 import { renderTenantInvitationTemplate } from '@/templates/email/tenant-invitation.template'
 import { renderTrialEndedTemplate } from '@/templates/email/trial-ended.template'
 import { renderTrialEndingTemplate } from '@/templates/email/trial-ending.template'
@@ -61,6 +62,8 @@ const MACHINE_FACING = new Set([
   'src/controllers/email-webhook.controller.ts',
   'src/services/billing/billing-webhook.service.ts',
   'src/controllers/billing-webhook.controller.ts',
+  // GSTR-1 column headers and cell values, named as the GST offline tool reads them.
+  'src/constants/gst-export.constants.ts',
 ])
 
 /**
@@ -593,6 +596,26 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
   ],
+  tax_document_issued: [
+    renderTaxDocumentIssuedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      documentType: 'invoice',
+      documentNumber: 'INV/26-27/00001',
+      invoiceNumber: '',
+      issuedOn: '27 October 2026',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+    renderTaxDocumentIssuedTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      documentType: 'credit_note',
+      documentNumber: 'CN/26-27/00001',
+      invoiceNumber: 'INV/26-27/00001',
+      issuedOn: '27 October 2026',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    }),
+  ],
 }
 
 /**
@@ -649,7 +672,32 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
   disputeOpen: BILLING_ALERT_TEXT.disputeOpen('pay_P1'),
   webhookFailed: BILLING_ALERT_TEXT.webhookFailed('evt_E1', 'subscription.charged'),
   stillRetrying: BILLING_ALERT_TEXT.stillRetrying('Razorpay event evt_E1 (subscription.charged)'),
+  taxHeldSez: BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900),
+  taxHeldSezRefunded: BILLING_ALERT_TEXT.taxHeldSezRefunded('pay_P1', 99_900, 'rfnd_R1'),
+  taxIssueFailed: BILLING_ALERT_TEXT.taxIssueFailed('tenant-1', '2026-10-27'),
+  taxRefundOverCredit: BILLING_ALERT_TEXT.taxRefundOverCredit(
+    'rfnd_R1',
+    50_000,
+    20_000,
+    'INV/26-27/00001'
+  ),
+  taxInvoiceLate: BILLING_ALERT_TEXT.taxInvoiceLate(3, 'INV/26-27/00001', 'INV/26-27/00003'),
+  taxCreditNoteLate: BILLING_ALERT_TEXT.taxCreditNoteLate(
+    'CN/27-28/00001',
+    'INV/26-27/00001',
+    2027
+  ),
 }
+
+/**
+ * Alert wordings a key renders only for some arguments, checked beside `ALERTS`.
+ */
+const ALERT_VARIANTS: ReadonlyArray<[string, string]> = [
+  [
+    'taxInvoiceLate (one)',
+    BILLING_ALERT_TEXT.taxInvoiceLate(1, 'INV/26-27/00001', 'INV/26-27/00001'),
+  ],
+]
 
 /**
  * What breaks the rules in one piece of copy.
@@ -721,7 +769,10 @@ describe('user-facing copy', () => {
   })
 
   it('breaks no copy rule in any staff billing alert', () => {
-    const copy = Object.entries(ALERTS).map(([key, text]) => ({ where: `alert ${key}`, text }))
+    const copy = [...Object.entries(ALERTS), ...ALERT_VARIANTS].map(([key, text]) => ({
+      where: `alert ${key}`,
+      text,
+    }))
     expect(offenders(copy)).toEqual([])
   })
 })

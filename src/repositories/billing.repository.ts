@@ -8,6 +8,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   getTableColumns,
@@ -27,6 +28,7 @@ import type {
   BillingProviderMode,
   BillingState,
 } from '@/constants/billing.constants'
+import type { TaxSubscriptionRole } from '@/constants/gst.constants'
 import {
   billingAlertModel,
   billingEventModel,
@@ -296,7 +298,7 @@ export class BillingRepository {
   ): Promise<void> {
     const [recorded] = await tx
       .insert(tenantBillingSubscriptionModel)
-      .values({ tenantId, provider: scope.kind, mode: scope.mode, subscriptionId })
+      .values({ tenantId, provider: scope.kind, mode: scope.mode, subscriptionId, role: 'held' })
       .onConflictDoNothing({
         target: [
           tenantBillingSubscriptionModel.provider,
@@ -307,7 +309,10 @@ export class BillingRepository {
       .returning({ id: tenantBillingSubscriptionModel.id })
     if (recorded !== undefined) return
     const [holder] = await tx
-      .select({ tenantId: tenantBillingSubscriptionModel.tenantId })
+      .select({
+        tenantId: tenantBillingSubscriptionModel.tenantId,
+        role: tenantBillingSubscriptionModel.role,
+      })
       .from(tenantBillingSubscriptionModel)
       .where(
         and(
@@ -316,7 +321,23 @@ export class BillingRepository {
           eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId)
         )
       )
-    if (holder === undefined || holder.tenantId === tenantId) return
+    if (holder === undefined) return
+    if (holder.tenantId === tenantId) {
+      // A refunded duplicate that later becomes current is the held one now.
+      if (holder.role !== 'held') {
+        await tx
+          .update(tenantBillingSubscriptionModel)
+          .set({ role: 'held' })
+          .where(
+            and(
+              eq(tenantBillingSubscriptionModel.provider, scope.kind),
+              eq(tenantBillingSubscriptionModel.mode, scope.mode),
+              eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId)
+            )
+          )
+      }
+      return
+    }
     // A repository cannot log; a staff alert, raised once per pair, names the ids instead.
     const message = `Subscription ${subscriptionId} became current for workspace ${tenantId} but is recorded for workspace ${holder.tenantId}. Check which workspace pays for it.`
     if (await this.hasAlertNaming(tenantId, 'reconcile_repair', message, tx)) return
@@ -333,6 +354,114 @@ export class BillingRepository {
    * @returns The subscription ids.
    */
   async listHeldSubscriptionIds(
+    tenantId: string,
+    scope: ProviderScope,
+    limit: number,
+    executor: DbExecutor = db
+  ): Promise<string[]> {
+    const rows = await executor
+      .select({ subscriptionId: tenantBillingSubscriptionModel.subscriptionId })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.tenantId, tenantId),
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantBillingSubscriptionModel.role, 'held')
+        )
+      )
+      .orderBy(
+        desc(tenantBillingSubscriptionModel.firstSeenAt),
+        desc(tenantBillingSubscriptionModel.id)
+      )
+      .limit(limit)
+    return rows.map((row) => row.subscriptionId)
+  }
+
+  /**
+   * Record a subscription that was refunded rather than held, so the tax
+   * reconciler can find its charge and refund. Never downgrades a held
+   * subscription, and keeps the first role recorded. An id already recorded
+   * for another workspace stays theirs, and one `reconcile_repair` alert
+   * names the ids, as `#recordHeldSubscription` does. Runs after the sync
+   * commits.
+   * @param tenantId - The workspace the charge belongs to.
+   * @param scope - The provider and mode the subscription belongs to.
+   * @param subscriptionId - The subscription.
+   * @param role - Why it was refunded.
+   * @param executor - Where to run the write. Defaults to the pool.
+   */
+  async recordTrackedSubscription(
+    tenantId: string,
+    scope: ProviderScope,
+    subscriptionId: string,
+    role: Exclude<TaxSubscriptionRole, 'held'>,
+    executor: DbExecutor = db
+  ): Promise<void> {
+    const [recorded] = await executor
+      .insert(tenantBillingSubscriptionModel)
+      .values({ tenantId, provider: scope.kind, mode: scope.mode, subscriptionId, role })
+      .onConflictDoNothing({
+        target: [
+          tenantBillingSubscriptionModel.provider,
+          tenantBillingSubscriptionModel.mode,
+          tenantBillingSubscriptionModel.subscriptionId,
+        ],
+      })
+      .returning({ id: tenantBillingSubscriptionModel.id })
+    if (recorded !== undefined) return
+    const [holder] = await executor
+      .select({ tenantId: tenantBillingSubscriptionModel.tenantId })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId)
+        )
+      )
+    if (holder === undefined || holder.tenantId === tenantId) return
+    const message = `Subscription ${subscriptionId} was refunded for workspace ${tenantId} but is recorded for workspace ${holder.tenantId}. Check which workspace pays for it.`
+    if (await this.hasAlertNaming(tenantId, 'reconcile_repair', message, executor)) return
+    await this.insertAlert({ kind: 'reconcile_repair', tenantId, message }, executor)
+  }
+
+  /**
+   * Count the subscriptions a workspace has held or had refunded, in every
+   * role.
+   * @param tenantId - The workspace.
+   * @param scope - The running provider and mode.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The count.
+   */
+  async countTrackedSubscriptions(
+    tenantId: string,
+    scope: ProviderScope,
+    executor: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ total: count() })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.tenantId, tenantId),
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode)
+        )
+      )
+    return row?.total ?? 0
+  }
+
+  /**
+   * The subscriptions a workspace has held or had refunded, in every role,
+   * newest first.
+   * @param tenantId - The workspace.
+   * @param scope - The running provider and mode.
+   * @param limit - The most ids to answer.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The subscription ids.
+   */
+  async listTrackedSubscriptionIds(
     tenantId: string,
     scope: ProviderScope,
     limit: number,
@@ -393,6 +522,60 @@ export class BillingRepository {
       )
       .limit(1)
     return found !== undefined
+  }
+
+  /**
+   * The workspaces other than the platform one that track any subscription
+   * in the running provider and mode.
+   * @param scope - The running provider and mode.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The workspace ids, in id order.
+   */
+  async listTenantIdsWithTrackedSubscriptions(
+    scope: ProviderScope,
+    executor: DbExecutor = db
+  ): Promise<string[]> {
+    const rows = await executor
+      .selectDistinct({ tenantId: tenantBillingSubscriptionModel.tenantId })
+      .from(tenantBillingSubscriptionModel)
+      .innerJoin(tenantModel, eq(tenantModel.id, tenantBillingSubscriptionModel.tenantId))
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantModel.isPlatform, false)
+        )
+      )
+      .orderBy(asc(tenantBillingSubscriptionModel.tenantId))
+    return rows.map((row) => row.tenantId)
+  }
+
+  /**
+   * The workspace that tracks a subscription in any role, else the one whose
+   * billing row holds it (a pending checkout nothing has recorded yet).
+   * @param scope - The running provider and mode.
+   * @param subscriptionId - The provider's subscription id.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The workspace id, or undefined when none tracks it.
+   */
+  async findTenantIdBySubscription(
+    scope: ProviderScope,
+    subscriptionId: string,
+    executor: DbExecutor = db
+  ): Promise<string | undefined> {
+    const [tracked] = await executor
+      .select({ tenantId: tenantBillingSubscriptionModel.tenantId })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId)
+        )
+      )
+    if (tracked !== undefined) return tracked.tenantId
+    const held = await this.findBySubscriptionId(subscriptionId, executor)
+    return held?.tenantId
   }
 
   /**

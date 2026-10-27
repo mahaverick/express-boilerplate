@@ -8,7 +8,8 @@
  * before that middleware's database reads. `GET /:slug/beta` is the reference
  * flag-gated route: `requireFlag` runs after `resolveTenant()`, because
  * `example_beta_page` is tenant-scoped. The billing routes come from
- * `addBillingRoutes` (billing.routes.ts).
+ * `addBillingRoutes` (billing.routes.ts) and the owner's tax routes from
+ * `addTaxRoutes` (tax.routes.ts), which share the billing limiters.
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -28,6 +29,7 @@ import {
   resolveTenant,
 } from '@/middlewares/tenant.middleware'
 import { addBillingRoutes } from '@/routes/billing.routes'
+import { addTaxRoutes } from '@/routes/tax.routes'
 
 /**
  * Build the tenant routes. `requireRole` checks the effective role, so staff
@@ -199,12 +201,15 @@ export function createTenantRouter(): Router {
     requireFlag('example_beta_page'),
     flagsController.getExampleBeta
   )
+  const billingWrite = createRateLimiter(RATE_LIMITS.billingWrite)
+  const billingRead = createRateLimiter(RATE_LIMITS.billingRead)
   addBillingRoutes(router, {
-    billingWrite: createRateLimiter(RATE_LIMITS.billingWrite),
-    billingRead: createRateLimiter(RATE_LIMITS.billingRead),
+    billingWrite,
+    billingRead,
     upgradeRequest: createRateLimiter(RATE_LIMITS.upgradeRequest),
     memberWrite: writeLimiter,
   })
+  addTaxRoutes(router, { billingWrite, billingRead })
 
   return router
 }

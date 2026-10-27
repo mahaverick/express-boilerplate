@@ -606,6 +606,15 @@ const CANDIDATES: readonly unknown[] = [
   '2026-11-02T10:00:00.000Z',
   'react',
   'apex',
+  // A tax document's type, a document id and a held charge id.
+  'invoice',
+  'credit_note',
+  '0192f6a4-3c1e-7b2a-9d4e-5f6a7b8c9d0e',
+  '0192f6a4-3c1e-7b2a-9d4e-5f6a7b8c9d0f',
+  // The tax details fields a save changed.
+  ['gstin', 'city'],
+  // A tax export period.
+  '2026-10',
   true,
   false,
   0,
@@ -811,6 +820,33 @@ describe('buildProductEvent', () => {
     })
   })
 
+  it('sends a tax document download in its tenant group with the type and surface only', () => {
+    const row = buildProductEvent(
+      {
+        type: 'tax_document_downloaded',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        documentType: 'invoice',
+        surface: 'web',
+        at: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row).toEqual({
+      event: 'tax_document_downloaded',
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: {
+        type: 'invoice',
+        surface: 'web',
+        source: 'product',
+        access: 'member',
+        app: 'api',
+        $groups: { tenant: TENANT_ID },
+      },
+    })
+  })
+
   it('sends a reconciled completion, which has no user, as a system event', () => {
     const row = buildProductEvent(
       {
@@ -844,6 +880,14 @@ describe('buildProductEvent', () => {
         stepKey: 'read_getting_started',
         how: 'manual',
         required: false,
+        at: OCCURRED_AT,
+      },
+      {
+        type: 'tax_document_downloaded',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        documentType: 'credit_note',
+        surface: 'apex',
         at: OCCURRED_AT,
       },
       ...BILLING_DETAILS.map((detail) => billingEvent(detail)),
@@ -997,6 +1041,11 @@ describe('buildProductEvent for a billing event', () => {
     )
     expect(refunded.properties).toMatchObject({ refund_cause: 'archived' })
     expect(refunded.properties).not.toHaveProperty('reason')
+    const lateSwitch = buildProductEvent(
+      billingEvent({ type: 'duplicate_subscription_refunded', refundCause: 'late_switch' }),
+      {}
+    )
+    expect(lateSwitch.properties).toMatchObject({ refund_cause: 'late_switch' })
   })
 
   it.each(BILLING_DETAILS.map((detail) => [detail.type, detail] as const))(

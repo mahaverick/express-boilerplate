@@ -25,7 +25,8 @@ import type {
   PlanPrice,
 } from '@/database/models/billing.model'
 import { toPriceView, type PriceView, type TenantBillingView } from '@/presenters/billing.presenter'
-import type { ProviderInvoice, SourcedEntitlements } from '@/types/billing'
+import type { SourcedEntitlements } from '@/types/billing'
+import type { LinkedInvoice } from '@/types/tax'
 
 /**
  * Where a grant stands: in force, past its expiry, or revoked by staff.
@@ -74,6 +75,10 @@ export interface StaffTenantBillingView extends TenantBillingView {
     at: Date
   }[]
   events: { type: string; receivedAt: Date; processedAt: Date | null; error: string | null }[]
+  /**
+   * The workspace's unresolved held SEZ charges, for the "Held: SEZ" badge.
+   */
+  openHeldCharges: number
 }
 
 /**
@@ -139,16 +144,17 @@ export function toEventView(event: BillingEventRecord): StaffTenantBillingView['
 /**
  * One invoice as staff see it: the owner's view without its link, since the
  * provider's hosted invoice page shows the payer's contact details, and with
- * the subscription it bills.
+ * the subscription it bills and its tax links. The internal payment id is
+ * left out too.
  */
-export type StaffInvoiceView = Omit<ProviderInvoice, 'url'>
+export type StaffInvoiceView = Omit<LinkedInvoice, 'url'>
 
 /**
- * Project a provider invoice for staff.
- * @param invoice - The invoice the provider listed.
+ * Project a linked provider invoice for staff.
+ * @param invoice - The invoice the provider listed, with its tax links.
  * @returns It without its link.
  */
-export function toStaffInvoiceView(invoice: ProviderInvoice): StaffInvoiceView {
+export function toStaffInvoiceView(invoice: LinkedInvoice): StaffInvoiceView {
   return {
     id: invoice.id,
     subscriptionId: invoice.subscriptionId,
@@ -157,6 +163,9 @@ export function toStaffInvoiceView(invoice: ProviderInvoice): StaffInvoiceView {
     status: invoice.status,
     issuedAt: invoice.issuedAt,
     paidAt: invoice.paidAt,
+    taxDocument: invoice.taxDocument,
+    creditNotes: invoice.creditNotes,
+    taxStatus: invoice.taxStatus,
   }
 }
 
@@ -225,6 +234,19 @@ export interface BillingSettingsView {
    * The name falls back to their email when they have none.
    */
   updatedBy: { userId: string; name: string } | null
+  /**
+   * GST registration is on.
+   */
+  taxDocumentsEnabled: boolean
+  /**
+   * At least one tax document exists on the platform, purged workspaces' included.
+   */
+  hasTaxDocuments: boolean
+  /**
+   * The configured first day tax documents cover (`YYYY-MM-DD`), whether or
+   * not registration is on; null when unset.
+   */
+  gstEffectiveFrom: string | null
 }
 
 /**

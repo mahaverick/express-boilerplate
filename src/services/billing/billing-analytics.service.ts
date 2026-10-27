@@ -773,7 +773,10 @@ export async function trackPayerLeft(
 export async function trackProviderEvent(
   row: TenantBillingRecord,
   detail:
-    | { type: 'duplicate_subscription_refunded'; refundCause: 'duplicate' | 'archived' }
+    | {
+        type: 'duplicate_subscription_refunded'
+        refundCause: 'duplicate' | 'late_switch' | 'archived'
+      }
     | { type: 'dispute_opened' },
   stamp: string
 ): Promise<void> {

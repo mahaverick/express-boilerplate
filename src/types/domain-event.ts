@@ -4,6 +4,7 @@
  * subscriber receives with one.
  */
 import type { BillingInterval, BillingState, PlanKey } from '@/constants/billing.constants'
+import type { TaxDocumentType } from '@/constants/gst.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { DowngradeCause } from '@/utilities/billing-transitions.utilities'
 
@@ -94,10 +95,11 @@ export type BillingEventDetail =
   | {
       type: 'duplicate_subscription_refunded'
       /**
-       * Why it was refunded: a second subscription while one ran, or one an
-       * archived workspace adopted, which it can't use.
+       * Why it was refunded: a second subscription while one ran, an
+       * interval switch paid after the current subscription renewed, or one
+       * an archived workspace adopted, which it can't use.
        */
-      refundCause: 'duplicate' | 'archived'
+      refundCause: 'duplicate' | 'late_switch' | 'archived'
     }
   | { type: 'billing_reconciled'; field: string }
   | { type: 'dispute_opened' }
@@ -131,6 +133,20 @@ export type ProductDomainEvent =
       stepKey: string
       how: 'auto' | 'manual'
       required: boolean
+      at: Date
+    }
+  | {
+      type: 'tax_document_downloaded'
+      tenantId: string
+      /**
+       * Who downloaded the PDF.
+       */
+      userId: string
+      documentType: TaxDocumentType
+      /**
+       * Where it was downloaded: the customer app or Apex.
+       */
+      surface: 'web' | 'apex'
       at: Date
     }
   | BillingDomainEvent

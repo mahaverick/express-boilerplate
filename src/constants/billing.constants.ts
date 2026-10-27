@@ -80,6 +80,10 @@ export const BILLING_ALERT_KINDS = [
   'reconcile_repair',
   'dispute',
   'subscription_completed',
+  'tax_held_sez',
+  'tax_issue_failed',
+  'tax_invoice_late',
+  'tax_credit_note_late',
 ] as const
 
 /**
@@ -317,3 +321,234 @@ export const PLAN_VERSION_CONFLICT_CODE = 'PLAN_VERSION_CONFLICT'
  * confirm it, in case of a slipped digit.
  */
 export const PRICE_WARNING_ABOVE_MINOR = 1_500_000
+
+/**
+ * What anyone but an owner by membership reads when they ask for tax
+ * details or tax documents, staff acting through platform access included.
+ */
+export const TAX_DOCUMENTS_OWNER_ONLY_MESSAGE =
+  'Only a workspace owner can see tax documents. Ask an owner.'
+
+/**
+ * What anyone but an owner by membership reads when they try to change tax
+ * details, staff acting through platform access included.
+ */
+export const TAX_DETAILS_OWNER_ONLY_MESSAGE =
+  'Only a workspace owner can change tax details. Ask an owner.'
+
+/**
+ * The tax documents 404 on a read while registration is off and the
+ * workspace has no documents.
+ */
+export const TAX_DOCUMENTS_READ_DISABLED_MESSAGE =
+  'Tax documents are off, and this workspace has none to download.'
+
+/**
+ * The tax documents 404 on a write (tax details, a manual credit note) while
+ * registration is off.
+ */
+export const TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE =
+  "Tax documents are off, so tax details and credit notes can't change. Issued documents stay available to download."
+
+/**
+ * The tax export's 404 while registration is off and no workspace has a
+ * tax document.
+ */
+export const TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE =
+  'Tax documents are off, and no workspace has any, so there is nothing to export.'
+
+/**
+ * The field error for a tax export period that is missing or malformed.
+ */
+export const TAX_EXPORT_PERIOD_MESSAGE =
+  'Use YYYY-MM for a month or YYYY-Q1 to YYYY-Q4 for a quarter.'
+
+/**
+ * Error code: a tax details PATCH sent a `version` that no longer matches:
+ * stale, null when details exist, or a number when none exist.
+ */
+export const TAX_DETAILS_VERSION_CONFLICT_CODE = 'TAX_DETAILS_VERSION_CONFLICT'
+
+/**
+ * What a tax details PATCH with a stale version reads.
+ */
+export const TAX_DETAILS_VERSION_CONFLICT_MESSAGE =
+  'Someone changed these tax details since you opened them. Reload to see them, then save again.'
+
+/**
+ * What an owner reads after saving tax details.
+ */
+export const TAX_DETAILS_SAVED_MESSAGE =
+  'Tax details saved. They apply to invoices issued from now on.'
+
+/**
+ * What staff read after saving a workspace's tax details.
+ * @param workspaceName - The workspace's name.
+ * @returns The message.
+ */
+export function staffTaxDetailsSavedMessage(workspaceName: string): string {
+  return `Tax details for ${workspaceName} saved. They apply to invoices issued from now on.`
+}
+
+/**
+ * Error code: a manual credit note named a credit note, not an invoice.
+ */
+export const NOT_AN_INVOICE_CODE = 'NOT_AN_INVOICE'
+
+/**
+ * What a manual credit note against a credit note reads.
+ */
+export const NOT_AN_INVOICE_MESSAGE = 'Credit notes reduce invoices only. Pick the invoice instead.'
+
+/**
+ * Error code: a manual credit note is more than what is left to credit on its
+ * invoice; `details.remainingMinor` says what is left.
+ */
+export const CREDIT_EXCEEDS_INVOICE_CODE = 'CREDIT_EXCEEDS_INVOICE'
+
+/**
+ * What a manual credit note larger than what is left reads.
+ * @param remaining - What is left to credit, in rupees as `formatRupees` writes them.
+ * @returns The message.
+ */
+export function creditExceedsInvoiceMessage(remaining: string): string {
+  return `This invoice has ₹${remaining} left to credit. Enter ₹${remaining} or less.`
+}
+
+/**
+ * What staff read after issuing a credit note by hand.
+ * @param number - The note's number.
+ * @param amount - Its amount, in rupees as `formatRupees` writes them.
+ * @returns The message.
+ */
+export function creditNoteIssuedMessage(number: string, amount: string): string {
+  return `Credit note ${number} issued for ₹${amount}.`
+}
+
+/**
+ * What a manual credit note amount outside the range reads.
+ */
+export const CREDIT_NOTE_AMOUNT_MESSAGE = 'Enter a credit from ₹1 to ₹1,00,000.'
+
+/**
+ * Error code: the same staff member issued a manual credit note for the same
+ * invoice, amount and reason in the last 10 minutes.
+ */
+export const CREDIT_NOTE_REPEATED_CODE = 'CREDIT_NOTE_REPEATED'
+
+/**
+ * What a repeated manual credit note reads.
+ * @param number - The earlier note's number.
+ * @param time - When it was issued, as `HH:mm` in IST.
+ * @returns The message.
+ */
+export function creditNoteRepeatedMessage(number: string, time: string): string {
+  return `Credit note ${number} for this amount and reason was issued at ${time} IST. Nothing changed.`
+}
+
+/**
+ * Error code: a held charge staff tried to resolve is already resolved.
+ */
+export const HELD_CHARGE_RESOLVED_CODE = 'HELD_CHARGE_RESOLVED'
+
+/**
+ * What resolving an already resolved held charge reads.
+ * @param date - The day it was resolved, as a person reads it.
+ * @returns The message.
+ */
+export function heldChargeResolvedMessage(date: string): string {
+  return `This held charge was resolved on ${date}. Nothing changed.`
+}
+
+/**
+ * What staff read after marking a held charge resolved.
+ */
+export const HELD_CHARGE_MARKED_RESOLVED_MESSAGE = 'Held charge marked resolved.'
+
+/**
+ * Tax details: the legal name is missing on the first save, or sent blank.
+ */
+export const TAX_LEGAL_NAME_REQUIRED_MESSAGE = 'Enter the legal name to print on your tax invoices.'
+
+/**
+ * Tax details: a legal name or address line over 100 characters.
+ */
+export const TAX_TEXT_TOO_LONG_MESSAGE = 'Use 100 characters or fewer.'
+
+/**
+ * Tax details: a city over 60 characters.
+ */
+export const TAX_CITY_TOO_LONG_MESSAGE = 'Use 60 characters or fewer.'
+
+/**
+ * Tax details: a character the invoice font can't draw.
+ */
+export const TAX_TEXT_CHARACTERS_MESSAGE = 'Use English letters, digits and common punctuation.'
+
+/**
+ * Tax details: a GSTIN of the wrong shape.
+ */
+export const GSTIN_SHAPE_MESSAGE = 'Enter the 15-character GSTIN, such as 29ABCDE1234F1ZW.'
+
+/**
+ * Tax details: a GSTIN whose check character is wrong.
+ */
+export const GSTIN_CHECKSUM_MESSAGE =
+  "This GSTIN's last character doesn't match the rest. Check it against your registration certificate."
+
+/**
+ * Tax details: a GSTIN whose first two digits are no selectable state.
+ */
+export const GSTIN_STATE_MESSAGE = "This GSTIN's first two digits aren't a state code."
+
+/**
+ * Tax details: address line 1 is missing with a GSTIN.
+ */
+export const TAX_ADDRESS_REQUIRED_MESSAGE =
+  'Enter address line 1. Invoices with a GSTIN need your registered address.'
+
+/**
+ * Tax details: the city is missing with a GSTIN.
+ */
+export const TAX_CITY_REQUIRED_MESSAGE = 'Enter the city. Invoices with a GSTIN need it.'
+
+/**
+ * Tax details: the PIN code is missing with a GSTIN.
+ */
+export const TAX_PINCODE_REQUIRED_MESSAGE =
+  'Enter the 6-digit PIN code. Invoices with a GSTIN need it.'
+
+/**
+ * Tax details: the state is missing on the first save, or sent null.
+ */
+export const TAX_STATE_REQUIRED_MESSAGE =
+  'Choose the state of your billing address. It sets the tax split on your invoices.'
+
+/**
+ * Tax details: an unknown or retired state code.
+ */
+export const TAX_STATE_UNKNOWN_MESSAGE = 'Choose a state from the list.'
+
+/**
+ * Tax details: a PIN code that isn't six digits with a non-zero first.
+ */
+export const TAX_PINCODE_FORMAT_MESSAGE = 'Enter the 6-digit PIN code.'
+
+/**
+ * Tax details: an SEZ unit with no GSTIN.
+ */
+export const TAX_SEZ_NEEDS_GSTIN_MESSAGE = 'An SEZ unit has a GSTIN. Enter it first.'
+
+/**
+ * Tax details: a PATCH that changes nothing.
+ */
+export const TAX_DETAILS_NO_CHANGE_MESSAGE = 'Change at least one tax detail before saving.'
+
+/**
+ * Tax details: the GSTIN's state is not the chosen state.
+ * @param stateName - The state the GSTIN is registered in.
+ * @returns The message, on `stateCode`.
+ */
+export function gstinStateMismatchMessage(stateName: string): string {
+  return `This GSTIN is registered in ${stateName}. Choose ${stateName} as the state.`
+}

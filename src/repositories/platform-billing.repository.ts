@@ -373,6 +373,7 @@ export function billingSubscriptionList(
         .where(
           and(
             eq(held.tenantId, tenantId),
+            eq(held.role, 'held'),
             filters.providers === undefined ? undefined : inArray(held.provider, filters.providers),
             filters.modes === undefined ? undefined : inArray(held.mode, filters.modes),
             searchCondition(search, [sql`lower(${held.subscriptionId})`]),

@@ -39,6 +39,7 @@ import {
   type PlanKey,
 } from '@/constants/billing.constants'
 import type { EntitlementValue } from '@/constants/entitlements.constants'
+import { TAX_SUBSCRIPTION_ROLES, type TaxSubscriptionRole } from '@/constants/gst.constants'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { sqlValueList } from '@/utilities/sql-value-list.utilities'
@@ -442,9 +443,17 @@ export const tenantBillingSubscriptionModel = pgTable(
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, precision: 3 })
       .notNull()
       .defaultNow(),
+    /**
+     * The part this subscription plays for tax documents; rows from before GST read `held`.
+     */
+    role: varchar('role', { length: 16 }).$type<TaxSubscriptionRole>().notNull().default('held'),
   },
   (table) => [
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
+    check(
+      'tenant_billing_subscriptions_role_check',
+      sql`${table.role} in (${sql.raw(sqlValueList(TAX_SUBSCRIPTION_ROLES))})`
+    ),
     check(
       'tenant_billing_subscriptions_provider_check',
       sql`${table.provider} in (${sql.raw(sqlValueList(BILLING_PROVIDERS))})`

@@ -56,4 +56,30 @@ describe('BILLING_ALERT_TEXT', () => {
       BILLING_ALERT_TEXT.stillRetrying('Razorpay event evt_1 (subscription.charged)')
     ).toContain('evt_1 (subscription.charged) is still retrying')
   })
+
+  it('words the tax alerts as the API contract gives them', () => {
+    expect(BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900)).toBe(
+      "Payment pay_P1 of ₹999 is held: this workspace is an SEZ unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab."
+    )
+    expect(BILLING_ALERT_TEXT.taxHeldSezRefunded('pay_P1', 99_900, 'rfnd_R1')).toBe(
+      'Payment pay_P1 of a held SEZ invoice was refunded ₹999 (refund rfnd_R1). Issue a credit note by hand.'
+    )
+    expect(BILLING_ALERT_TEXT.taxIssueFailed('tenant-1', '2026-10-27')).toBe(
+      'Tax documents for workspace tenant-1 were not issued on 2026-10-27. Check the error log for this workspace, then resync it.'
+    )
+    expect(
+      BILLING_ALERT_TEXT.taxRefundOverCredit('rfnd_R1', 50_000, 20_000, 'INV/26-27/00001')
+    ).toBe(
+      "Refund rfnd_R1 of ₹500 is more than the ₹200 left to credit on INV/26-27/00001. No credit note was issued. Check this invoice's manual credit notes."
+    )
+    expect(BILLING_ALERT_TEXT.taxInvoiceLate(3, 'INV/26-27/00001', 'INV/26-27/00003')).toBe(
+      '3 tax invoices, INV/26-27/00001 to INV/26-27/00003, were issued more than 30 days after payment. Tell your CA.'
+    )
+    expect(BILLING_ALERT_TEXT.taxInvoiceLate(1, 'INV/26-27/00007', 'INV/26-27/00007')).toBe(
+      '1 tax invoice, INV/26-27/00007, was issued more than 30 days after payment. Tell your CA.'
+    )
+    expect(BILLING_ALERT_TEXT.taxCreditNoteLate('CN/27-28/00001', 'INV/26-27/00001', 2027)).toBe(
+      'Credit note CN/27-28/00001 for INV/26-27/00001 was issued after 30 November 2027, so it gives no tax reduction. Tell your CA.'
+    )
+  })
 })

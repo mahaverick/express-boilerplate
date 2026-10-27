@@ -4,9 +4,14 @@
  * `createPlatformRouter` behind its router-wide `requireAuth`; the read and
  * its history, events, subscriptions and invoices lists are a platform
  * viewer's, the resync, the trial extension and grants a manager's,
- * the cancel an admin's. `addPlatformPlanRoutes` registers the plans,
- * prices, billing settings and alerts flat on the platform router: the plan
- * and settings reads are a viewer's, everything else an admin's. Each route
+ * the cancel an admin's. Its tax routes: the tax details, documents, PDFs
+ * and held charges are a viewer's to read, the tax details save a
+ * manager's, the manual credit note and the held-charge resolve an
+ * admin's. `addPlatformPlanRoutes` registers the plans,
+ * prices, billing settings, alerts and the tax export flat on the platform
+ * router: the plan and settings reads are a viewer's, everything else an
+ * admin's. The tax export is a read but takes step-up, since it downloads
+ * every buyer's GSTIN, name and address. Each route
  * names its own role gate and runs it first, so a refused caller gets the
  * plain 404: then, on a write, the JSON gate, the step-up check and the
  * limiter. Every write needs a recent sign-in, since each changes what
@@ -15,6 +20,7 @@
  */
 import { Router } from 'express'
 import { platformBillingController } from '@/controllers/platform-billing.controller'
+import { platformTaxController } from '@/controllers/platform-tax.controller'
 import { requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
@@ -98,11 +104,59 @@ export function createPlatformTenantBillingRouter(limiters: PlatformLimiters): R
     limiters.writeLimiter,
     platformBillingController.cancel
   )
+  router.get(
+    '/tax-details',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformTaxController.getTaxDetails
+  )
+  router.patch(
+    '/tax-details',
+    requirePlatformRole('manager'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformTaxController.saveTaxDetails
+  )
+  router.get(
+    '/tax-documents',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformTaxController.listTaxDocuments
+  )
+  router.get(
+    '/tax-documents/:docId/pdf',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformTaxController.getTaxDocumentPdf
+  )
+  router.post(
+    '/tax-documents/:docId/credit-notes',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformTaxController.issueCreditNote
+  )
+  router.get(
+    '/tax-held-charges',
+    requirePlatformRole('viewer'),
+    limiters.searchLimiter,
+    platformTaxController.listHeldCharges
+  )
+  router.post(
+    '/tax-held-charges/:heldId/resolve',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformTaxController.resolveHeldCharge
+  )
   return router
 }
 
 /**
- * Register the plans, prices, billing settings and alerts routes on the
+ * Register the plans, prices, billing settings, alerts and tax export routes on the
  * platform router, flat, so the route walk sees each one under its full path.
  * @param router - The platform router.
  * @param limiters - The shared `platformSearch` and `platformWrite` limiters.
@@ -156,5 +210,13 @@ export function addPlatformPlanRoutes(router: Router, limiters: PlatformLimiters
     requirePlatformRole('admin'),
     limiters.searchLimiter,
     platformBillingController.listAlerts
+  )
+  // A bulk download of every buyer's GSTIN, name and address, so it takes step-up like a write.
+  router.get(
+    '/billing/tax-export',
+    requirePlatformRole('admin'),
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformTaxController.exportTaxDocuments
   )
 }

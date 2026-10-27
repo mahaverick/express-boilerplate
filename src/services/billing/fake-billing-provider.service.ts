@@ -21,7 +21,9 @@ import type {
   InvoiceListOptions,
   InvoiceView,
   ProviderInvoice,
+  ProviderCharge,
   ProviderInvoicePage,
+  ProviderRefund,
   ProviderPlanPrice,
   ProviderRefundOutcome,
   ProviderSubscription,
@@ -39,6 +41,66 @@ import {
 interface FakePlan {
   amountMinor: number
   interval: BillingInterval
+}
+
+/**
+ * An invoice as the fake stores it. A record an older fake wrote has no
+ * payment or billing period; it reads as null.
+ */
+interface FakeInvoiceRecord extends InvoiceView {
+  paymentId?: string | null
+  /**
+   * The billing period start in epoch milliseconds.
+   */
+  billingStart?: number | null
+  /**
+   * The billing period end in epoch milliseconds.
+   */
+  billingEnd?: number | null
+}
+
+/**
+ * A refund as the fake stores it: its time as epoch milliseconds.
+ */
+interface FakeRefundRecord {
+  id: string
+  paymentId: string
+  amountMinor: number
+  status: ProviderRefund['status']
+  createdAt: number
+}
+
+/**
+ * The hash field that holds a payment's refunds as a JSON list.
+ * @param paymentId - The payment id.
+ * @returns The field name.
+ */
+function refundsField(paymentId: string): string {
+  return `refunds:${paymentId}`
+}
+
+/**
+ * Appends one JSON refund (ARGV[2]) to the JSON list in a hash field
+ * (ARGV[1]) of the fake's hash (KEYS[1]) as one atomic step. It splices the
+ * text rather than decoding it, so no number loses precision.
+ */
+const APPEND_REFUND_SCRIPT = `
+local stored = redis.call('HGET', KEYS[1], ARGV[1])
+if not stored or stored == '[]' then
+  redis.call('HSET', KEYS[1], ARGV[1], '[' .. ARGV[2] .. ']')
+else
+  redis.call('HSET', KEYS[1], ARGV[1], string.sub(stored, 1, -2) .. ',' .. ARGV[2] .. ']')
+end
+return 1
+`
+
+/**
+ * A stored refund as the provider shape.
+ * @param record - The stored refund.
+ * @returns The refund.
+ */
+function toRefund(record: FakeRefundRecord): ProviderRefund {
+  return { ...record, createdAt: new Date(record.createdAt) }
 }
 
 /**
@@ -62,7 +124,7 @@ interface FakeSubscriptionRecord {
   latestInvoicePaid: boolean
   cancelAtCycleEnd: boolean
   createdAt: number
-  invoices: InvoiceView[]
+  invoices: FakeInvoiceRecord[]
   /**
    * Payments taken, oldest first.
    */
@@ -132,6 +194,16 @@ function toSubscription(record: FakeSubscriptionRecord): ProviderSubscription {
     hasScheduledChanges: false,
     latestInvoicePaid: record.status === 'active' && record.latestInvoicePaid,
   }
+}
+
+/**
+ * Order refunds oldest first.
+ * @param a - A refund.
+ * @param b - Another refund.
+ * @returns Negative when `a` is older.
+ */
+function byCreatedAt(a: ProviderRefund, b: ProviderRefund): number {
+  return a.createdAt.getTime() - b.createdAt.getTime()
 }
 
 /**
@@ -318,6 +390,13 @@ export class FakeBillingProvider implements BillingProviderClient {
       return redis.hSetNX(redisKey('billing-fake'), `refund:${latest.paymentId}`, refundId)
     }, 'fake billing refund')
     if (!isClaimed) return { status: 'already_refunded' }
+    await this.#addRefund({
+      id: refundId,
+      paymentId: latest.paymentId,
+      amountMinor: latest.amountMinor,
+      status: 'processed',
+      createdAt: Date.now(),
+    })
     return { status: 'refunded', refundId, amountMinor: latest.amountMinor }
   }
 
@@ -343,11 +422,81 @@ export class FakeBillingProvider implements BillingProviderClient {
       if (record === undefined) continue
       for (const invoice of record.invoices.toReversed()) {
         if (statuses === undefined || statuses.includes(invoice.status)) {
-          items.push({ ...invoice, subscriptionId: id })
+          const { billingStart: _start, billingEnd: _end, ...view } = invoice
+          items.push({ ...view, subscriptionId: id, paymentId: view.paymentId ?? null })
         }
       }
     }
     return { items, nextCursor: null }
+  }
+
+  /**
+   * Append a refund to its payment's stored list in one Redis script, so two
+   * refunds of one payment at once both land.
+   * @param refund - The refund.
+   */
+  async #addRefund(refund: FakeRefundRecord): Promise<void> {
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.eval(APPEND_REFUND_SCRIPT, {
+        keys: [redisKey('billing-fake')],
+        arguments: [refundsField(refund.paymentId), JSON.stringify(refund)],
+      })
+    }, 'fake billing refund append')
+  }
+
+  /**
+   * Every paid charge of a subscription, oldest first.
+   * @param subscriptionId - The subscription id.
+   * @returns The charges; an invoice stored without a payment is not one. An unknown id has none, as `listInvoices` reads it.
+   */
+  async listPaidCharges(subscriptionId: string): Promise<ProviderCharge[]> {
+    const record = await this.#read<FakeSubscriptionRecord>(`sub:${subscriptionId}`)
+    if (record === undefined) return []
+    const charges: ProviderCharge[] = []
+    for (const invoice of record.invoices) {
+      if (invoice.status !== 'paid' || invoice.paymentId == null || invoice.paidAt === null) {
+        continue
+      }
+      charges.push({
+        invoiceId: invoice.id,
+        subscriptionId,
+        paymentId: invoice.paymentId,
+        amountMinor: invoice.amountMinor,
+        paidAt: new Date(invoice.paidAt),
+        billingStart: dateOrNull(invoice.billingStart ?? null),
+        billingEnd: dateOrNull(invoice.billingEnd ?? null),
+      })
+    }
+    return charges.toSorted((a, b) => a.paidAt.getTime() - b.paidAt.getTime())
+  }
+
+  /**
+   * Every refund of a payment, oldest first.
+   * @param paymentId - The payment id.
+   * @returns The refunds.
+   */
+  async listRefunds(paymentId: string): Promise<ProviderRefund[]> {
+    const stored = (await this.#read<FakeRefundRecord[]>(refundsField(paymentId))) ?? []
+    return stored.map((refund) => toRefund(refund)).toSorted(byCreatedAt)
+  }
+
+  /**
+   * Every refund created since a time, across all payments, oldest first.
+   * @param since - The earliest creation time.
+   * @returns The refunds.
+   */
+  async listRecentRefunds(since: Date): Promise<ProviderRefund[]> {
+    const all = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.hGetAll(redisKey('billing-fake'))
+    }, 'fake billing refund sweep')
+    return Object.entries(all)
+      .filter(([field]) => field.startsWith('refunds:'))
+      .flatMap(([, value]) => JSON.parse(value) as FakeRefundRecord[])
+      .filter((refund) => refund.createdAt >= since.getTime())
+      .map((refund) => toRefund(refund))
+      .toSorted(byCreatedAt)
   }
 
   /**
@@ -446,6 +595,9 @@ export class FakeBillingProvider implements BillingProviderClient {
         issuedAt: new Date(now).toISOString(),
         paidAt: new Date(now).toISOString(),
         url: null,
+        paymentId,
+        billingStart: start,
+        billingEnd: end,
       })
     } else if (status === 'pending' || status === 'halted') {
       record.latestInvoicePaid = false
@@ -493,8 +645,36 @@ export class FakeBillingProvider implements BillingProviderClient {
       ...invoice,
       issuedAt: shiftIso(invoice.issuedAt) ?? invoice.issuedAt,
       paidAt: shiftIso(invoice.paidAt),
+      ...(invoice.billingStart != null && { billingStart: invoice.billingStart - ms }),
+      ...(invoice.billingEnd != null && { billingEnd: invoice.billingEnd - ms }),
     }))
     await this.#write(`sub:${id}`, record)
+    for (const { paymentId } of record.payments) {
+      const refunds = await this.#read<FakeRefundRecord[]>(refundsField(paymentId))
+      if (refunds === undefined) continue
+      await this.#write(
+        refundsField(paymentId),
+        refunds.map((refund) => ({ ...refund, createdAt: refund.createdAt - ms }))
+      )
+    }
+  }
+
+  /**
+   * Test hook: record a refund of a payment, as Razorpay would after a
+   * refund from its dashboard.
+   * @param paymentId - The payment id.
+   * @param amountMinor - The refunded amount in minor units.
+   * @param status - The refund's status; `processed` by default.
+   * @returns The refund's id.
+   */
+  async fakeRefund(
+    paymentId: string,
+    amountMinor: number,
+    status: ProviderRefund['status'] = 'processed'
+  ): Promise<string> {
+    const id = fakeId('rfnd')
+    await this.#addRefund({ id, paymentId, amountMinor, status, createdAt: Date.now() })
+    return id
   }
 
   /**
