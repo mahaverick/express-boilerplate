@@ -263,6 +263,8 @@ come.
 It refuses a workspace on a real provider, so a real subscription's dates
 never move.
 
+The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ### Tax documents: dry run and backfill
 
 With `BILLING_GST_REGISTERED=true`, the billing worker issues a numbered tax
@@ -283,7 +285,23 @@ It exits 1 when registration or payments are off. Set
 refunded duplicate subscriptions are not tracked
 ([ARCHITECTURE.md](ARCHITECTURE.md#billing)).
 
-The hooks, commit format and CI are in [CONTRIBUTING.md](CONTRIBUTING.md).
+**Preview before go-live.** Run the dry run before you turn registration on
+for the server. Set `BILLING_GST_REGISTERED=true` and the seller variables in
+the command's own environment only, for example
+`BILLING_GST_REGISTERED=true BILLING_SELLER_GSTIN=… BILLING_GST_EFFECTIVE_FROM=… pnpm billing:tax-reconcile`.
+The dry run reads and prints counts only, so the server keeps issuing nothing
+until you change its environment.
+
+**Backfill.** On the first daily run after `BILLING_GST_EFFECTIVE_FROM` gets a
+new value, the scheduler queues a run for every workspace that tracks a
+subscription, then marks that date done. If the step fails part way, the
+next daily run queues them all again. To recover at once, or after deleting
+the marker, run `pnpm billing:tax-reconcile -- --apply`: queueing twice issues
+nothing twice.
+
+**Manual credit notes.** Staff issue one in Apex for a lost dispute. Its
+reason prints on the customer's credit note, so it takes one line of English
+letters, digits and common punctuation.
 
 ## Lists
 

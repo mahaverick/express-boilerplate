@@ -1254,7 +1254,7 @@ describe('the daily tax steps', () => {
     expect(await taxJobsFor(tenant.id)).toStrictEqual([])
   })
 
-  it('releases the backfill marker when the step fails after claiming it, so the next run backfills', async () => {
+  it('sets no backfill marker when the step fails before it has queued every workspace, so the next run backfills', async () => {
     const { tenant } = await workspace()
     const subscriptionId = await fakeSubscription({
       tenantId: tenant.id,

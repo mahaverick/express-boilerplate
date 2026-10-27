@@ -345,12 +345,18 @@ in this order:
    `FOR KEY SHARE` the credit note's foreign key takes on it), then, last,
    the series counter (`allocateNumber`, `tax_document_counters`,
    `FOR NO KEY UPDATE`: it only bumps `last_number`). The counter is shared
-   by every tenant, so it is held for one insert only, and its bump and the
-   insert commit or roll back together, so a series has no gap. The tax
-   details are read unlocked and frozen into the document. A staff credit
-   note first takes the actor's platform-role and user rows
-   (`assertStillPlatformRole`, the staff-write exception below), then the
-   billing row, invoice row and counter, all in that one transaction. A tax
+   by every tenant, so it is held for the insert and its audit entry, and
+   nothing else; its bump and the insert commit or roll back together, so a
+   series has no gap. The issue time is the database clock read after the
+   counter lock, so a series is dated in its number order; when that time
+   falls in another financial year than the one locked, the transaction
+   rolls back and runs once more in that year. The tax details are read
+   unlocked and frozen into the document. A staff credit note first takes
+   the actor's platform-role and user rows (`assertStillPlatformRole`, the
+   staff-write exception below), then the billing row, invoice row and
+   counter, all in that one transaction. A held-charge resolve takes the
+   actor's platform-role and user rows, then only the held row, through its
+   conditional `UPDATE`, so two resolves queue there. A tax
    details write first re-reads the actor's role under lock (an owner's
    owner and membership rows through `lockActorRole`, 2 and 3 above; staff's
    platform-role and user rows through `assertStillPlatformRole`), then
@@ -450,8 +456,8 @@ billing job's next run (at most 15 minutes); the platform tenant has neither.
 Each cross-tenant repository is imported by its own `platform-*` service only;
 `platform-user.repository.ts` also by `platform-purge.service.ts`, and
 `platform-tax.repository.ts` also by `platform-billing.service.ts` (the open
-held count and whether any tax document exists). What staff may do, and the gates on it, are in
-[SECURITY.md](SECURITY.md#platform-staff).
+held count and whether any tax document exists). What staff may do, and the
+gates on it, are in [SECURITY.md](SECURITY.md#platform-staff).
 
 ### Extending Apex
 
@@ -965,9 +971,10 @@ whose webhook event failed in the last three days. With GST registration on,
 `tax_refunds` queues one hinted `tax-reconcile` job per workspace with a
 processed refund in the last three days of an invoiced or held payment, and
 `tax_backfill` queues one for every customer workspace that tracks a
-subscription, once per `BILLING_GST_EFFECTIVE_FROM` value (a `SET NX` marker
-under `redisKey('billing-tax-backfill', date)`, released when the step fails
-after claiming it), so a workspace whose
+subscription, once per `BILLING_GST_EFFECTIVE_FROM` value (it queues first,
+then sets a marker under `redisKey('billing-tax-backfill', date)`, so a step
+that fails part way leaves none and the next run queues again, which issues
+nothing twice), so a workspace whose
 subscriptions all ended before registration, which no sync reaches, is still
 invoiced. It also sends the yearly
 renewal reminder a week before the period ends (never for a stand-in period
@@ -1569,8 +1576,11 @@ map; the detail lives in the sections it links.
   alerts after the commits: one `tax_invoice_late` per run, one
   `tax_credit_note_late` per late note, one `tax_held_sez` per hold, and one
   `tax_issue_failed` per refund larger than what is left to credit, which is
-  never issued capped. A run that fails part way still raises the alerts for
-  what it committed before rethrowing. Every sync that ends `synced` queues a run; so do a
+  never issued capped. A processed refund of a held charge (hinted, or paid
+  within 200 days) raises one `tax_held_sez` alert and issues nothing: staff
+  credit it by hand. A run that fails part way still raises the alerts for
+  what it committed before rethrowing. Every sync that ends `synced` queues a
+  run; so do a
   `refund.processed` webhook and one that reaches no workspace's sync (hinted
   with the payment, after the handling resolves, so a retried attempt queues
   none), and the two daily tax steps. A provider error fails the run for a
@@ -1583,9 +1593,9 @@ map; the detail lives in the sections it links.
     and credit note, with a frozen snapshot of each printed field),
     `tax_document_counters` (the last number per type and financial year) and
     `tax_held_charges` (an SEZ buyer's charges, held for staff).
-  - _Numbering._ A number is `PREFIX/YY-YY/NNNNN` (financial year from the IST
-    issue date, five digits at least, 16 characters at most), one series per
-    type and year. It is allocated only inside the transaction that inserts the
+  - _Numbering._ A number is `PREFIX/YY-YY/NNNNN` (a prefix of 1 to 3
+    characters, the financial year from the IST issue date, five digits at
+    least, 16 characters at most), one series per type and year. It is allocated only inside the transaction that inserts the
     document, under the counter's row lock taken last
     (see [Lock order](#layers)), so a failed insert rolls the number back and a
     series has no gap.
@@ -1597,7 +1607,10 @@ map; the detail lives in the sections it links.
     the stored row alone; the PDF dates come from the issue time and the
     producer is a fixed string, so one row always renders the same bytes. The
     rupee sign has no glyph in those fonts, so PDFs print `Rs.`; input fields
-    take Latin text only so every character renders. Only the workspace's
+    take Latin text only so every character renders: tax details, the seller
+    variables and a staff credit note's reason, which prints on the customer's
+    note. A workspace name or plan name that isn't Latin prints as the slug or
+    `Paid plan`, and `taxDocumentLines` writes any other character as `?`. Only the workspace's
     owner downloads a PDF (staff through their audited route).
   - _Export._ `GET /platform/billing/tax-export?period=YYYY-MM|YYYY-Qn`
     (`platform-tax-export.service.ts`) returns a zip of GSTR-1 CSVs for every

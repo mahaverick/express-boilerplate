@@ -61,7 +61,7 @@ import {
 } from '@/services/billing/billing-sync.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
-import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
 import {
@@ -969,10 +969,12 @@ async function sweepTaxRefunds(
  * The one-time tax backfill: on the first daily run after the registration
  * date gets a new value, queue a tax run for every customer workspace that
  * tracks a subscription, so one whose subscriptions all ended before
- * registration, which no sync reaches again, is still invoiced. A Redis
- * marker per registration date (`SET NX`, no expiry) makes it once; losing
- * it only runs the step again, which issues nothing twice. A failure after
- * the claim releases the marker, so the next run backfills again.
+ * registration, which no sync reaches again, is still invoiced. It queues
+ * first and sets a Redis marker per registration date (no expiry) after, so
+ * a failure part way leaves no marker and the next daily run queues them
+ * all again; queueing twice issues nothing twice, since each issue
+ * re-checks its payment or refund. `pnpm billing:tax-reconcile -- --apply`
+ * queues the same jobs by hand.
  * @param scope - The running provider and mode.
  * @param counts - The step's counts: workspaces queued.
  */
@@ -980,51 +982,19 @@ async function backfillTaxDocuments(scope: ProviderScope, counts: StepCounts): P
   const seller = gstSellerConfig()
   if (seller === null) return
   const key = redisKey('billing-tax-backfill', istDate(seller.effectiveFrom))
-  const claimed = await withRedisDeadline(async () => {
+  const done = await withRedisDeadline(async () => {
     const redis = await getRedis()
-    return redis.set(key, '1', { condition: 'NX' })
+    return redis.get(key)
+  }, 'tax backfill marker read')
+  if (done !== null) return
+  for (const tenantId of await billingRepository.listTenantIdsWithTrackedSubscriptions(scope)) {
+    await addTaxReconcileJob({ tenantId })
+    counts.acted += 1
+  }
+  await withRedisDeadline(async () => {
+    const redis = await getRedis()
+    return redis.set(key, '1')
   }, 'tax backfill marker')
-  if (claimed !== 'OK') return
-  try {
-    for (const tenantId of await billingRepository.listTenantIdsWithTrackedSubscriptions(scope)) {
-      await addTaxReconcileJob({ tenantId })
-      counts.acted += 1
-    }
-  } catch (error) {
-    await releaseBackfillMarker(key)
-    throw error
-  }
-}
-
-/**
- * Log a backfill marker release that failed, before or after the deadline.
- * @param error - What the delete rejected with.
- */
-function reportBackfillReleaseFailure(error: unknown): void {
-  logger.error('Could not release the tax backfill marker; delete it to backfill again', {
-    error,
-  })
-}
-
-/**
- * Delete the tax backfill marker after the step failed part way, so the
- * next daily run queues the workspaces it missed; the ones it queued run
- * twice, which issues nothing twice. A failed delete is logged.
- * @param key - The marker's key.
- */
-async function releaseBackfillMarker(key: string): Promise<void> {
-  try {
-    await waitForRedisWrite(
-      async () => {
-        const redis = await getRedis()
-        return redis.del(key)
-      },
-      'tax backfill marker release',
-      reportBackfillReleaseFailure
-    )
-  } catch (error) {
-    reportBackfillReleaseFailure(error)
-  }
 }
 
 /**

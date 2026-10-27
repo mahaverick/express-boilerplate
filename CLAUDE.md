@@ -376,7 +376,7 @@ The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
   after a failed insert, leaves a gap the tax authority can see.
 - **The counter lock comes last.** An issue transaction locks the billing row,
   then (for a credit note) the invoice row, then the counter, which every
-  workspace shares, so it is held for one insert only
+  workspace shares, so it is held for one insert and its audit entry only
   ([ARCHITECTURE.md](ARCHITECTURE.md#layers)).
 - **No provider call inside an issue transaction.** The run plans from the
   provider with no lock held, then issues; a provider call under the billing
