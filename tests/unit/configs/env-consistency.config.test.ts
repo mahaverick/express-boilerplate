@@ -605,4 +605,78 @@ describe('billing settings', () => {
       'BILLING_FAKE_PROVIDER is true and Razorpay keys are set'
     )
   })
+
+  describe('GST seller settings', () => {
+    const seller: Record<string, string> = {
+      ...local,
+      BILLING_GST_REGISTERED: 'true',
+      BILLING_SELLER_GSTIN: '29AABCE1234F1Z1',
+      BILLING_SELLER_LEGAL_NAME: 'Acme Software Pvt Ltd',
+      BILLING_SELLER_ADDRESS: '1 MG Road | Bengaluru 560001',
+      BILLING_SELLER_STATE_CODE: '29',
+      BILLING_SAC_CODE: '998314',
+      BILLING_GST_EFFECTIVE_FROM: '2026-04-01',
+    }
+
+    it('passes registration with every seller variable and no warning, or with none set', () => {
+      expect(runChecks(seller)).toStrictEqual({ error: undefined, warnings: [] })
+      expect(runChecks(local)).toStrictEqual({ error: undefined, warnings: [] })
+    })
+
+    it.each([
+      'BILLING_SELLER_GSTIN',
+      'BILLING_SELLER_LEGAL_NAME',
+      'BILLING_SELLER_ADDRESS',
+      'BILLING_SELLER_STATE_CODE',
+      'BILLING_SAC_CODE',
+      'BILLING_GST_EFFECTIVE_FROM',
+    ])('names %s alone when registration is on and it is missing', (name) => {
+      const { [name]: _removed, ...rest } = seller
+      expect(runChecks(rest).error).toContain(
+        `BILLING_GST_REGISTERED is true, but ${name} is not set. Set it: every tax document prints these details.`
+      )
+    })
+
+    it('names every missing variable in one plural sentence', () => {
+      const { BILLING_SAC_CODE: _sac, BILLING_GST_EFFECTIVE_FROM: _from, ...rest } = seller
+      expect(runChecks(rest).error).toContain(
+        'BILLING_GST_REGISTERED is true, but BILLING_SAC_CODE, BILLING_GST_EFFECTIVE_FROM are not set. Set them: every tax document prints these details.'
+      )
+    })
+
+    it('refuses a GSTIN whose state differs from the state code, once', () => {
+      const { error } = runChecks({ ...seller, BILLING_SELLER_STATE_CODE: '27' })
+      const sentence =
+        'BILLING_SELLER_GSTIN is registered in state 29 but BILLING_SELLER_STATE_CODE is 27. Set them to the same state.'
+      expect(error).toContain(sentence)
+      expect(error?.split(sentence)).toHaveLength(2)
+      expect(error).not.toContain('not set')
+    })
+
+    it('refuses BILLING_EINVOICE_REQUIRED=true', () => {
+      const { error } = runChecks({ ...seller, BILLING_EINVOICE_REQUIRED: 'true' })
+      expect(error).toContain('BILLING_EINVOICE_REQUIRED is true')
+      expect(error).toContain('turn off BILLING_GST_REGISTERED')
+    })
+
+    it('refuses equal prefixes', () => {
+      const { error } = runChecks({
+        ...seller,
+        BILLING_INVOICE_PREFIX: 'INV',
+        BILLING_CREDIT_NOTE_PREFIX: 'INV',
+      })
+      expect(error).toContain(
+        'BILLING_INVOICE_PREFIX and BILLING_CREDIT_NOTE_PREFIX are both INV. Give invoices and credit notes different prefixes.'
+      )
+    })
+
+    it('warns once when seller variables are set with registration off', () => {
+      const { BILLING_GST_REGISTERED: _on, ...rest } = seller
+      const { error, warnings } = runChecks(rest)
+      expect(error).toBeUndefined()
+      expect(warnings).toStrictEqual([
+        'BILLING_SELLER_GSTIN, BILLING_SELLER_LEGAL_NAME, BILLING_SELLER_ADDRESS, BILLING_SELLER_STATE_CODE, BILLING_SAC_CODE, BILLING_GST_EFFECTIVE_FROM are set but BILLING_GST_REGISTERED is false, so no tax documents are issued.',
+      ])
+    })
+  })
 })

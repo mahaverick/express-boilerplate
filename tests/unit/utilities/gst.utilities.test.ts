@@ -5,6 +5,7 @@ import {
   creditNoteAmounts,
   exportPeriodRange,
   financialYearEnd,
+  financialYearEndYear,
   financialYearOf,
   formatDocumentNumber,
   gstinCheckCharacter,
@@ -13,6 +14,7 @@ import {
   isLateInvoice,
   istDate,
   istMidnight,
+  istTime,
   normaliseGstin,
   placeOfSupply,
   splitInclusive,
@@ -192,6 +194,21 @@ describe('dates', () => {
     expect(istMidnight('2026-04-01').toISOString()).toBe('2026-03-31T18:30:00.000Z')
   })
 
+  it('istMidnight reads any day, month and year, not only the first', () => {
+    expect(istMidnight('2027-12-31').toISOString()).toBe('2027-12-30T18:30:00.000Z')
+    expect(istMidnight('2026-10-27').toISOString()).toBe('2026-10-26T18:30:00.000Z')
+  })
+
+  it('istTime writes the IST time of day as HH:mm, across midnight', () => {
+    expect(istTime(new Date('2026-10-27T06:30:00Z'))).toBe('12:00')
+    expect(istTime(new Date('2026-10-27T18:45:59Z'))).toBe('00:15')
+  })
+
+  it('financialYearEndYear is the calendar year a financial year ends in', () => {
+    expect(financialYearEndYear('26-27')).toBe(2027)
+    expect(financialYearEndYear('99-00')).toBe(2100)
+  })
+
   it('istDate converts to the IST day', () => {
     expect(istDate(new Date('2026-10-31T20:00:00Z'))).toBe('2026-11-01')
     expect(istDate(new Date('2026-10-31T18:29:59Z'))).toBe('2026-10-31')
@@ -204,6 +221,12 @@ describe('dates', () => {
   it('late credit note: FY 26-27 deadline is the start of 1 December 2027 IST', () => {
     expect(isLateCreditNote('26-27', new Date('2027-11-30T18:29:59Z'))).toBe(false)
     expect(isLateCreditNote('26-27', new Date('2027-11-30T18:30:00Z'))).toBe(true)
+  })
+
+  it('late credit note: another year moves the deadline with it', () => {
+    expect(isLateCreditNote('27-28', new Date('2027-12-01T00:00:00Z'))).toBe(false)
+    expect(isLateCreditNote('27-28', new Date('2028-11-30T18:29:59Z'))).toBe(false)
+    expect(isLateCreditNote('27-28', new Date('2028-11-30T18:30:00Z'))).toBe(true)
   })
 
   it('late invoice: 30 days exactly is not late, 30 days + 1 ms is', () => {
@@ -221,6 +244,11 @@ describe('formatDocumentNumber', () => {
     expect(formatDocumentNumber('INV', '26-27', 100_000)).toBe('INV/26-27/100000')
     expect(formatDocumentNumber('INV', '26-27', 100_000)).toHaveLength(16)
     expect(() => formatDocumentNumber('ABCD', '26-27', 100_000)).toThrow(RangeError)
+  })
+
+  it('fits a 3-character prefix with a 6-digit serial, the longest the prefix rule allows', () => {
+    expect(formatDocumentNumber('ABC', '26-27', 999_999)).toBe('ABC/26-27/999999')
+    expect(() => formatDocumentNumber('ABC', '26-27', 1_000_000)).toThrow(RangeError)
   })
 })
 

@@ -1,11 +1,11 @@
 /**
- * @file The GST seller config and its boot checks take crafted envs, never
- * the memoised getEnv().
+ * @file The GST seller config and its variables' parsing take crafted envs,
+ * never the memoised getEnv(). The boot checks across the seller variables
+ * are in env-consistency.config.test.ts.
  */
 import { readFileSync } from 'node:fs'
-import { describe, expect, it, vi } from 'vite-plus/test'
+import { describe, expect, it } from 'vite-plus/test'
 import { gstSellerConfig } from '@/configs/billing.config'
-import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { parseEnv } from '@/configs/env.config'
 import { TAX_TEXT_PATTERN, normaliseQuotes } from '@/utilities/gst.utilities'
 
@@ -37,27 +37,9 @@ function env(extra: Record<string, string>): ReturnType<typeof parseEnv> {
   return parseEnv({ ...base, ...extra })
 }
 
-/**
- * Run the boot checks; returns the thrown message and every warning.
- */
-function runChecks(extra: Record<string, string>): {
-  error: string | undefined
-  warnings: string[]
-} {
-  const warn = vi.fn<(message: string) => void>()
-  let message: string | undefined
-  try {
-    assertEnvConsistent(env(extra), warn)
-  } catch (error) {
-    message = (error as Error).message
-  }
-  return { error: message, warnings: warn.mock.calls.map(([w]) => w) }
-}
-
 describe('gstSellerConfig', () => {
   it('is null with registration off and nothing set, and boot passes without a warning', () => {
     expect(gstSellerConfig(env({}))).toBeNull()
-    expect(runChecks({})).toStrictEqual({ error: undefined, warnings: [] })
   })
 
   it('builds the config with the effective date at 00:00 IST and the address split', () => {
@@ -73,46 +55,16 @@ describe('gstSellerConfig', () => {
       invoicePrefix: 'INV',
       creditNotePrefix: 'CN',
     })
-    expect(runChecks(seller)).toStrictEqual({ error: undefined, warnings: [] })
   })
 
-  it.each([
-    'BILLING_SELLER_GSTIN',
-    'BILLING_SELLER_LEGAL_NAME',
-    'BILLING_SELLER_ADDRESS',
-    'BILLING_SELLER_STATE_CODE',
-    'BILLING_SAC_CODE',
-    'BILLING_GST_EFFECTIVE_FROM',
-  ])('names %s when registration is on and it is missing', (name) => {
-    const { [name]: _removed, ...rest } = seller
-    const { error } = runChecks(rest)
-    expect(error).toContain(name)
-  })
-
-  it('refuses a GSTIN whose state differs from the state code', () => {
-    const { error } = runChecks({ ...seller, BILLING_SELLER_STATE_CODE: '27' })
-    expect(error).toContain(
-      'BILLING_SELLER_GSTIN is registered in state 29 but BILLING_SELLER_STATE_CODE is 27. Set them to the same state.'
-    )
-  })
-
-  it('refuses BILLING_EINVOICE_REQUIRED=true', () => {
-    const { error } = runChecks({ ...seller, BILLING_EINVOICE_REQUIRED: 'true' })
-    expect(error).toContain('BILLING_EINVOICE_REQUIRED is true')
-    expect(error).toContain('turn off BILLING_GST_REGISTERED')
-  })
-
-  it('refuses equal prefixes', () => {
-    const { error } = runChecks({
-      ...seller,
-      BILLING_INVOICE_PREFIX: 'INV',
-      BILLING_CREDIT_NOTE_PREFIX: 'INV',
+  it('takes a prefix of 1 to 3 capital letters or digits and rejects a longer one', () => {
+    expect(env({ BILLING_INVOICE_PREFIX: 'IN1', BILLING_CREDIT_NOTE_PREFIX: 'C' })).toMatchObject({
+      BILLING_INVOICE_PREFIX: 'IN1',
+      BILLING_CREDIT_NOTE_PREFIX: 'C',
     })
-    expect(error).toContain('BILLING_INVOICE_PREFIX')
-  })
-
-  it('rejects a prefix longer than four characters', () => {
-    expect(() => env({ BILLING_INVOICE_PREFIX: 'INVOI' })).toThrow()
+    expect(() => env({ BILLING_INVOICE_PREFIX: 'INVO' })).toThrow('BILLING_INVOICE_PREFIX')
+    expect(() => env({ BILLING_CREDIT_NOTE_PREFIX: 'CRED' })).toThrow('BILLING_CREDIT_NOTE_PREFIX')
+    expect(() => env({ BILLING_INVOICE_PREFIX: 'in' })).toThrow('BILLING_INVOICE_PREFIX')
   })
 
   it('rejects a seller name in Devanagari', () => {
@@ -129,13 +81,17 @@ describe('gstSellerConfig', () => {
     expect(() => env({ ...seller, BILLING_SELLER_STATE_CODE: '99' })).toThrow()
   })
 
-  it('warns once when seller variables are set with registration off', () => {
-    const { BILLING_GST_REGISTERED: _on, ...rest } = seller
-    const { error, warnings } = runChecks(rest)
-    expect(error).toBeUndefined()
-    const matching = warnings.filter((w) => w.includes('BILLING_GST_REGISTERED is false'))
-    expect(matching).toHaveLength(1)
-    expect(matching[0]).toContain('so no tax documents are issued.')
+  it('names a GSTIN whose first two digits are no state once, not once per rule', () => {
+    let message = ''
+    try {
+      env({ ...seller, BILLING_SELLER_GSTIN: '99ABCDE1234F1ZP' })
+    } catch (error) {
+      message = (error as Error).message
+    }
+    expect(message.match(/BILLING_SELLER_GSTIN/g)).toHaveLength(1)
+    expect(message).toContain(
+      'must be a GSTIN whose last character matches and whose first two digits are a state code'
+    )
   })
 })
 

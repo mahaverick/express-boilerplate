@@ -188,7 +188,7 @@ export function isLateInvoice(paidAt: Date, issuedAt: Date): boolean {
   return issuedAt.getTime() - paidAt.getTime() > LATE_INVOICE_DAYS * DAY_MS
 }
 
-/** The instant a 'YYYY-MM-DD' day begins in IST. */
+/** The instant a 'YYYY-MM-DD' day begins in IST; the input is a valid calendar date. */
 export function istMidnight(isoDate: string): Date {
   const [year, month, day] = isoDate.split('-').map(Number)
   return istStartOf(year ?? 0, month ?? 1, day ?? 1)
@@ -281,7 +281,10 @@ function indianWords(n: number): string {
   return parts.join(' ')
 }
 
-/** Writes an amount in paise as 'Rupees … and … Paise Only' (Indian system). */
+/**
+ * Writes an amount in paise as 'Rupees … and … Paise Only' (Indian system).
+ * The amount is a whole number of paise, 0 or more.
+ */
 export function amountInWords(minor: number): string {
   const rupees = Math.floor(minor / 100)
   const paise = minor % 100

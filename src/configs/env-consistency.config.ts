@@ -247,6 +247,11 @@ function cursorSecretProblems(env: Env): string[] {
   ]
 }
 
+/**
+ * The seller variables registration needs: every tax document prints them,
+ * and the effective date decides which charges get one. Boot refuses
+ * registration while any is unset, and warns when any is set without it.
+ */
 const SELLER_VARIABLES = [
   'BILLING_SELLER_GSTIN',
   'BILLING_SELLER_LEGAL_NAME',

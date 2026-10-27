@@ -887,17 +887,17 @@ const EnvSchema = z.object({
     ),
   BILLING_INVOICE_PREFIX: z
     .string()
-    .regex(/^[A-Z0-9]{1,4}$/)
+    .regex(/^[A-Z0-9]{1,3}$/)
     .default('INV')
     .describe(
-      "Prefix of invoice numbers, 1 to 4 capital letters or digits. Don't change it inside a financial year: the series is counted per type and year, whatever the prefix. Defaults to INV."
+      "Prefix of invoice numbers, 1 to 3 capital letters or digits, so a number with a 6-digit serial still fits the 16 characters GST allows. Don't change it inside a financial year: the series is counted per type and year, whatever the prefix. Defaults to INV."
     ),
   BILLING_CREDIT_NOTE_PREFIX: z
     .string()
-    .regex(/^[A-Z0-9]{1,4}$/)
+    .regex(/^[A-Z0-9]{1,3}$/)
     .default('CN')
     .describe(
-      "Prefix of credit note numbers, 1 to 4 capital letters or digits. Don't change it inside a financial year: the series is counted per type and year, whatever the prefix. Defaults to CN."
+      "Prefix of credit note numbers, 1 to 3 capital letters or digits, so a number with a 6-digit serial still fits the 16 characters GST allows. Don't change it inside a financial year: the series is counted per type and year, whatever the prefix. Defaults to CN."
     ),
   BILLING_FAKE_PROVIDER: z
     .stringbool()
