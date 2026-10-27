@@ -489,6 +489,25 @@ describe('syncTenantBilling', () => {
     expect(await trackedRole(duplicateId)).toBe('duplicate')
   })
 
+  it('keeps a duplicate tracked when its cancel fails', async () => {
+    const { tenantId } = await createPayingWorkspace()
+    const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(duplicateId, 'active')
+    await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'cancelSubscription',
+      () => Promise.reject(new ProviderError('POST /subscriptions/x/cancel', 502)),
+      async () => {
+        await syncTenantBilling(tenantId, 'confirm')
+      }
+    )
+
+    expect(await trackedRole(duplicateId)).toBe('duplicate')
+    expect(await fake.fetchSubscription(duplicateId)).toMatchObject({ status: 'active' })
+  })
+
   it('adopts a paid subscription the sweep found for a workspace on Free', async () => {
     const { tenantId } = await createWorkspace()
     const foundId = await createSubscription({ tenantId, priceId: plans.yearPriceId }, 'year')

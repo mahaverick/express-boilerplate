@@ -544,6 +544,28 @@ describe('BillingRepository', () => {
       })
     })
 
+    it('keeps a refunded id another workspace tracks theirs and alerts staff once', async () => {
+      const scope = { kind: 'razorpay', mode: 'test' } as const
+      const first = await billedTenant()
+      const second = await billedTenant()
+      const id = subscriptionId()
+      await repository.recordTrackedSubscription(first, scope, id, 'duplicate')
+
+      await repository.recordTrackedSubscription(second, scope, id, 'late_switch')
+      await repository.recordTrackedSubscription(second, scope, id, 'duplicate')
+
+      const holders = await sql<{ tenant_id: string; role: string }[]>`
+        select tenant_id, role from tenant_billing_subscriptions where subscription_id = ${id}`
+      expect([...holders]).toStrictEqual([{ tenant_id: first, role: 'duplicate' }])
+      const alerts = await sql<{ id: string; message: string }[]>`
+        select id, message from billing_alerts
+        where kind = 'reconcile_repair' and tenant_id = ${second} and strpos(message, ${id}) > 0`
+      alertIds.push(...alerts.map((alert) => alert.id))
+      expect(alerts.map((alert) => alert.message)).toStrictEqual([
+        `Subscription ${id} was refunded for workspace ${second} but is recorded for workspace ${first}. Check which workspace pays for it.`,
+      ])
+    })
+
     it('turns a tracked duplicate held when it becomes current', async () => {
       const scope = { kind: 'razorpay', mode: 'test' } as const
       const tenantId = await billedTenant()
@@ -576,10 +598,22 @@ describe('BillingRepository', () => {
       const scope = { kind: 'razorpay', mode: 'test' } as const
       const tenantId = await billedTenant()
       await repository.recordTrackedSubscription(tenantId, scope, subscriptionId(), 'duplicate')
-      const platform = await sql<{ id: string }[]>`select id from tenants where is_platform limit 1`
+      const [platform] = await sql<
+        { id: string }[]
+      >`select id from tenants where is_platform limit 1`
+      if (platform === undefined) throw new Error('setup: no platform tenant')
+      const platformSubscription = subscriptionId()
+      // The platform tenant tracks one too, so leaving it out is the filter's doing.
+      await repository.recordTrackedSubscription(
+        platform.id,
+        scope,
+        platformSubscription,
+        'duplicate'
+      )
       const ids = await repository.listTenantIdsWithTrackedSubscriptions(scope)
+      await sql`delete from tenant_billing_subscriptions where subscription_id = ${platformSubscription}`
       expect(ids).toContain(tenantId)
-      if (platform[0] !== undefined) expect(ids).not.toContain(platform[0].id)
+      expect(ids).not.toContain(platform.id)
       expect(
         await repository.listTenantIdsWithTrackedSubscriptions({ kind: 'razorpay', mode: 'live' })
       ).not.toContain(tenantId)

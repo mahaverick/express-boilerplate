@@ -381,8 +381,10 @@ export class BillingRepository {
   /**
    * Record a subscription that was refunded rather than held, so the tax
    * reconciler can find its charge and refund. Never downgrades a held
-   * subscription, and keeps the first role recorded. Runs in its own
-   * statement, after the sync commits.
+   * subscription, and keeps the first role recorded. An id already recorded
+   * for another workspace stays theirs, and one `reconcile_repair` alert
+   * names the ids, as `#recordHeldSubscription` does. Runs after the sync
+   * commits.
    * @param tenantId - The workspace the charge belongs to.
    * @param scope - The provider and mode the subscription belongs to.
    * @param subscriptionId - The subscription.
@@ -396,7 +398,7 @@ export class BillingRepository {
     role: Exclude<TaxSubscriptionRole, 'held'>,
     executor: DbExecutor = db
   ): Promise<void> {
-    await executor
+    const [recorded] = await executor
       .insert(tenantBillingSubscriptionModel)
       .values({ tenantId, provider: scope.kind, mode: scope.mode, subscriptionId, role })
       .onConflictDoNothing({
@@ -406,6 +408,22 @@ export class BillingRepository {
           tenantBillingSubscriptionModel.subscriptionId,
         ],
       })
+      .returning({ id: tenantBillingSubscriptionModel.id })
+    if (recorded !== undefined) return
+    const [holder] = await executor
+      .select({ tenantId: tenantBillingSubscriptionModel.tenantId })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode),
+          eq(tenantBillingSubscriptionModel.subscriptionId, subscriptionId)
+        )
+      )
+    if (holder === undefined || holder.tenantId === tenantId) return
+    const message = `Subscription ${subscriptionId} was refunded for workspace ${tenantId} but is recorded for workspace ${holder.tenantId}. Check which workspace pays for it.`
+    if (await this.hasAlertNaming(tenantId, 'reconcile_repair', message, executor)) return
+    await this.insertAlert({ kind: 'reconcile_repair', tenantId, message }, executor)
   }
 
   /**

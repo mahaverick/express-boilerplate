@@ -932,6 +932,29 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
     expect(page.items.map((item) => item.id)).toStrictEqual(expected.map((item) => item.id))
   })
 
+  it('leaves a refunded duplicate out of the list and its one page, cursor and all', async () => {
+    const { tenant, owner } = await workspace()
+    const { subscriptionId } = await makePaying(tenant.id)
+    const duplicateId = await fakeSubscription({ tenantId: tenant.id, priceId: plans.monthPriceId })
+    await fake.fakeAdvance(duplicateId, 'active')
+    await setBilling(tenant.id, { pendingSubscriptionId: duplicateId })
+    await syncTenantBilling(tenant.id, 'confirm')
+    const tracked = await sql<{ role: string }[]>`
+      select role from tenant_billing_subscriptions where subscription_id = ${duplicateId}`
+    expect(tracked.map((row) => row.role)).toStrictEqual(['duplicate'])
+
+    const response = await getAs(owner, `${tenant.slug}/billing/invoices`)
+
+    expect(response.status).toBe(200)
+    const page = dataOf(response.body) as {
+      items: { id: string }[]
+      page: Record<string, unknown>
+    }
+    const held = await fake.listInvoices([subscriptionId], null)
+    expect(page.items.map((item) => item.id)).toStrictEqual(held.items.map((item) => item.id))
+    expect(page.page).toMatchObject({ nextCursor: null, hasNext: false, hasPrev: false })
+  })
+
   it("never lists another workspace's subscriptions", async () => {
     const mine = await workspace()
     const theirs = await workspace()

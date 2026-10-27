@@ -95,10 +95,11 @@ export type BillingEventDetail =
   | {
       type: 'duplicate_subscription_refunded'
       /**
-       * Why it was refunded: a second subscription while one ran, or one an
-       * archived workspace adopted, which it can't use.
+       * Why it was refunded: a second subscription while one ran, an
+       * interval switch paid after the current subscription renewed, or one
+       * an archived workspace adopted, which it can't use.
        */
-      refundCause: 'duplicate' | 'archived'
+      refundCause: 'duplicate' | 'late_switch' | 'archived'
     }
   | { type: 'billing_reconciled'; field: string }
   | { type: 'dispute_opened' }

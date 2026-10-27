@@ -628,6 +628,11 @@ const REFUND_ALERTS = {
  * (staff refund the rest), or a cancel or refund that failed (staff act at
  * the provider). Only a refund is reported to analytics, with its cause,
  * timed at the sync's write that found it.
+ *
+ * A duplicate or late switch is recorded for the tax run before the cancel.
+ * If that record fails, the cancel and refund don't run and the error
+ * reaches the caller; the next reconcile finds the subscription still
+ * running and tries again, so a refund never goes out untracked.
  * @param provider - The payment provider.
  * @param reported - The workspace's row as the sync's write left it.
  * @param subscriptionId - The subscription.
@@ -691,10 +696,7 @@ async function refundDuplicate(
       })
       await trackProviderEvent(
         reported,
-        {
-          type: 'duplicate_subscription_refunded',
-          refundCause: cause === 'archived' ? 'archived' : 'duplicate',
-        },
+        { type: 'duplicate_subscription_refunded', refundCause: cause },
         subscriptionId
       )
       return

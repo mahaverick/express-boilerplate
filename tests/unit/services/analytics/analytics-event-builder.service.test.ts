@@ -1041,6 +1041,11 @@ describe('buildProductEvent for a billing event', () => {
     )
     expect(refunded.properties).toMatchObject({ refund_cause: 'archived' })
     expect(refunded.properties).not.toHaveProperty('reason')
+    const lateSwitch = buildProductEvent(
+      billingEvent({ type: 'duplicate_subscription_refunded', refundCause: 'late_switch' }),
+      {}
+    )
+    expect(lateSwitch.properties).toMatchObject({ refund_cause: 'late_switch' })
   })
 
   it.each(BILLING_DETAILS.map((detail) => [detail.type, detail] as const))(
