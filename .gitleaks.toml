@@ -27,6 +27,4 @@ paths = [
   '''^tests/fixtures/flag-golden-fixtures\.json$''',
 ]
 regexTarget = "line"
-regexes = [
-  '''\bLinkedInvoice\b''',
-]
+regexes = ['''\bLinkedInvoice\b''']
