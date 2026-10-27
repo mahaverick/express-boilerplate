@@ -141,6 +141,59 @@ async function paying(at = new Date(NOW.getTime() - 60 * 60 * 1000)) {
 }
 
 /**
+ * Run a callback while the provider lists every paid charge without billing
+ * dates and reports a chosen current period for every subscription.
+ * @param period - The current period, as offsets in milliseconds from the run time.
+ * @param period.start - The start offset.
+ * @param period.end - The end offset.
+ * @param extraCharges - How many copies of each charge to list besides the original.
+ * @param run - The callback.
+ * @returns How many times the subscription was read.
+ */
+async function withUndatedCharges(
+  period: { start: number; end: number },
+  extraCharges: number,
+  run: () => Promise<void>
+): Promise<number> {
+  const listPaidCharges = FakeBillingProvider.prototype.listPaidCharges
+  const fetchSubscription = FakeBillingProvider.prototype.fetchSubscription
+  let reads = 0
+  await withMutatedMethod(
+    FakeBillingProvider.prototype,
+    'listPaidCharges',
+    async function (this: FakeBillingProvider, ...arguments_) {
+      const charges = await listPaidCharges.apply(this, arguments_)
+      return charges.flatMap((charge) =>
+        Array.from({ length: extraCharges + 1 }, (_, index) => ({
+          ...charge,
+          paymentId: index === 0 ? charge.paymentId : `${charge.paymentId}x${index}`,
+          invoiceId: index === 0 ? charge.invoiceId : `${charge.invoiceId}x${index}`,
+          billingStart: null,
+          billingEnd: null,
+        }))
+      )
+    },
+    async () => {
+      await withMutatedMethod(
+        FakeBillingProvider.prototype,
+        'fetchSubscription',
+        async function (this: FakeBillingProvider, ...arguments_) {
+          reads += 1
+          const subscription = await fetchSubscription.apply(this, arguments_)
+          return {
+            ...subscription,
+            currentStart: new Date(NOW.getTime() + period.start),
+            currentEnd: new Date(NOW.getTime() + period.end),
+          }
+        },
+        run
+      )
+    }
+  )
+  return reads
+}
+
+/**
  * A workspace's tax documents, in issue order.
  * @param tenantId - The workspace.
  * @returns Each document's fields the tests read, in the order they were issued (ids are time-ordered).
@@ -560,26 +613,46 @@ describe('reconcileTaxDocuments provider refusals and limits', () => {
 
   it('falls back to the current period for a charge the provider lists without dates', async () => {
     const { tenantId } = await paying()
-    const listPaidCharges = FakeBillingProvider.prototype.listPaidCharges
 
-    await withMutatedMethod(
-      FakeBillingProvider.prototype,
-      'listPaidCharges',
-      async function (this: FakeBillingProvider, ...arguments_) {
-        const charges = await listPaidCharges.apply(this, arguments_)
-        return charges.map((charge) => ({ ...charge, billingStart: null, billingEnd: null }))
-      },
-      async () => {
-        await reconcileTaxDocuments(tenantId, { now: NOW })
-      }
-    )
+    await withUndatedCharges({ start: -2 * DAY, end: 28 * DAY }, 0, async () => {
+      await reconcileTaxDocuments(tenantId, { now: NOW })
+    })
 
     const [invoice] = await documentsOf(tenantId)
     expect(invoice?.snapshot.billingPeriod).toStrictEqual({
-      start: '2026-10-27',
-      end: '2026-11-27',
+      start: '2026-10-25',
+      end: '2026-11-24',
     })
-    expect(invoice?.snapshot.description).toBe('Paid, Monthly, 27 Oct 2026 to 27 Nov 2026')
+    expect(invoice?.snapshot.description).toBe('Paid, Monthly, 25 Oct 2026 to 24 Nov 2026')
+  })
+
+  it('takes the current period for a charge paid at its start and not at its end', async () => {
+    const atStart = await paying()
+    const atEnd = await paying()
+    const paidMs = -60 * 60 * 1000
+
+    await withUndatedCharges({ start: paidMs, end: 30 * DAY }, 0, async () => {
+      await reconcileTaxDocuments(atStart.tenantId, { now: NOW })
+    })
+    await withUndatedCharges({ start: -30 * DAY, end: paidMs }, 0, async () => {
+      await reconcileTaxDocuments(atEnd.tenantId, { now: NOW })
+    })
+
+    const [first] = await documentsOf(atStart.tenantId)
+    const [second] = await documentsOf(atEnd.tenantId)
+    expect(first?.snapshot.billingPeriod).not.toBeNull()
+    expect(second?.snapshot.billingPeriod).toBeNull()
+  })
+
+  it('reads the subscription once for two undated charges', async () => {
+    const { tenantId } = await paying()
+
+    const reads = await withUndatedCharges({ start: -2 * DAY, end: 28 * DAY }, 1, async () => {
+      await reconcileTaxDocuments(tenantId, { now: NOW })
+    })
+
+    expect(await documentsOf(tenantId)).toHaveLength(2)
+    expect(reads).toBe(1)
   })
 
   it('gives an undated charge paid outside the current period no dates', async () => {

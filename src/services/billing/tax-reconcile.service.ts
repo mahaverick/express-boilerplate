@@ -264,8 +264,9 @@ async function subscriptionFactsOf(
  * with IST dates. The plan and interval come from the subscription's price,
  * read once per subscription; the fallback is the Paid plan, yearly for a
  * billing period of 300 days or more. A plan name the PDF font can't draw
- * prints as `Paid plan`. A charge with no billing period of its own takes the
- * subscription's current period when it was paid inside it; the returned
+ * prints as `Paid plan`. A charge missing its start or its end (or both)
+ * takes the subscription's current period when it was paid inside it, from
+ * its start up to but not including its end; the returned
  * charge carries those dates, so the issued snapshot matches the line.
  * @param provider - The payment provider.
  * @returns A function from a charge to its line and the charge with its period filled in.
