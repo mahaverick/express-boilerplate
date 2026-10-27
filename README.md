@@ -297,7 +297,8 @@ new value, the scheduler queues a run for every workspace that tracks a
 subscription, then marks that date done. If the step fails part way, the
 next daily run queues them all again. To recover at once, or after deleting
 the marker, run `pnpm billing:tax-reconcile -- --apply`: queueing twice issues
-nothing twice.
+nothing twice, since each issue re-checks its payment or refund, and raises
+each alert once, since alerts are deduplicated by their text.
 
 **Manual credit notes.** Staff issue one in Apex for a lost dispute. Its
 reason prints on the customer's credit note, so it takes one line of English
