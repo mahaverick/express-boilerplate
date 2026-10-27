@@ -17,7 +17,9 @@
  *    members and sends its emails (`emitBillingDiff`, which also tells each
  *    member whose upgrade request the write fulfilled), syncs once more
  *    after a handover or a cancel so the new provider state lands at once,
- *    and queues the prompt lifecycle cancel when it released the claim.
+ *    and queues the prompt lifecycle cancel when it released the claim;
+ * 5. once the whole call (its follow-up sync included) ends `synced`, queues
+ *    one tax run for the workspace.
  *
  * A subscription whose notes name another workspace is never adopted, and one
  * whose notes name an unknown price is never made current: both are ignored
@@ -37,6 +39,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { emitBillingDiff } from '@/services/billing/billing-events.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
+import { queueTaxReconcile } from '@/services/billing/tax-reconcile.service'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type {
@@ -847,7 +850,9 @@ async function runSync(run: SyncRun): Promise<SyncResult> {
  * a row of another provider or mode, it changes nothing. Every sync that
  * writes stamps `syncedAt`, so it moves the row's version; a concurrent writer
  * can therefore make a sync give up with `BillingSyncConflictError`, which a
- * job absorbs by retrying.
+ * job absorbs by retrying. A sync that ends `synced` queues one tax run,
+ * here and not in the recursive `runSync`, so a follow-up sync queues none
+ * of its own.
  * @param tenantId - The workspace.
  * @param source - What asked for the sync, for the history.
  * @param options - Optional inputs.
@@ -862,11 +867,13 @@ export async function syncTenantBilling(
   source: BillingHistorySource,
   options: { now?: Date; extraSubscriptionIds?: readonly string[] } = {}
 ): Promise<SyncResult> {
-  return runSync({
+  const result = await runSync({
     tenantId,
     source,
     now: options.now ?? new Date(),
     extraSubscriptionIds: options.extraSubscriptionIds ?? [],
     mayFollowUp: true,
   })
+  if (result.outcome === 'synced') await queueTaxReconcile(tenantId)
+  return result
 }

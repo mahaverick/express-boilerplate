@@ -16,8 +16,11 @@
  * Daily: the reconcile queues a sync for every row that holds a subscription,
  * for each running subscription whose notes name a workspace whose row does
  * not hold it, and for each workspace whose webhook event failed in the last
- * three days; the yearly renewal reminder and the day-7 and day-30 win-back
- * emails go out. A reminder is claimed before it is sent, and a suspended or
+ * three days; with GST registration on, a tax run is queued for each
+ * workspace with a processed refund in the last three days, hinted with
+ * those payments, and once per registration date for every workspace that
+ * tracks a subscription; the yearly renewal reminder and the day-7 and
+ * day-30 win-back emails go out. A reminder is claimed before it is sent, and a suspended or
  * archived workspace is never claimed.
  *
  * The lifecycle transactions (suspend, archive) never touch the billing row:
@@ -27,13 +30,16 @@
  * prompt cancel job each one queues after its commit (`runLifecycleCancelFor`),
  * which takes the same claim.
  */
+import { gstSellerConfig } from '@/configs/billing.config'
 import { getEnv } from '@/configs/env.config'
 import { CANCEL_BUFFER_DAYS } from '@/constants/billing.constants'
+import { TAX_REFUND_SWEEP_DAYS } from '@/constants/gst.constants'
 import type { TenantBillingRecord } from '@/database/models/billing.model'
 import { isUnknownIdError } from '@/errors/billing-provider-errors'
-import { addBillingSyncJob } from '@/jobs/billing.job'
+import { addBillingSyncJob, addTaxReconcileJob } from '@/jobs/billing.job'
 import { BillingRepository, type ProviderScope } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import { TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { record } from '@/services/audit.service'
 import { billingTimeZone } from '@/services/billing/billing-dates.service'
@@ -55,6 +61,8 @@ import {
 } from '@/services/billing/billing-sync.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
 import {
   BILLING_ALERT_TEXT,
@@ -66,10 +74,12 @@ import {
 import { isOtherProvider } from '@/utilities/billing-rules.utilities'
 import { isRunning } from '@/utilities/billing-state-machine.utilities'
 import { formatDateInZone } from '@/utilities/date-text.utilities'
+import { istDate } from '@/utilities/gst.utilities'
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
 const tenantRepository = new TenantRepository()
+const taxRepository = new TaxRepository()
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -914,6 +924,73 @@ async function sweepSubscriptions(
 }
 
 /**
+ * The tax refund sweep: every processed refund created in the last
+ * `TAX_REFUND_SWEEP_DAYS` whose payment was invoiced or held here queues one
+ * tax run per workspace, hinted with those payments, so a missed webhook or
+ * an old payment's refund is still credited. Nothing with registration off.
+ * @param provider - The payment provider.
+ * @param scope - The running provider and mode.
+ * @param now - The run's time.
+ * @param counts - The step's counts: workspaces queued, refunds passed over.
+ * @throws {ProviderError} When the provider's list fails.
+ */
+async function sweepTaxRefunds(
+  provider: BillingProviderClient,
+  scope: ProviderScope,
+  now: Date,
+  counts: StepCounts
+): Promise<void> {
+  if (gstSellerConfig() === null) return
+  const refunds = await provider.listRecentRefunds(
+    new Date(now.getTime() - TAX_REFUND_SWEEP_DAYS * DAY_MS)
+  )
+  const paymentsByTenant = new Map<string, Set<string>>()
+  for (const refund of refunds) {
+    const tenantId =
+      refund.status === 'processed'
+        ? await taxRepository.findTenantIdForPayment(scope, refund.paymentId)
+        : undefined
+    if (tenantId === undefined) {
+      counts.skipped += 1
+      continue
+    }
+    paymentsByTenant.set(
+      tenantId,
+      (paymentsByTenant.get(tenantId) ?? new Set()).add(refund.paymentId)
+    )
+  }
+  for (const [tenantId, paymentIds] of paymentsByTenant) {
+    await addTaxReconcileJob({ tenantId, paymentIds: [...paymentIds] })
+    counts.acted += 1
+  }
+}
+
+/**
+ * The one-time tax backfill: on the first daily run after the registration
+ * date gets a new value, queue a tax run for every customer workspace that
+ * tracks a subscription, so one whose subscriptions all ended before
+ * registration, which no sync reaches again, is still invoiced. A Redis
+ * marker per registration date (`SET NX`, no expiry) makes it once; losing
+ * it only runs the step again, which issues nothing twice.
+ * @param scope - The running provider and mode.
+ * @param counts - The step's counts: workspaces queued.
+ */
+async function backfillTaxDocuments(scope: ProviderScope, counts: StepCounts): Promise<void> {
+  const seller = gstSellerConfig()
+  if (seller === null) return
+  const key = redisKey('billing-tax-backfill', istDate(seller.effectiveFrom))
+  const claimed = await withRedisDeadline(async () => {
+    const redis = await getRedis()
+    return redis.set(key, '1', { condition: 'NX' })
+  }, 'tax backfill marker')
+  if (claimed !== 'OK') return
+  for (const tenantId of await billingRepository.listTenantIdsWithTrackedSubscriptions(scope)) {
+    await addTaxReconcileJob({ tenantId })
+    counts.acted += 1
+  }
+}
+
+/**
  * The daily run's steps, in order. Each is independent of the others.
  */
 const DAILY_STEPS: readonly BillingStep[] = [
@@ -944,6 +1021,22 @@ const DAILY_STEPS: readonly BillingStep[] = [
         await addBillingSyncJob({ tenantId, source: 'reconcile' })
         counts.acted += 1
       }
+    },
+  },
+  {
+    name: 'tax_refunds',
+    run: async (now, counts) => {
+      const running = runningProvider()
+      if (running === undefined) return
+      await sweepTaxRefunds(running.provider, running.scope, now, counts)
+    },
+  },
+  {
+    name: 'tax_backfill',
+    run: async (_now, counts) => {
+      const running = runningProvider()
+      if (running === undefined) return
+      await backfillTaxDocuments(running.scope, counts)
     },
   },
   {
@@ -980,7 +1073,9 @@ export async function runFrequentBilling(now = new Date()): Promise<BillingRunRe
 /**
  * The daily run, at 03:30 UTC: the reconcile's row pass, its sweep of recent
  * subscriptions, and a resync for each recently failed webhook event, which
- * queue `sync-tenant` jobs so the syncs spread over the billing Worker; then
+ * queue `sync-tenant` jobs so the syncs spread over the billing Worker; the
+ * tax refund sweep and the one-time tax backfill, which queue `tax-reconcile`
+ * jobs; then
  * the yearly renewal reminders and the win-back emails. Never rejects.
  * @param now - The run's time; defaults to now.
  * @returns Each step's outcome.

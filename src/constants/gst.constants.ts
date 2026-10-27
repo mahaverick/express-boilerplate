@@ -82,3 +82,16 @@ export const TAX_SUBSCRIPTION_ROLES = ['held', 'duplicate', 'late_switch'] as co
 
 /** One of the subscription roles. */
 export type TaxSubscriptionRole = (typeof TAX_SUBSCRIPTION_ROLES)[number]
+
+/**
+ * A tax run lists the refunds of an invoiced payment that is not fully
+ * credited only while it was paid within this many days: Razorpay refuses a
+ * normal refund after six months. A payment named as a hint is always read.
+ */
+export const TAX_REFUND_LOOKBACK_DAYS = 200
+
+/** The daily refund sweep reads refunds created in this many past days. */
+export const TAX_REFUND_SWEEP_DAYS = 3
+
+/** The most tracked subscriptions one tax run reads charges for. */
+export const TAX_MAX_TRACKED_SUBSCRIPTIONS = 50

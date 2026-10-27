@@ -17,6 +17,7 @@ import {
   BILLING_OTHER_FAILURE_ATTEMPTS,
   BILLING_OUTAGE_ALERT_FAILURES,
   BILLING_SYNC_TENANT_JOB,
+  BILLING_TAX_RECONCILE_JOB,
   BILLING_WEBHOOK_JOB,
   billingRetryDelay,
   type BillingWebhookJobData,
@@ -26,10 +27,13 @@ import {
   recordWebhookJobFailure,
 } from '@/services/billing/billing-webhook.service'
 import { RazorpayProvider } from '@/services/billing/razorpay-provider.service'
+import { recordTaxReconcileFailure } from '@/services/billing/tax-reconcile.service'
 import { sql } from '@/services/database.service'
-import { closeQueue, getBillingQueue } from '@/services/queue.service'
+import { addJob, closeQueue, getBillingQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
+import { istDate } from '@/utilities/gst.utilities'
 import { processBillingJob, startBillingWorker } from '@/workers/billing.worker'
 import {
   billingColumn,
@@ -61,6 +65,20 @@ import { waitUntil } from '../../helpers/timing'
 const providerState = vi.hoisted(() => ({
   current: undefined as BillingProviderClient | null | undefined,
 }))
+
+/**
+ * Whether GST registration is on: off, except in the tax job's tests, so no
+ * other test's sync queues a tax run.
+ */
+const gst = vi.hoisted(() => ({ on: false }))
+
+vi.mock('@/configs/billing.config', async (importOriginal) => {
+  const { FIXTURE_SELLER: seller } = await import('../../helpers/tax-seller')
+  return {
+    ...(await importOriginal<typeof import('@/configs/billing.config')>()),
+    gstSellerConfig: () => (gst.on ? seller : null),
+  }
+})
 
 vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/billing/billing-provider.service')>()),
@@ -336,6 +354,7 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
+  gst.on = false
   api.reset()
   if (eventIds.length > 0) {
     await sql`delete from billing_events where provider_event_id = any(${eventIds})`
@@ -910,6 +929,42 @@ describe('processBillingJob', () => {
     await expect(processBillingJob({ name: 'nope', data: {} } as Job)).rejects.toBeInstanceOf(
       UnrecoverableError
     )
+  })
+})
+
+describe('a tax reconcile job', () => {
+  it('raises one tax_issue_failed alert per workspace and day when it fails for good', async () => {
+    gst.on = true
+    const { tenantId } = await payingWorkspace()
+    /**
+     * The workspace's tax failure alerts.
+     * @returns Their messages.
+     */
+    const alerts = () =>
+      sql<{ message: string }[]>`
+        select message from billing_alerts
+        where tenant_id = ${tenantId} and kind = 'tax_issue_failed'`
+
+    await withMutatedMethod(
+      RazorpayProvider.prototype,
+      'listPaidCharges',
+      () => Promise.reject(new TypeError('unexpected')),
+      async () => {
+        await addJob(getBillingQueue(), BILLING_TAX_RECONCILE_JOB, { tenantId }, { attempts: 1 })
+        await waitUntil(
+          async () => {
+            const raised = await alerts()
+            return raised.length > 0 ? raised : null
+          },
+          { message: 'the failed tax job raises an alert' }
+        )
+      }
+    )
+    await recordTaxReconcileFailure({ tenantId }, new TypeError('unexpected'))
+
+    const raised = await alerts()
+    const expected = BILLING_ALERT_TEXT.taxIssueFailed(tenantId, istDate(new Date()))
+    expect(raised.map((alert) => alert.message)).toStrictEqual([expected])
   })
 })
 

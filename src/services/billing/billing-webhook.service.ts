@@ -17,6 +17,11 @@
  * state. A subscription whose notes name another environment, read when no
  * row here holds it, marks the event `other_environment` with no alert.
  *
+ * Once the handling resolves (never on a failed attempt, which the job
+ * retries), a `refund.processed`, and any event that resolved to no
+ * workspace's sync, queues a tax run hinted with its payment: a refunded
+ * duplicate's refund reaches its workspace only that way.
+ *
  * Only ids, the type and the outcome are stored or logged: a payload carries
  * the payer's address, phone and card ids, so the body is never kept, logged
  * or queued.
@@ -38,6 +43,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { trackProviderEvent } from '@/services/billing/billing-analytics.service'
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
+import { queueTaxReconcileForPayment } from '@/services/billing/tax-reconcile.service'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
@@ -103,6 +109,13 @@ const OPEN_DISPUTE_STATUSES: ReadonlySet<string> = new Set(['open', 'under_revie
  * Dispute statuses that end a dispute.
  */
 const ENDED_DISPUTE_STATUSES: ReadonlySet<string> = new Set(['won', 'lost', 'closed'])
+
+/**
+ * How a subscription event's handling ended: `synced` its workspace,
+ * `unresolved` when no row held the subscription or the sync found none,
+ * or `ignored` as another environment's.
+ */
+type SubscriptionEventOutcome = 'synced' | 'unresolved' | 'ignored'
 
 /**
  * What the receipt did: `queued` a job, found a `duplicate` delivery, or
@@ -414,12 +427,13 @@ async function markOtherEnvironment(data: BillingWebhookJobData): Promise<void> 
  * @param provider - The payment provider.
  * @param data - The job's payload.
  * @param subscriptionId - The subscription the event concerns.
+ * @returns How the handling ended.
  */
 async function syncForSubscription(
   provider: BillingProviderClient,
   data: BillingWebhookJobData,
   subscriptionId: string
-): Promise<void> {
+): Promise<SubscriptionEventOutcome> {
   const row = await billingRepository.findBySubscriptionId(subscriptionId)
   let tenantId = row?.tenantId
   let extraSubscriptionIds: string[] = []
@@ -427,7 +441,7 @@ async function syncForSubscription(
     const sub = await unlessUnknown(() => provider.fetchSubscription(subscriptionId))
     if (sub !== undefined && isOtherEnvironment(sub)) {
       await markOtherEnvironment(data)
-      return
+      return 'ignored'
     }
     tenantId = sub === undefined ? undefined : await notedTenant(sub)
     if (tenantId === undefined) {
@@ -447,7 +461,7 @@ async function syncForSubscription(
       await billingRepository.markEventProcessed(data.eventRowId, {
         error: 'unknown_subscription',
       })
-      return
+      return 'unresolved'
     }
     extraSubscriptionIds = [subscriptionId]
   }
@@ -457,6 +471,7 @@ async function syncForSubscription(
     tenantId,
     ...(result.outcome !== 'synced' && { error: result.outcome }),
   })
+  return result.outcome === 'no_row' ? 'unresolved' : 'synced'
 }
 
 /**
@@ -549,10 +564,41 @@ async function handleDispute(
 }
 
 /**
+ * Resolve a non-dispute event's subscription and sync its workspace, then
+ * mark the event processed. An event whose payment the provider does not
+ * know is marked `unknown_subscription`; one whose payment belongs to no
+ * subscription, `no_subscription`.
+ * @param provider - The payment provider.
+ * @param data - The job's payload.
+ * @returns The subscription it resolved to, or null, and how the handling ended.
+ */
+async function handleSubscriptionEvent(
+  provider: BillingProviderClient,
+  data: BillingWebhookJobData
+): Promise<{ subscriptionId: string | null; outcome: SubscriptionEventOutcome }> {
+  const subscriptionId =
+    data.subscriptionId ?? (await subscriptionOfPayment(provider, data.paymentId))
+  if (subscriptionId === undefined) {
+    await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
+    return { subscriptionId: null, outcome: 'unresolved' }
+  }
+  if (subscriptionId === null) {
+    await billingRepository.markEventProcessed(data.eventRowId, { error: 'no_subscription' })
+    return { subscriptionId: null, outcome: 'unresolved' }
+  }
+  return {
+    subscriptionId,
+    outcome: await syncForSubscription(provider, data, subscriptionId),
+  }
+}
+
+/**
  * Handle one stored webhook event: resolve its workspace and sync it, or
- * flag a dispute, then mark the event processed. An event whose payment
- * the provider does not know is marked `unknown_subscription`; one whose
- * payment belongs to no subscription, `no_subscription`.
+ * flag a dispute, then mark the event processed. Once that resolves, a
+ * `refund.processed` and an event that reached no workspace's sync queue a
+ * tax run hinted with the payment; a failed attempt queues nothing, so a
+ * retried event queues one run, not one per attempt. A charge that syncs is
+ * covered by the sync's own tax run.
  * @param data - The job's payload.
  * @throws {ProviderError} When the provider could not answer; nothing is marked, and the job retries when it is retryable.
  * @throws {BillingSyncConflictError} When the row kept changing; nothing is marked, and the job retries.
@@ -567,17 +613,13 @@ export async function processBillingWebhookEvent(data: BillingWebhookJobData): P
     await handleDispute(provider, data)
     return
   }
-  const subscriptionId =
-    data.subscriptionId ?? (await subscriptionOfPayment(provider, data.paymentId))
-  if (subscriptionId === undefined) {
-    await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
-    return
+  const { subscriptionId, outcome } = await handleSubscriptionEvent(provider, data)
+  if (outcome === 'unresolved' || (outcome === 'synced' && data.eventType === 'refund.processed')) {
+    await queueTaxReconcileForPayment(
+      { kind: provider.kind, mode: provider.mode },
+      { paymentId: data.paymentId, subscriptionId }
+    )
   }
-  if (subscriptionId === null) {
-    await billingRepository.markEventProcessed(data.eventRowId, { error: 'no_subscription' })
-    return
-  }
-  await syncForSubscription(provider, data, subscriptionId)
 }
 
 /**

@@ -882,14 +882,14 @@ missing from it. `getPausableQueues()` is that list without `auth-email`, and
 is what full maintenance pauses. `emailQueueFor` (`src/jobs/email.job.ts`)
 picks an email's queue from its template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                                                                                       | Worker concurrency   | Job options                                                                                                                                                 |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                     | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                   | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
-| `maintenance`  | The retention purge                                                                                                                                                                                                           | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                    | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
-| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
+| Queue          | Carries                                                                                                                                                                                                                                                                                                        | Worker concurrency   | Job options                                                                                                                                                 |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                                                                                                    | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
+| `maintenance`  | The retention purge                                                                                                                                                                                                                                                                                            | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
+| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                                                                                                     | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
+| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, a workspace's `tax-reconcile` run (priority 10, so webhooks and syncs go first), and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`, which
 reports the attempt BullMQ will not retry (`attemptsMade >= attempts`, or an
@@ -898,8 +898,9 @@ maintenance and billing handlers then log a retryable attempt at `warn`; on the 
 one `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
 payload, marks an email's message `failed`, and logs `job failed permanently`
 once. A billing webhook job's final failure also marks its `billing_events`
-row failed and raises one `webhook_failing` staff alert per event; a provider
-refusal a retry cannot change fails it at once. The billing Worker counts a
+row failed and raises one `webhook_failing` staff alert per event; a
+`tax-reconcile` job's raises one `tax_issue_failed` alert per workspace and IST
+day. A provider refusal a retry cannot change fails a job at once. The billing Worker counts a
 job's provider-outage failures and its other failures apart in the job's data
 (`outageFailures`, `otherFailures`): the eighth outage failure, about an hour
 in, raises one "still retrying" staff alert and the job keeps retrying; the
@@ -954,7 +955,14 @@ and counted; a Free row whose current subscription a failed cancel left
 running, which a staff alert names, is synced so the cancel is tried again),
 for each running subscription of the last three days whose
 notes name a workspace whose row does not hold it, and for each workspace
-whose webhook event failed in the last three days. It also sends the yearly
+whose webhook event failed in the last three days. With GST registration on,
+`tax_refunds` queues one hinted `tax-reconcile` job per workspace with a
+processed refund in the last three days of an invoiced or held payment, and
+`tax_backfill` queues one for every customer workspace that tracks a
+subscription, once per `BILLING_GST_EFFECTIVE_FROM` value (a `SET NX` marker
+under `redisKey('billing-tax-backfill', date)`), so a workspace whose
+subscriptions all ended before registration, which no sync reaches, is still
+invoiced. It also sends the yearly
 renewal reminder a week before the period ends (never for a stand-in period
 end, one no later than the row's last sync, which an adoption of an unpaid
 cycle stores) and the win-back emails on days
@@ -1542,8 +1550,23 @@ map; the detail lives in the sections it links.
   work, and every owner billing write and the webhook answer the unknown-route 404. The fake keeps its subscriptions in Redis so the API and the worker
   agree.
 - **Jobs and schedulers.** The `billing` queue carries one job per webhook
-  event, workspace syncs, the prompt lifecycle cancel and the two runs
-  ([Queues and Workers](#queues-and-workers), [Schedulers](#schedulers)).
+  event, workspace syncs, the prompt lifecycle cancel, tax runs and the two
+  runs ([Queues and Workers](#queues-and-workers), [Schedulers](#schedulers)).
+- **Tax documents.** With GST registration on, a workspace's tax run
+  (`src/services/billing/tax-reconcile.service.ts`) plans with no lock held:
+  the paid charges of its current, next and tracked subscriptions since the
+  registration date, and the processed refunds of each invoiced charge that
+  is hinted, or not fully credited and paid within 200 days. It then issues
+  each invoice (an SEZ buyer's charge is held instead) and each credit note,
+  after its invoice, through `tax-documents.service.ts`, and raises the staff
+  alerts after the commits: one `tax_invoice_late` per run, one
+  `tax_credit_note_late` per late note, one `tax_held_sez` per hold, and one
+  `tax_issue_failed` per refund larger than what is left to credit, which is
+  never issued capped. Every sync that ends `synced` queues a run; so do a
+  `refund.processed` webhook and one that reaches no workspace's sync (hinted
+  with the payment, after the handling resolves, so a retried attempt queues
+  none), and the two daily tax steps. A provider error fails the run for a
+  retry; what it issued stays.
 - **Events and pushes.** Every change emits its product events
   ([Billing events](#billing-events)) and tells the workspace's open apps over
   SSE ([Realtime (SSE)](#realtime-sse)).
