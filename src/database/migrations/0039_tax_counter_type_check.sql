@@ -1,0 +1,1 @@
+ALTER TABLE "tax_document_counters" ADD CONSTRAINT "tax_document_counters_type_check" CHECK ("tax_document_counters"."type" in ('invoice', 'credit_note'));

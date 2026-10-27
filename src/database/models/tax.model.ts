@@ -80,9 +80,10 @@ export const tenantTaxDetailsModel = pgTable(
 )
 
 /**
- * The `tax_documents` table: every invoice and credit note issued. Rows are
- * never updated or deleted by code. The tenant link is SET NULL because GST
- * records are kept 72 months after a tenant is purged.
+ * The `tax_documents` table: every invoice and credit note issued. No code
+ * updates or deletes a row; the one change is the database's own, nulling
+ * `tenant_id` when the tenant is purged (SET NULL), because GST records are
+ * kept 72 months after that.
  */
 export const taxDocumentModel = pgTable(
   'tax_documents',
@@ -171,7 +172,8 @@ export const taxDocumentModel = pgTable(
 
 /**
  * The `tax_document_counters` table: the last number issued per document type
- * and financial year. Locked for one insert only, so numbers have no gaps.
+ * and financial year. Locked for one insert and its audit entry only, so
+ * numbers have no gaps.
  */
 export const taxDocumentCounterModel = pgTable(
   'tax_document_counters',
@@ -180,12 +182,20 @@ export const taxDocumentCounterModel = pgTable(
     financialYear: char('financial_year', { length: 5 }).notNull(),
     lastNumber: integer('last_number').notNull(),
   },
-  (table) => [primaryKey({ columns: [table.type, table.financialYear] })]
+  (table) => [
+    primaryKey({ columns: [table.type, table.financialYear] }),
+    // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
+    check(
+      'tax_document_counters_type_check',
+      sql`${table.type} in (${sql.raw(sqlValueList(TAX_DOCUMENT_TYPES))})`
+    ),
+  ]
 )
 
 /**
  * The `tax_held_charges` table: a charge from a SEZ buyer that was not
- * invoiced and waits for staff to issue it by hand.
+ * invoiced and waits for staff to issue it by hand. A staff resolve is the
+ * only update; the rows go with their tenant (cascade).
  */
 export const taxHeldChargeModel = pgTable(
   'tax_held_charges',

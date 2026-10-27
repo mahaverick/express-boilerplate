@@ -280,7 +280,10 @@ marked by a comment in its file (0024's has none):
   the number series stays gap-free. `tenant_tax_details` and
   `tax_held_charges` are deleted with the tenant. No code updates or deletes a
   `tax_documents` row.
-
+- `0039` is generated whole. It adds `tax_document_counters_type_check`, so a
+  counter row names `invoice` or `credit_note` only, as `tax_documents` does.
+  The table holds one row per type and financial year, so the check's scan is
+  instant.
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until

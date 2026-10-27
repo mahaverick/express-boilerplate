@@ -1,9 +1,10 @@
 /**
- * @file What migration 0038 built, asserted against the live per-worker
- * database in raw SQL: the tax tables' CHECKs and unique indexes, purge
- * survival of issued documents, and the subscription role column.
+ * @file What migrations 0038 and 0039 built, asserted against the live
+ * per-worker database in raw SQL: the tax tables' CHECKs and unique indexes,
+ * purge survival of issued documents, and the subscription role column.
  */
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 import { sql } from '@/services/database.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -130,6 +131,12 @@ describe('tax_documents CHECKs and uniques', () => {
     expect(await code(insertDocument({ paymentId: null }))).toBe('23514')
   })
 
+  it('refuses an invoice that names an original document or a refund', async () => {
+    const invoice = await insertDocument()
+    expect(await code(insertDocument({ originalId: invoice }))).toBe('23514')
+    expect(await code(insertDocument({ refundId: 'rfnd_on_invoice' }))).toBe('23514')
+  })
+
   it('refuses total that is not the sum of parts', async () => {
     expect(await code(insertDocument({ total: 119 }))).toBe('23514')
   })
@@ -157,6 +164,56 @@ describe('tax_documents CHECKs and uniques', () => {
     expect(
       await code(insertDocument({ type: 'credit_note', originalId: invoice, paymentId: null }))
     ).toBeUndefined()
+  })
+})
+
+describe('tax_document_counters CHECK', () => {
+  it('takes the two document types and refuses any other', async () => {
+    expect(
+      await code(sql`
+        insert into tax_document_counters (type, financial_year, last_number)
+        values ('invoice', '26-27', 0), ('credit_note', '26-27', 0)`)
+    ).toBeUndefined()
+    expect(
+      await code(sql`
+        insert into tax_document_counters (type, financial_year, last_number)
+        values ('receipt', '26-27', 0)`)
+    ).toBe('23514')
+  })
+
+  it("reads held on a row that existed before the column, through the migration's own statement", async () => {
+    const t = await insertTenant()
+    const subscriptionId = `sub_${randomUUID().slice(0, 12)}`
+    const migration = readFileSync('src/database/migrations/0038_gst_tax_documents.sql', 'utf8')
+    const addColumn = migration
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim().replace(/;$/, ''))
+      .find((statement) => statement.includes('ADD COLUMN "role"'))
+    if (addColumn === undefined) throw new Error('0038 has no role column statement')
+    let role: string | undefined
+
+    // Rebuild the column inside a transaction that rolls back, so the shared schema is untouched.
+    const rolledBack = new Error('roll back')
+    const outcome = await sql
+      .begin(async (tx) => {
+        await tx`alter table tenant_billing_subscriptions drop column role`
+        await tx`
+          insert into tenant_billing_subscriptions (tenant_id, provider, mode, subscription_id)
+          values (${t}, 'fake', 'test', ${subscriptionId})`
+        await tx.unsafe(addColumn)
+        const [row] = await tx<{ role: string }[]>`
+          select role from tenant_billing_subscriptions where subscription_id = ${subscriptionId}`
+        role = row?.role
+        throw rolledBack
+      })
+      .catch((error: unknown) => error)
+
+    expect(outcome).toBe(rolledBack)
+    expect(role).toBe('held')
+    const [column] = await sql<{ count: number }[]>`
+      select count(*)::int as count from information_schema.columns
+      where table_name = 'tenant_billing_subscriptions' and column_name = 'role'`
+    expect(column?.count).toBe(1)
   })
 })
 
