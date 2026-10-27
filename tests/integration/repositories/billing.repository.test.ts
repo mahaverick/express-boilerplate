@@ -510,5 +510,79 @@ describe('BillingRepository', () => {
         `Subscription ${id} became current for workspace ${second} but is recorded for workspace ${first}. Check which workspace pays for it.`,
       ])
     })
+
+    it('tracks refunded subscriptions in every role but lists only the held one as held', async () => {
+      const scope = { kind: 'razorpay', mode: 'test' } as const
+      const tenantId = await billedTenant()
+      const held = subscriptionId()
+      const duplicate = subscriptionId()
+      const late = subscriptionId()
+      await withTransaction((tx) =>
+        repository.updateVersioned(
+          tenantId,
+          1,
+          { ...razorpayTest, providerSubscriptionId: held },
+          tx
+        )
+      )
+      await repository.recordTrackedSubscription(tenantId, scope, duplicate, 'duplicate')
+      await repository.recordTrackedSubscription(tenantId, scope, late, 'late_switch')
+      // Never downgrades a held subscription, and the first role stays.
+      await repository.recordTrackedSubscription(tenantId, scope, held, 'duplicate')
+      await repository.recordTrackedSubscription(tenantId, scope, duplicate, 'late_switch')
+
+      expect(await repository.listHeldSubscriptionIds(tenantId, scope, 10)).toStrictEqual([held])
+      expect(
+        [...(await repository.listTrackedSubscriptionIds(tenantId, scope, 10))].toSorted()
+      ).toStrictEqual([held, duplicate, late].toSorted())
+      const roles = await sql<{ subscription_id: string; role: string }[]>`
+        select subscription_id, role from tenant_billing_subscriptions where tenant_id = ${tenantId}`
+      expect(Object.fromEntries(roles.map((r) => [r.subscription_id, r.role]))).toStrictEqual({
+        [held]: 'held',
+        [duplicate]: 'duplicate',
+        [late]: 'late_switch',
+      })
+    })
+
+    it('turns a tracked duplicate held when it becomes current', async () => {
+      const scope = { kind: 'razorpay', mode: 'test' } as const
+      const tenantId = await billedTenant()
+      const id = subscriptionId()
+      await repository.recordTrackedSubscription(tenantId, scope, id, 'duplicate')
+      expect(await repository.listHeldSubscriptionIds(tenantId, scope, 10)).toStrictEqual([])
+      await withTransaction((tx) =>
+        repository.updateVersioned(tenantId, 1, { ...razorpayTest, providerSubscriptionId: id }, tx)
+      )
+      expect(await repository.listHeldSubscriptionIds(tenantId, scope, 10)).toStrictEqual([id])
+    })
+
+    it('finds the tenant that tracks a subscription, falling back to the billing row', async () => {
+      const scope = { kind: 'razorpay', mode: 'test' } as const
+      const tenantId = await billedTenant()
+      const other = await billedTenant()
+      const id = subscriptionId()
+      const pending = subscriptionId()
+      await repository.recordTrackedSubscription(tenantId, scope, id, 'late_switch')
+      await sql`update tenant_billing set pending_subscription_id = ${pending} where tenant_id = ${other}`
+      expect(await repository.findTenantIdBySubscription(scope, id)).toBe(tenantId)
+      expect(await repository.findTenantIdBySubscription(scope, pending)).toBe(other)
+      expect(await repository.findTenantIdBySubscription(scope, subscriptionId())).toBeUndefined()
+      expect(
+        await repository.findTenantIdBySubscription({ kind: 'razorpay', mode: 'live' }, id)
+      ).toBeUndefined()
+    })
+
+    it('lists the non-platform tenants that track a subscription in the scope', async () => {
+      const scope = { kind: 'razorpay', mode: 'test' } as const
+      const tenantId = await billedTenant()
+      await repository.recordTrackedSubscription(tenantId, scope, subscriptionId(), 'duplicate')
+      const platform = await sql<{ id: string }[]>`select id from tenants where is_platform limit 1`
+      const ids = await repository.listTenantIdsWithTrackedSubscriptions(scope)
+      expect(ids).toContain(tenantId)
+      if (platform[0] !== undefined) expect(ids).not.toContain(platform[0].id)
+      expect(
+        await repository.listTenantIdsWithTrackedSubscriptions({ kind: 'razorpay', mode: 'live' })
+      ).not.toContain(tenantId)
+    })
   })
 })

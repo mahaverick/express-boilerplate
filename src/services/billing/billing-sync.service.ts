@@ -599,6 +599,13 @@ const REFUND_ALERTS = {
     nothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid,
     partlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded,
   },
+  late_switch: {
+    cancelFailed: BILLING_ALERT_TEXT.duplicateCancelFailed,
+    refundFailed: BILLING_ALERT_TEXT.duplicateRefundFailed,
+    refunded: BILLING_ALERT_TEXT.duplicateRefunded,
+    nothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid,
+    partlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded,
+  },
   archived: {
     cancelFailed: BILLING_ALERT_TEXT.archivedCancelFailed,
     refundFailed: BILLING_ALERT_TEXT.archivedRefundFailed,
@@ -627,10 +634,19 @@ async function refundDuplicate(
   provider: BillingProviderClient,
   reported: TenantBillingRecord,
   subscriptionId: string,
-  cause: 'duplicate' | 'archived'
+  cause: 'duplicate' | 'archived' | 'late_switch'
 ): Promise<void> {
   const { tenantId } = reported
   const alerts = REFUND_ALERTS[cause]
+  // Recorded before the cancel, so a cancel or refund failure still leaves the charge tracked for tax.
+  if (cause !== 'archived') {
+    await billingRepository.recordTrackedSubscription(
+      tenantId,
+      { kind: provider.kind, mode: provider.mode },
+      subscriptionId,
+      cause
+    )
+  }
   try {
     await provider.cancelSubscription(subscriptionId, false)
   } catch (error) {
@@ -663,7 +679,7 @@ async function refundDuplicate(
     return
   }
   // A duplicate's outcome is a duplicate_refunded alert; an archived workspace's is a repair note.
-  const doneKind = cause === 'duplicate' ? 'duplicate_refunded' : 'reconcile_repair'
+  const doneKind = cause === 'archived' ? 'reconcile_repair' : 'duplicate_refunded'
   switch (outcome.status) {
     case 'refunded': {
       await insertAlert(tenantId, {
@@ -672,7 +688,10 @@ async function refundDuplicate(
       })
       await trackProviderEvent(
         reported,
-        { type: 'duplicate_subscription_refunded', refundCause: cause },
+        {
+          type: 'duplicate_subscription_refunded',
+          refundCause: cause === 'archived' ? 'archived' : 'duplicate',
+        },
         subscriptionId
       )
       return

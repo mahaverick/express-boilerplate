@@ -385,6 +385,20 @@ describe('GET /api/v1/platform/tenants/:id/billing/subscriptions', () => {
     expect(itemsOf(response.body).map((item) => item.standing)).toStrictEqual(['earlier'])
   })
 
+  it('omits refunded duplicate and late-switch subscriptions', async () => {
+    const { tenant } = await workspace()
+    await storeHeld(tenant.id, 'sub_HELD1', 30)
+    await storeHeld(tenant.id, 'sub_DUP1', 20)
+    await storeHeld(tenant.id, 'sub_LATE1', 10)
+    await sql`update tenant_billing_subscriptions set role = 'duplicate' where subscription_id = 'sub_DUP1'`
+    await sql`update tenant_billing_subscriptions set role = 'late_switch' where subscription_id = 'sub_LATE1'`
+    const { token } = await viewer()
+
+    const response = await listAs(token, tenant.id, 'subscriptions')
+
+    expect(itemsOf(response.body).map((item) => item.subscriptionId)).toStrictEqual(['sub_HELD1'])
+  })
+
   it('searches the subscription id', async () => {
     const { tenant } = await workspace()
     await storeHeld(tenant.id, 'sub_ALPHA1', 20)
