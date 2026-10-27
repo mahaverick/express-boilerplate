@@ -155,7 +155,7 @@ async function documentsOf(tenantId: string) {
       refund_id: string | null
       original_document_id: string | null
       total_minor: number
-      snapshot: { description: string }
+      snapshot: { description: string; billingPeriod: { start: string; end: string } | null }
     }[]
   >`
     select id, type, number, payment_id, refund_id, original_document_id, total_minor, snapshot
@@ -556,6 +556,122 @@ describe('reconcileTaxDocuments provider refusals and limits', () => {
 
     const [invoice] = await documentsOf(tenantId)
     expect(invoice?.snapshot.description).toMatch(/^Paid plan, Monthly, /)
+  })
+
+  it('falls back to the current period for a charge the provider lists without dates', async () => {
+    const { tenantId } = await paying()
+    const listPaidCharges = FakeBillingProvider.prototype.listPaidCharges
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'listPaidCharges',
+      async function (this: FakeBillingProvider, ...arguments_) {
+        const charges = await listPaidCharges.apply(this, arguments_)
+        return charges.map((charge) => ({ ...charge, billingStart: null, billingEnd: null }))
+      },
+      async () => {
+        await reconcileTaxDocuments(tenantId, { now: NOW })
+      }
+    )
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.snapshot.billingPeriod).toStrictEqual({
+      start: '2026-10-27',
+      end: '2026-11-27',
+    })
+    expect(invoice?.snapshot.description).toBe('Paid, Monthly, 27 Oct 2026 to 27 Nov 2026')
+  })
+
+  it('gives an undated charge paid outside the current period no dates', async () => {
+    const { tenantId } = await paying()
+    const listPaidCharges = FakeBillingProvider.prototype.listPaidCharges
+    const fetchSubscription = FakeBillingProvider.prototype.fetchSubscription
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'listPaidCharges',
+      async function (this: FakeBillingProvider, ...arguments_) {
+        const charges = await listPaidCharges.apply(this, arguments_)
+        return charges.map((charge) => ({ ...charge, billingStart: null, billingEnd: null }))
+      },
+      async () => {
+        await withMutatedMethod(
+          FakeBillingProvider.prototype,
+          'fetchSubscription',
+          async function (this: FakeBillingProvider, ...arguments_) {
+            const subscription = await fetchSubscription.apply(this, arguments_)
+            return {
+              ...subscription,
+              currentStart: new Date(NOW.getTime() + 30 * DAY),
+              currentEnd: new Date(NOW.getTime() + 60 * DAY),
+            }
+          },
+          async () => {
+            await reconcileTaxDocuments(tenantId, { now: NOW })
+          }
+        )
+      }
+    )
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.snapshot.billingPeriod).toBeNull()
+    expect(invoice?.snapshot.description).toBe('Paid, Monthly')
+  })
+
+  it("keeps a charge's own dates when the subscription's period differs", async () => {
+    const { tenantId } = await paying()
+    const fetchSubscription = FakeBillingProvider.prototype.fetchSubscription
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'fetchSubscription',
+      async function (this: FakeBillingProvider, ...arguments_) {
+        const subscription = await fetchSubscription.apply(this, arguments_)
+        return {
+          ...subscription,
+          currentStart: new Date(NOW.getTime() - 2 * DAY),
+          currentEnd: new Date(NOW.getTime() + 28 * DAY),
+        }
+      },
+      async () => {
+        await reconcileTaxDocuments(tenantId, { now: NOW })
+      }
+    )
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.snapshot.billingPeriod).toStrictEqual({
+      start: '2026-10-27',
+      end: '2026-11-27',
+    })
+    expect(invoice?.snapshot.description).toBe('Paid, Monthly, 27 Oct 2026 to 27 Nov 2026')
+  })
+
+  it('issues an undated charge with no period when the subscription read is refused', async () => {
+    const { tenantId } = await paying()
+    const listPaidCharges = FakeBillingProvider.prototype.listPaidCharges
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'listPaidCharges',
+      async function (this: FakeBillingProvider, ...arguments_) {
+        const charges = await listPaidCharges.apply(this, arguments_)
+        return charges.map((charge) => ({ ...charge, billingStart: null, billingEnd: null }))
+      },
+      async () => {
+        await withMutatedMethod(
+          FakeBillingProvider.prototype,
+          'fetchSubscription',
+          () => Promise.reject(new ProviderError('GET /subscriptions/x', 404)),
+          async () => {
+            await reconcileTaxDocuments(tenantId, { now: NOW })
+          }
+        )
+      }
+    )
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.snapshot.billingPeriod).toBeNull()
+    expect(invoice?.snapshot.description).toBe('Paid, Monthly')
   })
 })
 

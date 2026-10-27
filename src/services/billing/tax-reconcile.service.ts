@@ -99,6 +99,15 @@ interface PlanLine {
 }
 
 /**
+ * What one read of a subscription gives the invoice lines: the plan line
+ * (when its price is known) and its current billing period (when it has one).
+ */
+interface SubscriptionFacts {
+  line: PlanLine | undefined
+  period: { start: Date; end: Date } | undefined
+}
+
+/**
  * A charge whose refunds a run may credit: invoiced before, or planned now.
  */
 interface Creditable {
@@ -211,31 +220,43 @@ async function processedRefundsOf(
 }
 
 /**
- * The plan name and interval a subscription's notes name through their price.
+ * The plan line and the current billing period of a subscription, from one
+ * read of it. The line names the plan and interval its notes give through
+ * their price.
  * @param provider - The payment provider.
  * @param subscriptionId - The subscription.
- * @returns The line, or undefined when the subscription or its price can't be read.
+ * @returns The facts; each part is undefined when the subscription, its price or its period can't be read.
  * @throws {ProviderError} When the read can still succeed on a retry.
  */
-async function planLineOf(
+async function subscriptionFactsOf(
   provider: BillingProviderClient,
   subscriptionId: string
-): Promise<PlanLine | undefined> {
+): Promise<SubscriptionFacts> {
   let priceId: string | undefined
+  let period: SubscriptionFacts['period']
   try {
     const subscription = await provider.fetchSubscription(subscriptionId)
     priceId = subscription.notes.priceId
+    if (subscription.currentStart !== null && subscription.currentEnd !== null) {
+      period = { start: subscription.currentStart, end: subscription.currentEnd }
+    }
   } catch (error) {
-    if (error instanceof ProviderError && !error.retryable) return undefined
+    if (error instanceof ProviderError && !error.retryable) {
+      return { line: undefined, period: undefined }
+    }
     throw error
   }
-  if (priceId === undefined) return undefined
+  if (priceId === undefined) return { line: undefined, period }
   const [price] = await planRepository.findPricesByIds([priceId])
-  if (price === undefined) return undefined
+  if (price === undefined) return { line: undefined, period }
   const plan = await planRepository.findPlan(price.planId)
-  return plan === undefined
-    ? undefined
-    : { name: printablePlanName(plan.name), interval: price.interval }
+  return {
+    line:
+      plan === undefined
+        ? undefined
+        : { name: printablePlanName(plan.name), interval: price.interval },
+    period,
+  }
 }
 
 /**
@@ -243,23 +264,35 @@ async function planLineOf(
  * with IST dates. The plan and interval come from the subscription's price,
  * read once per subscription; the fallback is the Paid plan, yearly for a
  * billing period of 300 days or more. A plan name the PDF font can't draw
- * prints as `Paid plan`.
+ * prints as `Paid plan`. A charge with no billing period of its own takes the
+ * subscription's current period when it was paid inside it; the returned
+ * charge carries those dates, so the issued snapshot matches the line.
  * @param provider - The payment provider.
- * @returns A function from a charge to its line.
+ * @returns A function from a charge to its line and the charge with its period filled in.
  */
 function invoiceLines(
   provider: BillingProviderClient
-): (charge: ProviderCharge) => Promise<string> {
-  const lines = new Map<string, Promise<PlanLine | undefined>>()
+): (charge: ProviderCharge) => Promise<{ description: string; charge: ProviderCharge }> {
+  const facts = new Map<string, Promise<SubscriptionFacts>>()
   let paidName: string | undefined
-  return async (charge) => {
-    let pending = lines.get(charge.subscriptionId)
+  return async (original) => {
+    let pending = facts.get(original.subscriptionId)
     if (pending === undefined) {
-      pending = planLineOf(provider, charge.subscriptionId)
-      lines.set(charge.subscriptionId, pending)
+      pending = subscriptionFactsOf(provider, original.subscriptionId)
+      facts.set(original.subscriptionId, pending)
+    }
+    const { line: planLine, period } = await pending
+    let charge = original
+    if (
+      (charge.billingStart === null || charge.billingEnd === null) &&
+      period !== undefined &&
+      period.start.getTime() <= charge.paidAt.getTime() &&
+      charge.paidAt.getTime() < period.end.getTime()
+    ) {
+      charge = { ...charge, billingStart: period.start, billingEnd: period.end }
     }
     const { billingStart, billingEnd } = charge
-    let line = await pending
+    let line = planLine
     if (line === undefined) {
       if (paidName === undefined) {
         const paid = await planRepository.findPlanByKey('paid')
@@ -272,9 +305,13 @@ function invoiceLines(
       line = { name: paidName, interval: isYearly ? 'year' : 'month' }
     }
     const head = `${line.name}, ${line.interval === 'year' ? 'Yearly' : 'Monthly'}`
-    return billingStart === null || billingEnd === null
-      ? head
-      : `${head}, ${documentDate(billingStart)} to ${documentDate(billingEnd)}`
+    return {
+      description:
+        billingStart === null || billingEnd === null
+          ? head
+          : `${head}, ${documentDate(billingStart)} to ${documentDate(billingEnd)}`,
+      charge,
+    }
   }
 }
 
@@ -294,6 +331,8 @@ function invoiceLines(
  *   credit is an over-credit, never a capped note. A held charge's refunds
  *   are never credited: the same rule lists them (hinted, or paid within the
  *   lookback) as `heldRefunds`, and staff hear about each one.
+ * - A charge with no billing period takes its subscription's current period
+ *   when it was paid inside it; otherwise it has none.
  * - A payment or subscription the provider refuses to read (a 4xx) is
  *   skipped and logged.
  *
@@ -384,13 +423,13 @@ export async function planTaxDocuments(
       heldPayments.set(charge.paymentId, charge.paidAt)
       continue
     }
-    const description = await lineOf(charge)
+    const { description, charge: dated } = await lineOf(charge)
     if (details?.isSez === true) {
-      holds.push({ charge, description })
+      holds.push({ charge: dated, description })
       heldPayments.set(charge.paymentId, charge.paidAt)
       continue
     }
-    invoices.push({ charge, description, isLate: isLateInvoice(charge.paidAt, now) })
+    invoices.push({ charge: dated, description, isLate: isLateInvoice(charge.paidAt, now) })
     creditable.push({
       paymentId: charge.paymentId,
       invoiceId: null,
