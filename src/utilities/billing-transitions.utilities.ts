@@ -9,8 +9,13 @@
  * in Billing: the only one it gets is the move to Free of a paying row, cause
  * `lifecycle`, which carries no button. For an active workspace:
  *
- * - Paid welcome: the row becomes `active` from another state with a new
- *   current subscription. A recovery on the same subscription is not new.
+ * - Paid welcome: the row is `active` on a subscription with a known period
+ *   end, and either it became active from another state on a new
+ *   subscription, or the period end just became known on the subscription it
+ *   was already active on (`isActivationPending`: Razorpay can report the
+ *   first payment before the activation, so the end can arrive one sync
+ *   late). A recovery on the same subscription, a handover while active and a
+ *   resubscribe during a cancel buffer are not new starts.
  * - Payment stopped: `haltedAt` is set (the payment failed) or `pausedAt` is
  *   set (paused from the payer's bank or UPI app), once per stamp. Both start
  *   the grace period.
@@ -70,6 +75,14 @@ export interface TransitionContext {
    * The interval a price bills, or undefined for an unknown price.
    */
   intervalOf: (priceId: string | null) => BillingInterval | undefined
+  /**
+   * Whether the workspace has any move to `active` from another state at or
+   * after the moment the row's current subscription was first seen
+   * (`wasActivatedWithSubscription`). Only a welcome deferred for a missing
+   * period end needs it; false or absent means the period-end rule never
+   * fires.
+   */
+  isActivationPending?: boolean
   /**
    * Whether the change is a staff member's own cancel (`cancelSubscriptions`
    * on the staff path), as opposed to a staff resync that only brought in
@@ -144,6 +157,42 @@ export function isContinued(after: TenantBillingRecord): boolean {
 }
 
 /**
+ * Whether the change completes a welcome to Paid: the row is active on a
+ * subscription with a known period end, and either the row just became
+ * active on a new subscription, or the period end just became known on the
+ * subscription it was already active on, where that subscription started
+ * Paid (`isActivationPending`). Razorpay can report the first payment before
+ * it activates the subscription, so the period end may arrive one sync after
+ * the row turns active. A handover or a resubscribe while the row stays
+ * active gets no welcome.
+ * @param before - The row before the change.
+ * @param after - The row after it.
+ * @param context - The workspace facts.
+ * @returns True when the welcome is due.
+ */
+function isWelcomeDue(
+  before: TenantBillingRecord,
+  after: TenantBillingRecord,
+  context: TransitionContext
+): boolean {
+  if (
+    after.state !== 'active' ||
+    after.providerSubscriptionId === null ||
+    after.currentPeriodEnd === null
+  ) {
+    return false
+  }
+  const isNewSubscription =
+    before.state !== 'active' && after.providerSubscriptionId !== before.providerSubscriptionId
+  const isPeriodEndKnownNow =
+    before.state === 'active' &&
+    after.providerSubscriptionId === before.providerSubscriptionId &&
+    before.currentPeriodEnd === null &&
+    context.isActivationPending === true
+  return isNewSubscription || isPeriodEndKnownNow
+}
+
+/**
  * The email-worthy changes between two rows, in the order they are sent.
  * @param before - The row before the change.
  * @param after - The row after it.
@@ -159,14 +208,7 @@ export function billingTransitions(
 ): BillingTransition[] {
   if (!context.isWorkspaceActive) return inactiveTransitions(before, after)
   const transitions: BillingTransition[] = []
-  if (
-    before.state !== 'active' &&
-    after.state === 'active' &&
-    after.providerSubscriptionId !== null &&
-    after.providerSubscriptionId !== before.providerSubscriptionId
-  ) {
-    transitions.push({ kind: 'paid_welcome' })
-  }
+  if (isWelcomeDue(before, after, context)) transitions.push({ kind: 'paid_welcome' })
   if (before.haltedAt === null && after.haltedAt !== null) {
     transitions.push({ kind: 'payment_failed', stoppedBy: 'halted' })
   }

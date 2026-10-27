@@ -96,6 +96,8 @@ const CONTEXT: TransitionContext = {
   intervalOf: (priceId) => (priceId === null ? undefined : INTERVALS.get(priceId)),
 }
 
+const PENDING: TransitionContext = { ...CONTEXT, isActivationPending: true }
+
 /**
  * The transition kinds and causes for one change.
  * @param before - The row before.
@@ -126,6 +128,68 @@ describe('billingTransitions', () => {
     expect(kinds(row({ state: 'trialing', planId: 'plan-paid' }), paying())).toEqual([
       'paid_welcome',
     ])
+  })
+
+  it('waits for the period end before it welcomes a new subscription', () => {
+    expect(kinds(row(), paying({ currentPeriodEnd: null }))).toEqual([])
+  })
+
+  it('welcomes once the period end arrives on the subscription that was already active', () => {
+    const early = paying({ currentPeriodEnd: null })
+    expect(kinds(early, paying(), 'webhook', PENDING)).toEqual(['paid_welcome'])
+  })
+
+  it('sends no welcome for the period end when the subscription did not start Paid', () => {
+    const early = paying({ currentPeriodEnd: null })
+    expect(kinds(early, paying())).toEqual([])
+    expect(kinds(early, paying(), 'webhook', { ...CONTEXT, isActivationPending: false })).toEqual(
+      []
+    )
+  })
+
+  it('sends no welcome when the row leaves active as the period end arrives', () => {
+    const early = paying({ currentPeriodEnd: null })
+    const lapsed = paying({ state: 'past_due', pastDueSince: NOW })
+    expect(kinds(early, lapsed, 'webhook', PENDING)).toEqual([])
+  })
+
+  it('sends no welcome when the period end moves forward on a renewal', () => {
+    const later = new Date('2027-01-01T00:00:00.000Z')
+    expect(kinds(paying(), paying({ currentPeriodEnd: later }), 'webhook', PENDING)).toEqual([])
+  })
+
+  it('sends no welcome when the period end stays unknown', () => {
+    const early = paying({ currentPeriodEnd: null })
+    expect(kinds(early, { ...early, version: early.version + 1 }, 'webhook', PENDING)).toEqual([])
+  })
+
+  it('does not apply the period-end rule when the subscription changed while active', () => {
+    const early = paying({ currentPeriodEnd: null })
+    expect(kinds(early, paying({ providerSubscriptionId: 'sub_2' }), 'webhook', PENDING)).toEqual(
+      []
+    )
+  })
+
+  it('welcomes a subscription that replaces one that was not active, whatever the old period end', () => {
+    const lapsed = paying({ state: 'past_due', pastDueSince: NOW, currentPeriodEnd: null })
+    expect(kinds(lapsed, paying({ providerSubscriptionId: 'sub_2' }))).toEqual(['paid_welcome'])
+  })
+
+  it('sends no welcome when the period end arrives but the row is not active', () => {
+    const early = paying({ state: 'past_due', pastDueSince: NOW, currentPeriodEnd: null })
+    expect(
+      kinds(early, paying({ state: 'past_due', pastDueSince: NOW }), 'webhook', PENDING)
+    ).toEqual([])
+  })
+
+  it('sends no welcome when the row recovers from past due and the period end arrives', () => {
+    const lapsed = paying({ state: 'past_due', pastDueSince: NOW, currentPeriodEnd: null })
+    expect(kinds(lapsed, paying(), 'webhook', PENDING)).toEqual([])
+  })
+
+  it('sends no welcome when the period end arrives with no subscription id', () => {
+    const early = paying({ providerSubscriptionId: null, currentPeriodEnd: null })
+    expect(kinds(early, paying({ providerSubscriptionId: null }), 'webhook', PENDING)).toEqual([])
   })
 
   it('sends no welcome for a recovery on the same subscription', () => {

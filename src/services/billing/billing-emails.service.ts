@@ -687,6 +687,37 @@ async function sendRequestsFulfilled(
 }
 
 /**
+ * Whether the subscription a period end just arrived on started Paid in a
+ * move to `active`, so a welcome is waiting for the date. Reads only for the
+ * one change that could use it.
+ * @param before - The row before the change.
+ * @param after - The row after it.
+ * @returns True when the welcome was deferred.
+ */
+async function isActivationPending(
+  before: TenantBillingRecord,
+  after: TenantBillingRecord
+): Promise<boolean> {
+  if (
+    before.state !== 'active' ||
+    after.state !== 'active' ||
+    before.currentPeriodEnd !== null ||
+    after.currentPeriodEnd === null ||
+    after.providerSubscriptionId === null ||
+    after.providerSubscriptionId !== before.providerSubscriptionId ||
+    after.provider === null ||
+    after.providerMode === null
+  ) {
+    return false
+  }
+  return billingRepository.wasActivatedWithSubscription(
+    after.tenantId,
+    { kind: after.provider, mode: after.providerMode },
+    after.providerSubscriptionId
+  )
+}
+
+/**
  * Send the emails and notifications a committed billing change calls for.
  * Never rejects: a failure is logged with ids only, and the change stands.
  * @param before - The row before the change.
@@ -710,6 +741,7 @@ export async function sendBillingDiffEmails(
     const prices = new Map(priceRows.map((price) => [price.id, price]))
     const transitions = billingTransitions(before, after, source, {
       isWorkspaceActive,
+      isActivationPending: await isActivationPending(before, after),
       intervalOf: (priceId) => (priceId === null ? undefined : prices.get(priceId)?.interval),
       isStaffCancel: extras.isStaffCancel === true,
       // Only an owner's own write passes its actor: their cancel, a past-due one included.
