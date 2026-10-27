@@ -1,20 +1,30 @@
 /**
  * @file Issuing tax documents under concurrency: each payment gets one
- * invoice, numbers are used once with no gap, parallel credit notes never
- * credit more than the invoice, an issue and an invite on one workspace
- * queue on its billing row without a deadlock, and a failed insert gives
- * its number back.
+ * invoice and each refund one credit note, numbers are used once with no
+ * gap, parallel credit notes never credit more than the invoice, an issue
+ * and an invite on one workspace queue on its billing row without a
+ * deadlock, and a failed insert gives its number back.
+ *
+ * The races pause the first transaction at a seam after it holds the
+ * billing row, then prove the second is queued behind it
+ * (`waitForWaiter`) before releasing it, so the two always overlap. Without
+ * the billing-row lock the second would not queue and each such test fails.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { NewTaxDocument } from '@/database/models/tax.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
-import { BillingRepository } from '@/repositories/billing.repository'
 import { TaxRepository } from '@/repositories/tax.repository'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { issueCreditNote, issueInvoice } from '@/services/billing/tax-documents.service'
-import { db, sql, withTransaction, type DbTransaction } from '@/services/database.service'
+import {
+  sql,
+  withTransaction,
+  type DbExecutor,
+  type DbTransaction,
+} from '@/services/database.service'
 import {
   closeQueue,
   getAuthEmailQueue,
@@ -24,7 +34,7 @@ import {
 import { invite } from '@/services/tenant-invitation.service'
 import type { ProviderCharge } from '@/types/billing'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
-import { backendPid, deferred, waitForWaiter } from '../../../helpers/lock-probe'
+import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../../helpers/lock-probe'
 import { withMutatedMethod } from '../../../helpers/mutate'
 import { createTrackedUser, deleteTrackedUsers } from '../../../helpers/platform-users'
 import { resetTaxDocuments } from '../../../helpers/tax'
@@ -37,7 +47,6 @@ vi.mock('@/configs/billing.config', async (importOriginal) => {
   }
 })
 
-const billingRepository = new BillingRepository()
 const taxRepository = new TaxRepository()
 const tenantRepository = new TenantRepository()
 const scope = { kind: 'razorpay', mode: 'test' } as const
@@ -47,7 +56,11 @@ const tenantIds: string[] = []
 
 beforeEach(resetTaxDocuments)
 
+// Seams still paused when a test fails; released first, so their transactions end and free the pool.
+const openSeams: Array<() => void> = []
+
 afterEach(async () => {
+  for (const release of openSeams.splice(0)) release()
   await resetTaxDocuments()
   await truncateAuditLogs()
   if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
@@ -104,33 +117,75 @@ async function invoiceCounter(): Promise<number | undefined> {
 }
 
 /**
- * Hold a workspace's billing row in an open transaction until released.
- * @returns The holder's backend pid, its release and the transaction's promise.
+ * A stand-in for a repository method that pauses its first call until
+ * released, after reporting the backend pid of the transaction it was
+ * given (its last argument). Later calls run straight through.
  */
-async function holdBillingRow(
-  tenantId: string
-): Promise<{ pid: number; release: () => void; done: Promise<void> }> {
-  const release = deferred()
-  const holding = deferred<number>()
-  const done = db.transaction(async (tx) => {
-    await billingRepository.lockByTenantId(tenantId, tx)
-    holding.resolve(await backendPid(tx))
-    await release.promise
-  })
-  return { pid: await holding.promise, release: () => release.resolve(), done }
+interface PausedSeam<TArguments extends unknown[], TResult> {
+  implementation: (...arguments_: TArguments) => Promise<TResult>
+  /**
+   * Resolves with the paused transaction's backend pid.
+   */
+  reached: Promise<number>
+  release: () => void
+}
+
+/**
+ * Build a seam that pauses the first call of `original`.
+ * @param original - The real method, called with the same `this` and arguments.
+ * @returns The stand-in, its arrival signal and its release.
+ */
+function pauseFirstCall<TArguments extends unknown[], TResult>(
+  original: (...arguments_: TArguments) => Promise<TResult>
+): PausedSeam<TArguments, TResult> {
+  const reached = deferred<number>()
+  const released = deferred()
+  let isFirst = true
+  openSeams.push(() => released.resolve())
+  return {
+    implementation: async function (this: unknown, ...arguments_: TArguments): Promise<TResult> {
+      if (isFirst) {
+        isFirst = false
+        reached.resolve(await backendPid(arguments_.at(-1) as DbExecutor))
+        await released.promise
+      }
+      return original.apply(this, arguments_)
+    },
+    reached: reached.promise,
+    release: () => released.resolve(),
+  }
+}
+
+/**
+ * Issue an invoice for a fresh workspace and fail unless it was issued.
+ */
+async function invoiced(tenantId: string) {
+  const result = await issueInvoice(tenantId, charge(), scope, ISSUED_AT)
+  if (result.outcome !== 'issued') throw new Error(`expected issued, got ${result.outcome}`)
+  return result.document
 }
 
 describe('issuing under concurrency', () => {
-  it('invoices one payment once when two issues race', async () => {
+  it('invoices one payment once when a second issue overlaps the first', async () => {
     const { tenant } = await workspace()
     const paid = charge()
+    const seam = pauseFirstCall(TaxRepository.prototype.findInvoiceByPayment)
 
-    const results = await Promise.all([
-      issueInvoice(tenant.id, paid, scope, ISSUED_AT),
-      issueInvoice(tenant.id, paid, scope, ISSUED_AT),
-    ])
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'findInvoiceByPayment',
+      seam.implementation,
+      async () => {
+        const first = issueInvoice(tenant.id, paid, scope, ISSUED_AT)
+        const firstPid = await untilSignalled(seam.reached, first, 'the first issue')
+        const second = issueInvoice(tenant.id, paid, scope, ISSUED_AT)
+        expect(await waitForWaiter(firstPid, second)).toBe(true)
+        seam.release()
 
-    expect(results.map((result) => result.outcome).toSorted()).toStrictEqual(['exists', 'issued'])
+        const results = await Promise.all([first, second])
+        expect(results.map((result) => result.outcome)).toStrictEqual(['issued', 'exists'])
+      }
+    )
     expect(await invoiceCounter()).toBe(1)
   })
 
@@ -153,55 +208,62 @@ describe('issuing under concurrency', () => {
     expect(await invoiceCounter()).toBe(10)
   })
 
-  it('issues one of two parallel credit notes that together exceed the invoice', async () => {
+  it('issues one of two overlapping credit notes that together exceed the invoice', async () => {
     const { tenant } = await workspace()
-    const invoice = await issueInvoice(tenant.id, charge(), scope, ISSUED_AT)
-    if (invoice.outcome !== 'issued') throw new Error('not issued')
+    const invoice = await invoiced(tenant.id)
+    const seam = pauseFirstCall(TaxRepository.prototype.creditedBefore)
 
-    const results = await Promise.all([
-      issueCreditNote(
-        tenant.id,
-        invoice.document.id,
-        { amountMinor: 60_000, refundId: 'rfnd_R1', reason: 'Refund' },
-        ISSUED_AT
-      ),
-      issueCreditNote(
-        tenant.id,
-        invoice.document.id,
-        { amountMinor: 60_000, refundId: 'rfnd_R2', reason: 'Refund' },
-        ISSUED_AT
-      ),
-    ])
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'creditedBefore',
+      seam.implementation,
+      async () => {
+        const first = issueCreditNote(
+          tenant.id,
+          invoice.id,
+          { amountMinor: 60_000, refundId: 'rfnd_R1', reason: 'Refund' },
+          ISSUED_AT
+        )
+        const firstPid = await untilSignalled(seam.reached, first, 'the first note')
+        const second = issueCreditNote(
+          tenant.id,
+          invoice.id,
+          { amountMinor: 60_000, refundId: 'rfnd_R2', reason: 'Refund' },
+          ISSUED_AT
+        )
+        expect(await waitForWaiter(firstPid, second)).toBe(true)
+        seam.release()
 
-    expect(results.map((result) => result.outcome).toSorted()).toStrictEqual([
-      'issued',
-      'over_credit',
-    ])
-    expect(results.find((result) => result.outcome === 'over_credit')).toStrictEqual({
-      outcome: 'over_credit',
-      remainingMinor: 39_900,
-    })
-    expect(
-      await withTransaction((tx) => taxRepository.creditedBefore(invoice.document.id, tx))
-    ).toBe(60_000)
+        const [issued, refused] = await Promise.all([first, second])
+        expect(issued.outcome).toBe('issued')
+        expect(refused).toStrictEqual({ outcome: 'over_credit', remainingMinor: 39_900 })
+      }
+    )
+    expect(await withTransaction((tx) => taxRepository.creditedBefore(invoice.id, tx))).toBe(60_000)
   })
 
-  it('credits one refund once when two notes for it race', async () => {
+  it('credits one refund once when a second note for it overlaps the first', async () => {
     const { tenant } = await workspace()
-    const invoice = await issueInvoice(tenant.id, charge(), scope, ISSUED_AT)
-    if (invoice.outcome !== 'issued') throw new Error('not issued')
+    const invoice = await invoiced(tenant.id)
     const credit = { amountMinor: 30_000, refundId: 'rfnd_SAME', reason: 'Refund' }
+    const seam = pauseFirstCall(TaxRepository.prototype.creditedBefore)
 
-    const results = await Promise.all([
-      issueCreditNote(tenant.id, invoice.document.id, credit, ISSUED_AT),
-      issueCreditNote(tenant.id, invoice.document.id, credit, ISSUED_AT),
-    ])
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'creditedBefore',
+      seam.implementation,
+      async () => {
+        const first = issueCreditNote(tenant.id, invoice.id, credit, ISSUED_AT)
+        const firstPid = await untilSignalled(seam.reached, first, 'the first note')
+        const second = issueCreditNote(tenant.id, invoice.id, credit, ISSUED_AT)
+        expect(await waitForWaiter(firstPid, second)).toBe(true)
+        seam.release()
 
-    expect(results.map((result) => result.outcome).toSorted()).toStrictEqual(['exists', 'issued'])
-    expect(results.find((result) => result.outcome === 'exists')).toStrictEqual({
-      outcome: 'exists',
-      remainingMinor: 69_900,
-    })
+        const [issued, again] = await Promise.all([first, second])
+        expect(issued.outcome).toBe('issued')
+        expect(again).toStrictEqual({ outcome: 'exists', remainingMinor: 69_900 })
+      }
+    )
     const rows = await sql<{ last_number: number }[]>`
       select last_number from tax_document_counters
       where type = 'credit_note' and financial_year = '26-27'
@@ -209,27 +271,65 @@ describe('issuing under concurrency', () => {
     expect(rows[0]?.last_number).toBe(1)
   })
 
-  it('queues an issue and an invite on the billing row and settles both without a deadlock', async () => {
+  it('makes an invite wait on the billing row an issue holds, with no deadlock', async () => {
     const { tenant, owner } = await workspace()
-    const holder = await holdBillingRow(tenant.id)
+    const seam = pauseFirstCall(TaxRepository.prototype.findInvoiceByPayment)
 
-    const issuing = issueInvoice(tenant.id, charge(), scope, ISSUED_AT)
-    expect(await waitForWaiter(holder.pid, issuing)).toBe(true)
-    const inviting = invite(
-      { userId: owner.id },
-      tenant.id,
-      `tax-race-${randomUUID()}@example.test`,
-      'viewer'
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'findInvoiceByPayment',
+      seam.implementation,
+      async () => {
+        const issuing = issueInvoice(tenant.id, charge(), scope, ISSUED_AT)
+        const issuePid = await untilSignalled(seam.reached, issuing, 'the issue')
+        const inviting = invite(
+          { userId: owner.id },
+          tenant.id,
+          `tax-race-${randomUUID()}@example.test`,
+          'viewer'
+        )
+        expect(await waitForWaiter(issuePid, inviting)).toBe(true)
+        const releasedAt = Date.now()
+        seam.release()
+
+        const [issued, invited] = await Promise.allSettled([issuing, inviting])
+        expect(issued).toMatchObject({ status: 'fulfilled', value: { outcome: 'issued' } })
+        expect(invited).toMatchObject({ status: 'fulfilled' })
+        // The claim is "no deadlock": Postgres reports one after deadlock_timeout (1 s), so a cycle would surface as a rejection well inside this 5 s bound.
+        expect(Date.now() - releasedAt).toBeLessThan(5000)
+      }
     )
-    const releasedAt = Date.now()
-    holder.release()
-    await holder.done
-    const [issued, invited] = await Promise.allSettled([issuing, inviting])
+  })
 
-    expect(issued).toMatchObject({ status: 'fulfilled', value: { outcome: 'issued' } })
-    expect(invited).toMatchObject({ status: 'fulfilled' })
-    // The claim is "no deadlock": Postgres reports one after deadlock_timeout (1 s), so a cycle would surface as a rejection well inside this 5 s bound.
-    expect(Date.now() - releasedAt).toBeLessThan(5000)
+  it('makes an issue wait on the billing row an invite holds, with no deadlock', async () => {
+    const { tenant, owner } = await workspace()
+    // The invite's seat check reads the invitation right after its seat lock.
+    const seam = pauseFirstCall(TenantInvitationRepository.prototype.findRedeemableForEmail)
+
+    await withMutatedMethod(
+      TenantInvitationRepository.prototype,
+      'findRedeemableForEmail',
+      seam.implementation,
+      async () => {
+        const inviting = invite(
+          { userId: owner.id },
+          tenant.id,
+          `tax-race-${randomUUID()}@example.test`,
+          'viewer'
+        )
+        const invitePid = await untilSignalled(seam.reached, inviting, 'the invite')
+        const issuing = issueInvoice(tenant.id, charge(), scope, ISSUED_AT)
+        expect(await waitForWaiter(invitePid, issuing)).toBe(true)
+        const releasedAt = Date.now()
+        seam.release()
+
+        const [invited, issued] = await Promise.allSettled([inviting, issuing])
+        expect(invited).toMatchObject({ status: 'fulfilled' })
+        expect(issued).toMatchObject({ status: 'fulfilled', value: { outcome: 'issued' } })
+        // The claim is "no deadlock": Postgres reports one after deadlock_timeout (1 s), so a cycle would surface as a rejection well inside this 5 s bound.
+        expect(Date.now() - releasedAt).toBeLessThan(5000)
+      }
+    )
   })
 
   it('gives the number back when the insert after allocation fails', async () => {
@@ -248,7 +348,9 @@ describe('issuing under concurrency', () => {
         )
       },
       async () => {
-        await expect(issueInvoice(tenant.id, charge(), scope, ISSUED_AT)).rejects.toThrow()
+        await expect(issueInvoice(tenant.id, charge(), scope, ISSUED_AT)).rejects.toMatchObject({
+          cause: { constraint_name: 'tax_documents_total_check' },
+        })
       }
     )
 

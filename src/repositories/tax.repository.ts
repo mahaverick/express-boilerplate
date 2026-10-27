@@ -221,16 +221,24 @@ export class TaxRepository {
    * `FOR UPDATE` would conflict with the `FOR KEY SHARE` a credit-note
    * insert's foreign key takes on it.
    *
+   * Scoped to the workspace, so a call naming another workspace's document
+   * never locks it.
+   *
    * Lock order: after the tenant billing row, before the number counter.
+   * @param tenantId - The workspace the document must belong to.
    * @param documentId - The invoice.
    * @param tx - The open transaction.
-   * @returns The locked row, or undefined when none exists.
+   * @returns The locked row, or undefined when none exists or it is another workspace's.
    */
-  async lockInvoice(documentId: string, tx: DbTransaction): Promise<TaxDocumentRecord | undefined> {
+  async lockInvoice(
+    tenantId: string,
+    documentId: string,
+    tx: DbTransaction
+  ): Promise<TaxDocumentRecord | undefined> {
     const [row] = await tx
       .select()
       .from(taxDocumentModel)
-      .where(eq(taxDocumentModel.id, documentId))
+      .where(and(eq(taxDocumentModel.id, documentId), eq(taxDocumentModel.tenantId, tenantId)))
       .for('no key update')
     return row
   }

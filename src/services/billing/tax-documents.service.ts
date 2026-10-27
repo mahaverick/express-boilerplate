@@ -9,7 +9,7 @@
  * raise alerts and send mail after the commit.
  */
 import { gstSellerConfig, type GstSellerConfig } from '@/configs/billing.config'
-import { GST_RATE_PERCENT, type GstState } from '@/constants/gst.constants'
+import type { GstState } from '@/constants/gst.constants'
 import type { TaxDocumentRecord, TenantTaxDetailsRecord } from '@/database/models/tax.model'
 import { BillingRepository, type ProviderScope } from '@/repositories/billing.repository'
 import { TaxRepository } from '@/repositories/tax.repository'
@@ -293,6 +293,7 @@ export async function issueInvoice(
  * @param options - `staff.actor` when staff issue it by hand.
  * @param options.staff - The staff member issuing it.
  * @returns What happened.
+ * @throws {RangeError} When the amount is not a positive whole number of paise; nothing is locked or written.
  * @throws {HttpError} 404 when the staff actor is no longer a platform admin.
  * @throws {Error} When GST registration is off.
  */
@@ -303,15 +304,18 @@ export async function issueCreditNote(
   now: Date = new Date(),
   options: { staff?: { actor: Actor } } = {}
 ): Promise<IssueCreditNoteResult> {
+  if (!Number.isSafeInteger(credit.amountMinor) || credit.amountMinor <= 0) {
+    throw new RangeError('A credit note amount must be a positive whole number of paise.')
+  }
   const seller = requireSeller()
   const staff = options.staff
   return withTransaction(async (tx) => {
     if (staff !== undefined) await assertStillPlatformRole(staff.actor, 'admin', tx)
     const billing = await billingRepository.lockByTenantId(tenantId, tx)
     if (billing === undefined) return { outcome: 'no_row' }
-    const invoice = await taxRepository.lockInvoice(invoiceId, tx)
-    // Another workspace's document reads as unknown, whatever its type.
-    if (invoice === undefined || invoice.tenantId !== tenantId) return { outcome: 'no_row' }
+    // Scoped to the workspace: another workspace's document reads as unknown, whatever its type.
+    const invoice = await taxRepository.lockInvoice(tenantId, invoiceId, tx)
+    if (invoice === undefined) return { outcome: 'no_row' }
     if (invoice.type !== 'invoice') return { outcome: 'not_an_invoice' }
 
     const scope: ProviderScope = { kind: invoice.provider, mode: invoice.providerMode }
@@ -330,7 +334,7 @@ export async function issueCreditNote(
         cgstMinor: invoice.cgstMinor,
         sgstMinor: invoice.sgstMinor,
         igstMinor: invoice.igstMinor,
-        ratePercent: GST_RATE_PERCENT,
+        ratePercent: invoice.snapshot.amounts.ratePercent,
         supply: invoice.supply,
       },
       credited,

@@ -405,6 +405,24 @@ describe('issueCreditNote', () => {
     expect(await counter('credit_note', '26-27')).toBe(2)
   })
 
+  it.each([0, -1, 1.5, Number.NaN])(
+    'refuses a credit of %s paise before it locks or writes anything',
+    async (amountMinor) => {
+      const { tenant } = await workspace()
+      const invoice = await issued(tenant.id)
+
+      await expect(
+        issueCreditNote(
+          tenant.id,
+          invoice.id,
+          { amountMinor, refundId: 'rfnd_Z1', reason: 'Refund' },
+          ISSUED_AT
+        )
+      ).rejects.toBeInstanceOf(RangeError)
+      expect(await counter('credit_note', '26-27')).toBeUndefined()
+    }
+  )
+
   it('answers exists for a refund already credited', async () => {
     const { tenant } = await workspace()
     const invoice = await issued(tenant.id)

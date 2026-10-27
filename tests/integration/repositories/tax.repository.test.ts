@@ -105,6 +105,25 @@ describe('TaxRepository', () => {
     return created.id
   }
 
+  it('locks an invoice only for its own workspace', async () => {
+    const owner = await tenant()
+    const other = await tenant()
+    const document = await invoice(owner)
+
+    await withTransaction(async (tx) => {
+      expect(await repository.lockInvoice(other, document.id, tx)).toBeUndefined()
+      // The foreign call took no lock: another connection locks the row without waiting.
+      const free =
+        await sql`select id from tax_documents where id = ${document.id} for no key update nowait`
+      expect(free).toHaveLength(1)
+    })
+    await withTransaction(async (tx) => {
+      expect(await repository.lockInvoice(owner, document.id, tx)).toMatchObject({
+        id: document.id,
+      })
+    })
+  })
+
   it('waits at the counter row lock and numbers after the holder', async () => {
     const result = await allocateBehindLockHolder((tx) =>
       repository.allocateNumber('invoice', '26-27', tx)
