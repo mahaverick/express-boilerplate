@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.0.1](https://github.com/mahaverick/express-boilerplate/compare/v10.0.0...v10.0.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **billing:** send the Paid welcome email once the period end is known ([#166](https://github.com/mahaverick/express-boilerplate/issues/166)) ([42f362b](https://github.com/mahaverick/express-boilerplate/commit/42f362bb8c0f76baea3ab568989c77d3bd3d6b84))
+
 ## [10.0.0](https://github.com/mahaverick/express-boilerplate/compare/v9.1.4...v10.0.0) (2026-10-27)
 
 
