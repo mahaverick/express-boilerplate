@@ -6,16 +6,22 @@
  * then the shared number counter last, held for one insert. The counter bump
  * and the document insert commit or roll back together, so the series has
  * no gap. Nothing here calls the payment provider or sends mail; callers
- * raise alerts and send mail after the commit.
+ * raise alerts and send mail after the commit. Also the owner's reads of
+ * issued documents: the list and the PDF download.
  */
 import { gstSellerConfig, type GstSellerConfig } from '@/configs/billing.config'
 import type { GstState } from '@/constants/gst.constants'
 import type { TaxDocumentRecord, TenantTaxDetailsRecord } from '@/database/models/tax.model'
+import { notFoundError } from '@/errors/not-found-errors'
+import { presentTaxDocument, type TaxDocumentView } from '@/presenters/tax.presenter'
 import { BillingRepository, type ProviderScope } from '@/repositories/billing.repository'
-import { TaxRepository } from '@/repositories/tax.repository'
+import { ownerDocumentList, TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { record } from '@/services/audit.service'
-import { withTransaction } from '@/services/database.service'
+import { assertTaxReadable } from '@/services/billing/tax-details.service'
+import { renderTaxDocumentPdf } from '@/services/billing/tax-pdf.service'
+import { db, withTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import type { Actor } from '@/types/actor'
 import type { ProviderCharge } from '@/types/billing'
@@ -32,6 +38,8 @@ import {
   supplyKind,
   type TaxAmounts,
 } from '@/utilities/gst.utilities'
+import { listPage, type ListPage } from '@/utilities/list-page.utilities'
+import type { TaxDocumentListQuery } from '@/validators/tax.validators'
 
 const billingRepository = new BillingRepository()
 const taxRepository = new TaxRepository()
@@ -404,4 +412,65 @@ export async function issueCreditNote(
         ))
     return { outcome: 'issued', document }
   })
+}
+
+/**
+ * One page of a workspace's tax documents for its owner, newest first by
+ * default, each with its links. It holds every document of the workspace,
+ * including those of subscriptions with no invoice row (a refunded
+ * duplicate). Readable while registration is on, or once the workspace has
+ * documents.
+ * @param tenantId - The workspace.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {HttpError} 404 `tax_documents_disabled` while registration is off and the workspace has no documents.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listTaxDocuments(
+  tenantId: string,
+  query: TaxDocumentListQuery
+): Promise<ListPage<TaxDocumentView>> {
+  await assertTaxReadable(tenantId)
+  const page = await listPage(db, ownerDocumentList(tenantId, query.filters.type), query.params)
+  const references = await taxRepository.listRefsFor(page.items)
+  return {
+    ...page,
+    items: page.items.map((document) => presentTaxDocument(document, references)),
+  }
+}
+
+/**
+ * One of a workspace's tax documents as a PDF, with the file name a
+ * download saves it under (the number with `/` turned into `-`). Once the
+ * bytes are built it records a `tax_document_downloaded` event with the
+ * document type and where it was downloaded, never the number.
+ * @param tenantId - The workspace.
+ * @param id - The document id.
+ * @param actor - The downloader.
+ * @param surface - `web` for the customer app, `apex` for staff.
+ * @returns The file name, the bytes and the document type.
+ * @throws {HttpError} 404 `tax_documents_disabled` while registration is off and the workspace has no documents; 404 `tax_document_not_found` for an unknown id or another workspace's document.
+ */
+export async function getDocumentPdf(
+  tenantId: string,
+  id: string,
+  actor: Actor,
+  surface: 'web' | 'apex'
+): Promise<{ filename: string; body: Buffer; type: TaxDocumentRecord['type'] }> {
+  await assertTaxReadable(tenantId)
+  const document = await taxRepository.findDocument(tenantId, id)
+  if (document === undefined) throw notFoundError('taxDocument')
+  const body = await renderTaxDocumentPdf(document)
+  await emitDomainEvent(
+    {
+      type: 'tax_document_downloaded',
+      tenantId,
+      userId: actor.userId,
+      documentType: document.type,
+      surface,
+      at: new Date(),
+    },
+    { access: surface === 'apex' ? 'platform' : 'member' }
+  )
+  return { filename: `${document.number.replaceAll('/', '-')}.pdf`, body, type: document.type }
 }

@@ -295,6 +295,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   read('/api/v1/tenants/:slug/billing/invoices'),
   read('/api/v1/tenants/:slug/billing/tax-details'),
   write('PATCH', '/api/v1/tenants/:slug/billing/tax-details'),
+  read('/api/v1/tenants/:slug/billing/tax-documents'),
+  read('/api/v1/tenants/:slug/billing/tax-documents/:id/pdf'),
   write('POST', '/api/v1/tenants/:slug/upgrade-requests'),
   read('/api/v1/tenants/:slug/upgrade-requests'),
   write('POST', '/api/v1/tenants/:slug/banner-dismissals'),

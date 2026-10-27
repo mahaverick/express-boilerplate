@@ -25,7 +25,8 @@ import type {
   PlanPrice,
 } from '@/database/models/billing.model'
 import { toPriceView, type PriceView, type TenantBillingView } from '@/presenters/billing.presenter'
-import type { ProviderInvoice, SourcedEntitlements } from '@/types/billing'
+import type { SourcedEntitlements } from '@/types/billing'
+import type { LinkedInvoice } from '@/types/tax'
 
 /**
  * Where a grant stands: in force, past its expiry, or revoked by staff.
@@ -139,16 +140,17 @@ export function toEventView(event: BillingEventRecord): StaffTenantBillingView['
 /**
  * One invoice as staff see it: the owner's view without its link, since the
  * provider's hosted invoice page shows the payer's contact details, and with
- * the subscription it bills. The internal payment id is left out too.
+ * the subscription it bills and its tax links. The internal payment id is
+ * left out too.
  */
-export type StaffInvoiceView = Omit<ProviderInvoice, 'url' | 'paymentId'>
+export type StaffInvoiceView = Omit<LinkedInvoice, 'url'>
 
 /**
- * Project a provider invoice for staff.
- * @param invoice - The invoice the provider listed.
+ * Project a linked provider invoice for staff.
+ * @param invoice - The invoice the provider listed, with its tax links.
  * @returns It without its link.
  */
-export function toStaffInvoiceView(invoice: ProviderInvoice): StaffInvoiceView {
+export function toStaffInvoiceView(invoice: LinkedInvoice): StaffInvoiceView {
   return {
     id: invoice.id,
     subscriptionId: invoice.subscriptionId,
@@ -157,6 +159,9 @@ export function toStaffInvoiceView(invoice: ProviderInvoice): StaffInvoiceView {
     status: invoice.status,
     issuedAt: invoice.issuedAt,
     paidAt: invoice.paidAt,
+    taxDocument: invoice.taxDocument,
+    creditNotes: invoice.creditNotes,
+    taxStatus: invoice.taxStatus,
   }
 }
 

@@ -160,6 +160,8 @@ describe('GET /api/v1/tenants/:slug/billing', () => {
       payer: { userId: owner.id, name: 'Ada', isMember: true },
       billingEmail: owner.email,
       paymentsEnabled: true,
+      taxDocumentsEnabled: false,
+      hasTaxDocuments: false,
       dismissedBanners: [],
     })
     expect(adminView.status).toBe(200)
@@ -890,14 +892,17 @@ describe('GET /api/v1/tenants/:slug/billing/invoices', () => {
     expect(page.items).toEqual([
       expect.objectContaining({ amountMinor: 99_900, currency: 'INR', status: 'paid' }),
     ])
-    // The owner's shape exactly: the provider's subscription id is staff-only.
+    // The owner's shape exactly: the provider's subscription id is staff-only, and the payment id stays internal.
     expect(Object.keys(page.items[0] ?? {}).toSorted()).toStrictEqual([
       'amountMinor',
+      'creditNotes',
       'currency',
       'id',
       'issuedAt',
       'paidAt',
       'status',
+      'taxDocument',
+      'taxStatus',
       'url',
     ])
     expect(page.page).toMatchObject({ nextCursor: null, hasNext: false, hasPrev: false })

@@ -65,6 +65,13 @@ export const TAX_DOCUMENT_TYPES = ['invoice', 'credit_note'] as const
 /** One of the tax document types. */
 export type TaxDocumentType = (typeof TAX_DOCUMENT_TYPES)[number]
 
+/**
+ * Where an invoice row stands for tax: its tax invoice is issued, its
+ * payment is held as an SEZ charge, the next tax run will invoice it, or it
+ * gets no tax invoice at all.
+ */
+export type TaxStatus = 'issued' | 'held' | 'pending' | 'not_applicable'
+
 /** The longest document number rule 46 allows, in characters. */
 export const TAX_DOCUMENT_NUMBER_MAX_LENGTH = 16
 

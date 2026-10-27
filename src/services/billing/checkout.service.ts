@@ -17,6 +17,7 @@
  * subscription.
  */
 import { z } from 'zod'
+import { gstSellerConfig } from '@/configs/billing.config'
 import { getEnv } from '@/configs/env.config'
 import {
   BILLING_BUSY_CODE,
@@ -55,6 +56,7 @@ import {
 } from '@/presenters/billing.presenter'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { PlanRepository } from '@/repositories/plan.repository'
+import { TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -86,11 +88,12 @@ import type {
   BillingProviderClient,
   CheckoutConfirm,
   InvoiceListOptions,
-  InvoiceView,
   ProviderInvoice,
   ProviderSubscription,
   SourcedEntitlements,
 } from '@/types/billing'
+import type { LinkedInvoice, OwnerInvoiceView } from '@/types/tax'
+import { taxStatusOf } from '@/utilities/gst.utilities'
 import { bindScope, listScope, signCursor, verifyCursor } from '@/utilities/list-cursor.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 
@@ -99,6 +102,7 @@ const planRepository = new PlanRepository()
 const tenantRepository = new TenantRepository()
 const membershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
+const taxRepository = new TaxRepository()
 
 /**
  * How many times a write reads, calls the provider and writes before it
@@ -1494,7 +1498,8 @@ async function payerOf(
 /**
  * A workspace's billing as the actor may see it. Any member and staff with
  * platform access read it; the billing email is shown only to an owner by
- * membership. The state and plan are the effective ones, as entitlements
+ * membership, and so is whether it has tax documents (staff read that
+ * too). The state and plan are the effective ones, as entitlements
  * read them. A scheduled switch or resubscribe shows once its subscription
  * is authenticated, which the sync stamps in `nextAuthenticatedAt`.
  * @param actor - The signed-in user.
@@ -1578,6 +1583,9 @@ async function billingView(
     payer: await payerOf(tenantId, row?.payerUserId ?? null, viewer.isStaff),
     billingEmail: viewer.isOwner ? (row?.billingEmail ?? null) : null,
     paymentsEnabled: getBillingProvider() !== null,
+    taxDocumentsEnabled: gstSellerConfig() !== null,
+    hasTaxDocuments:
+      (viewer.isOwner || viewer.isStaff) && (await taxRepository.hasDocuments(tenantId)),
     dismissedBanners: viewer.dismissedBanners,
   }
 }
@@ -1637,6 +1645,43 @@ async function invoiceSubscriptionIds(
 }
 
 /**
+ * Add each invoice's tax links and status, read for the page's payments in
+ * one pass, then drop its payment id.
+ * @param tenantId - The workspace.
+ * @param provider - The running provider, whose kind and mode the documents carry.
+ * @param invoices - The page's invoices.
+ * @returns The invoices with their tax invoice, credit notes and tax status.
+ */
+async function withTaxLinks(
+  tenantId: string,
+  provider: BillingProviderClient,
+  invoices: readonly ProviderInvoice[]
+): Promise<LinkedInvoice[]> {
+  const paymentIds = invoices.flatMap((invoice) =>
+    invoice.paymentId === null ? [] : [invoice.paymentId]
+  )
+  const tax = await taxRepository.listForInvoiceRows(
+    tenantId,
+    { kind: provider.kind, mode: provider.mode },
+    paymentIds
+  )
+  const seller = gstSellerConfig()
+  return invoices.map(({ paymentId, ...invoice }) => {
+    const references = paymentId === null ? undefined : tax.get(paymentId)
+    return {
+      ...invoice,
+      taxDocument: references?.taxDocument ?? null,
+      creditNotes: references?.creditNotes ?? [],
+      taxStatus: taxStatusOf(
+        { status: invoice.status, paymentId, paidAt: invoice.paidAt },
+        references,
+        seller
+      ),
+    }
+  })
+}
+
+/**
  * One page of a workspace's invoices across the subscriptions it held, the
  * provider's own page cursor travelling signed under the list's scope.
  * Forward only: there is no previous-page cursor.
@@ -1645,7 +1690,7 @@ async function invoiceSubscriptionIds(
  * @param cursor - The previous page's `nextCursor`, if any.
  * @param list - The list's name.
  * @param options - The staff list's status filter and provider-call cap; neither for the owner's list.
- * @returns The page.
+ * @returns The page, each invoice with its tax links and without its payment id.
  * @throws {InvalidCursorError} When the cursor does not verify.
  * @throws {HttpError} 503 or 502 when the provider fails.
  */
@@ -1655,7 +1700,7 @@ async function invoicePage(
   cursor: string | undefined,
   list: string,
   options: InvoiceListOptions
-): Promise<ListPage<ProviderInvoice>> {
+): Promise<ListPage<LinkedInvoice>> {
   const { statuses } = options
   const subscriptionIds = await invoiceSubscriptionIds(tenantId, provider)
   const scope = invoiceScope(list, tenantId, subscriptionIds, statuses)
@@ -1672,7 +1717,7 @@ async function invoicePage(
     provider.listInvoices(subscriptionIds, providerCursor, options)
   )
   return {
-    items: page.items,
+    items: await withTaxLinks(tenantId, provider, page.items),
     page: {
       nextCursor: page.nextCursor === null ? null : signCursor(list, scope, [page.nextCursor]),
       prevCursor: null,
@@ -1687,7 +1732,8 @@ async function invoicePage(
  * One page of a workspace's invoices, for an owner by membership: the
  * scheduled next subscription, the current one, then every earlier
  * subscription the workspace held with this provider and mode, newest
- * first. The provider's own page cursor travels signed.
+ * first, each with its tax invoice, credit notes and tax status. The
+ * provider's own page cursor travels signed.
  * @param actor - The signed-in owner.
  * @param tenantId - The workspace.
  * @param cursor - The previous page's `nextCursor`, if any.
@@ -1698,7 +1744,7 @@ export async function listInvoices(
   actor: Actor,
   tenantId: string,
   cursor: string | undefined
-): Promise<ListPage<InvoiceView>> {
+): Promise<ListPage<OwnerInvoiceView>> {
   const provider = requireProvider()
   await assertCustomerTenant(tenantId)
   if (!(await isMemberOwner(actor, tenantId))) {
@@ -1708,9 +1754,7 @@ export async function listInvoices(
   const page = await invoicePage(provider, tenantId, cursor, INVOICE_LIST, {})
   return {
     ...page,
-    items: page.items.map(
-      ({ subscriptionId: _subscription, paymentId: _payment, ...invoice }) => invoice
-    ),
+    items: page.items.map(({ subscriptionId: _subscription, ...invoice }) => invoice),
   }
 }
 
@@ -1725,7 +1769,7 @@ export async function listInvoices(
  * @param tenantId - The customer workspace.
  * @param cursor - The previous page's `nextCursor`, if any.
  * @param statuses - The statuses to list, or undefined for all.
- * @returns The page, each invoice with the subscription it bills.
+ * @returns The page, each invoice with the subscription it bills and its tax links.
  * @throws {InvalidCursorError} When the cursor does not verify, or any cursor with payments off.
  * @throws {HttpError} 503 or 502 when the provider fails.
  */
@@ -1733,7 +1777,7 @@ export async function listInvoicesForStaff(
   tenantId: string,
   cursor: string | undefined,
   statuses: readonly InvoiceStatus[] | undefined
-): Promise<ListPage<ProviderInvoice>> {
+): Promise<ListPage<LinkedInvoice>> {
   const provider = getBillingProvider()
   if (provider === null) {
     if (cursor !== undefined) throw new InvalidCursorError()

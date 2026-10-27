@@ -479,12 +479,15 @@ describe('GET /api/v1/platform/tenants/:id/billing/invoices', () => {
     expect(items.map((item) => item.subscriptionId)).toStrictEqual([subscriptionId, earlier])
     expect(Object.keys(items[0] ?? {}).toSorted()).toStrictEqual([
       'amountMinor',
+      'creditNotes',
       'currency',
       'id',
       'issuedAt',
       'paidAt',
       'status',
       'subscriptionId',
+      'taxDocument',
+      'taxStatus',
     ])
     expect(pageOf(response.body)).toStrictEqual({
       nextCursor: null,

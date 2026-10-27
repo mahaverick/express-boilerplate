@@ -18,6 +18,7 @@ import {
   splitInclusive,
   stateOf,
   supplyKind,
+  taxStatusOf,
 } from '@/utilities/gst.utilities'
 
 describe('gstin', () => {
@@ -254,5 +255,54 @@ describe('exportPeriodRange', () => {
 
   it.each(['2026-13', '2026-00', '2026-Q5', '2026-Q0', '26-10', 'x', ''])('%s is null', (p) => {
     expect(exportPeriodRange(p)).toBeNull()
+  })
+})
+
+describe('taxStatusOf', () => {
+  const seller = { effectiveFrom: new Date('2026-03-31T18:30:00.000Z') }
+  const paid = { status: 'paid', paymentId: 'pay_1', paidAt: '2026-10-01T00:00:00.000Z' } as const
+  const document = { id: 'doc_1', number: 'INV/26-27/00001' }
+
+  it('reads a row with a tax invoice as issued, even with registration off', () => {
+    expect(taxStatusOf(paid, { taxDocument: document, held: false }, seller)).toBe('issued')
+    expect(taxStatusOf(paid, { taxDocument: document, held: false }, null)).toBe('issued')
+  })
+
+  it('reads a held payment as held, resolved or not, before the paid and cutoff checks', () => {
+    expect(taxStatusOf(paid, { taxDocument: null, held: true }, seller)).toBe('held')
+    expect(
+      taxStatusOf(
+        { ...paid, paidAt: '2026-01-01T00:00:00.000Z' },
+        { taxDocument: null, held: true },
+        null
+      )
+    ).toBe('held')
+  })
+
+  it.each([
+    ['an unpaid row', { ...paid, status: 'issued' }],
+    ['a cancelled row', { ...paid, status: 'cancelled' }],
+    ['a paid row with no payment', { ...paid, paymentId: null }],
+    ['a paid row with no paid time', { ...paid, paidAt: null }],
+  ] as const)('reads %s as not applicable', (_name, row) => {
+    expect(taxStatusOf(row, undefined, seller)).toBe('not_applicable')
+  })
+
+  it('reads a paid row as not applicable while registration is off', () => {
+    expect(taxStatusOf(paid, undefined, null)).toBe('not_applicable')
+  })
+
+  it('reads a row paid before 00:00 IST on the effective date as not applicable, and one at it as pending', () => {
+    expect(taxStatusOf({ ...paid, paidAt: '2026-03-31T18:29:59.000Z' }, undefined, seller)).toBe(
+      'not_applicable'
+    )
+    expect(taxStatusOf({ ...paid, paidAt: '2026-03-31T18:30:00.000Z' }, undefined, seller)).toBe(
+      'pending'
+    )
+  })
+
+  it('reads a paid row on or after the cutoff with no document as pending', () => {
+    expect(taxStatusOf(paid, undefined, seller)).toBe('pending')
+    expect(taxStatusOf(paid, { taxDocument: null, held: false }, seller)).toBe('pending')
   })
 })

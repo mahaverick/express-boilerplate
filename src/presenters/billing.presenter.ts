@@ -86,6 +86,15 @@ export interface TenantBillingView {
   payer: BillingPayer | null
   billingEmail: string | null
   paymentsEnabled: boolean
+  /**
+   * GST registration is on, so paid charges get tax invoices.
+   */
+  taxDocumentsEnabled: boolean
+  /**
+   * The workspace has at least one tax document. Shown to an owner by
+   * membership and to staff; false for anyone else.
+   */
+  hasTaxDocuments: boolean
   dismissedBanners: string[]
 }
 

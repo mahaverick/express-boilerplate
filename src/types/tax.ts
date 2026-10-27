@@ -3,8 +3,8 @@
  * every printed field so a document renders the same after its tenant is
  * gone, and the plan and report of a workspace's tax run.
  */
-import type { GstState } from '@/constants/gst.constants'
-import type { ProviderCharge, ProviderRefund } from '@/types/billing'
+import type { GstState, TaxStatus } from '@/constants/gst.constants'
+import type { ProviderCharge, ProviderInvoice, ProviderRefund } from '@/types/billing'
 import type { TaxAmounts } from '@/utilities/gst.utilities'
 
 /**
@@ -38,6 +38,28 @@ export interface TaxDocumentReference {
   id: string
   number: string
 }
+
+/**
+ * What an invoice row shows of its payment's tax: the tax invoice, its
+ * credit notes oldest first, and its tax status.
+ */
+interface InvoiceTaxLinks {
+  taxDocument: TaxDocumentReference | null
+  creditNotes: TaxDocumentReference[]
+  taxStatus: TaxStatus
+}
+
+/**
+ * A provider invoice with its tax links. Its payment id, used to find them,
+ * is dropped: no owner or staff response carries it.
+ */
+export type LinkedInvoice = Omit<ProviderInvoice, 'paymentId'> & InvoiceTaxLinks
+
+/**
+ * One invoice row as an owner reads it: a linked invoice without the
+ * subscription it bills, which only staff see.
+ */
+export type OwnerInvoiceView = Omit<LinkedInvoice, 'subscriptionId'>
 
 /**
  * A paid charge a tax run invoices, with the line it prints and whether it

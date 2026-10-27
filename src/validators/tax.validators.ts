@@ -3,7 +3,8 @@
  * across its fields. A PATCH sends only the fields that changed plus the
  * `version` it read; each sent field is checked here on its own, and the
  * cross-field rules run in the service on the stored row with the sent
- * fields applied (`taxDetailsRuleIssues`).
+ * fields applied (`taxDetailsRuleIssues`). Also the owner's tax documents
+ * list query.
  */
 import { z } from 'zod'
 import {
@@ -24,7 +25,11 @@ import {
   TAX_TEXT_CHARACTERS_MESSAGE,
   TAX_TEXT_TOO_LONG_MESSAGE,
 } from '@/constants/billing.constants'
-import { TAX_DETAIL_FIELDS, type TaxDetailField } from '@/constants/gst.constants'
+import {
+  TAX_DETAIL_FIELDS,
+  TAX_DOCUMENT_TYPES,
+  type TaxDetailField,
+} from '@/constants/gst.constants'
 import {
   gstinProblem,
   normaliseGstin,
@@ -32,6 +37,7 @@ import {
   stateOf,
   TAX_TEXT_PATTERN,
 } from '@/utilities/gst.utilities'
+import { listFilter, listParamsSchema } from '@/validators/list.validators'
 import { versionSchema } from '@/validators/platform-billing.validators'
 import { reasonSchema } from '@/validators/platform.validators'
 
@@ -247,3 +253,34 @@ export function taxDetailsRuleIssues(
   }
   return issues
 }
+
+/**
+ * `GET /tenants/:slug/billing/tax-documents` query: the shared list params,
+ * newest issued first by default, and `type` picking invoices or credit
+ * notes. The owner list has no search and no total, so either is refused.
+ */
+export const taxDocumentListSchema = listParamsSchema({
+  sorts: ['-issued', 'issued'],
+  defaultSort: '-issued',
+  filters: { type: listFilter('type', TAX_DOCUMENT_TYPES).optional() },
+}).superRefine((query, context) => {
+  if (query.params.search !== undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['search'],
+      message: 'This list has no search. Remove search from the request.',
+    })
+  }
+  if (query.params.total) {
+    context.addIssue({
+      code: 'custom',
+      path: ['total'],
+      message: 'This list has no total. Remove total from the request.',
+    })
+  }
+})
+
+/**
+ * A parsed owner tax documents list query.
+ */
+export type TaxDocumentListQuery = z.output<typeof taxDocumentListSchema>

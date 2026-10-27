@@ -817,6 +817,33 @@ describe('buildProductEvent', () => {
     })
   })
 
+  it('sends a tax document download in its tenant group with the type and surface only', () => {
+    const row = buildProductEvent(
+      {
+        type: 'tax_document_downloaded',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        documentType: 'invoice',
+        surface: 'web',
+        at: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row).toEqual({
+      event: 'tax_document_downloaded',
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: {
+        type: 'invoice',
+        surface: 'web',
+        source: 'product',
+        access: 'member',
+        app: 'api',
+        $groups: { tenant: TENANT_ID },
+      },
+    })
+  })
+
   it('sends a reconciled completion, which has no user, as a system event', () => {
     const row = buildProductEvent(
       {
@@ -850,6 +877,14 @@ describe('buildProductEvent', () => {
         stepKey: 'read_getting_started',
         how: 'manual',
         required: false,
+        at: OCCURRED_AT,
+      },
+      {
+        type: 'tax_document_downloaded',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        documentType: 'credit_note',
+        surface: 'apex',
         at: OCCURRED_AT,
       },
       ...BILLING_DETAILS.map((detail) => billingEvent(detail)),

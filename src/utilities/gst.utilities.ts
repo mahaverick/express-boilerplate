@@ -2,12 +2,14 @@
  * @file Pure GST rules: GSTIN checks, tax splits, credit-note maths,
  * financial years in IST, document numbers and amounts in words. No I/O.
  */
+import type { InvoiceStatus } from '@/constants/billing.constants'
 import {
   GST_RATE_PERCENT,
   GST_STATES,
   LATE_INVOICE_DAYS,
   TAX_DOCUMENT_NUMBER_MAX_LENGTH,
   TAX_NUMBER_MIN_DIGITS,
+  type TaxStatus,
 } from '@/constants/gst.constants'
 
 /** The amounts on a tax document, in paise. */
@@ -190,6 +192,36 @@ export function istMidnight(isoDate: string): Date {
 /** The IST calendar day of an instant as 'YYYY-MM-DD'. */
 export function istDate(at: Date): string {
   return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+/**
+ * The tax status of one invoice row, the first rule that matches winning:
+ * a tax invoice exists (even with registration off), the payment is held
+ * (resolved or not, since staff issued it by hand), the row is unpaid or has
+ * no payment or no paid time, registration is off, it was paid before the
+ * effective date; otherwise the next tax run invoices it. These are the tax
+ * run's own filters.
+ * @param row - The invoice row's status, payment and paid time.
+ * @param row.status - The provider's invoice status.
+ * @param row.paymentId - The payment that paid it, or null.
+ * @param row.paidAt - When it was paid, as an ISO string, or null.
+ * @param references - The payment's tax invoice and whether it is held, or undefined when it has neither.
+ * @param seller - The seller config (only its effective date is read), or null while registration is off.
+ * @returns The status.
+ */
+export function taxStatusOf(
+  row: { status: InvoiceStatus; paymentId: string | null; paidAt: string | null },
+  references: { taxDocument: { id: string; number: string } | null; held: boolean } | undefined,
+  seller: { effectiveFrom: Date } | null
+): TaxStatus {
+  if (references?.taxDocument != null) return 'issued'
+  if (references?.held === true) return 'held'
+  if (row.status !== 'paid' || row.paymentId === null || row.paidAt === null) {
+    return 'not_applicable'
+  }
+  if (seller === null) return 'not_applicable'
+  if (Date.parse(row.paidAt) < seller.effectiveFrom.getTime()) return 'not_applicable'
+  return 'pending'
 }
 
 const ONES = [

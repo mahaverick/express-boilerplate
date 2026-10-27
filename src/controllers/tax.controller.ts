@@ -1,7 +1,8 @@
 /**
- * @file Handlers for a workspace owner's tax details: the read and the
- * PATCH of the changed fields. Registration's gate runs first, so a write
- * while it is off answers its 404 before any field is checked.
+ * @file Handlers for a workspace owner's tax details and tax documents: the
+ * details read and the PATCH of the changed fields, the documents list and
+ * the PDF download. Registration's gate runs first, so a write while it is
+ * off answers its 404 before any field is checked.
  */
 import { TAX_DETAILS_SAVED_MESSAGE } from '@/constants/billing.constants'
 import { BaseController } from '@/controllers/base.controller'
@@ -12,9 +13,10 @@ import {
   getTaxDetails,
   saveTaxDetails,
 } from '@/services/billing/tax-details.service'
+import { getDocumentPdf, listTaxDocuments } from '@/services/billing/tax-documents.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
-import { taxDetailsPatchSchema } from '@/validators/tax.validators'
+import { taxDetailsPatchSchema, taxDocumentListSchema } from '@/validators/tax.validators'
 
 /**
  * Tax handlers for the owner routes under `/tenants/:slug/billing`.
@@ -41,6 +43,32 @@ class TaxController extends BaseController {
       reason: null,
     })
     successResponse(response, saved, TAX_DETAILS_SAVED_MESSAGE)
+  })
+
+  /**
+   * `GET /tenants/:slug/billing/tax-documents`: one page of the workspace's documents.
+   */
+  listTaxDocuments = this.handle(async (request, response) => {
+    const { tenantId } = tenantPrincipal(request)
+    const query = parseBody(taxDocumentListSchema, request.query)
+    successResponse(response, await listTaxDocuments(tenantId, query))
+  })
+
+  /**
+   * `GET /tenants/:slug/billing/tax-documents/:id/pdf`: the document as a
+   * PDF download. Private and never cached, since it names the buyer.
+   */
+  getTaxDocumentPdf = this.handle(async (request, response) => {
+    const { tenantId } = tenantPrincipal(request)
+    const pdf = await getDocumentPdf(tenantId, String(request.params.id), actorFrom(request), 'web')
+    response
+      .status(200)
+      .set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${pdf.filename}"`,
+        'Cache-Control': 'private, no-store',
+      })
+      .send(pdf.body)
   })
 }
 

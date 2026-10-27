@@ -43,4 +43,18 @@ export function addTaxRoutes(
     requireMemberOwner(TAX_DETAILS_OWNER_ONLY_MESSAGE),
     taxController.saveTaxDetails
   )
+  router.get(
+    '/:slug/billing/tax-documents',
+    limiters.billingRead,
+    resolveTenant(),
+    requireMemberOwner(TAX_DOCUMENTS_OWNER_ONLY_MESSAGE),
+    taxController.listTaxDocuments
+  )
+  router.get(
+    '/:slug/billing/tax-documents/:id/pdf',
+    limiters.billingRead,
+    resolveTenant(),
+    requireMemberOwner(TAX_DOCUMENTS_OWNER_ONLY_MESSAGE),
+    taxController.getTaxDocumentPdf
+  )
 }

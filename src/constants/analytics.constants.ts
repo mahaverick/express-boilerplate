@@ -41,6 +41,7 @@ export const PRODUCT_EVENTS = [
   'other_sessions_revoked',
   'email_verified',
   'onboarding_step_completed',
+  'tax_document_downloaded',
   'trial_started',
   'trial_reminder_sent',
   'trial_extended',
