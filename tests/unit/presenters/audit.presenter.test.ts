@@ -18,7 +18,7 @@ const base = {
   ip: '203.0.113.5',
   userAgent: 'agent',
 } as unknown as AuditLog
-const tenant = { id: 'tenant-1', name: 'Acme', slug: 'acme' }
+const tenant = { id: 'tenant-1', name: 'Acme', slug: 'acme', timezone: 'Asia/Kolkata' }
 
 describe('toAuditEntry', () => {
   it('sends the contract fields only, never ip, user agent or request id', () => {
@@ -71,5 +71,15 @@ describe('toPlatformAuditEntry', () => {
     const entry = toPlatformAuditEntry({ entry: base, actor: null, tenant })
 
     expect(entry.tenant).toEqual(tenant)
+  })
+
+  it('reads a missing time zone as UTC', () => {
+    const entry = toPlatformAuditEntry({
+      entry: base,
+      actor: null,
+      tenant: { ...tenant, timezone: null },
+    })
+
+    expect(entry.tenant.timezone).toBe('UTC')
   })
 })

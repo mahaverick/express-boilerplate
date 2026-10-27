@@ -715,6 +715,21 @@ describe('/api/v1/platform/billing-settings', () => {
     expect(entry?.metadata).toEqual({ changedFields: ['trialDays'], reason: REASON })
   })
 
+  it('names an editor with no name by their email', async () => {
+    const { user, token } = await createTrackedStaff('admin')
+
+    const response = await send('patch', token, '/billing-settings', {
+      version: await settingsVersion(),
+      trialDays: 21,
+      reason: REASON,
+    })
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body)).toMatchObject({
+      updatedBy: { userId: user.id, name: user.email },
+    })
+  })
+
   it.each([
     ['trialDays', 0],
     ['trialDays', 91],

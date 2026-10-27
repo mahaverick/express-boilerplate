@@ -72,7 +72,7 @@ import {
   addBillingPublishEntitlementsJob,
   type BillingPublishEntitlementsJobData,
 } from '@/jobs/billing.job'
-import { displayName } from '@/presenters/billing.presenter'
+import { nameOrEmail } from '@/presenters/billing.presenter'
 import {
   toBillingAlertView,
   toEventView,
@@ -208,7 +208,7 @@ async function grantersOf(
 ): Promise<Map<string, NonNullable<GrantView['grantedBy']>>> {
   const ids = [...new Set(grants.map((grant) => grant.grantedBy).filter((id) => id !== null))]
   const users = await userRepository.findManyByIds(ids, { includeDeleted: true })
-  return new Map(users.map((user) => [user.id, { userId: user.id, name: displayName(user) }]))
+  return new Map(users.map((user) => [user.id, { userId: user.id, name: nameOrEmail(user) }]))
 }
 
 /**
@@ -1264,7 +1264,7 @@ async function settingsView(settings: BillingSettingsRecord): Promise<BillingSet
     pastDueGraceDays: settings.pastDueGraceDays,
     version: settings.version,
     updatedAt: settings.updatedAt,
-    updatedBy: editor === undefined ? null : { userId: editor.id, name: displayName(editor) },
+    updatedBy: editor === undefined ? null : { userId: editor.id, name: nameOrEmail(editor) },
   }
 }
 

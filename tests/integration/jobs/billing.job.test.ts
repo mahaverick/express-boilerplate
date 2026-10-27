@@ -535,7 +535,7 @@ describe('billing webhook jobs', () => {
     expect(alerts).toEqual([
       {
         kind: 'reconcile_repair',
-        message: `Ignored subscription ${sub}: its notes name another workspace.`,
+        message: `The sync skipped subscription ${sub} because its notes name another workspace. Check its notes in Razorpay.`,
       },
     ])
   })

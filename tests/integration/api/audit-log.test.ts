@@ -546,11 +546,38 @@ describe('audit-log reads', () => {
         expect.arrayContaining([memberRow, staffRow])
       )
       const staffEntry = all.items.find((entry) => entry.id === staffRow)
-      expect(staffEntry?.tenant).toEqual({ id: second.id, name: second.name, slug: second.slug })
+      expect(staffEntry?.tenant).toEqual({
+        id: second.id,
+        name: second.name,
+        slug: second.slug,
+        timezone: 'UTC',
+      })
       expect(inFirst.items.map((entry) => entry.id)).toEqual([memberRow])
       expect(staffOnly.items.map((entry) => entry.id)).toEqual([staffRow])
       expect(byActor.items.map((entry) => entry.id)).toEqual([memberRow])
       expect(byAction.items.map((entry) => entry.id)).toEqual([staffRow])
+    })
+
+    it("gives each entry its tenant's time zone, on the global, tenant and user reads", async () => {
+      const { token } = await staff('admin')
+      const { tenant, owner } = await createTenant()
+      await sql`update tenant_settings set timezone = 'Asia/Kolkata' where tenant_id = ${tenant.id}`
+      const row = await insertRow({ tenantId: tenant.id, actorUserId: owner.id })
+
+      const reads = [
+        pageOf(await readPlatformLog(token)),
+        pageOf(await readPlatformLog(token, { tenant: tenant.id })),
+        pageOf(await readPlatformLog(token, { actor: owner.id })),
+      ]
+
+      for (const page of reads) {
+        expect(page.items.find((entry) => entry.id === row)?.tenant).toEqual({
+          id: tenant.id,
+          name: tenant.name,
+          slug: tenant.slug,
+          timezone: 'Asia/Kolkata',
+        })
+      }
     })
 
     it('filters by a retired action name, which stored rows still hold', async () => {

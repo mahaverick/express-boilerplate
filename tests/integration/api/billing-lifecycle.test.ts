@@ -499,7 +499,7 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(alerts[0]?.kind).toBe('reconcile_repair')
     expect(alerts[0]?.message).toMatch(
       new RegExp(
-        `^Cancelled subscription ${pending}, which an archived workspace adopted, and refunded \\d+ paise in rfnd_\\w+\\.$`
+        `^We cancelled subscription ${pending}, which an archived workspace adopted, and refunded ₹[\\d,.]+ in refund rfnd_\\w+\\. No action needed\\.$`
       )
     )
   })
@@ -526,7 +526,7 @@ describe('a subscription that reaches a suspended or archived workspace later', 
     expect(alerts.map((alert) => ({ ...alert }))).toStrictEqual([
       {
         kind: 'reconcile_repair',
-        message: `Cancelled subscription ${pending}, which an archived workspace adopted, but its refund did not go through. Refund it at the provider.`,
+        message: `We cancelled subscription ${pending}, which an archived workspace adopted, but its refund failed. Refund it in Razorpay.`,
       },
     ])
   })

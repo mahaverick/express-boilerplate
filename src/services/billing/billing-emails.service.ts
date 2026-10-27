@@ -76,6 +76,7 @@ import {
 } from '@/utilities/billing-transitions.utilities'
 import { formatDateInZone } from '@/utilities/date-text.utilities'
 import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
+import { formatRupees } from '@/utilities/money-text.utilities'
 
 const tenantRepository = new TenantRepository()
 const membershipRepository = new UserMembershipRepository()
@@ -192,19 +193,6 @@ const OWNERS_ONLY: PayerOnRecord = { billingEmail: null, payerUserId: null }
  * A message for one recipient's address.
  */
 type MessageFor = (to: string) => MailMessage
-
-/**
- * An amount in paise as rupees, grouped the Indian way, without the sign.
- * @param amountMinor - The amount in paise.
- * @returns For example "999", "9,990" or "1,49,999.50".
- */
-function formatRupees(amountMinor: number): string {
-  const hasPaise = amountMinor % 100 !== 0
-  return new Intl.NumberFormat('en-IN', {
-    minimumFractionDigits: hasPaise ? 2 : 0,
-    maximumFractionDigits: 2,
-  }).format(amountMinor / 100)
-}
 
 /**
  * A short, fixed key for one send, from the workspace, the transition's

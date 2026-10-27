@@ -10,7 +10,10 @@ import type { AuditLog } from '@/database/models/audit-log.model'
 export interface JoinedAuditRow {
   entry: AuditLog
   actor: { id: string; email: string; firstName: string | null; lastName: string | null } | null
-  tenant: { id: string; name: string; slug: string }
+  /**
+   * `timezone` is null on a tenant read, which never shows the tenant.
+   */
+  tenant: { id: string; name: string; slug: string; timezone: string | null }
 }
 
 /**
@@ -39,7 +42,11 @@ export interface AuditEntryResponse {
  * One entry of `GET /platform/audit-log`: an entry plus its tenant.
  */
 export interface PlatformAuditEntryResponse extends AuditEntryResponse {
-  tenant: { id: string; name: string; slug: string }
+  /**
+   * `timezone` is the tenant's IANA time zone (`tenant_settings.timezone`),
+   * so a client reads a date in an audit sentence as the tenant's day.
+   */
+  tenant: { id: string; name: string; slug: string; timezone: string }
 }
 
 /**
@@ -84,7 +91,8 @@ export function toAuditEntry(row: JoinedAuditRow): AuditEntryResponse {
  * @returns The contract's `AuditEntry` plus `tenant`.
  */
 export function toPlatformAuditEntry(row: JoinedAuditRow): PlatformAuditEntryResponse {
-  return { ...toAuditEntry(row), tenant: row.tenant }
+  // A platform read always selects the zone; UTC is the column's own default.
+  return { ...toAuditEntry(row), tenant: { ...row.tenant, timezone: row.tenant.timezone ?? 'UTC' } }
 }
 
 /**

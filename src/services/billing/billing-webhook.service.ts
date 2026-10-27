@@ -41,6 +41,7 @@ import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
+import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 
 const billingRepository = new BillingRepository()
 const tenantRepository = new TenantRepository()
@@ -362,12 +363,7 @@ async function readDisputeStatus(
   } catch (error) {
     if (data.eventType === 'payment.dispute.created' && isRefusal(error)) {
       const named = data.paymentId ?? disputeId
-      await alertOnce(
-        null,
-        'dispute',
-        named,
-        `Payment ${named} has a new dispute, and reading its status at the provider failed. Respond there before its deadline.`
-      )
+      await alertOnce(null, 'dispute', named, BILLING_ALERT_TEXT.disputeStatusUnread(named))
     }
     throw error
   }
@@ -445,7 +441,7 @@ async function syncForSubscription(
           null,
           'reconcile_repair',
           subscriptionId,
-          `Subscription ${subscriptionId} is paid, and no workspace here holds it. Check its notes at the provider.`
+          BILLING_ALERT_TEXT.paidSubscriptionUnheld(subscriptionId)
         )
       }
       await billingRepository.markEventProcessed(data.eventRowId, {
@@ -535,12 +531,7 @@ async function handleDispute(
       return
     }
     if (isOpen && paymentId !== null) {
-      await alertOnce(
-        null,
-        'dispute',
-        paymentId,
-        `Payment ${paymentId} has an open dispute, and no workspace here holds its subscription. Respond at the provider.`
-      )
+      await alertOnce(null, 'dispute', paymentId, BILLING_ALERT_TEXT.disputeUnheld(paymentId))
     }
     await billingRepository.markEventProcessed(data.eventRowId, { error: 'unknown_subscription' })
     return
@@ -552,12 +543,7 @@ async function handleDispute(
     await trackProviderEvent(flagged, { type: 'dispute_opened' }, disputeId)
   }
   if (isOpen && paymentId !== null) {
-    await alertOnce(
-      row.tenantId,
-      'dispute',
-      paymentId,
-      `Payment ${paymentId} has an open dispute. Respond at the provider before its deadline.`
-    )
+    await alertOnce(row.tenantId, 'dispute', paymentId, BILLING_ALERT_TEXT.disputeOpen(paymentId))
   }
   await billingRepository.markEventProcessed(data.eventRowId, { tenantId: row.tenantId })
 }
@@ -644,7 +630,7 @@ export async function recordWebhookJobFailure(
       'webhook_failing',
       // Not the bare event id: the earlier still-retrying alert names it too.
       `${data.providerEventId} (${data.eventType}) failed`,
-      `Provider event ${data.providerEventId} (${data.eventType}) failed after every retry. Resync the workspace.`
+      BILLING_ALERT_TEXT.webhookFailed(data.providerEventId, data.eventType)
     )
   } catch (recordError) {
     logger.error('Could not record a failed billing webhook job', {
@@ -673,12 +659,12 @@ export async function recordProviderOutageRetrying(job: {
   try {
     if (job.name === BILLING_WEBHOOK_JOB) {
       const data = job.data as BillingWebhookJobData
-      const what = `Provider event ${data.providerEventId} (${data.eventType})`
+      const what = `Razorpay event ${data.providerEventId} (${data.eventType})`
       await alertOnce(
         await tenantOfWebhookJob(data),
         'webhook_failing',
         `${data.providerEventId} (${data.eventType}) is still retrying`,
-        `${what} is still retrying after an hour of provider outage. It retries for 24 hours. Check the provider's status page.`
+        BILLING_ALERT_TEXT.stillRetrying(what)
       )
       return
     }
@@ -688,7 +674,7 @@ export async function recordProviderOutageRetrying(job: {
       typeof tenantId === 'string' ? tenantId : null,
       'reconcile_repair',
       `${what} is still retrying`,
-      `${what} is still retrying after an hour of provider outage. It retries for 24 hours. Check the provider's status page.`
+      BILLING_ALERT_TEXT.stillRetrying(what)
     )
   } catch (alertError) {
     logger.error('Could not record a billing job still retrying', {

@@ -7,13 +7,15 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import type { NewAuditLog } from '@/database/models/audit-log.model'
 import {
+  auditLogList,
   AuditLogRepository,
   type AuditLogFilters,
   type AuditLogListRow,
 } from '@/repositories/audit-log.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
+import { listPageQuery, type ListParams } from '@/utilities/list-page.utilities'
 import { tenantAuditLogListSchema } from '@/validators/audit.validators'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 
@@ -246,9 +248,31 @@ describe('AuditLogRepository.list, with its tenant', () => {
       id: tenantId,
       name: 'Audit Co',
       slug: expect.stringMatching(/^audit-/) as string,
+      timezone: null,
     })
     expect(staffOnly.items.map((row) => row.entry.action)).toEqual(['tenant.accessed_by_platform'])
     expect(byAction.items.map((row) => row.entry.access)).toEqual(['member'])
+  })
+
+  it('joins tenant_settings for the time zone on a platform read only', () => {
+    const params: ListParams = {
+      search: undefined,
+      sort: '-occurred',
+      cursor: undefined,
+      direction: 'next',
+      limit: 20,
+      total: false,
+      scope: 'explain',
+    }
+    const platform = listPageQuery(db, auditLogList(undefined, { scope: 'platform' }), params)
+    const tenant = listPageQuery(
+      db,
+      auditLogList(undefined, { scope: 'tenant', tenantId: randomUUID() }),
+      params
+    )
+
+    expect(platform.toSQL().sql).toContain('"tenant_settings"')
+    expect(tenant.toSQL().sql).not.toContain('"tenant_settings"')
   })
 
   it('pages the platform-wide log by the same keyset', async () => {

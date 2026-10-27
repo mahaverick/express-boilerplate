@@ -44,6 +44,7 @@ import type {
   ProviderRefundOutcome,
   ProviderSubscription,
 } from '@/types/billing'
+import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { isFirstPaidCycle } from '@/utilities/billing-analytics.utilities'
 import { heldSubscriptionIds, isOtherProvider } from '@/utilities/billing-rules.utilities'
 import {
@@ -257,7 +258,7 @@ async function fetchState(
     if (sub === undefined || sub.notes.tenantId === row.tenantId) return sub
     alerts.push({
       kind: 'reconcile_repair',
-      message: `Ignored subscription ${sub.id}: its notes name another workspace.`,
+      message: BILLING_ALERT_TEXT.foreignSubscription(sub.id),
       subscriptionId: sub.id,
     })
     return undefined
@@ -273,7 +274,7 @@ async function fetchState(
     if (priceId !== null && priceId !== undefined && planIdByPriceId.has(priceId)) return sub
     alerts.push({
       kind: 'reconcile_repair',
-      message: `Did not make subscription ${sub.id} current: its notes name no known price.`,
+      message: BILLING_ALERT_TEXT.unknownPrice(sub.id),
       subscriptionId: sub.id,
     })
     return undefined
@@ -526,7 +527,7 @@ async function didCancelNow(
     logger.error('Could not cancel a subscription', { error, tenantId, subscriptionId })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
-      message: `Could not cancel subscription ${subscriptionId}. Cancel it at the provider.`,
+      message: BILLING_ALERT_TEXT.cancelFailed(subscriptionId),
       subscriptionId,
     })
     return false
@@ -557,7 +558,7 @@ async function cancelAtCycleEnd(
     })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
-      message: `Could not cancel subscription ${subscriptionId} at its cycle end for an interval switch. Both subscriptions may charge until it is cancelled.`,
+      message: BILLING_ALERT_TEXT.switchCancelFailed(subscriptionId),
       subscriptionId,
     })
     return
@@ -579,7 +580,7 @@ async function cancelAtCycleEnd(
     logger.error('Could not record a scheduled cancel', { error, tenantId, subscriptionId })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
-      message: `Subscription ${subscriptionId} is cancelled at its cycle end for an interval switch, but the workspace does not show it as cancelling yet.`,
+      message: BILLING_ALERT_TEXT.switchCancelNotRecorded(subscriptionId),
       subscriptionId,
     })
   }
@@ -592,28 +593,18 @@ async function cancelAtCycleEnd(
  */
 const REFUND_ALERTS = {
   duplicate: {
-    cancelFailed: (id: string) =>
-      `Could not cancel duplicate subscription ${id}. Cancel and refund it at the provider.`,
-    refundFailed: (id: string) =>
-      `Cancelled duplicate subscription ${id}, but its refund did not go through. Refund it at the provider.`,
-    refunded: (id: string, amount: string, refundId: string) =>
-      `Cancelled duplicate subscription ${id} and refunded ${amount} paise in ${refundId}.`,
-    nothingPaid: (id: string) =>
-      `Cancelled duplicate subscription ${id}. It had no payment to refund.`,
-    partlyRefunded: (id: string) =>
-      `Duplicate subscription ${id} is only partly refunded. Refund the rest at the provider.`,
+    cancelFailed: BILLING_ALERT_TEXT.duplicateCancelFailed,
+    refundFailed: BILLING_ALERT_TEXT.duplicateRefundFailed,
+    refunded: BILLING_ALERT_TEXT.duplicateRefunded,
+    nothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid,
+    partlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded,
   },
   archived: {
-    cancelFailed: (id: string) =>
-      `Could not cancel subscription ${id}, which an archived workspace adopted. Cancel and refund it at the provider.`,
-    refundFailed: (id: string) =>
-      `Cancelled subscription ${id}, which an archived workspace adopted, but its refund did not go through. Refund it at the provider.`,
-    refunded: (id: string, amount: string, refundId: string) =>
-      `Cancelled subscription ${id}, which an archived workspace adopted, and refunded ${amount} paise in ${refundId}.`,
-    nothingPaid: (id: string) =>
-      `Cancelled subscription ${id}, which an archived workspace adopted. It had no payment to refund.`,
-    partlyRefunded: (id: string) =>
-      `Subscription ${id}, which an archived workspace adopted, is only partly refunded. Refund the rest at the provider.`,
+    cancelFailed: BILLING_ALERT_TEXT.archivedCancelFailed,
+    refundFailed: BILLING_ALERT_TEXT.archivedRefundFailed,
+    refunded: BILLING_ALERT_TEXT.archivedRefunded,
+    nothingPaid: BILLING_ALERT_TEXT.archivedNothingPaid,
+    partlyRefunded: BILLING_ALERT_TEXT.archivedPartlyRefunded,
   },
 } as const
 
@@ -677,7 +668,7 @@ async function refundDuplicate(
     case 'refunded': {
       await insertAlert(tenantId, {
         kind: doneKind,
-        message: alerts.refunded(subscriptionId, String(outcome.amountMinor), outcome.refundId),
+        message: alerts.refunded(subscriptionId, outcome.amountMinor, outcome.refundId),
       })
       await trackProviderEvent(
         reported,
