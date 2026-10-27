@@ -14,6 +14,7 @@ import { actorFrom } from '@/controllers/helpers.controller'
 import { exportTaxPeriod } from '@/services/platform-tax-export.service'
 import {
   assertStaffHeldWritable,
+  assertStaffTaxReadable,
   assertStaffTaxWritable,
   getStaffDocumentPdf,
   getStaffTaxDetails,
@@ -80,6 +81,7 @@ class PlatformTaxController extends BaseController {
    */
   getTaxDocumentPdf = this.handle(async (request, response) => {
     const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    await assertStaffTaxReadable(tenantId)
     const documentId = parseIdParameter(request.params.docId, 'taxDocument')
     const pdf = await getStaffDocumentPdf(actorFrom(request), tenantId, documentId)
     response

@@ -958,6 +958,7 @@ describe('refusals', () => {
 
     const details = await getAs(token, `/tenants/${tenant.id}/billing/tax-details`)
     const held = await getAs(token, `/tenants/${tenant.id}/billing/tax-held-charges`)
+    const malformedPdf = await pdfAs(token, tenant.id, 'not-a-uuid')
     const holdingList = await getAs(token, `/tenants/${holding.id}/billing/tax-held-charges`)
     const resolve = await sendAs(
       'post',
@@ -973,6 +974,10 @@ describe('refusals', () => {
         message: READ_DISABLED,
       })
     }
+    expect(malformedPdf.status).toBe(404)
+    expect(JSON.parse((malformedPdf.body as Buffer).toString())).toMatchObject({
+      code: 'tax_documents_disabled',
+    })
     expect(holdingList.status).toBe(200)
     expect(itemsOf(holdingList.body)).toHaveLength(1)
     expect(resolve.status).toBe(200)

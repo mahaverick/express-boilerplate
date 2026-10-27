@@ -557,13 +557,14 @@ export async function listTaxDocuments(
  * One of a workspace's tax documents as a PDF, with the file name a
  * download saves it under (the number with `/` turned into `-`). Once the
  * bytes are built it records a `tax_document_downloaded` event with the
- * document type and where it was downloaded, never the number.
+ * document type and where it was downloaded, never the number. Call
+ * `assertTaxReadable` first, before the id is parsed.
  * @param tenantId - The workspace.
  * @param id - The document id.
  * @param actor - The downloader.
  * @param surface - `web` for the customer app, `apex` for staff.
  * @returns The file name, the bytes and the document type.
- * @throws {HttpError} 404 `tax_documents_disabled` while registration is off and the workspace has no documents; 404 `tax_document_not_found` for an unknown id or another workspace's document.
+ * @throws {HttpError} 404 `tax_document_not_found` for an unknown id or another workspace's document.
  */
 export async function getDocumentPdf(
   tenantId: string,
@@ -571,7 +572,6 @@ export async function getDocumentPdf(
   actor: Actor,
   surface: 'web' | 'apex'
 ): Promise<{ filename: string; body: Buffer; type: TaxDocumentRecord['type'] }> {
-  await assertTaxReadable(tenantId)
   const document = await taxRepository.findDocument(tenantId, id)
   if (document === undefined) throw notFoundError('taxDocument')
   const body = await renderTaxDocumentPdf(document)

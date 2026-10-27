@@ -61,6 +61,8 @@ class TaxController extends BaseController {
    */
   getTaxDocumentPdf = this.handle(async (request, response) => {
     const { tenantId } = tenantPrincipal(request)
+    // Registration's 404 comes before the id is read, so a malformed id never answers another one.
+    await assertTaxReadable(tenantId)
     const pdf = await getDocumentPdf(
       tenantId,
       parseIdParameter(request.params.id, 'taxDocument'),

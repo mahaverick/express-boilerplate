@@ -222,20 +222,31 @@ export async function listStaffTaxDocuments(
 }
 
 /**
+ * Refuse a staff PDF download before the document id is read: the
+ * workspace's 404s, then registration's.
+ * @param tenantId - The workspace.
+ * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant; 404 `tax_documents_disabled` while registration is off and the workspace has no documents.
+ */
+export async function assertStaffTaxReadable(tenantId: string): Promise<void> {
+  await customerTenant(tenantId)
+  await assertTaxReadable(tenantId)
+}
+
+/**
  * One of a customer workspace's tax documents as a PDF for staff, audited as
- * a billing read once the bytes are built.
+ * a billing read once the bytes are built. Call `assertStaffTaxReadable`
+ * first.
  * @param actor - The staff member (a platform viewer or above; the route checked).
  * @param tenantId - The workspace.
  * @param documentId - The document.
  * @returns The file name and the bytes.
- * @throws {HttpError} The workspace's 404s; as `getDocumentPdf`.
+ * @throws {HttpError} As `getDocumentPdf`.
  */
 export async function getStaffDocumentPdf(
   actor: Actor,
   tenantId: string,
   documentId: string
 ): Promise<{ filename: string; body: Buffer }> {
-  await customerTenant(tenantId)
   const pdf = await getDocumentPdf(tenantId, documentId, actor, 'apex')
   await auditBillingView(actor, tenantId)
   return { filename: pdf.filename, body: pdf.body }

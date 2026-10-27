@@ -389,9 +389,16 @@ describe('GET /api/v1/tenants/:slug/billing/tax-documents', () => {
     gst.on = false
 
     const empty = await getAs(owner, `${tenant.slug}/billing/tax-documents`)
+    // A malformed id gets the registration 404 too: readability is checked before the id.
+    const malformed = await pdfAs(owner, tenant.slug, 'not-a-uuid')
 
     expect(empty.status).toBe(404)
     expect(empty.body).toMatchObject({ code: 'tax_documents_disabled', message: READ_DISABLED })
+    expect(malformed.status).toBe(404)
+    expect(JSON.parse((malformed.body as Buffer).toString())).toMatchObject({
+      code: 'tax_documents_disabled',
+      message: READ_DISABLED,
+    })
 
     gst.on = true
     const document = await invoiced(tenant.id)
