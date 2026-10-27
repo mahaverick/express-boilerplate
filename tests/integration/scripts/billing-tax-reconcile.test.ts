@@ -2,8 +2,9 @@
  * @file Exercises `runBillingTaxReconcile` against this worker's database and
  * the fake provider in Redis: it refuses when registration or payments are
  * off, a dry run prints one line per workspace and writes nothing, `--apply`
- * queues one `tax-reconcile` job per workspace with work, and an unknown
- * slug is refused.
+ * queues one `tax-reconcile` job per workspace with work and none for one
+ * with nothing owed, and an unknown slug, a bare `--tenant` or an unknown
+ * argument is refused.
  */
 import type { Job } from 'bullmq'
 import {
@@ -19,7 +20,8 @@ import {
 import { BILLING_TAX_RECONCILE_JOB, type BillingTaxReconcileJobData } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { runBillingTaxReconcile } from '@/scripts/billing-tax-reconcile'
-import { sql } from '@/services/database.service'
+import { reconcileTaxDocuments } from '@/services/billing/tax-reconcile.service'
+import { sql, withTransaction } from '@/services/database.service'
 import { closeQueue, getBillingQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -30,6 +32,7 @@ import {
   loadPlans,
   makePaying,
   paymentsSwitch,
+  readBilling,
   workspace,
 } from '../../helpers/billing-api'
 import { deleteTrackedUsers } from '../../helpers/platform-users'
@@ -111,16 +114,33 @@ async function twoPayingWorkspaces(): Promise<Array<{ id: string; slug: string }
     const latest = charges.at(-1)
     if (latest === undefined) throw new Error('setup: the subscription has no charge')
     await fake.fakeShiftBack(subscriptionId, latest.paidAt.getTime() - (Date.now() - 3_600_000))
-    // The script walks tracked subscriptions, which a held one has no row for.
-    await billingRepository.recordTrackedSubscription(
-      tenant.id,
-      { kind: 'fake', mode: 'test' },
-      subscriptionId,
-      'late_switch'
+    // makePaying writes the row directly; the write a sync makes records the subscription as held.
+    const { version } = await readBilling(tenant.id)
+    await withTransaction((tx) =>
+      billingRepository.updateVersioned(
+        tenant.id,
+        version,
+        { providerSubscriptionId: subscriptionId },
+        tx
+      )
     )
+    expect(
+      await billingRepository.listTrackedSubscriptionIds(
+        tenant.id,
+        { kind: 'fake', mode: 'test' },
+        5
+      )
+    ).toStrictEqual([subscriptionId])
     made.push({ id: tenant.id, slug: tenant.slug })
   }
   return made
+}
+
+/**
+ * Empty the billing queue of what a setup step queued.
+ */
+async function resetQueue(): Promise<void> {
+  await getBillingQueue().obliterate({ force: true })
 }
 
 /**
@@ -190,6 +210,31 @@ describe('billing:tax-reconcile', () => {
     )
     expect(out).toContain('Queued 2 workspaces. The billing worker issues their documents.\n')
     expect(await documentCount()).toBe(0)
+  })
+
+  it('queues no job on --apply for a workspace with nothing owed', async () => {
+    const [done, owed] = await twoPayingWorkspaces()
+    await reconcileTaxDocuments(done!.id)
+    await resetQueue()
+
+    expect(await runBillingTaxReconcile(['--apply'])).toBe(0)
+
+    expect(out).toContain(
+      `${done!.slug}: 0 invoices, 0 credit notes, 0 held, 0 late (over 30 days), 0 over-credited refunds\n`
+    )
+    const jobs = await taxJobs()
+    expect(jobs.map((job) => job.data.tenantId)).toStrictEqual([owed!.id])
+    expect(out).toContain('Queued 1 workspaces. The billing worker issues their documents.\n')
+  })
+
+  it('refuses a bare --tenant and an unknown argument, naming the usage', async () => {
+    expect(await runBillingTaxReconcile(['--tenant'])).toBe(1)
+    expect(await runBillingTaxReconcile(['--tenant', '--apply'])).toBe(1)
+    expect(await runBillingTaxReconcile(['--dry'])).toBe(1)
+    expect(errorOutput).toBe(
+      '--tenant needs a workspace slug.\n--tenant needs a workspace slug.\nUnknown argument --dry. Use [--apply] [--tenant <slug>].\n'
+    )
+    expect(await taxJobs()).toHaveLength(0)
   })
 
   it('refuses a slug no workspace has', async () => {

@@ -98,6 +98,10 @@ function parseArguments(argv: readonly string[]): { shouldApply: boolean; slug: 
 
 /**
  * Plan every workspace (or the named one) and print or queue the result.
+ * Every workspace is planned before anything is queued, so a planner error
+ * for one workspace (a provider read that can still succeed on a retry)
+ * stops the whole run with exit 1 and nothing queued; run it again once the
+ * provider answers.
  * @param argv - The arguments after the script path.
  * @returns The process exit code: 0 on success, 1 on a refusal or any failure.
  */
