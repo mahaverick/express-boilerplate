@@ -91,7 +91,10 @@ export function taxDocumentRow(
  * the holder takes the next number by hand and commits. The conflict-check
  * insert does not wait on a row that is only locked, so the allocation can
  * only wait at its own locking read; an allocator that skips the lock reads
- * the old count and hands out the holder's number again.
+ * the old count and hands out the holder's number again. `queued` does not
+ * tell the two apart: an unlocked allocator's own update still waits on the
+ * holder's lock. Only `allocatedNumber` does: the holder's number plus one
+ * with the lock, the holder's number again without it.
  * @param allocate - Takes the next number of the invoice series for 26-27 in a transaction.
  * @returns Whether the allocation was seen queued behind the holder, the number the holder took and the number the allocation got.
  */

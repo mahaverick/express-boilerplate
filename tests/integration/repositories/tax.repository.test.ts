@@ -9,6 +9,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql, withTransaction } from '@/services/database.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backendPid, deferred, waitForWaiter } from '../../helpers/lock-probe'
 import { allocateBehindLockHolder, resetTaxDocuments, taxDocumentRow } from '../../helpers/tax'
 
 const repository = new TaxRepository()
@@ -129,6 +130,27 @@ describe('TaxRepository', () => {
       repository.allocateNumber('invoice', '26-27', tx)
     )
     expect(result).toStrictEqual({ queued: true, holderNumber: 2, allocatedNumber: 3 })
+  })
+
+  it('numbers two real allocators that overlap one after the other', async () => {
+    const holding = deferred()
+    const release = deferred()
+    let holderPid = 0
+    const first = withTransaction(async (tx) => {
+      holderPid = await backendPid(tx)
+      const n = await repository.allocateNumber('invoice', '26-27', tx)
+      holding.resolve()
+      await release.promise
+      return n
+    })
+    await holding.promise
+    const second = withTransaction((tx) => repository.allocateNumber('invoice', '26-27', tx))
+
+    const queued = await waitForWaiter(holderPid, second)
+    release.resolve()
+
+    expect(queued).toBe(true)
+    expect(await Promise.all([first, second])).toStrictEqual([1, 2])
   })
 
   it('leaves no gap when an allocating transaction rolls back', async () => {

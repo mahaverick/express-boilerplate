@@ -252,8 +252,9 @@ export class TaxRepository {
    * series is new, locks it `FOR NO KEY UPDATE`, then bumps it, so two
    * allocators queue and a rollback leaves no gap.
    *
-   * Lock order: last in the lock order; hold it for one insert. The counter
-   * is shared by every workspace.
+   * Lock order: last in the lock order. The lock is held until the
+   * transaction ends: through the document insert and its audit entry, and
+   * nothing else. The counter is shared by every workspace.
    * @param type - The document type.
    * @param financialYear - The series' financial year, such as `26-27`.
    * @param tx - The open transaction, which must also insert the document.
