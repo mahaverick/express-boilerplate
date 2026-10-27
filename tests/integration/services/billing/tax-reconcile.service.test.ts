@@ -27,6 +27,7 @@ import {
 } from '@/jobs/billing.job'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
+import { PlanRepository } from '@/repositories/plan.repository'
 import { TaxRepository } from '@/repositories/tax.repository'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { processBillingWebhookEvent } from '@/services/billing/billing-webhook.service'
@@ -34,6 +35,7 @@ import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.se
 import { issueCreditNote } from '@/services/billing/tax-documents.service'
 import { planTaxDocuments, reconcileTaxDocuments } from '@/services/billing/tax-reconcile.service'
 import { sql, withTransaction } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { closeQueue, getBillingQueue, getEmailQueue } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
@@ -480,6 +482,83 @@ async function mailedNumbersOf(tenantId: string): Promise<string[]> {
   return rows.map((row) => row.number).toSorted()
 }
 
+describe('reconcileTaxDocuments provider refusals and limits', () => {
+  it('skips a payment whose refunds the provider refuses to read, and issues the rest', async () => {
+    const { tenantId, paymentId } = await paying()
+    await fake.fakeRefund(paymentId, 50_000)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    await withMutatedMethod(
+      FakeBillingProvider.prototype,
+      'listRefunds',
+      () => Promise.reject(new ProviderError('GET /payments/x/refunds', 400)),
+      async () => {
+        const report = await reconcileTaxDocuments(tenantId, { now: NOW })
+        expect(report.issued).toStrictEqual({ invoices: 1, creditNotes: 0 })
+      }
+    )
+
+    expect(warn).toHaveBeenCalledWith(
+      'A tax run skipped a payment whose refunds the provider refused to read',
+      { paymentId }
+    )
+    warn.mockRestore()
+  })
+
+  it('reads the newest 50 tracked subscriptions and logs the workspace and its count', async () => {
+    const { tenantId } = await paying()
+    for (let n = 0; n < 51; n += 1) {
+      await billingRepository.recordTrackedSubscription(
+        tenantId,
+        { kind: 'fake', mode: 'test' },
+        `sub_FAKEcap${String(n).padStart(4, '0')}`,
+        'duplicate'
+      )
+    }
+    const count = await billingRepository.countTrackedSubscriptions(tenantId, {
+      kind: 'fake',
+      mode: 'test',
+    })
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const listPaidCharges = vi.spyOn(FakeBillingProvider.prototype, 'listPaidCharges')
+
+    await planTaxDocuments(tenantId, { now: NOW })
+
+    expect(count).toBe(51)
+    expect(warn).toHaveBeenCalledWith(
+      'A tax run read only the newest tracked subscriptions of a workspace',
+      { tenantId, count, read: 50 }
+    )
+    // The billing row's own subscription, then the newest 50 tracked: the oldest is left out.
+    const read = new Set(listPaidCharges.mock.calls.map(([id]) => id))
+    expect(read.size).toBe(51)
+    expect(read.has('sub_FAKEcap0000')).toBe(false)
+    warn.mockRestore()
+    listPaidCharges.mockRestore()
+  })
+
+  it('prints Paid plan on the invoice line when the plan name holds a script the PDF cannot draw', async () => {
+    const { tenantId } = await paying()
+    const findPlan = PlanRepository.prototype.findPlan
+
+    await withMutatedMethod(
+      PlanRepository.prototype,
+      'findPlan',
+      async function (this: PlanRepository, ...arguments_) {
+        const plan = await findPlan.apply(this, arguments_)
+        // Devanagari for "Pro".
+        return plan === undefined ? plan : { ...plan, name: '\u092A\u094D\u0930\u094B' }
+      },
+      async () => {
+        await reconcileTaxDocuments(tenantId, { now: NOW })
+      }
+    )
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.snapshot.description).toMatch(/^Paid plan, Monthly, /)
+  })
+})
+
 describe('reconcileTaxDocuments emails', () => {
   it('mails the owner a link to each invoice and credit note a run issues, once', async () => {
     const { tenantId, paymentId } = await paying()
@@ -615,6 +694,41 @@ describe('reconcileTaxDocuments alerts', () => {
     ])
     expect(await alertsOf(sez.tenantId, 'tax_held_sez')).toStrictEqual([
       BILLING_ALERT_TEXT.taxHeldSez(held?.paymentId ?? '', 99_900),
+    ])
+  })
+
+  it('raises one tax_held_sez alert for a processed refund of a held charge, and issues nothing', async () => {
+    const { tenantId, ownerId, paymentId } = await paying()
+    await saveDetails(tenantId, ownerId, true)
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+    await fake.fakeRefund(paymentId, 20_000, 'pending')
+    const refundId = await fake.fakeRefund(paymentId, 50_000)
+
+    const first = await reconcileTaxDocuments(tenantId, { now: NOW })
+    await reconcileTaxDocuments(tenantId, { now: NOW, paymentIds: [paymentId] })
+
+    expect(first.issued).toStrictEqual({ invoices: 0, creditNotes: 0 })
+    expect(await documentsOf(tenantId)).toStrictEqual([])
+    expect(await alertsOf(tenantId, 'tax_held_sez')).toStrictEqual([
+      BILLING_ALERT_TEXT.taxHeldSez(paymentId, 99_900),
+      BILLING_ALERT_TEXT.taxHeldSezRefunded(paymentId, 50_000, refundId),
+    ])
+  })
+
+  it('reads the refunds of a held charge paid 201 days before only when hinted', async () => {
+    const { tenantId, ownerId, paymentId } = await paying(new Date(NOW.getTime() - 201 * DAY))
+    await saveDetails(tenantId, ownerId, true)
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+    const refundId = await fake.fakeRefund(paymentId, 50_000)
+
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+    const unhinted = await alertsOf(tenantId, 'tax_held_sez')
+    await reconcileTaxDocuments(tenantId, { now: NOW, paymentIds: [paymentId] })
+
+    expect(unhinted).toStrictEqual([BILLING_ALERT_TEXT.taxHeldSez(paymentId, 99_900)])
+    expect(await alertsOf(tenantId, 'tax_held_sez')).toStrictEqual([
+      BILLING_ALERT_TEXT.taxHeldSez(paymentId, 99_900),
+      BILLING_ALERT_TEXT.taxHeldSezRefunded(paymentId, 50_000, refundId),
     ])
   })
 

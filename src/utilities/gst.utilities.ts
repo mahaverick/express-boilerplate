@@ -159,9 +159,14 @@ export function financialYearOf(at: Date): string {
   return `${String(start % 100).padStart(2, '0')}-${String((start + 1) % 100).padStart(2, '0')}`
 }
 
+/** The calendar year a financial year such as '26-27' ends in (2027). */
+export function financialYearEndYear(fy: string): number {
+  return 2000 + Number(fy.slice(0, 2)) + 1
+}
+
 /** The instant 1 April after a financial year begins in IST. */
 export function financialYearEnd(fy: string): Date {
-  return istStartOf(2000 + Number(fy.slice(0, 2)) + 1, 4)
+  return istStartOf(financialYearEndYear(fy), 4)
 }
 
 /** Builds 'INV/26-27/00001'; throws RangeError past the 16-character limit. */
@@ -175,7 +180,7 @@ export function formatDocumentNumber(prefix: string, fy: string, n: number): str
 
 /** A credit note is late when issued from 1 December IST after its invoice's year ends. */
 export function isLateCreditNote(invoiceFy: string, issuedAt: Date): boolean {
-  return issuedAt.getTime() >= istStartOf(2000 + Number(invoiceFy.slice(0, 2)) + 1, 12).getTime()
+  return issuedAt.getTime() >= istStartOf(financialYearEndYear(invoiceFy), 12).getTime()
 }
 
 /** An invoice is late when issued more than 30 days after the payment. */
@@ -192,6 +197,11 @@ export function istMidnight(isoDate: string): Date {
 /** The IST calendar day of an instant as 'YYYY-MM-DD'. */
 export function istDate(at: Date): string {
   return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+/** The IST time of day of an instant as 'HH:mm'. */
+export function istTime(at: Date): string {
+  return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(11, 16)
 }
 
 /**

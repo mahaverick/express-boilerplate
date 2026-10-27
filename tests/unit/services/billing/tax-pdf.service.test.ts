@@ -314,6 +314,27 @@ describe('taxDocumentLines', () => {
   })
 })
 
+describe('taxDocumentLines drawable guard', () => {
+  it('writes any character above U+00FF as ? and makes curly quotes straight', () => {
+    const row = creditNoteRow({
+      snapshot: {
+        ...creditNoteRow().snapshot,
+        // Devanagari, a rupee sign and an emoji: none is in the PDF fonts.
+        buyer: { ...INTRA_SNAPSHOT.buyer, legalName: '\u0926\u0947\u0935 Studio' },
+        description: 'Plan \u20B9 \u{1F600}',
+        reason: '\u2018Caf\u00E9\u2019 refund',
+      },
+    })
+
+    const lines = printed(row)
+
+    expect(lines).toContain('??? Studio')
+    expect(lines).toContain('Plan ? ?')
+    expect(lines).toContain("Reason: 'Caf\u00E9' refund")
+    for (const line of lines) expect(line).toMatch(/^[\x20-\x7E\xA0-\xFF]*$/)
+  })
+})
+
 describe('renderTaxDocumentPdf', () => {
   it('renders a small one-page PDF', async () => {
     const pdf = await renderTaxDocumentPdf(creditNoteRow({ noTaxReduction: true }))

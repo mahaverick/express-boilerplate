@@ -428,8 +428,23 @@ export function creditNoteIssuedMessage(number: string, amount: string): string 
 /**
  * What a manual credit note amount outside the range reads.
  */
-export const CREDIT_NOTE_AMOUNT_MESSAGE =
-  'Enter the credit in paise as a whole number from 100 (₹1) to 1,00,00,000 (₹1,00,000).'
+export const CREDIT_NOTE_AMOUNT_MESSAGE = 'Enter a credit from ₹1 to ₹1,00,000.'
+
+/**
+ * Error code: the same staff member issued a manual credit note for the same
+ * invoice, amount and reason in the last 10 minutes.
+ */
+export const CREDIT_NOTE_REPEATED_CODE = 'CREDIT_NOTE_REPEATED'
+
+/**
+ * What a repeated manual credit note reads.
+ * @param number - The earlier note's number.
+ * @param time - When it was issued, as `HH:mm` in IST.
+ * @returns The message.
+ */
+export function creditNoteRepeatedMessage(number: string, time: string): string {
+  return `Credit note ${number} for this amount and reason was issued at ${time} IST. Nothing changed.`
+}
 
 /**
  * Error code: a held charge staff tried to resolve is already resolved.

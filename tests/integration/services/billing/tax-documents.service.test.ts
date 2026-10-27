@@ -18,7 +18,9 @@ import {
 } from '@/services/billing/tax-documents.service'
 import { sql, withTransaction } from '@/services/database.service'
 import type { ProviderCharge } from '@/types/billing'
+import { financialYearEnd, financialYearOf } from '@/utilities/gst.utilities'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
+import { withMutatedMethod } from '../../../helpers/mutate'
 import { platformTenant } from '../../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -253,6 +255,15 @@ describe('issueInvoice', () => {
     expect(document).toMatchObject({ placeOfSupply: '29', supply: 'intra', buyerGstin: null })
   })
 
+  it('names a buyer by the workspace slug when its name holds a script the PDF cannot draw', async () => {
+    // Devanagari for "Dev", then a Latin word.
+    const { tenant } = await workspace('\u0926\u0947\u0935 Studio')
+
+    const document = await issued(tenant.id)
+
+    expect(document.snapshot.buyer.legalName).toBe(tenant.slug)
+  })
+
   it('answers exists for a payment already invoiced and takes no number', async () => {
     const { tenant } = await workspace()
     const paid = charge()
@@ -331,6 +342,111 @@ describe('issueInvoice', () => {
         metadata: { type: 'invoice' },
       },
     ])
+  })
+})
+
+/**
+ * An instant 1 minute into the financial year after the one this machine's
+ * clock is in, so the year guessed before the counter lock is always wrong.
+ * @returns The instant and its financial year.
+ */
+function nextYearInstant(): { at: Date; financialYear: string } {
+  const thisYear = financialYearOf(new Date())
+  const at = new Date(financialYearEnd(thisYear).getTime() + 60_000)
+  return { at, financialYear: financialYearOf(at) }
+}
+
+describe('the issue time', () => {
+  it('is the database clock read after the counter lock when no time is passed', async () => {
+    const { tenant } = await workspace()
+    const before = await sql<{ at: Date }[]>`select now() as at`
+
+    const result = await issueInvoice(tenant.id, charge(), scope)
+
+    const after = await sql<{ at: Date }[]>`select clock_timestamp() as at`
+    if (result.outcome !== 'issued') throw new Error('not issued')
+    const issuedAt = result.document.issuedAt.getTime()
+    expect(issuedAt).toBeGreaterThanOrEqual(new Date(before[0]?.at ?? 0).getTime())
+    expect(issuedAt).toBeLessThanOrEqual(new Date(after[0]?.at ?? 0).getTime())
+  })
+
+  it('numbers in the year of the clock read under the lock, rolling back the guessed year', async () => {
+    const { tenant } = await workspace()
+    const next = nextYearInstant()
+    const guessed = financialYearOf(new Date())
+    let reads = 0
+
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'readClock',
+      () => {
+        reads += 1
+        return Promise.resolve(next.at)
+      },
+      async () => {
+        const result = await issueInvoice(tenant.id, charge(), scope)
+
+        expect(result).toMatchObject({
+          outcome: 'issued',
+          document: {
+            number: `INV/${next.financialYear}/00001`,
+            financialYear: next.financialYear,
+            issuedAt: next.at,
+          },
+        })
+      }
+    )
+
+    expect(reads).toBe(2)
+    expect(await counter('invoice', guessed)).toBeUndefined()
+    expect(await counter('invoice', next.financialYear)).toBe(1)
+  })
+
+  it('fails and writes nothing when the year moves again on the second try', async () => {
+    const { tenant } = await workspace()
+    const next = nextYearInstant()
+    const yearAfter = new Date(financialYearEnd(next.financialYear).getTime() + 60_000)
+    const clock = [next.at, yearAfter]
+
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'readClock',
+      () => Promise.resolve(clock.shift() ?? yearAfter),
+      async () => {
+        await expect(issueInvoice(tenant.id, charge(), scope)).rejects.toThrow(
+          `The issue time fell in financial year ${financialYearOf(yearAfter)}`
+        )
+      }
+    )
+
+    const rows = await sql<{ count: number }[]>`select count(*)::int as count from tax_documents`
+    expect(rows[0]?.count).toBe(0)
+    expect(await sql`select 1 from tax_document_counters`).toHaveLength(0)
+  })
+
+  it('applies the late credit note rule to the clock read under the lock', async () => {
+    const { tenant } = await workspace()
+    // An FY 26-27 invoice: a note from 1 December 2027 gives no tax reduction.
+    const invoice = await issued(tenant.id)
+    const lateClock = new Date('2027-12-01T00:00:00+05:30')
+
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'readClock',
+      () => Promise.resolve(lateClock),
+      async () => {
+        const result = await issueCreditNote(tenant.id, invoice.id, {
+          amountMinor: 10_000,
+          refundId: 'rfnd_CLOCK',
+          reason: 'Refund',
+        })
+
+        expect(result).toMatchObject({
+          outcome: 'issued',
+          document: { number: 'CN/27-28/00001', issuedAt: lateClock, noTaxReduction: true },
+        })
+      }
+    )
   })
 })
 

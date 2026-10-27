@@ -98,8 +98,19 @@ export interface PlannedCreditNote {
 }
 
 /**
+ * A processed refund of a held SEZ charge. No credit note follows: staff
+ * issue the invoice by hand, so they credit it by hand too, and an alert
+ * tells them.
+ */
+export interface PlannedHeldRefund {
+  paymentId: string
+  refund: ProviderRefund
+}
+
+/**
  * What one tax run will do for a workspace. A charge's credit notes always
- * come after its invoice, and a held charge's refunds are never planned.
+ * come after its invoice, and a held charge's refunds are never credited,
+ * only reported (`heldRefunds`).
  */
 export interface TaxPlan {
   /**
@@ -111,6 +122,7 @@ export interface TaxPlan {
   creditNotes: PlannedCreditNote[]
   holds: PlannedHold[]
   overCredits: PlannedCreditNote[]
+  heldRefunds: PlannedHeldRefund[]
 }
 
 /**

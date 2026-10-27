@@ -1,5 +1,6 @@
 /**
- * @file The tax details PATCH body and its cross-field rules. Every
+ * @file The tax details PATCH body and its cross-field rules, and the
+ * staff manual credit note body. Every
  * validation message a client copies is written out once here, word for
  * word, and asserted on the field it belongs to: the per-field rules through
  * the schemas, the rules across fields through `taxDetailsRuleIssues`.
@@ -7,6 +8,7 @@
 import { describe, expect, it } from 'vite-plus/test'
 import { z } from 'zod'
 import {
+  manualCreditNoteBodySchema,
   staffTaxDetailsPatchSchema,
   taxDetailsPatchSchema,
   taxDetailsRuleIssues,
@@ -273,5 +275,47 @@ describe('taxDetailsRuleIssues', () => {
     ])
     expect(taxDetailsRuleIssues(merged, new Set(['isSez']))).toHaveLength(1)
     expect(taxDetailsRuleIssues(merged, new Set(['city']))).toEqual([])
+  })
+})
+
+describe('manualCreditNoteBodySchema', () => {
+  const AMOUNT = 'Enter a credit from ₹1 to ₹1,00,000.'
+
+  it('takes an amount from ₹1 to ₹1,00,000 and a one-line reason, quotes made straight', () => {
+    expect(
+      manualCreditNoteBodySchema.parse({
+        amountMinor: 100,
+        reason: '  \u201CLost\u201D the dispute  ',
+      })
+    ).toStrictEqual({ amountMinor: 100, reason: '"Lost" the dispute' })
+    expect(
+      manualCreditNoteBodySchema.parse({ amountMinor: 10_000_000, reason: 'R' })
+    ).toMatchObject({ amountMinor: 10_000_000 })
+  })
+
+  it('refuses an amount outside the range, or not a whole number of paise', () => {
+    for (const amountMinor of [99, 10_000_001, 150.5, '200']) {
+      expect(
+        errorsOf({ amountMinor, reason: 'R' }, manualCreditNoteBodySchema).fieldErrors
+      ).toEqual({ amountMinor: [AMOUNT] })
+    }
+  })
+
+  it('refuses a reason the credit note could not print: another script, a rupee sign or a line break', () => {
+    for (const reason of ['\u0926\u0947\u0935', 'Refunded \u20B9100', 'One\nTwo', 'One\r\nTwo']) {
+      expect(
+        errorsOf({ amountMinor: 100, reason }, manualCreditNoteBodySchema).fieldErrors
+      ).toEqual({ reason: [OUTSIDE_PATTERN] })
+    }
+  })
+
+  it('refuses a blank reason or one over 500 characters', () => {
+    expect(
+      errorsOf({ amountMinor: 100, reason: '   ' }, manualCreditNoteBodySchema).fieldErrors
+    ).toEqual({ reason: ['reason must not be empty.'] })
+    expect(
+      errorsOf({ amountMinor: 100, reason: 'a'.repeat(501) }, manualCreditNoteBodySchema)
+        .fieldErrors
+    ).toEqual({ reason: ['reason must be at most 500 characters.'] })
   })
 })

@@ -22,6 +22,7 @@ import {
 import { createApp } from '@/app'
 import type { TaxDocumentRecord } from '@/database/models/tax.model'
 import { NOT_FOUND } from '@/errors/not-found-errors'
+import { PlatformTaxRepository } from '@/repositories/platform-tax.repository'
 import { TaxRepository } from '@/repositories/tax.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { issueInvoice } from '@/services/billing/tax-documents.service'
@@ -438,6 +439,9 @@ describe('staff tax documents', () => {
     const response = await pdfAs(token, tenant.id, invoice.id)
 
     expect(response.status).toBe(404)
+    expect(JSON.parse((response.body as Buffer).toString())).toMatchObject({
+      code: 'tax_document_not_found',
+    })
   })
 })
 
@@ -604,7 +608,8 @@ describe('the manual credit note', () => {
     const path = `/tenants/${tenant.id}/billing/tax-documents/${invoice.id}/credit-notes`
 
     const first = await sendAs('post', token, path, { amountMinor: 1000, reason: REASON })
-    const second = await sendAs('post', token, path, { amountMinor: 1000, reason: REASON })
+    // A second note of another amount, so the repeat guard lets it through.
+    const second = await sendAs('post', token, path, { amountMinor: 2000, reason: REASON })
 
     expect([first.status, second.status]).toStrictEqual([200, 200])
     expect(dataOf(first.body)).toMatchObject({ noTaxReduction: true })
@@ -618,6 +623,121 @@ describe('the manual credit note', () => {
           `Credit note ${number} for ${invoice.number} was issued after 30 November 2025, so it gives no tax reduction. Tell your CA.`
       )
     )
+  })
+})
+
+/**
+ * A read that fails, standing in for one after the commit.
+ * @returns A rejection.
+ */
+function failedRead(): Promise<never> {
+  return Promise.reject(new Error('a read after the commit'))
+}
+
+describe('the manual credit note guards', () => {
+  it('refuses the same note by the same admin within 10 minutes, and lets another admin issue it', async () => {
+    const { tenant } = await workspace()
+    const invoice = await invoiced(tenant.id)
+    const { token } = await staff('admin')
+    const { token: otherToken } = await staff('admin')
+    const path = `/tenants/${tenant.id}/billing/tax-documents/${invoice.id}/credit-notes`
+
+    const first = await sendAs('post', token, path, { amountMinor: 10_000, reason: REASON })
+    const repeated = await sendAs('post', token, path, { amountMinor: 10_000, reason: REASON })
+    const byOther = await sendAs('post', otherToken, path, { amountMinor: 10_000, reason: REASON })
+
+    expect([first.status, repeated.status, byOther.status]).toStrictEqual([200, 409, 200])
+    const issuedAt = new Date(dataOf(first.body).issuedAt as string)
+    // HH:mm of the first note in IST (UTC+05:30).
+    const time = new Date(issuedAt.getTime() + 330 * 60_000).toISOString().slice(11, 16)
+    expect(repeated.body).toMatchObject({
+      code: 'CREDIT_NOTE_REPEATED',
+      message: `Credit note CN/26-27/00001 for this amount and reason was issued at ${time} IST. Nothing changed.`,
+    })
+    expect(dataOf(byOther.body)).toMatchObject({ number: 'CN/26-27/00002' })
+    expect(await auditOf('billing.credit_note_issued_by_staff')).toHaveLength(2)
+  })
+
+  it('lets the same note through once 10 minutes have passed by the database clock', async () => {
+    const { tenant } = await workspace()
+    const invoice = await invoiced(tenant.id)
+    const { token } = await staff('admin')
+    const path = `/tenants/${tenant.id}/billing/tax-documents/${invoice.id}/credit-notes`
+    const first = await sendAs('post', token, path, { amountMinor: 10_000, reason: REASON })
+    const issuedAt = new Date(dataOf(first.body).issuedAt as string)
+    const realReadClock = TaxRepository.prototype.readClock
+    let later: Awaited<ReturnType<typeof sendAs>> | undefined
+
+    await withMutatedMethod(
+      TaxRepository.prototype,
+      'readClock',
+      async function (this: TaxRepository, ...arguments_) {
+        const at = await realReadClock.apply(this, arguments_)
+        return new Date(Math.max(at.getTime(), issuedAt.getTime() + 10 * 60_000 + 1))
+      },
+      async () => {
+        later = await sendAs('post', token, path, { amountMinor: 10_000, reason: REASON })
+      }
+    )
+
+    expect(later?.status).toBe(200)
+    expect(dataOf(later?.body)).toMatchObject({ number: 'CN/26-27/00002' })
+  })
+
+  it('answers 200 with the note when every read after the commit would fail', async () => {
+    const { tenant } = await workspace()
+    const invoice = await invoiced(tenant.id)
+    const { user, token } = await staff('admin')
+    const path = `/tenants/${tenant.id}/billing/tax-documents/${invoice.id}/credit-notes`
+    let response: Awaited<ReturnType<typeof sendAs>> | undefined
+
+    await withMutatedMethod(TaxRepository.prototype, 'listRefsFor', failedRead, async () => {
+      await withMutatedMethod(TaxRepository.prototype, 'findDocument', failedRead, async () => {
+        response = await sendAs('post', token, path, { amountMinor: 10_000, reason: REASON })
+      })
+    })
+
+    expect(response?.status).toBe(200)
+    expect(dataOf(response?.body)).toMatchObject({
+      number: 'CN/26-27/00001',
+      invoice: { id: invoice.id, number: invoice.number },
+      creditNotes: [],
+      creditedMinor: 0,
+      manual: true,
+      createdBy: { userId: user.id, name: 'Ria' },
+    })
+  })
+
+  it('refuses a reason the credit note could not print, and stores curly quotes straight', async () => {
+    const { tenant } = await workspace()
+    const invoice = await invoiced(tenant.id)
+    const { token } = await staff('admin')
+    const path = `/tenants/${tenant.id}/billing/tax-documents/${invoice.id}/credit-notes`
+
+    const rupee = await sendAs('post', token, path, {
+      amountMinor: 10_000,
+      reason: 'Refunded \u20B9100 by hand.',
+    })
+    const twoLines = await sendAs('post', token, path, {
+      amountMinor: 10_000,
+      reason: 'Lost the dispute.\nSee the case.',
+    })
+    const quoted = await sendAs('post', token, path, {
+      amountMinor: 10_000,
+      reason: '\u201CLost\u201D the customer\u2019s dispute.',
+    })
+
+    for (const response of [rupee, twoLines]) {
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({
+        errors: { reason: ['Use English letters, digits and common punctuation.'] },
+      })
+    }
+    expect(quoted.status).toBe(200)
+    expect(dataOf(quoted.body)).toMatchObject({ reason: '"Lost" the customer\'s dispute.' })
+    const [stored] = await sql<{ count: number }[]>`
+      select count(*)::int as count from tax_documents where type = 'credit_note'`
+    expect(stored?.count).toBe(1)
   })
 })
 
@@ -674,6 +794,56 @@ describe('held charges', () => {
         metadata: { heldChargeId: heldId, reason: 'Issued INV-SEZ-1 by hand.' },
       },
     ])
+  })
+
+  it('resolves a charge once when two admins resolve it at the same time', async () => {
+    const { tenant } = await workspace()
+    const heldId = await hold(tenant.id)
+    const { token } = await staff('admin')
+    const { token: otherToken } = await staff('admin')
+    const path = `/tenants/${tenant.id}/billing/tax-held-charges/${heldId}/resolve`
+
+    const responses = await Promise.all([
+      sendAs('post', token, path, { reason: 'Issued by hand.' }),
+      sendAs('post', otherToken, path, { reason: 'Issued by hand too.' }),
+    ])
+
+    expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toStrictEqual([
+      200, 409,
+    ])
+    const refused = responses.find((response) => response.status === 409)
+    expect(refused?.body).toMatchObject({ code: 'HELD_CHARGE_RESOLVED' })
+    expect(await auditOf('billing.held_charge_resolved')).toHaveLength(1)
+  })
+
+  it('answers 404 tax_held_charge_not_found when the charge is gone by the update', async () => {
+    const { tenant } = await workspace()
+    const heldId = await hold(tenant.id)
+    const { token } = await staff('admin')
+    const realResolveHeld = PlatformTaxRepository.prototype.resolveHeld
+    let response: Awaited<ReturnType<typeof sendAs>> | undefined
+
+    await withMutatedMethod(
+      PlatformTaxRepository.prototype,
+      'resolveHeld',
+      async function (this: PlatformTaxRepository, ...arguments_) {
+        // The row vanishes between the read and the update, as a purge would remove it.
+        await sql`delete from tax_held_charges where id = ${heldId}`
+        return realResolveHeld.apply(this, arguments_)
+      },
+      async () => {
+        response = await sendAs(
+          'post',
+          token,
+          `/tenants/${tenant.id}/billing/tax-held-charges/${heldId}/resolve`,
+          { reason: REASON }
+        )
+      }
+    )
+
+    expect(response?.status).toBe(404)
+    expect(response?.body).toMatchObject({ code: 'tax_held_charge_not_found' })
+    expect(await auditOf('billing.held_charge_resolved')).toStrictEqual([])
   })
 
   it('takes only the -heldAt sort', async () => {
@@ -733,14 +903,10 @@ describe('refusals', () => {
       await sendAs('patch', token, `${base}/tax-details`, { version: null, reason: REASON }),
       await getAs(token, `${base}/tax-documents`),
       await getAs(token, `${base}/tax-documents/${randomUUID()}/pdf`),
-      await sendAs('post', token, `${base}/tax-documents/${randomUUID()}/credit-notes`, {
-        amountMinor: 1000,
-        reason: REASON,
-      }),
+      // Empty write bodies: the workspace's 404 comes before the body is read.
+      await sendAs('post', token, `${base}/tax-documents/${randomUUID()}/credit-notes`, {}),
       await getAs(token, `${base}/tax-held-charges`),
-      await sendAs('post', token, `${base}/tax-held-charges/${randomUUID()}/resolve`, {
-        reason: REASON,
-      }),
+      await sendAs('post', token, `${base}/tax-held-charges/${randomUUID()}/resolve`, {}),
     ]
 
     for (const response of responses) {

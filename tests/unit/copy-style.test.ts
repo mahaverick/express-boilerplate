@@ -673,6 +673,7 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
   webhookFailed: BILLING_ALERT_TEXT.webhookFailed('evt_E1', 'subscription.charged'),
   stillRetrying: BILLING_ALERT_TEXT.stillRetrying('Razorpay event evt_E1 (subscription.charged)'),
   taxHeldSez: BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900),
+  taxHeldSezRefunded: BILLING_ALERT_TEXT.taxHeldSezRefunded('pay_P1', 99_900, 'rfnd_R1'),
   taxIssueFailed: BILLING_ALERT_TEXT.taxIssueFailed('tenant-1', '2026-10-27'),
   taxRefundOverCredit: BILLING_ALERT_TEXT.taxRefundOverCredit(
     'rfnd_R1',

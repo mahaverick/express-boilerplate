@@ -41,7 +41,7 @@ import {
 } from '@/utilities/gst.utilities'
 import { listFilter, listParamsSchema } from '@/validators/list.validators'
 import { versionSchema } from '@/validators/platform-billing.validators'
-import { reasonSchema } from '@/validators/platform.validators'
+import { MAX_REASON_LENGTH, reasonSchema } from '@/validators/platform.validators'
 
 /**
  * The longest legal name or address line, the columns' width.
@@ -334,9 +334,24 @@ export type HeldChargeListQuery = z.output<typeof heldChargeListSchema>
 const MAX_CREDIT_NOTE_MINOR = 10_000_000
 
 /**
+ * A manual credit note's reason. It is printed on the credit note the
+ * customer downloads, so it follows the tax-details text rule rather than the
+ * house reason's: trimmed, curly quotes made straight, one line of the
+ * characters the PDF font draws (`TAX_TEXT_PATTERN` has no line break), and
+ * at most the house reason's 500 characters.
+ */
+const creditNoteReasonSchema = z
+  .string({ error: 'reason must not be empty.' })
+  .trim()
+  .overwrite(normaliseQuotes)
+  .min(1, { message: 'reason must not be empty.', abort: true })
+  .regex(TAX_TEXT_PATTERN, { message: TAX_TEXT_CHARACTERS_MESSAGE, abort: true })
+  .max(MAX_REASON_LENGTH, `reason must be at most ${MAX_REASON_LENGTH} characters.`)
+
+/**
  * `POST /platform/tenants/:id/billing/tax-documents/:docId/credit-notes`:
- * the amount in paise, ₹1 at least, and why. Whether it fits what is left on
- * the invoice is checked under the invoice's lock.
+ * the amount in paise, ₹1 at least, and why, which the note prints. Whether
+ * it fits what is left on the invoice is checked under the invoice's lock.
  */
 export const manualCreditNoteBodySchema = z.strictObject({
   amountMinor: z
@@ -344,7 +359,7 @@ export const manualCreditNoteBodySchema = z.strictObject({
     .int(CREDIT_NOTE_AMOUNT_MESSAGE)
     .min(100, CREDIT_NOTE_AMOUNT_MESSAGE)
     .max(MAX_CREDIT_NOTE_MINOR, CREDIT_NOTE_AMOUNT_MESSAGE),
-  reason: reasonSchema,
+  reason: creditNoteReasonSchema,
 })
 
 /**

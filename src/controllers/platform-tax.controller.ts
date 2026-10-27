@@ -13,6 +13,7 @@ import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
 import { exportTaxPeriod } from '@/services/platform-tax-export.service'
 import {
+  assertStaffHeldWritable,
   assertStaffTaxWritable,
   getStaffDocumentPdf,
   getStaffTaxDetails,
@@ -53,9 +54,9 @@ class PlatformTaxController extends BaseController {
    */
   saveTaxDetails = this.handle(async (request, response) => {
     const tenantId = parseIdParameter(request.params.id, 'platformTenant')
-    await assertStaffTaxWritable(tenantId)
+    const tenant = await assertStaffTaxWritable(tenantId)
     const body = parseBody(staffTaxDetailsPatchSchema, request.body)
-    const { details, message } = await saveStaffTaxDetails(actorFrom(request), tenantId, body)
+    const { details, message } = await saveStaffTaxDetails(actorFrom(request), tenant, body)
     successResponse(response, details, message)
   })
 
@@ -126,6 +127,7 @@ class PlatformTaxController extends BaseController {
    */
   resolveHeldCharge = this.handle(async (request, response) => {
     const tenantId = parseIdParameter(request.params.id, 'platformTenant')
+    await assertStaffHeldWritable(tenantId)
     const { reason } = parseBody(reasonBodySchema, request.body)
     const heldId = parseIdParameter(request.params.heldId, 'taxHeldCharge')
     successResponse(

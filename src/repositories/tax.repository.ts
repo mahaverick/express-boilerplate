@@ -1,4 +1,3 @@
-import { and, asc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
 /**
  * @file Query access to a workspace's tax details, the tax documents issued
  * to it, their gap-free number counters and its held SEZ charges. It does
@@ -7,6 +6,7 @@ import { and, asc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
  * `tenant_id` is nulled when its workspace is purged. Consumers create their
  * own instance at module scope.
  */
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import {
   TAX_DETAILS_VERSION_CONFLICT_CODE,
   TAX_DETAILS_VERSION_CONFLICT_MESSAGE,
@@ -281,6 +281,22 @@ export class TaxRepository {
   }
 
   /**
+   * The database's clock as the statement runs (`clock_timestamp()`, not the
+   * transaction's start time). Read after the counter lock, it dates a
+   * document in the order its number was allocated.
+   * @param tx - The open transaction.
+   * @returns The current time.
+   */
+  async readClock(tx: DbTransaction): Promise<Date> {
+    const rows = await tx.execute<{ at: string }>(
+      sql`select to_json(clock_timestamp())#>>'{}' as at`
+    )
+    const at = rows[0]?.at
+    if (at === undefined) throw new HttpError('The database clock returned no row', 500)
+    return new Date(at)
+  }
+
+  /**
    * Insert a tax document.
    * @param row - The row's column values.
    * @param tx - The open transaction.
@@ -338,10 +354,10 @@ export class TaxRepository {
 
   /**
    * List the invoices issued for some payments, each with the sum of its
-   * credit notes.
+   * credit notes. The sums are read for the matched invoices only.
    * @param scope - The provider and mode.
    * @param paymentIds - The provider's payment ids.
-   * @param executor - Where to run the query. Defaults to the pool.
+   * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The invoices with `creditedMinor`.
    */
   async listInvoicesByPayments(
@@ -350,21 +366,72 @@ export class TaxRepository {
     executor: DbExecutor = db
   ): Promise<Array<TaxDocumentRecord & { creditedMinor: number }>> {
     if (paymentIds.length === 0) return []
-    const credits = executor
+    const invoices = await executor
+      .select()
+      .from(taxDocumentModel)
+      .where(and(invoiceOfProvider(scope), inArray(taxDocumentModel.paymentId, [...paymentIds])))
+    if (invoices.length === 0) return []
+    const credits = await executor
       .select({
         originalId: taxDocumentModel.originalDocumentId,
-        total: sql<string | null>`sum(${taxDocumentModel.totalMinor})::bigint`.as('total'),
+        total: sql<string>`sum(${taxDocumentModel.totalMinor})::bigint`,
       })
       .from(taxDocumentModel)
-      .where(isNotNull(taxDocumentModel.originalDocumentId))
+      .where(
+        inArray(
+          taxDocumentModel.originalDocumentId,
+          invoices.map((invoice) => invoice.id)
+        )
+      )
       .groupBy(taxDocumentModel.originalDocumentId)
-      .as('credits')
-    const rows = await executor
-      .select({ document: taxDocumentModel, credited: credits.total })
-      .from(taxDocumentModel)
-      .leftJoin(credits, eq(credits.originalId, taxDocumentModel.id))
-      .where(and(invoiceOfProvider(scope), inArray(taxDocumentModel.paymentId, [...paymentIds])))
-    return rows.map((row) => ({ ...row.document, creditedMinor: Number(row.credited ?? 0) }))
+    const creditedById = new Map(credits.map((row) => [row.originalId, Number(row.total)]))
+    return invoices.map((invoice) => ({
+      ...invoice,
+      creditedMinor: creditedById.get(invoice.id) ?? 0,
+    }))
+  }
+
+  /**
+   * Find the newest manual credit note a staff member issued against an
+   * invoice for this amount and reason after a time. Call it after
+   * `lockInvoice`, so two submits of one note queue and the second finds the
+   * first.
+   * @param note - The invoice, the staff member, the amount, the reason and the earliest issue time that counts.
+   * @param note.invoiceId - The invoice.
+   * @param note.createdBy - The staff member's user id.
+   * @param note.amountMinor - The amount in paise.
+   * @param note.reason - The reason, as stored.
+   * @param note.since - Notes issued at or before this time don't count.
+   * @param tx - The open transaction.
+   * @returns The note, or undefined when there is none.
+   */
+  async findRecentManualNote(
+    note: {
+      invoiceId: string
+      createdBy: string
+      amountMinor: number
+      reason: string
+      since: Date
+    },
+    tx: DbTransaction
+  ): Promise<TaxDocumentRecord | undefined> {
+    const document = taxDocumentModel
+    const [row] = await tx
+      .select()
+      .from(document)
+      .where(
+        and(
+          eq(document.originalDocumentId, note.invoiceId),
+          eq(document.createdBy, note.createdBy),
+          isNull(document.refundId),
+          eq(document.totalMinor, note.amountMinor),
+          eq(document.reason, note.reason),
+          gt(document.issuedAt, note.since)
+        )
+      )
+      .orderBy(desc(document.issuedAt), desc(document.id))
+      .limit(1)
+    return row
   }
 
   /**

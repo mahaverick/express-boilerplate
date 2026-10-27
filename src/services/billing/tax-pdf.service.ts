@@ -17,7 +17,7 @@ import {
   TAX_INVOICE_TITLE,
 } from '@/constants/tax-document-text.constants'
 import type { TaxDocumentRecord } from '@/database/models/tax.model'
-import { amountInWords, istDate } from '@/utilities/gst.utilities'
+import { amountInWords, istDate, normaliseQuotes } from '@/utilities/gst.utilities'
 
 /**
  * One block of a printed document: an optional bold heading, then its lines.
@@ -91,6 +91,18 @@ function rupees(minor: number): string {
 }
 
 /**
+ * A line as the standard PDF fonts draw it: curly quotes made straight, then
+ * any character outside printable Latin-1 written as `?`. Every input rule
+ * already keeps such characters out; this is the last guard, so nothing above
+ * U+00FF ever reaches pdfkit, which would print it as a wrong glyph.
+ * @param line - The line.
+ * @returns The drawable line.
+ */
+function drawable(line: string): string {
+  return normaliseQuotes(line).replaceAll(/[^\x20-\x7E\xA0-\xFF]/gu, '?')
+}
+
+/**
  * A state with its code, such as `Karnataka (29)`.
  * @param state - The state.
  * @returns The written state.
@@ -123,7 +135,8 @@ function taxRows(document: TaxDocumentRecord): string[] {
  * supply and, for a credit note, the invoice it reduces; the SAC line and
  * taxable value; the tax rows; the total in figures and words; then the
  * reverse-charge line, the references, a credit note's reason, the
- * no-tax-reduction line when it applies, and the no-signature line.
+ * no-tax-reduction line when it applies, and the no-signature line. Every
+ * line passes `drawable`, so a character the fonts can't draw prints as `?`.
  * @param document - The stored document.
  * @returns The printed text.
  */
@@ -132,74 +145,78 @@ export function taxDocumentLines(document: TaxDocumentRecord): TaxDocumentLines 
   const isCreditNote = document.type === 'credit_note'
   const { seller, buyer, amounts } = snapshot
   const period = snapshot.billingPeriod
+  const sections: TaxDocumentSection[] = [
+    {
+      heading: null,
+      lines: [`Number: ${document.number}`, `Date: ${istWrittenDate(document.issuedAt)}`],
+    },
+    {
+      heading: 'Seller',
+      lines: [
+        seller.legalName,
+        ...seller.addressLines,
+        `GSTIN: ${seller.gstin}`,
+        `State: ${stateLine(seller.state)}`,
+      ],
+    },
+    {
+      heading: 'Buyer',
+      lines: [
+        buyer.legalName,
+        ...(buyer.gstin === null ? [] : [`GSTIN: ${buyer.gstin}`]),
+        ...buyer.addressLines,
+        ...(buyer.state === null ? [] : [`State: ${stateLine(buyer.state)}`]),
+      ],
+    },
+    {
+      heading: null,
+      lines: [
+        `Place of supply: ${stateLine(snapshot.placeOfSupply)}`,
+        ...(snapshot.original === null
+          ? []
+          : [
+              `Original invoice: ${snapshot.original.number} dated ${istWrittenDate(new Date(snapshot.original.issuedAt))}`,
+            ]),
+      ],
+    },
+    {
+      heading: 'Service',
+      lines: [
+        `SAC ${snapshot.sacCode}`,
+        snapshot.description,
+        ...(period === null
+          ? []
+          : [`Period: ${writtenDay(period.start)} to ${writtenDay(period.end)}`]),
+        `Taxable value: ${rupees(amounts.taxableMinor)}`,
+      ],
+    },
+    { heading: 'Tax', lines: taxRows(document) },
+    {
+      heading: null,
+      lines: [`Total: ${rupees(amounts.totalMinor)}`, amountInWords(amounts.totalMinor)],
+    },
+    {
+      heading: null,
+      lines: [
+        REVERSE_CHARGE_SENTENCE,
+        ...(snapshot.reference.paymentId === null
+          ? []
+          : [`Payment reference: ${snapshot.reference.paymentId}`]),
+        ...(snapshot.reference.refundId === null
+          ? []
+          : [`Refund reference: ${snapshot.reference.refundId}`]),
+        ...(isCreditNote && snapshot.reason !== null ? [`Reason: ${snapshot.reason}`] : []),
+        ...(document.noTaxReduction ? [NO_TAX_REDUCTION_SENTENCE] : []),
+        COMPUTER_GENERATED_SENTENCE,
+      ],
+    },
+  ]
   return {
-    title: isCreditNote ? CREDIT_NOTE_TITLE : TAX_INVOICE_TITLE,
-    sections: [
-      {
-        heading: null,
-        lines: [`Number: ${document.number}`, `Date: ${istWrittenDate(document.issuedAt)}`],
-      },
-      {
-        heading: 'Seller',
-        lines: [
-          seller.legalName,
-          ...seller.addressLines,
-          `GSTIN: ${seller.gstin}`,
-          `State: ${stateLine(seller.state)}`,
-        ],
-      },
-      {
-        heading: 'Buyer',
-        lines: [
-          buyer.legalName,
-          ...(buyer.gstin === null ? [] : [`GSTIN: ${buyer.gstin}`]),
-          ...buyer.addressLines,
-          ...(buyer.state === null ? [] : [`State: ${stateLine(buyer.state)}`]),
-        ],
-      },
-      {
-        heading: null,
-        lines: [
-          `Place of supply: ${stateLine(snapshot.placeOfSupply)}`,
-          ...(snapshot.original === null
-            ? []
-            : [
-                `Original invoice: ${snapshot.original.number} dated ${istWrittenDate(new Date(snapshot.original.issuedAt))}`,
-              ]),
-        ],
-      },
-      {
-        heading: 'Service',
-        lines: [
-          `SAC ${snapshot.sacCode}`,
-          snapshot.description,
-          ...(period === null
-            ? []
-            : [`Period: ${writtenDay(period.start)} to ${writtenDay(period.end)}`]),
-          `Taxable value: ${rupees(amounts.taxableMinor)}`,
-        ],
-      },
-      { heading: 'Tax', lines: taxRows(document) },
-      {
-        heading: null,
-        lines: [`Total: ${rupees(amounts.totalMinor)}`, amountInWords(amounts.totalMinor)],
-      },
-      {
-        heading: null,
-        lines: [
-          REVERSE_CHARGE_SENTENCE,
-          ...(snapshot.reference.paymentId === null
-            ? []
-            : [`Payment reference: ${snapshot.reference.paymentId}`]),
-          ...(snapshot.reference.refundId === null
-            ? []
-            : [`Refund reference: ${snapshot.reference.refundId}`]),
-          ...(isCreditNote && snapshot.reason !== null ? [`Reason: ${snapshot.reason}`] : []),
-          ...(document.noTaxReduction ? [NO_TAX_REDUCTION_SENTENCE] : []),
-          COMPUTER_GENERATED_SENTENCE,
-        ],
-      },
-    ],
+    title: drawable(isCreditNote ? CREDIT_NOTE_TITLE : TAX_INVOICE_TITLE),
+    sections: sections.map((section) => ({
+      heading: section.heading === null ? null : drawable(section.heading),
+      lines: section.lines.map(drawable),
+    })),
   }
 }
 

@@ -137,6 +137,8 @@ export const BILLING_ALERT_TEXT = {
   // Tax documents.
   taxHeldSez: (paymentId: string, amountMinor: number) =>
     `Payment ${paymentId} of ₹${formatRupees(amountMinor)} is held: this workspace is an SEZ unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab.`,
+  taxHeldSezRefunded: (paymentId: string, amountMinor: number, refundId: string) =>
+    `Payment ${paymentId} of a held SEZ invoice was refunded ₹${formatRupees(amountMinor)} (refund ${refundId}). Issue a credit note by hand.`,
   taxIssueFailed: (tenantId: string, date: string) =>
     `Tax documents for workspace ${tenantId} were not issued on ${date}. Check the error log for this workspace, then resync it.`,
   taxRefundOverCredit: (

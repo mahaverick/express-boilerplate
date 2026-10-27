@@ -25,9 +25,10 @@ import { sendTaxDocumentIssued } from '@/services/billing/billing-emails.service
 import { getBillingProvider } from '@/services/billing/billing-provider.service'
 import { issueCreditNote, issueInvoice } from '@/services/billing/tax-documents.service'
 import { logger } from '@/services/logger.service'
-import type { BillingProviderClient, ProviderCharge } from '@/types/billing'
+import type { BillingProviderClient, ProviderCharge, ProviderRefund } from '@/types/billing'
 import type {
   PlannedCreditNote,
+  PlannedHeldRefund,
   PlannedHold,
   PlannedInvoice,
   TaxPlan,
@@ -35,7 +36,13 @@ import type {
 } from '@/types/tax'
 import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { isOtherProvider } from '@/utilities/billing-rules.utilities'
-import { financialYearOf, isLateInvoice, istDate } from '@/utilities/gst.utilities'
+import {
+  financialYearEndYear,
+  financialYearOf,
+  isLateInvoice,
+  istDate,
+  TAX_TEXT_PATTERN,
+} from '@/utilities/gst.utilities'
 
 const billingRepository = new BillingRepository()
 const planRepository = new PlanRepository()
@@ -58,6 +65,12 @@ const YEARLY_PERIOD_MIN_DAYS = 300
  * The reason a credit note for a provider refund prints.
  */
 const REFUND_CREDIT_NOTE_REASON = 'Refund'
+
+/**
+ * The plan name an invoice line prints when the plan's own name holds a
+ * character the PDF font can't draw.
+ */
+const PRINTABLE_PLAN_NAME_FALLBACK = 'Paid plan'
 
 /**
  * Month names as a document date prints them.
@@ -104,7 +117,17 @@ interface Creditable {
  * @returns The plan.
  */
 function skippedPlan(skipped: NonNullable<TaxPlan['skipped']>): TaxPlan {
-  return { skipped, invoices: [], creditNotes: [], holds: [], overCredits: [] }
+  return { skipped, invoices: [], creditNotes: [], holds: [], overCredits: [], heldRefunds: [] }
+}
+
+/**
+ * A plan name as an invoice line prints it: the name when the PDF font can
+ * draw it (`TAX_TEXT_PATTERN`), else `Paid plan`.
+ * @param name - The plan's name.
+ * @returns The printable name.
+ */
+function printablePlanName(name: string): string {
+  return TAX_TEXT_PATTERN.test(name) ? name : PRINTABLE_PLAN_NAME_FALLBACK
 }
 
 /**
@@ -144,6 +167,50 @@ async function paidChargesOf(
 }
 
 /**
+ * Every refund of a payment. A payment the provider refuses to read (a 4xx a
+ * retry can't change) is skipped and logged by its id, as `paidChargesOf`
+ * skips a subscription, so one unknown payment never fails the run.
+ * @param provider - The payment provider.
+ * @param paymentId - The payment.
+ * @returns Its refunds, or none when the provider refused.
+ * @throws {ProviderError} When the read can still succeed on a retry.
+ */
+async function refundsOf(
+  provider: BillingProviderClient,
+  paymentId: string
+): Promise<ProviderRefund[]> {
+  try {
+    return await provider.listRefunds(paymentId)
+  } catch (error) {
+    if (error instanceof ProviderError && !error.retryable) {
+      logger.warn('A tax run skipped a payment whose refunds the provider refused to read', {
+        paymentId,
+      })
+      return []
+    }
+    throw error
+  }
+}
+
+/**
+ * A payment's processed refunds, oldest first: a pending refund can still
+ * fail, and a failed one returned nothing.
+ * @param provider - The payment provider.
+ * @param paymentId - The payment.
+ * @returns The processed refunds.
+ * @throws {ProviderError} When the read can still succeed on a retry.
+ */
+async function processedRefundsOf(
+  provider: BillingProviderClient,
+  paymentId: string
+): Promise<ProviderRefund[]> {
+  const listed = await refundsOf(provider, paymentId)
+  return listed
+    .filter((refund) => refund.status === 'processed')
+    .toSorted((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+}
+
+/**
  * The plan name and interval a subscription's notes name through their price.
  * @param provider - The payment provider.
  * @param subscriptionId - The subscription.
@@ -166,14 +233,17 @@ async function planLineOf(
   const [price] = await planRepository.findPricesByIds([priceId])
   if (price === undefined) return undefined
   const plan = await planRepository.findPlan(price.planId)
-  return plan === undefined ? undefined : { name: plan.name, interval: price.interval }
+  return plan === undefined
+    ? undefined
+    : { name: printablePlanName(plan.name), interval: price.interval }
 }
 
 /**
  * Builds invoice lines: `{plan name}, {Monthly|Yearly}, {start} to {end}`
  * with IST dates. The plan and interval come from the subscription's price,
  * read once per subscription; the fallback is the Paid plan, yearly for a
- * billing period of 300 days or more.
+ * billing period of 300 days or more. A plan name the PDF font can't draw
+ * prints as `Paid plan`.
  * @param provider - The payment provider.
  * @returns A function from a charge to its line.
  */
@@ -193,7 +263,7 @@ function invoiceLines(
     if (line === undefined) {
       if (paidName === undefined) {
         const paid = await planRepository.findPlanByKey('paid')
-        paidName = paid?.name ?? 'Paid'
+        paidName = paid === undefined ? 'Paid' : printablePlanName(paid.name)
       }
       const isYearly =
         billingStart !== null &&
@@ -222,11 +292,16 @@ function invoiceLines(
  *   fully credited and paid within `TAX_REFUND_LOOKBACK_DAYS`. Only
  *   processed refunds count, oldest first; one more than what is left to
  *   credit is an over-credit, never a capped note. A held charge's refunds
- *   are never planned.
+ *   are never credited: the same rule lists them (hinted, or paid within the
+ *   lookback) as `heldRefunds`, and staff hear about each one.
+ * - A payment or subscription the provider refuses to read (a 4xx) is
+ *   skipped and logged.
  *
  * The provider's charge and refund lists stop at 100 pages and then return
  * what they read with a logged warning, so a subscription or payment with
- * more is planned in part; a later run sees the same pages.
+ * more is planned in part; a later run sees the same pages. When a workspace
+ * tracks more than `TAX_MAX_TRACKED_SUBSCRIPTIONS`, the newest are read and
+ * a warning logs the workspace and the count.
  * @param tenantId - The workspace.
  * @param options - Payments to read refunds for whatever their age or credit, and the run time.
  * @param options.paymentIds - The hinted payments.
@@ -254,13 +329,20 @@ export async function planTaxDocuments(
       if (id !== null) subscriptionIds.add(id)
     }
   }
-  for (const id of await billingRepository.listTrackedSubscriptionIds(
+  // One past the cap, to tell a truncated list from a full one.
+  const tracked = await billingRepository.listTrackedSubscriptionIds(
     tenantId,
     scope,
-    TAX_MAX_TRACKED_SUBSCRIPTIONS
-  )) {
-    subscriptionIds.add(id)
+    TAX_MAX_TRACKED_SUBSCRIPTIONS + 1
+  )
+  if (tracked.length > TAX_MAX_TRACKED_SUBSCRIPTIONS) {
+    logger.warn('A tax run read only the newest tracked subscriptions of a workspace', {
+      tenantId,
+      count: await billingRepository.countTrackedSubscriptions(tenantId, scope),
+      read: TAX_MAX_TRACKED_SUBSCRIPTIONS,
+    })
   }
+  for (const id of tracked.slice(0, TAX_MAX_TRACKED_SUBSCRIPTIONS)) subscriptionIds.add(id)
 
   const charges = new Map<string, ProviderCharge>()
   for (const subscriptionId of subscriptionIds) {
@@ -285,6 +367,8 @@ export async function planTaxDocuments(
   const invoices: PlannedInvoice[] = []
   const holds: PlannedHold[] = []
   const creditable: Creditable[] = []
+  // Held charges, already or in this plan, with when each was paid.
+  const heldPayments = new Map<string, Date>()
   for (const charge of ordered) {
     const invoice = invoiceByPayment.get(charge.paymentId)
     if (invoice !== undefined) {
@@ -296,10 +380,14 @@ export async function planTaxDocuments(
       })
       continue
     }
-    if ((await taxRepository.findHeldByPayment(scope, charge.paymentId)) !== undefined) continue
+    if ((await taxRepository.findHeldByPayment(scope, charge.paymentId)) !== undefined) {
+      heldPayments.set(charge.paymentId, charge.paidAt)
+      continue
+    }
     const description = await lineOf(charge)
     if (details?.isSez === true) {
       holds.push({ charge, description })
+      heldPayments.set(charge.paymentId, charge.paidAt)
       continue
     }
     invoices.push({ charge, description, isLate: isLateInvoice(charge.paidAt, now) })
@@ -310,15 +398,21 @@ export async function planTaxDocuments(
       paidAt: charge.paidAt,
     })
   }
-  // A hinted payment's invoice counts even when its subscription was not read this run.
-  for (const [paymentId, invoice] of invoiceByPayment) {
-    if (charges.has(paymentId) || !hints.has(paymentId)) continue
-    creditable.push({
-      paymentId,
-      invoiceId: invoice.id,
-      remainingMinor: invoice.totalMinor - invoice.creditedMinor,
-      paidAt: null,
-    })
+  // A hinted payment's invoice or hold counts even when its subscription was not read this run.
+  for (const paymentId of hints) {
+    if (charges.has(paymentId)) continue
+    const invoice = invoiceByPayment.get(paymentId)
+    if (invoice !== undefined) {
+      creditable.push({
+        paymentId,
+        invoiceId: invoice.id,
+        remainingMinor: invoice.totalMinor - invoice.creditedMinor,
+        paidAt: null,
+      })
+      continue
+    }
+    const held = await taxRepository.findHeldByPayment(scope, paymentId)
+    if (held?.tenantId === tenantId) heldPayments.set(paymentId, held.paidAt)
   }
 
   const lookbackFrom = now.getTime() - TAX_REFUND_LOOKBACK_DAYS * DAY_MS
@@ -327,10 +421,7 @@ export async function planTaxDocuments(
   for (const charge of creditable) {
     const isRecent = charge.paidAt !== null && charge.paidAt.getTime() >= lookbackFrom
     if (!hints.has(charge.paymentId) && (charge.remainingMinor <= 0 || !isRecent)) continue
-    const listed = await provider.listRefunds(charge.paymentId)
-    const refunds = listed
-      .filter((refund) => refund.status === 'processed')
-      .toSorted((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    const refunds = await processedRefundsOf(provider, charge.paymentId)
     let remainingMinor = charge.remainingMinor
     for (const refund of refunds) {
       if ((await taxRepository.findCreditNoteByRefund(scope, refund.id)) !== undefined) continue
@@ -348,7 +439,14 @@ export async function planTaxDocuments(
       }
     }
   }
-  return { skipped: null, invoices, creditNotes, holds, overCredits }
+  const heldRefunds: PlannedHeldRefund[] = []
+  for (const [paymentId, paidAt] of heldPayments) {
+    if (!hints.has(paymentId) && paidAt.getTime() < lookbackFrom) continue
+    for (const refund of await processedRefundsOf(provider, paymentId)) {
+      heldRefunds.push({ paymentId, refund })
+    }
+  }
+  return { skipped: null, invoices, creditNotes, holds, overCredits, heldRefunds }
 }
 
 /**
@@ -359,7 +457,7 @@ export async function planTaxDocuments(
  * @param dedupeText - The id or text a repeat would name too.
  * @param message - The message.
  */
-export async function alertOnce(
+async function alertOnce(
   tenantId: string,
   kind: BillingAlertKind,
   dedupeText: string,
@@ -375,6 +473,31 @@ export async function alertOnce(
   } catch (error) {
     logger.error('Could not record a billing alert', { error, tenantId, kind })
   }
+}
+
+/**
+ * Raise the staff alert for a committed credit note that gives no tax
+ * reduction (`noTaxReduction`), deduplicated by a bounded text naming its
+ * number (`Credit note CN/26-27/00001 for` never matches inside
+ * `CN/26-27/000010`). The tax run and a staff member's manual note both
+ * raise it. Does nothing for a note that still reduces tax. Never rejects.
+ * @param tenantId - The workspace.
+ * @param note - The committed credit note.
+ */
+export async function raiseLateCreditNoteAlert(
+  tenantId: string,
+  note: TaxDocumentRecord
+): Promise<void> {
+  const original = note.snapshot.original
+  if (!note.noTaxReduction || original === null) return
+  // The 30 November that ends the reduction falls in the year the invoice's financial year ends.
+  const deadlineYear = financialYearEndYear(financialYearOf(new Date(original.issuedAt)))
+  await alertOnce(
+    tenantId,
+    'tax_credit_note_late',
+    `Credit note ${note.number} for `,
+    BILLING_ALERT_TEXT.taxCreditNoteLate(note.number, original.number, deadlineYear)
+  )
 }
 
 /**
@@ -401,12 +524,20 @@ interface IssuedDocument {
  */
 interface RunAlerts {
   /**
-   * The numbers of invoices issued more than 30 days after payment, in issue order.
+   * The numbers of invoices issued more than 30 days after payment, in
+   * issue order.
    */
   lateInvoiceNumbers: string[]
-  lateNotes: { number: string; invoiceNumber: string; year: number }[]
+  /**
+   * The credit notes issued with no tax reduction.
+   */
+  lateNotes: TaxDocumentRecord[]
   newHolds: ProviderCharge[]
   overCredits: OverCredit[]
+  /**
+   * The processed refunds of held charges, which staff credit by hand.
+   */
+  heldRefunds: PlannedHeldRefund[]
   /**
    * Every document the run issued, in issue order.
    */
@@ -427,10 +558,10 @@ async function mailIssuedDocuments(issued: readonly IssuedDocument[], now: Date)
 
 /**
  * Raise the staff alerts for what a run committed. One `tax_invoice_late`
- * covers every late invoice; each late credit note, new SEZ hold and
- * over-credit raises its own, deduplicated by a bounded text that names its
- * number, payment id or refund id (`Credit note CN/26-27/00001 for` never
- * matches inside `CN/26-27/000010`). Never rejects.
+ * covers every late invoice; each late credit note, new SEZ hold, refund of
+ * a held charge and over-credit raises its own, deduplicated by a bounded
+ * text that names its number, payment id or refund id (`Credit note
+ * CN/26-27/00001 for` never matches inside `CN/26-27/000010`). Never rejects.
  * @param tenantId - The workspace.
  * @param alerts - What the run committed.
  */
@@ -442,20 +573,21 @@ async function raiseRunAlerts(tenantId: string, alerts: RunAlerts): Promise<void
     const message = BILLING_ALERT_TEXT.taxInvoiceLate(lateInvoiceNumbers.length, first, last)
     await alertOnce(tenantId, 'tax_invoice_late', message, message)
   }
-  for (const note of alerts.lateNotes) {
-    await alertOnce(
-      tenantId,
-      'tax_credit_note_late',
-      `Credit note ${note.number} for `,
-      BILLING_ALERT_TEXT.taxCreditNoteLate(note.number, note.invoiceNumber, note.year)
-    )
-  }
+  for (const note of alerts.lateNotes) await raiseLateCreditNoteAlert(tenantId, note)
   for (const charge of alerts.newHolds) {
     await alertOnce(
       tenantId,
       'tax_held_sez',
-      `Payment ${charge.paymentId} of `,
+      `Payment ${charge.paymentId} of ₹`,
       BILLING_ALERT_TEXT.taxHeldSez(charge.paymentId, charge.amountMinor)
+    )
+  }
+  for (const { paymentId, refund } of alerts.heldRefunds) {
+    await alertOnce(
+      tenantId,
+      'tax_held_sez',
+      `(refund ${refund.id})`,
+      BILLING_ALERT_TEXT.taxHeldSezRefunded(paymentId, refund.amountMinor, refund.id)
     )
   }
   for (const over of alerts.overCredits) {
@@ -490,7 +622,7 @@ async function raiseRunAlerts(tenantId: string, alerts: RunAlerts): Promise<void
  * @param tenantId - The workspace.
  * @param options - Payments to read refunds for whatever their age or credit, and the run time.
  * @param options.paymentIds - The hinted payments.
- * @param options.now - The run time and issue date; defaults to now.
+ * @param options.now - The run time and issue date, a test seam; by default the run time is now and each document's issue time is the database clock read after its counter lock.
  * @returns What the run did.
  * @throws {ProviderError} When a provider read fails; documents issued before it stay issued.
  */
@@ -515,13 +647,23 @@ export async function reconcileTaxDocuments(
     lateNotes: [],
     newHolds: [],
     overCredits: [],
+    heldRefunds: [],
     issued: [],
   }
   try {
-    await issuePlan(tenantId, plan, scope, now, report, alerts)
+    await issuePlan(tenantId, plan, scope, options.now, report, alerts)
   } finally {
-    await raiseRunAlerts(tenantId, alerts)
-    await mailIssuedDocuments(alerts.issued, now)
+    // Each step stands alone, so a throw in one never skips the other.
+    try {
+      await raiseRunAlerts(tenantId, alerts)
+    } catch (error) {
+      logger.error('Could not raise the alerts of a tax run', { error, tenantId })
+    }
+    try {
+      await mailIssuedDocuments(alerts.issued, now)
+    } catch (error) {
+      logger.error('Could not mail the documents of a tax run', { error, tenantId })
+    }
   }
   report.late = { invoices: alerts.lateInvoiceNumbers.length, creditNotes: alerts.lateNotes.length }
   report.overCredits = alerts.overCredits.length
@@ -534,7 +676,7 @@ export async function reconcileTaxDocuments(
  * @param tenantId - The workspace.
  * @param plan - The plan.
  * @param scope - The running provider and mode.
- * @param now - The issue date.
+ * @param now - The issue time a test passes, or undefined for the database clock.
  * @param report - The run's report, counted into.
  * @param alerts - What staff hear about, collected into.
  * @throws {Error} When an issue fails; what committed before it is already collected.
@@ -543,7 +685,7 @@ async function issuePlan(
   tenantId: string,
   plan: TaxPlan,
   scope: ProviderScope,
-  now: Date,
+  now: Date | undefined,
   report: TaxReconcileReport,
   alerts: RunAlerts
 ): Promise<void> {
@@ -554,7 +696,9 @@ async function issuePlan(
       report.issued.invoices += 1
       invoiceIdByPayment.set(charge.paymentId, result.document.id)
       alerts.issued.push({ document: result.document, occurredAt: charge.paidAt })
-      if (isLateInvoice(charge.paidAt, now)) alerts.lateInvoiceNumbers.push(result.document.number)
+      if (isLateInvoice(charge.paidAt, result.document.issuedAt)) {
+        alerts.lateInvoiceNumbers.push(result.document.number)
+      }
     } else if (result.outcome === 'held') {
       report.held += 1
       alerts.newHolds.push(charge)
@@ -584,6 +728,12 @@ async function issuePlan(
       remainingMinor: planned.remainingMinor,
     })
   }
+  // A charge planned as held but invoiced at issue (no longer an SEZ unit) gets its note next run.
+  for (const planned of plan.heldRefunds) {
+    if ((await taxRepository.findHeldByPayment(scope, planned.paymentId)) !== undefined) {
+      alerts.heldRefunds.push(planned)
+    }
+  }
   for (const planned of plan.creditNotes) {
     const invoiceId = await invoiceOf(planned)
     // Held after the plan was read: a held charge's refunds are never credited.
@@ -599,15 +749,7 @@ async function issuePlan(
       report.issued.creditNotes += 1
       const { document } = result
       alerts.issued.push({ document, occurredAt: refund.createdAt })
-      const original = document.snapshot.original
-      if (document.noTaxReduction && original !== null) {
-        const invoiceYear = financialYearOf(new Date(original.issuedAt))
-        alerts.lateNotes.push({
-          number: document.number,
-          invoiceNumber: original.number,
-          year: 2000 + Number(invoiceYear.slice(0, 2)) + 1,
-        })
-      }
+      if (document.noTaxReduction) alerts.lateNotes.push(document)
     } else if (result.outcome === 'over_credit') {
       alerts.overCredits.push({
         invoiceId,

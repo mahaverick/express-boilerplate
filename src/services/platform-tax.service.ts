@@ -21,8 +21,10 @@
 import { gstSellerConfig } from '@/configs/billing.config'
 import {
   CREDIT_EXCEEDS_INVOICE_CODE,
+  CREDIT_NOTE_REPEATED_CODE,
   creditExceedsInvoiceMessage,
   creditNoteIssuedMessage,
+  creditNoteRepeatedMessage,
   HELD_CHARGE_RESOLVED_CODE,
   heldChargeResolvedMessage,
   NOT_AN_INVOICE_CODE,
@@ -30,6 +32,7 @@ import {
   staffTaxDetailsSavedMessage,
 } from '@/constants/billing.constants'
 import type { TaxDocumentRecord } from '@/database/models/tax.model'
+import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { nameOrEmail } from '@/presenters/billing.presenter'
@@ -46,7 +49,7 @@ import {
   PlatformTaxRepository,
   staffTaxDocumentList,
 } from '@/repositories/platform-tax.repository'
-import { TaxRepository } from '@/repositories/tax.repository'
+import { TaxRepository, type TaxDocumentReferences } from '@/repositories/tax.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { sendTaxDocumentIssued } from '@/services/billing/billing-emails.service'
@@ -56,14 +59,13 @@ import {
   saveTaxDetails,
 } from '@/services/billing/tax-details.service'
 import { getDocumentPdf, issueCreditNote } from '@/services/billing/tax-documents.service'
-import { alertOnce } from '@/services/billing/tax-reconcile.service'
+import { raiseLateCreditNoteAlert } from '@/services/billing/tax-reconcile.service'
 import { db, withTransaction } from '@/services/database.service'
 import { auditBillingView, customerTenant } from '@/services/platform-billing.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import type { Actor } from '@/types/actor'
-import { BILLING_ALERT_TEXT } from '@/utilities/billing-alert-text.utilities'
 import { formatDateInZone } from '@/utilities/date-text.utilities'
-import { financialYearOf } from '@/utilities/gst.utilities'
+import { istTime } from '@/utilities/gst.utilities'
 import { listPage, type ListPage } from '@/utilities/list-page.utilities'
 import { formatRupees } from '@/utilities/money-text.utilities'
 import type {
@@ -124,32 +126,48 @@ export async function getStaffTaxDetails(
 
 /**
  * Refuse a staff tax write before its body is read: the workspace's 404s,
- * then registration's.
+ * then registration's. The write's service takes the workspace this returns
+ * and doesn't read it again.
  * @param tenantId - The workspace.
+ * @returns The workspace.
  * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant; 404 `tax_documents_disabled` while registration is off.
  */
-export async function assertStaffTaxWritable(tenantId: string): Promise<void> {
-  await customerTenant(tenantId)
+export async function assertStaffTaxWritable(tenantId: string): Promise<Tenant> {
+  const tenant = await customerTenant(tenantId)
   assertTaxWritable()
+  return tenant
+}
+
+/**
+ * Refuse a held-charge resolve before its body is read: the workspace's
+ * 404s, then registration's. The resolve stays open while registration is
+ * off for a workspace with documents or held charges, since it only records
+ * work staff did by hand.
+ * @param tenantId - The workspace.
+ * @throws {HttpError} 404 `tenant_not_found`; 404 `tenant_billing_not_found` for the platform tenant; 404 `tax_documents_disabled` while registration is off and the workspace has no documents or held charges.
+ */
+export async function assertStaffHeldWritable(tenantId: string): Promise<void> {
+  await customerTenant(tenantId)
+  await assertHeldReadable(tenantId)
 }
 
 /**
  * Save a customer workspace's tax details as staff, under the owner's rules,
  * audited with platform access, the changed field names and the reason.
+ * Call `assertStaffTaxWritable` first.
  * @param actor - The staff member (a platform manager or above; re-checked under lock).
- * @param tenantId - The workspace.
+ * @param tenant - The workspace `assertStaffTaxWritable` returned.
  * @param body - The validated PATCH body with the reason.
  * @returns The saved details, and the success message naming the workspace.
- * @throws {HttpError} As `saveTaxDetails`, plus the workspace's 404s.
+ * @throws {HttpError} As `saveTaxDetails`.
  */
 export async function saveStaffTaxDetails(
   actor: Actor,
-  tenantId: string,
+  tenant: Tenant,
   body: TaxDetailsPatch & { reason: string }
 ): Promise<{ details: StaffTaxDetailsView; message: string }> {
-  const tenant = await customerTenant(tenantId)
   const { reason, ...patch } = body
-  const saved = await saveTaxDetails(actor, tenantId, patch, { access: 'platform', reason })
+  const saved = await saveTaxDetails(actor, tenant.id, patch, { access: 'platform', reason })
   return {
     details: { ...saved, updatedBy: await personOf(actor.userId) },
     message: staffTaxDetailsSavedMessage(tenant.name),
@@ -224,38 +242,20 @@ export async function getStaffDocumentPdf(
 }
 
 /**
- * Raise the staff alert for a credit note that gives no tax reduction,
- * deduplicated by a text naming its number, as the tax run does. Never
- * rejects.
- * @param tenantId - The workspace.
- * @param note - The committed note.
- */
-async function alertIfLate(tenantId: string, note: TaxDocumentRecord): Promise<void> {
-  const original = note.snapshot.original
-  if (!note.noTaxReduction || original === null) return
-  const invoiceYear = financialYearOf(new Date(original.issuedAt))
-  // The 30 November that ends the reduction falls in the year the invoice's financial year ends.
-  const deadlineYear = 2000 + Number(invoiceYear.slice(0, 2)) + 1
-  await alertOnce(
-    tenantId,
-    'tax_credit_note_late',
-    `Credit note ${note.number} for `,
-    BILLING_ALERT_TEXT.taxCreditNoteLate(note.number, original.number, deadlineYear)
-  )
-}
-
-/**
  * Issue a credit note by hand against one of a customer workspace's
  * invoices (for a lost dispute). `issueCreditNote` re-checks the admin role,
  * locks the billing row, the invoice and the counter in one transaction, and
- * records `billing.credit_note_issued_by_staff`. A late note raises its
- * alert after the commit.
+ * records `billing.credit_note_issued_by_staff`. The reason is printed on the
+ * credit note the customer downloads. A late note raises its alert after the
+ * commit. The answer is built from what is in hand before and at the commit,
+ * with no read after it, so a committed note never answers a 500 that
+ * invites a second submit. Call `assertStaffTaxWritable` first.
  * @param actor - The staff member (a platform admin or above; re-checked under lock).
  * @param tenantId - The workspace.
  * @param documentId - The invoice.
- * @param body - The amount in paise and the reason.
+ * @param body - The amount in paise and the reason the note prints.
  * @returns The new note and the success message.
- * @throws {HttpError} The workspace's 404s; 404 `tax_documents_disabled` while registration is off; 404 `tax_document_not_found`; 409 `NOT_AN_INVOICE`; 409 `CREDIT_EXCEEDS_INVOICE` with `details.remainingMinor`; the unknown-route 404 when the actor is no longer an admin.
+ * @throws {HttpError} 404 `tax_document_not_found`; 409 `NOT_AN_INVOICE`; 409 `CREDIT_NOTE_REPEATED` when the same staff member issued this amount and reason against it in the last 10 minutes; 409 `CREDIT_EXCEEDS_INVOICE` with `details.remainingMinor`; the unknown-route 404 when the actor is no longer an admin.
  */
 export async function issueManualCreditNote(
   actor: Actor,
@@ -263,27 +263,31 @@ export async function issueManualCreditNote(
   documentId: string,
   body: ManualCreditNoteBody
 ): Promise<{ document: StaffTaxDocumentItem; message: string }> {
-  await customerTenant(tenantId)
-  assertTaxWritable()
+  const creator = await personOf(actor.userId)
   const result = await issueCreditNote(
     tenantId,
     documentId,
     { amountMinor: body.amountMinor, refundId: null, reason: body.reason },
-    new Date(),
+    undefined,
     { staff: { actor } }
   )
   switch (result.outcome) {
     case 'issued': {
       const { document } = result
-      await alertIfLate(tenantId, document)
+      await raiseLateCreditNoteAlert(tenantId, document)
       await sendTaxDocumentIssued(document)
-      const creator = await personOf(actor.userId)
-      const [item] = await staffItems([document], new Map([[document.id, creator]]))
-      if (item === undefined) throw new Error('A presented credit note went missing')
       return {
-        document: item,
+        document: presentStaffTaxDocument(document, newNoteReferences(document), creator),
         message: creditNoteIssuedMessage(document.number, formatRupees(document.totalMinor)),
       }
+    }
+    case 'repeated': {
+      const { document } = result
+      throw new HttpError(
+        creditNoteRepeatedMessage(document.number, istTime(document.issuedAt)),
+        409,
+        CREDIT_NOTE_REPEATED_CODE
+      )
     }
     case 'over_credit': {
       throw new HttpError(
@@ -304,6 +308,25 @@ export async function issueManualCreditNote(
       throw new Error('A staff credit note has no refund, so it cannot already exist')
     }
   }
+}
+
+/**
+ * The links a credit note just issued shows, from the row alone: the
+ * invoice it reduces, by the number its snapshot froze.
+ * @param note - The committed credit note.
+ * @returns The references `presentStaffTaxDocument` reads.
+ */
+function newNoteReferences(note: TaxDocumentRecord): TaxDocumentReferences {
+  const references: TaxDocumentReferences = {
+    creditNotes: new Map(),
+    credited: new Map(),
+    originals: new Map(),
+  }
+  const original = note.snapshot.original
+  if (note.originalDocumentId !== null && original !== null) {
+    references.originals.set(note.id, { id: note.originalDocumentId, number: original.number })
+  }
+  return references
 }
 
 /**
@@ -347,13 +370,18 @@ function alreadyResolved(resolvedAt: Date): HttpError {
 /**
  * Record that staff issued a held SEZ charge's invoice by hand: sets when,
  * who and the note, and audits `billing.held_charge_resolved`, in one
- * transaction after the admin role's re-check. Issues nothing.
+ * transaction after the admin role's re-check. Issues nothing. Call
+ * `assertStaffHeldWritable` first.
+ *
+ * Lock order: the platform role (`assertStillPlatformRole`), then the held
+ * row, which the conditional update locks; two resolves queue there and the
+ * second finds it resolved.
  * @param actor - The staff member (a platform admin or above; re-checked under lock).
  * @param tenantId - The workspace.
  * @param heldId - The held charge.
  * @param reason - The staff member's note, stored as the resolution.
  * @returns The resolved charge.
- * @throws {HttpError} The workspace's 404s; 404 `tax_documents_disabled` while registration is off and the workspace has no documents or held charges; 404 `tax_held_charge_not_found`; 409 `HELD_CHARGE_RESOLVED`; the unknown-route 404 when the actor is no longer an admin.
+ * @throws {HttpError} 404 `tax_held_charge_not_found`, also when the row is gone by the update; 409 `HELD_CHARGE_RESOLVED`; the unknown-route 404 when the actor is no longer an admin.
  */
 export async function resolveHeldCharge(
   actor: Actor,
@@ -361,8 +389,6 @@ export async function resolveHeldCharge(
   heldId: string,
   reason: string
 ): Promise<TaxHeldChargeView> {
-  await customerTenant(tenantId)
-  await assertHeldReadable(tenantId)
   const resolved = await withTransaction(async (tx) => {
     await assertStillPlatformRole(actor, 'admin', tx)
     const existing = await platformTaxRepository.findHeld(tenantId, heldId, tx)
@@ -375,10 +401,12 @@ export async function resolveHeldCharge(
       reason,
       tx
     )
-    // Another resolve committed between the read and the update.
+    // Another resolve committed between the read and the update, or the row is gone.
     if (updated === undefined) {
       const raced = await platformTaxRepository.findHeld(tenantId, heldId, tx)
-      throw alreadyResolved(raced?.charge.resolvedAt ?? new Date())
+      const resolvedAt = raced?.charge.resolvedAt
+      if (resolvedAt === undefined || resolvedAt === null) throw notFoundError('taxHeldCharge')
+      throw alreadyResolved(resolvedAt)
     }
     await record(
       {

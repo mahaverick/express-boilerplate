@@ -8,6 +8,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   getTableColumns,
@@ -405,6 +406,32 @@ export class BillingRepository {
           tenantBillingSubscriptionModel.subscriptionId,
         ],
       })
+  }
+
+  /**
+   * Count the subscriptions a workspace has held or had refunded, in every
+   * role.
+   * @param tenantId - The workspace.
+   * @param scope - The running provider and mode.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The count.
+   */
+  async countTrackedSubscriptions(
+    tenantId: string,
+    scope: ProviderScope,
+    executor: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ total: count() })
+      .from(tenantBillingSubscriptionModel)
+      .where(
+        and(
+          eq(tenantBillingSubscriptionModel.tenantId, tenantId),
+          eq(tenantBillingSubscriptionModel.provider, scope.kind),
+          eq(tenantBillingSubscriptionModel.mode, scope.mode)
+        )
+      )
+    return row?.total ?? 0
   }
 
   /**

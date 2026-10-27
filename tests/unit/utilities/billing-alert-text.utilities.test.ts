@@ -61,6 +61,9 @@ describe('BILLING_ALERT_TEXT', () => {
     expect(BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900)).toBe(
       "Payment pay_P1 of ₹999 is held: this workspace is an SEZ unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab."
     )
+    expect(BILLING_ALERT_TEXT.taxHeldSezRefunded('pay_P1', 99_900, 'rfnd_R1')).toBe(
+      'Payment pay_P1 of a held SEZ invoice was refunded ₹999 (refund rfnd_R1). Issue a credit note by hand.'
+    )
     expect(BILLING_ALERT_TEXT.taxIssueFailed('tenant-1', '2026-10-27')).toBe(
       'Tax documents for workspace tenant-1 were not issued on 2026-10-27. Check the error log for this workspace, then resync it.'
     )
