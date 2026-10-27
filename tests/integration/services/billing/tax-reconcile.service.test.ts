@@ -30,6 +30,7 @@ import { TaxRepository } from '@/repositories/tax.repository'
 import { syncTenantBilling } from '@/services/billing/billing-sync.service'
 import { processBillingWebhookEvent } from '@/services/billing/billing-webhook.service'
 import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.service'
+import { issueCreditNote } from '@/services/billing/tax-documents.service'
 import { planTaxDocuments, reconcileTaxDocuments } from '@/services/billing/tax-reconcile.service'
 import { sql, withTransaction } from '@/services/database.service'
 import { closeQueue, getBillingQueue } from '@/services/queue.service'
@@ -49,7 +50,7 @@ import {
   setBilling,
   workspace,
 } from '../../../helpers/billing-api'
-import { withMutatedMethod } from '../../../helpers/mutate'
+import { withMutatedMethod, withMutatedModule } from '../../../helpers/mutate'
 import { deleteTrackedUsers } from '../../../helpers/platform-users'
 import { queuedJobs } from '../../../helpers/queue-jobs'
 import { resetTaxDocuments } from '../../../helpers/tax'
@@ -462,6 +463,119 @@ describe('reconcileTaxDocuments', () => {
     expect(await fieldOf(tenantId, 'type')).toStrictEqual(['invoice'])
     await processBillingJob(job)
     expect(await fieldOf(tenantId, 'type')).toStrictEqual(['invoice', 'credit_note'])
+  })
+})
+
+describe('reconcileTaxDocuments alerts', () => {
+  it('raises no credit note and one tax_issue_failed alert for a refund larger than what is left', async () => {
+    const { tenantId, paymentId } = await paying()
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+    const [invoice] = await documentsOf(tenantId)
+    await issueCreditNote(
+      tenantId,
+      invoice?.id ?? '',
+      { amountMinor: 90_000, refundId: null, reason: 'Lost dispute' },
+      NOW
+    )
+    const refundId = await fake.fakeRefund(paymentId, 50_000)
+
+    const first = await reconcileTaxDocuments(tenantId, { now: NOW })
+    const second = await reconcileTaxDocuments(tenantId, { now: NOW })
+
+    expect(first.overCredits).toBe(1)
+    expect(second.overCredits).toBe(1)
+    expect(first.issued.creditNotes).toBe(0)
+    expect(await fieldOf(tenantId, 'type')).toStrictEqual(['invoice', 'credit_note'])
+    expect(await alertsOf(tenantId, 'tax_issue_failed')).toStrictEqual([
+      BILLING_ALERT_TEXT.taxRefundOverCredit(refundId, 50_000, 9900, 'INV/26-27/00001'),
+    ])
+  })
+
+  it('raises one late credit-note alert for a note issued after 30 November of the next year', async () => {
+    const { tenantId, paymentId } = await paying()
+    await reconcileTaxDocuments(tenantId, { now: NOW })
+    await fake.fakeRefund(paymentId, 50_000)
+    const late = new Date('2027-11-30T18:30:00.000Z')
+
+    const report = await reconcileTaxDocuments(tenantId, { now: late, paymentIds: [paymentId] })
+    await reconcileTaxDocuments(tenantId, { now: late, paymentIds: [paymentId] })
+
+    expect(report.late).toStrictEqual({ invoices: 0, creditNotes: 1 })
+    expect(await fieldOf(tenantId, 'number')).toStrictEqual(['INV/26-27/00001', 'CN/27-28/00001'])
+    expect(await alertsOf(tenantId, 'tax_credit_note_late')).toStrictEqual([
+      BILLING_ALERT_TEXT.taxCreditNoteLate('CN/27-28/00001', 'INV/26-27/00001', 2027),
+    ])
+  })
+
+  it('keeps the late-invoice and SEZ-hold alerts of what committed before a run fails', async () => {
+    const late = await paying(new Date(NOW.getTime() - 31 * DAY))
+    await fake.fakeRefund(late.paymentId, 10_000)
+    const sez = await paying(new Date(NOW.getTime() - 2 * 60 * 60 * 1000))
+    await reconcileTaxDocuments(sez.tenantId, { now: NOW })
+    await saveDetails(sez.tenantId, sez.ownerId, true)
+    await fake.fakeAdvance(sez.subscriptionId, 'active')
+    const charges = await fake.listPaidCharges(sez.subscriptionId)
+    const held = charges.find((charge) => charge.paymentId !== sez.paymentId)
+    await fake.fakeRefund(sez.paymentId, 10_000)
+    const failure = new Error('the credit note failed')
+
+    await withMutatedModule(
+      '@/services/billing/tax-documents.service',
+      { issueCreditNote: () => Promise.reject(failure) },
+      () => import('@/services/billing/tax-reconcile.service'),
+      async (subject) => {
+        await expect(subject.reconcileTaxDocuments(late.tenantId, { now: NOW })).rejects.toBe(
+          failure
+        )
+        await expect(subject.reconcileTaxDocuments(sez.tenantId, { now: NOW })).rejects.toBe(
+          failure
+        )
+      }
+    )
+
+    // The SEZ workspace's first charge took INV/26-27/00001 before it became an SEZ unit.
+    expect(await alertsOf(late.tenantId, 'tax_invoice_late')).toStrictEqual([
+      BILLING_ALERT_TEXT.taxInvoiceLate(1, 'INV/26-27/00002', 'INV/26-27/00002'),
+    ])
+    expect(await alertsOf(sez.tenantId, 'tax_held_sez')).toStrictEqual([
+      BILLING_ALERT_TEXT.taxHeldSez(held?.paymentId ?? '', 99_900),
+    ])
+  })
+
+  it('never invoices the trial authorisation payment, and its refund issues nothing', async () => {
+    const { tenant } = await workspace()
+    const subscriptionId = await fakeSubscription(
+      { tenantId: tenant.id, priceId: plans.monthPriceId },
+      'month',
+      new Date(NOW.getTime() + 14 * DAY)
+    )
+    await fake.fakeAdvance(subscriptionId, 'authenticated')
+    await setBilling(tenant.id, {
+      state: 'trialing',
+      providerSubscriptionId: subscriptionId,
+      provider: 'fake',
+      providerMode: 'test',
+    })
+    // The authorisation payment has no invoice, so it is no subscription's paid charge.
+    const authorisation = `pay_FAKEauth${randomUUID().replaceAll('-', '').slice(0, 10)}`
+    await fake.fakeRefund(authorisation, 500)
+    const data = await storedEvent('refund.processed', {
+      paymentId: authorisation,
+      subscriptionId: null,
+    })
+
+    const plan = await planTaxDocuments(tenant.id, { now: NOW, paymentIds: [authorisation] })
+    const report = await reconcileTaxDocuments(tenant.id, {
+      now: NOW,
+      paymentIds: [authorisation],
+    })
+    await processBillingWebhookEvent(data)
+
+    expect(plan.invoices).toStrictEqual([])
+    expect(plan.creditNotes).toStrictEqual([])
+    expect(report.issued).toStrictEqual({ invoices: 0, creditNotes: 0 })
+    expect(await documentsOf(tenant.id)).toStrictEqual([])
+    expect(await taxJobsOf(tenant.id)).toStrictEqual([])
   })
 })
 

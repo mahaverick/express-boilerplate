@@ -1,8 +1,9 @@
 /**
  * @file The billing queue's jobs: one per Razorpay webhook event, a sync of
  * one workspace, the push of an entitlements change after a staff plan or
- * grace edit, a workspace's tax document run, and the two scheduler runs: the frequent one every 15
- * minutes and the daily one at 03:30 UTC. Each job carries ids only, never a
+ * grace edit, a workspace's tax document run, and the two scheduler runs:
+ * the frequent one every 15 minutes and the daily one at 03:30 UTC. Each
+ * job carries ids only, never a
  * payload body, an address or card details. A webhook job's id is derived
  * from its stored event, so a second delivery of the same event queues
  * nothing new while the first job is still on the queue. The schedulers live

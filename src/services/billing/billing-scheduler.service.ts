@@ -20,8 +20,8 @@
  * workspace with a processed refund in the last three days, hinted with
  * those payments, and once per registration date for every workspace that
  * tracks a subscription; the yearly renewal reminder and the day-7 and
- * day-30 win-back emails go out. A reminder is claimed before it is sent, and a suspended or
- * archived workspace is never claimed.
+ * day-30 win-back emails go out. A reminder is claimed before it is sent,
+ * and a suspended or archived workspace is never claimed.
  *
  * The lifecycle transactions (suspend, archive) never touch the billing row:
  * an invite locks the billing row before invitation rows, and an archive
@@ -61,7 +61,7 @@ import {
 } from '@/services/billing/billing-sync.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
-import { withRedisDeadline } from '@/services/redis-deadline.service'
+import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import type { BillingProviderClient, ProviderSubscription } from '@/types/billing'
 import {
@@ -971,7 +971,8 @@ async function sweepTaxRefunds(
  * tracks a subscription, so one whose subscriptions all ended before
  * registration, which no sync reaches again, is still invoiced. A Redis
  * marker per registration date (`SET NX`, no expiry) makes it once; losing
- * it only runs the step again, which issues nothing twice.
+ * it only runs the step again, which issues nothing twice. A failure after
+ * the claim releases the marker, so the next run backfills again.
  * @param scope - The running provider and mode.
  * @param counts - The step's counts: workspaces queued.
  */
@@ -984,9 +985,45 @@ async function backfillTaxDocuments(scope: ProviderScope, counts: StepCounts): P
     return redis.set(key, '1', { condition: 'NX' })
   }, 'tax backfill marker')
   if (claimed !== 'OK') return
-  for (const tenantId of await billingRepository.listTenantIdsWithTrackedSubscriptions(scope)) {
-    await addTaxReconcileJob({ tenantId })
-    counts.acted += 1
+  try {
+    for (const tenantId of await billingRepository.listTenantIdsWithTrackedSubscriptions(scope)) {
+      await addTaxReconcileJob({ tenantId })
+      counts.acted += 1
+    }
+  } catch (error) {
+    await releaseBackfillMarker(key)
+    throw error
+  }
+}
+
+/**
+ * Log a backfill marker release that failed, before or after the deadline.
+ * @param error - What the delete rejected with.
+ */
+function reportBackfillReleaseFailure(error: unknown): void {
+  logger.error('Could not release the tax backfill marker; delete it to backfill again', {
+    error,
+  })
+}
+
+/**
+ * Delete the tax backfill marker after the step failed part way, so the
+ * next daily run queues the workspaces it missed; the ones it queued run
+ * twice, which issues nothing twice. A failed delete is logged.
+ * @param key - The marker's key.
+ */
+async function releaseBackfillMarker(key: string): Promise<void> {
+  try {
+    await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.del(key)
+      },
+      'tax backfill marker release',
+      reportBackfillReleaseFailure
+    )
+  } catch (error) {
+    reportBackfillReleaseFailure(error)
   }
 }
 

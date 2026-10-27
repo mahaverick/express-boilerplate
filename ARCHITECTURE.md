@@ -900,8 +900,9 @@ payload, marks an email's message `failed`, and logs `job failed permanently`
 once. A billing webhook job's final failure also marks its `billing_events`
 row failed and raises one `webhook_failing` staff alert per event; a
 `tax-reconcile` job's raises one `tax_issue_failed` alert per workspace and IST
-day. A provider refusal a retry cannot change fails a job at once. The billing Worker counts a
-job's provider-outage failures and its other failures apart in the job's data
+day. A provider refusal a retry cannot change fails a job at once. The
+billing Worker counts a job's provider-outage failures and its other failures
+apart in the job's data
 (`outageFailures`, `otherFailures`): the eighth outage failure, about an hour
 in, raises one "still retrying" staff alert and the job keeps retrying; the
 eighth other failure stops the job, however many outage attempts came before. What a job payload may hold, and for how long, is in
@@ -960,7 +961,8 @@ whose webhook event failed in the last three days. With GST registration on,
 processed refund in the last three days of an invoiced or held payment, and
 `tax_backfill` queues one for every customer workspace that tracks a
 subscription, once per `BILLING_GST_EFFECTIVE_FROM` value (a `SET NX` marker
-under `redisKey('billing-tax-backfill', date)`), so a workspace whose
+under `redisKey('billing-tax-backfill', date)`, released when the step fails
+after claiming it), so a workspace whose
 subscriptions all ended before registration, which no sync reaches, is still
 invoiced. It also sends the yearly
 renewal reminder a week before the period ends (never for a stand-in period
@@ -1562,7 +1564,8 @@ map; the detail lives in the sections it links.
   alerts after the commits: one `tax_invoice_late` per run, one
   `tax_credit_note_late` per late note, one `tax_held_sez` per hold, and one
   `tax_issue_failed` per refund larger than what is left to credit, which is
-  never issued capped. Every sync that ends `synced` queues a run; so do a
+  never issued capped. A run that fails part way still raises the alerts for
+  what it committed before rethrowing. Every sync that ends `synced` queues a run; so do a
   `refund.processed` webhook and one that reaches no workspace's sync (hinted
   with the payment, after the handling resolves, so a retried attempt queues
   none), and the two daily tax steps. A provider error fails the run for a

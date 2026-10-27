@@ -2,8 +2,8 @@
  * @file The Worker for the "billing" queue: handles each stored Razorpay
  * webhook event, syncs a workspace on request, cancels for a workspace just
  * suspended or archived, pushes a staff plan or grace edit to the open apps
- * of the workspaces it changed, issues a workspace's tax documents, and runs the frequent and
- * daily scheduler runs, two jobs at a time.
+ * of the workspaces it changed, issues a workspace's tax documents, and
+ * runs the frequent and daily scheduler runs, two jobs at a time.
  * A retryable provider error (a timeout, a network failure, a 5xx or a 429)
  * is retried for about 24 hours, Razorpay's own webhook retry window, and
  * staff get one "still retrying" alert about an hour in. Any other failure,
@@ -116,7 +116,9 @@ async function withRetryPolicy(job: Job, work: () => Promise<unknown>): Promise<
 
 /**
  * Process one billing job. Exported for testing.
- * @param job - The job: a `webhook` job carries a stored event, a `sync-tenant`, `lifecycle-cancel` or `tax-reconcile` job a workspace, a `publish-entitlements` job a staff edit, a scheduler job nothing.
+ * @param job - The job: a `webhook` job carries a stored event; a
+ * `sync-tenant`, `lifecycle-cancel` or `tax-reconcile` job a workspace; a
+ * `publish-entitlements` job a staff edit; a scheduler job nothing.
  * @returns Resolves once the job's work is done.
  * @throws {UnrecoverableError} For a job name this worker has no handler for, or a provider refusal.
  * @throws {Error} A retryable failure, so BullMQ retries.

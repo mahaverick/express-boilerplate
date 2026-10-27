@@ -386,11 +386,79 @@ interface OverCredit {
 }
 
 /**
+ * What a run committed that staff hear about.
+ */
+interface RunAlerts {
+  /**
+   * The numbers of invoices issued more than 30 days after payment, in issue order.
+   */
+  lateInvoiceNumbers: string[]
+  lateNotes: { number: string; invoiceNumber: string; year: number }[]
+  newHolds: ProviderCharge[]
+  overCredits: OverCredit[]
+}
+
+/**
+ * Raise the staff alerts for what a run committed. One `tax_invoice_late`
+ * covers every late invoice; each late credit note, new SEZ hold and
+ * over-credit raises its own, deduplicated by a bounded text that names its
+ * number, payment id or refund id (`Credit note CN/26-27/00001 for` never
+ * matches inside `CN/26-27/000010`). Never rejects.
+ * @param tenantId - The workspace.
+ * @param alerts - What the run committed.
+ */
+async function raiseRunAlerts(tenantId: string, alerts: RunAlerts): Promise<void> {
+  const { lateInvoiceNumbers } = alerts
+  const first = lateInvoiceNumbers.at(0)
+  const last = lateInvoiceNumbers.at(-1)
+  if (first !== undefined && last !== undefined) {
+    const message = BILLING_ALERT_TEXT.taxInvoiceLate(lateInvoiceNumbers.length, first, last)
+    await alertOnce(tenantId, 'tax_invoice_late', message, message)
+  }
+  for (const note of alerts.lateNotes) {
+    await alertOnce(
+      tenantId,
+      'tax_credit_note_late',
+      `Credit note ${note.number} for `,
+      BILLING_ALERT_TEXT.taxCreditNoteLate(note.number, note.invoiceNumber, note.year)
+    )
+  }
+  for (const charge of alerts.newHolds) {
+    await alertOnce(
+      tenantId,
+      'tax_held_sez',
+      `Payment ${charge.paymentId} of `,
+      BILLING_ALERT_TEXT.taxHeldSez(charge.paymentId, charge.amountMinor)
+    )
+  }
+  for (const over of alerts.overCredits) {
+    let invoiceNumber = over.invoiceId
+    try {
+      const invoice = await taxRepository.findDocument(tenantId, over.invoiceId)
+      invoiceNumber = invoice?.number ?? over.invoiceId
+    } catch (error) {
+      logger.error('Could not read an invoice for an over-credit alert', { error, tenantId })
+    }
+    await alertOnce(
+      tenantId,
+      'tax_issue_failed',
+      `Refund ${over.refundId} of `,
+      BILLING_ALERT_TEXT.taxRefundOverCredit(
+        over.refundId,
+        over.amountMinor,
+        over.remainingMinor,
+        invoiceNumber
+      )
+    )
+  }
+}
+
+/**
  * Run a workspace's tax run: plan it, issue each invoice (or hold), then
- * each credit note, then raise the alerts. One `tax_invoice_late` alert
- * covers every late invoice of the run; each late credit note, each new SEZ
- * hold and each over-credit raises its own, deduplicated by its number,
- * payment id or refund id.
+ * each credit note, then raise the alerts for what committed
+ * (`raiseRunAlerts`). The alerts are raised even when an issue fails part
+ * way, before its error is rethrown: the retry finds those documents issued
+ * and would never raise them.
  * @param tenantId - The workspace.
  * @param options - Payments to read refunds for whatever their age or credit, and the run time.
  * @param options.paymentIds - The hinted payments.
@@ -414,24 +482,52 @@ export async function reconcileTaxDocuments(
   const provider = getBillingProvider()
   if (plan.skipped !== null || provider === null) return report
   const scope: ProviderScope = { kind: provider.kind, mode: provider.mode }
+  const alerts: RunAlerts = { lateInvoiceNumbers: [], lateNotes: [], newHolds: [], overCredits: [] }
+  try {
+    await issuePlan(tenantId, plan, scope, now, report, alerts)
+  } finally {
+    await raiseRunAlerts(tenantId, alerts)
+  }
+  report.late = { invoices: alerts.lateInvoiceNumbers.length, creditNotes: alerts.lateNotes.length }
+  report.overCredits = alerts.overCredits.length
+  return report
+}
 
+/**
+ * Issue a plan's invoices and holds, then its credit notes, counting into
+ * the report and collecting what staff hear about as each one commits.
+ * @param tenantId - The workspace.
+ * @param plan - The plan.
+ * @param scope - The running provider and mode.
+ * @param now - The issue date.
+ * @param report - The run's report, counted into.
+ * @param alerts - What staff hear about, collected into.
+ * @throws {Error} When an issue fails; what committed before it is already collected.
+ */
+async function issuePlan(
+  tenantId: string,
+  plan: TaxPlan,
+  scope: ProviderScope,
+  now: Date,
+  report: TaxReconcileReport,
+  alerts: RunAlerts
+): Promise<void> {
   const invoiceIdByPayment = new Map<string, string>()
-  const lateInvoiceNumbers: string[] = []
-  const newHolds: ProviderCharge[] = []
   for (const { charge, description } of [...plan.invoices, ...plan.holds]) {
     const result = await issueInvoice(tenantId, { ...charge, description }, scope, now)
     if (result.outcome === 'issued') {
       report.issued.invoices += 1
       invoiceIdByPayment.set(charge.paymentId, result.document.id)
-      if (isLateInvoice(charge.paidAt, now)) lateInvoiceNumbers.push(result.document.number)
+      if (isLateInvoice(charge.paidAt, now)) alerts.lateInvoiceNumbers.push(result.document.number)
     } else if (result.outcome === 'held') {
       report.held += 1
-      newHolds.push(charge)
+      alerts.newHolds.push(charge)
     }
   }
 
   /**
-   * The invoice a planned note credits: planned with it, issued by this run, or issued by another.
+   * The invoice a planned note credits: planned with it, issued by this
+   * run, or issued by another.
    * @param planned - The planned note.
    * @returns The invoice id, or undefined when the charge was held instead.
    */
@@ -442,12 +538,10 @@ export async function reconcileTaxDocuments(
     return invoice?.id
   }
 
-  const lateNotes: { number: string; invoiceNumber: string; year: number }[] = []
-  const overCredits: OverCredit[] = []
   for (const planned of plan.overCredits) {
     const invoiceId = await invoiceOf(planned)
     if (invoiceId === undefined) continue
-    overCredits.push({
+    alerts.overCredits.push({
       invoiceId,
       refundId: planned.refund.id,
       amountMinor: planned.refund.amountMinor,
@@ -471,14 +565,14 @@ export async function reconcileTaxDocuments(
       const original = document.snapshot.original
       if (document.noTaxReduction && original !== null) {
         const invoiceYear = financialYearOf(new Date(original.issuedAt))
-        lateNotes.push({
+        alerts.lateNotes.push({
           number: document.number,
           invoiceNumber: original.number,
           year: 2000 + Number(invoiceYear.slice(0, 2)) + 1,
         })
       }
     } else if (result.outcome === 'over_credit') {
-      overCredits.push({
+      alerts.overCredits.push({
         invoiceId,
         refundId: refund.id,
         amountMinor: refund.amountMinor,
@@ -486,46 +580,6 @@ export async function reconcileTaxDocuments(
       })
     }
   }
-
-  report.late = { invoices: lateInvoiceNumbers.length, creditNotes: lateNotes.length }
-  report.overCredits = overCredits.length
-  const first = lateInvoiceNumbers.at(0)
-  const last = lateInvoiceNumbers.at(-1)
-  if (first !== undefined && last !== undefined) {
-    const message = BILLING_ALERT_TEXT.taxInvoiceLate(lateInvoiceNumbers.length, first, last)
-    await alertOnce(tenantId, 'tax_invoice_late', message, message)
-  }
-  for (const note of lateNotes) {
-    await alertOnce(
-      tenantId,
-      'tax_credit_note_late',
-      note.number,
-      BILLING_ALERT_TEXT.taxCreditNoteLate(note.number, note.invoiceNumber, note.year)
-    )
-  }
-  for (const charge of newHolds) {
-    await alertOnce(
-      tenantId,
-      'tax_held_sez',
-      charge.paymentId,
-      BILLING_ALERT_TEXT.taxHeldSez(charge.paymentId, charge.amountMinor)
-    )
-  }
-  for (const over of overCredits) {
-    const invoice = await taxRepository.findDocument(tenantId, over.invoiceId)
-    await alertOnce(
-      tenantId,
-      'tax_issue_failed',
-      over.refundId,
-      BILLING_ALERT_TEXT.taxRefundOverCredit(
-        over.refundId,
-        over.amountMinor,
-        over.remainingMinor,
-        invoice?.number ?? over.invoiceId
-      )
-    )
-  }
-  return report
 }
 
 /**

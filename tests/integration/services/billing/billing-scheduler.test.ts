@@ -1213,12 +1213,10 @@ describe('the daily tax steps', () => {
     const report = await runDailyBilling(new Date())
 
     expect(report.tax_refunds).toMatchObject({ status: 'ok', acted: 2 })
-    expect(await taxJobsFor(first.id)).toContainEqual({
-      tenantId: first.id,
-      paymentIds: [firstPayment],
-    })
-    const secondJobs = await taxJobsFor(second.id)
-    expect(secondJobs.filter((data) => data.paymentIds !== undefined)).toStrictEqual([
+    expect(await taxJobsFor(first.id)).toStrictEqual([
+      { tenantId: first.id, paymentIds: [firstPayment] },
+    ])
+    expect(await taxJobsFor(second.id)).toStrictEqual([
       { tenantId: second.id, paymentIds: [secondPayment] },
     ])
     expect(await taxJobsFor(uninvoiced.id)).toStrictEqual([])
@@ -1254,6 +1252,37 @@ describe('the daily tax steps', () => {
     await getBillingQueue().obliterate({ force: true })
     await runDailyBilling(new Date())
     expect(await taxJobsFor(tenant.id)).toStrictEqual([])
+  })
+
+  it('releases the backfill marker when the step fails after claiming it, so the next run backfills', async () => {
+    const { tenant } = await workspace()
+    const subscriptionId = await fakeSubscription({
+      tenantId: tenant.id,
+      priceId: plans.monthPriceId,
+    })
+    await fake.fakeAdvance(subscriptionId, 'active')
+    await setBilling(tenant.id, { pendingSubscriptionId: subscriptionId })
+    await syncTenantBilling(tenant.id, 'confirm')
+    gst.on = true
+    await getBillingQueue().obliterate({ force: true })
+    const marker = redisKey('billing-tax-backfill', istDate(FIXTURE_SELLER.effectiveFrom))
+
+    await withMutatedMethod(
+      BillingRepository.prototype,
+      'listTenantIdsWithTrackedSubscriptions',
+      () => Promise.reject(new Error('the list failed')),
+      async () => {
+        const report = await runDailyBilling(new Date())
+        expect(report.tax_backfill).toMatchObject({ status: 'failed' })
+      }
+    )
+    const redis = await getRedis()
+    expect(await redis.get(marker)).toBeNull()
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([])
+
+    await runDailyBilling(new Date())
+
+    expect(await taxJobsFor(tenant.id)).toStrictEqual([{ tenantId: tenant.id }])
   })
 })
 

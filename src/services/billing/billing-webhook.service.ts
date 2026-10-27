@@ -111,11 +111,13 @@ const OPEN_DISPUTE_STATUSES: ReadonlySet<string> = new Set(['open', 'under_revie
 const ENDED_DISPUTE_STATUSES: ReadonlySet<string> = new Set(['won', 'lost', 'closed'])
 
 /**
- * How a subscription event's handling ended: `synced` its workspace,
- * `unresolved` when no row held the subscription or the sync found none,
- * or `ignored` as another environment's.
+ * How a subscription event's handling ended: `resolved` to a workspace
+ * whose sync ran, whatever that sync answered (`synced`, or
+ * `provider_mismatch` and `payments_off`, for which a tax run finds nothing
+ * to do); `unresolved` when no row held the subscription or the sync found
+ * no row; `ignored` as another environment's.
  */
-type SubscriptionEventOutcome = 'synced' | 'unresolved' | 'ignored'
+type SubscriptionEventOutcome = 'resolved' | 'unresolved' | 'ignored'
 
 /**
  * What the receipt did: `queued` a job, found a `duplicate` delivery, or
@@ -471,7 +473,7 @@ async function syncForSubscription(
     tenantId,
     ...(result.outcome !== 'synced' && { error: result.outcome }),
   })
-  return result.outcome === 'no_row' ? 'unresolved' : 'synced'
+  return result.outcome === 'no_row' ? 'unresolved' : 'resolved'
 }
 
 /**
@@ -614,7 +616,10 @@ export async function processBillingWebhookEvent(data: BillingWebhookJobData): P
     return
   }
   const { subscriptionId, outcome } = await handleSubscriptionEvent(provider, data)
-  if (outcome === 'unresolved' || (outcome === 'synced' && data.eventType === 'refund.processed')) {
+  if (
+    outcome === 'unresolved' ||
+    (outcome === 'resolved' && data.eventType === 'refund.processed')
+  ) {
     await queueTaxReconcileForPayment(
       { kind: provider.kind, mode: provider.mode },
       { paymentId: data.paymentId, subscriptionId }
