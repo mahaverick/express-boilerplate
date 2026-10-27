@@ -401,6 +401,11 @@ describe('staff tax documents', () => {
       capped: false,
     })
     expect(itemsOf(found.body).map((item) => item.number)).toStrictEqual(['INV/26-27/00001'])
+    const anyCase = await getAs(
+      token,
+      `/tenants/${tenant.id}/billing/tax-documents?search=inv/26-27/00002`
+    )
+    expect(itemsOf(anyCase.body).map((item) => item.number)).toStrictEqual(['INV/26-27/00002'])
     expect(itemsOf(oldest.body).map((item) => item.number)).toStrictEqual([
       'INV/26-27/00001',
       'INV/26-27/00002',
