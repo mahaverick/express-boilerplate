@@ -29,6 +29,17 @@ const DAY_MS = 86_400_000
 const GSTIN_SHAPE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/
 const GSTIN_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
+/**
+ * The characters tax-detail and seller text may hold: printable ASCII,
+ * printable Latin-1 and curly quotes. The PDF fonts draw exactly these.
+ */
+export const TAX_TEXT_PATTERN = /^[\x20-\x7E\xA0-\xFF\u2018\u2019\u201C\u201D]*$/
+
+/** Turns curly single quotes into `'` and curly double quotes into `"`. */
+export function normaliseQuotes(value: string): string {
+  return value.replaceAll(/[\u2018\u2019]/g, "'").replaceAll(/[\u201C\u201D]/g, '"')
+}
+
 /** Trims and upper-cases a GSTIN as typed. */
 export function normaliseGstin(raw: string): string {
   return raw.trim().toUpperCase()

@@ -247,6 +247,68 @@ function cursorSecretProblems(env: Env): string[] {
   ]
 }
 
+const SELLER_VARIABLES = [
+  'BILLING_SELLER_GSTIN',
+  'BILLING_SELLER_LEGAL_NAME',
+  'BILLING_SELLER_ADDRESS',
+  'BILLING_SELLER_STATE_CODE',
+  'BILLING_SAC_CODE',
+  'BILLING_GST_EFFECTIVE_FROM',
+] as const
+
+/**
+ * GST settings that cannot issue valid tax documents: a missing seller detail,
+ * a GSTIN from another state than the state code, e-invoicing required, or one
+ * prefix for both series.
+ * @param env - The validated environment.
+ * @returns One message per rule that fails, or none when registration is off.
+ */
+function gstProblems(env: Env): string[] {
+  if (!env.BILLING_GST_REGISTERED) return []
+  const problems: string[] = []
+  const missing = SELLER_VARIABLES.filter((name) => env[name] === undefined)
+  if (missing.length > 0) {
+    problems.push(
+      `BILLING_GST_REGISTERED is true, but ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set. Set ${missing.length === 1 ? 'it' : 'them'}: every tax document prints these details.`
+    )
+  }
+  const gstinState = env.BILLING_SELLER_GSTIN?.slice(0, 2)
+  if (
+    gstinState !== undefined &&
+    env.BILLING_SELLER_STATE_CODE !== undefined &&
+    gstinState !== env.BILLING_SELLER_STATE_CODE
+  ) {
+    problems.push(
+      `BILLING_SELLER_GSTIN is registered in state ${gstinState} but BILLING_SELLER_STATE_CODE is ${env.BILLING_SELLER_STATE_CODE}. Set them to the same state.`
+    )
+  }
+  if (env.BILLING_EINVOICE_REQUIRED) {
+    problems.push(
+      "BILLING_EINVOICE_REQUIRED is true: once turnover passes \u20B95 crore, a B2B invoice without an IRN is invalid, and this app can't get IRNs. Issue invoices through an e-invoicing provider and turn off BILLING_GST_REGISTERED."
+    )
+  }
+  if (env.BILLING_INVOICE_PREFIX === env.BILLING_CREDIT_NOTE_PREFIX) {
+    problems.push(
+      `BILLING_INVOICE_PREFIX and BILLING_CREDIT_NOTE_PREFIX are both ${env.BILLING_INVOICE_PREFIX}. Give invoices and credit notes different prefixes.`
+    )
+  }
+  return problems
+}
+
+/**
+ * Warns when seller details are set but registration is off.
+ * @param env - The validated environment.
+ * @param warn - Receives the warning, naming the variables that are set.
+ */
+function warnOnUnusedSellerConfig(env: Env, warn: (message: string) => void): void {
+  if (env.BILLING_GST_REGISTERED) return
+  const names = SELLER_VARIABLES.filter((name) => env[name] !== undefined)
+  if (names.length === 0) return
+  warn(
+    `${names.join(', ')} are set but BILLING_GST_REGISTERED is false, so no tax documents are issued.`
+  )
+}
+
 /**
  * Billing settings that contradict each other or the deployment: a partial
  * Razorpay set, a key whose mode does not suit APP_ENV, a rotated-away secret
@@ -294,6 +356,7 @@ function billingProblems(env: Env): string[] {
       'BILLING_FAKE_PROVIDER is true and Razorpay keys are set. Unset one of them: the fake replaces Razorpay.'
     )
   }
+  problems.push(...gstProblems(env))
   return problems
 }
 
@@ -360,6 +423,7 @@ export function assertEnvConsistent(env: Env, warn: (message: string) => void): 
   problems.push(...flagsKeyProblems(env), ...rateLimitScaleProblems(env), ...billingProblems(env))
   warnOnUntrustedProxyForAnalytics(env, warn)
   warnOnHalfPosthogApiConfig(env, warn)
+  warnOnUnusedSellerConfig(env, warn)
 
   if (problems.length === 0) return
   const list = problems.map((problem) => `  - ${problem}`).join('\n')

@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { config } from 'dotenv'
 import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
+import { TAX_TEXT_PATTERN, gstinProblem, normaliseQuotes, stateOf } from '@/utilities/gst.utilities'
 
 // Skipped under Vitest so a developer's .env never leaks into the suite; `quiet` keeps stdout clean.
 if (!process.env.VITEST) {
@@ -822,6 +823,81 @@ const EnvSchema = z.object({
     .default(false)
     .describe(
       'Whether the business is registered for GST. When false, prices show without a GST line. Defaults to false.'
+    ),
+  BILLING_SELLER_GSTIN: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/, 'must be a 15-character GSTIN')
+    .refine(
+      (v) => gstinProblem(v) === null,
+      'must be a GSTIN whose last character matches and whose first two digits are a state code'
+    )
+    .optional()
+    .describe(
+      "The seller's GSTIN, printed on every tax document. Required when BILLING_GST_REGISTERED is true. Its first two digits must match BILLING_SELLER_STATE_CODE. This app doesn't issue e-invoices, so it fits sellers under the e-invoicing turnover limit."
+    ),
+  BILLING_SELLER_LEGAL_NAME: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .transform(normaliseQuotes)
+    .pipe(z.string().regex(TAX_TEXT_PATTERN))
+    .optional()
+    .describe(
+      "The seller's legal name, printed on every tax document. Latin letters only; curly quotes are stored straight. Required when BILLING_GST_REGISTERED is true."
+    ),
+  BILLING_SELLER_ADDRESS: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .transform(normaliseQuotes)
+    .pipe(z.string().regex(TAX_TEXT_PATTERN))
+    .optional()
+    .describe(
+      "The seller's address, printed on every tax document. Separate printed lines with ' | '. Latin letters only. Required when BILLING_GST_REGISTERED is true."
+    ),
+  BILLING_SELLER_STATE_CODE: z
+    .string()
+    .refine((v) => stateOf(v) !== undefined, 'must be a GST state code such as 29')
+    .optional()
+    .describe(
+      "The two-digit GST state code of the seller's registration, such as 29. Decides CGST and SGST against IGST. Required when BILLING_GST_REGISTERED is true."
+    ),
+  BILLING_SAC_CODE: z
+    .string()
+    .regex(/^99\d{4}$/, 'must be a 6-digit SAC code starting 99, such as 998314')
+    .optional()
+    .describe(
+      'The 6-digit SAC code printed on every invoice, such as 998314. Required when BILLING_GST_REGISTERED is true.'
+    ),
+  BILLING_GST_EFFECTIVE_FROM: z.iso
+    .date()
+    .optional()
+    .describe(
+      "The first day tax documents cover, as YYYY-MM-DD, read as 00:00 IST. Required when BILLING_GST_REGISTERED is true. Set it on or after the day this release is deployed: refunded duplicate subscriptions from before that day aren't tracked, so their charges get no documents."
+    ),
+  BILLING_EINVOICE_REQUIRED: z
+    .stringbool()
+    .default(false)
+    .describe(
+      "Set true if your turnover requires e-invoicing. This app can't get IRNs, so true stops boot while BILLING_GST_REGISTERED is true. Defaults to false."
+    ),
+  BILLING_INVOICE_PREFIX: z
+    .string()
+    .regex(/^[A-Z0-9]{1,4}$/)
+    .default('INV')
+    .describe(
+      "Prefix of invoice numbers, 1 to 4 capital letters or digits. Don't change it inside a financial year: the series is counted per type and year, whatever the prefix. Defaults to INV."
+    ),
+  BILLING_CREDIT_NOTE_PREFIX: z
+    .string()
+    .regex(/^[A-Z0-9]{1,4}$/)
+    .default('CN')
+    .describe(
+      "Prefix of credit note numbers, 1 to 4 capital letters or digits. Don't change it inside a financial year: the series is counted per type and year, whatever the prefix. Defaults to CN."
     ),
   BILLING_FAKE_PROVIDER: z
     .stringbool()
