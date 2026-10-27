@@ -50,6 +50,7 @@ export const AUDIT_TARGET_TYPES = [
   'platform',
   'plan',
   'billing',
+  'tax_document',
 ] as const
 
 /**

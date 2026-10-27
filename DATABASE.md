@@ -74,6 +74,10 @@ glob is picked up by `drizzle.config.ts` with no config change.
 | `upgrade_requests`             | `billing.model.ts`                | A member's request that an owner upgrade the tenant; one open request per member and tenant.                                                    |
 | `user_banner_dismissals`       | `billing.model.ts`                | The dismissible billing banners a member has closed in a tenant.                                                                                |
 | `billing_alerts`               | `billing.model.ts`                | Billing events staff must look at, such as a refunded duplicate charge or a failing webhook.                                                    |
+| `tenant_tax_details`           | `tax.model.ts`                    | A workspace's legal name, address, state and GSTIN for its invoices. Deleted with its tenant.                                                   |
+| `tax_documents`                | `tax.model.ts`                    | Every invoice and credit note issued, with a snapshot of each printed field. `tenant_id` is SET NULL: documents outlive a purged tenant.        |
+| `tax_document_counters`        | `tax.model.ts`                    | The last number issued per document type and financial year.                                                                                    |
+| `tax_held_charges`             | `tax.model.ts`                    | Charges from a SEZ buyer held for staff to issue by hand. Deleted with its tenant.                                                              |
 
 Drizzle's own bookkeeping table is separate from these.
 
@@ -260,6 +264,13 @@ marked by a comment in its file (0024's has none):
   (`tenant_id`, `received_at`), so the staff events list's both sorts, with
   their id tiebreak, read in index order with no Sort. drizzle-kit writes the
   drop first; the snapshot does not encode the order.
+- `0038` is generated whole. It creates `tenant_tax_details`, `tax_documents`,
+  `tax_document_counters` and `tax_held_charges`, adds
+  `tenant_billing_subscriptions.role` (`held`, `duplicate` or `late_switch`,
+  checked; every existing row reads `held`), and re-creates the
+  `audit_logs_target_type_check` (gains `tax_document`) and
+  `billing_alerts_kind_check` (gains the four `tax_*` kinds) CHECKs.
+
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until
@@ -711,6 +722,15 @@ as described so it does not build them a second time under the lock, then run
 
   Then edit the `0037` file: add `IF NOT EXISTS` to its `CREATE INDEX` and
   `IF EXISTS` to its `DROP INDEX`, so `pnpm db:migrate` only records it.
+
+- **`0038` blocks writes to `audit_logs`, `billing_alerts` and
+  `tenant_billing_subscriptions` while it validates.** The two CHECK rebuilds
+  drop and re-add a constraint, so each re-add scans its table under an
+  `ACCESS EXCLUSIVE` lock held until the batch commits; the `role` column has
+  a constant default (no rewrite) and its CHECK scans the table once. On a
+  large `audit_logs`, add the new CHECK `NOT VALID` first, then `VALIDATE
+  CONSTRAINT` (a `SHARE UPDATE EXCLUSIVE` lock), and edit the `0038` file to
+  match so `pnpm db:migrate` only records it.
 
 ## The test database
 

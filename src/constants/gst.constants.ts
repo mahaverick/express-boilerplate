@@ -4,7 +4,7 @@
  */
 
 /** One state or territory a GSTIN or a place of supply can name. */
-interface GstState {
+export interface GstState {
   code: string
   name: string
 }
@@ -73,3 +73,12 @@ export const TAX_NUMBER_MIN_DIGITS = 5
 
 /** An invoice issued more than this many days after payment is late. */
 export const LATE_INVOICE_DAYS = 30
+
+/**
+ * The part a subscription has played for its workspace: the `held` one it was
+ * billed on, a refunded `duplicate`, or one left behind by a `late_switch`.
+ */
+export const TAX_SUBSCRIPTION_ROLES = ['held', 'duplicate', 'late_switch'] as const
+
+/** One of the subscription roles. */
+export type TaxSubscriptionRole = (typeof TAX_SUBSCRIPTION_ROLES)[number]

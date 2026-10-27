@@ -80,6 +80,10 @@ export const BILLING_ALERT_KINDS = [
   'reconcile_repair',
   'dispute',
   'subscription_completed',
+  'tax_held_sez',
+  'tax_issue_failed',
+  'tax_invoice_late',
+  'tax_credit_note_late',
 ] as const
 
 /**

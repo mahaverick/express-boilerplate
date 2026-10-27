@@ -404,6 +404,7 @@ describe('audit value sets', () => {
       'platform',
       'plan',
       'billing',
+      'tax_document',
     ])
   })
 
