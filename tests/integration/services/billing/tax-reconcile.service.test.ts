@@ -143,7 +143,7 @@ async function paying(at = new Date(NOW.getTime() - 60 * 60 * 1000)) {
 /**
  * Run a callback while the provider lists every paid charge without billing
  * dates and reports a chosen current period for every subscription.
- * @param period - The current period, as offsets in milliseconds from the run time.
+ * @param period - The current period, as offsets in milliseconds from the run time, or null for a subscription with none.
  * @param period.start - The start offset.
  * @param period.end - The end offset.
  * @param extraCharges - How many copies of each charge to list besides the original.
@@ -151,7 +151,7 @@ async function paying(at = new Date(NOW.getTime() - 60 * 60 * 1000)) {
  * @returns How many times the subscription was read.
  */
 async function withUndatedCharges(
-  period: { start: number; end: number },
+  period: { start: number; end: number } | null,
   extraCharges: number,
   run: () => Promise<void>
 ): Promise<number> {
@@ -182,8 +182,8 @@ async function withUndatedCharges(
           const subscription = await fetchSubscription.apply(this, arguments_)
           return {
             ...subscription,
-            currentStart: new Date(NOW.getTime() + period.start),
-            currentEnd: new Date(NOW.getTime() + period.end),
+            currentStart: period === null ? null : new Date(NOW.getTime() + period.start),
+            currentEnd: period === null ? null : new Date(NOW.getTime() + period.end),
           }
         },
         run
@@ -653,6 +653,65 @@ describe('reconcileTaxDocuments provider refusals and limits', () => {
 
     expect(await documentsOf(tenantId)).toHaveLength(2)
     expect(reads).toBe(1)
+  })
+
+  it('leaves a recent undated charge for a later run and logs it once', async () => {
+    const MIN = 60 * 1000
+    const { tenantId, paymentId, subscriptionId } = await paying(new Date(NOW.getTime() - 5 * MIN))
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
+
+    let report: Awaited<ReturnType<typeof reconcileTaxDocuments>> | undefined
+    await withUndatedCharges(null, 0, async () => {
+      report = await reconcileTaxDocuments(tenantId, { now: NOW })
+    })
+
+    const waiting = info.mock.calls.filter(([message]) =>
+      message.includes('has no billing period yet')
+    )
+    info.mockRestore()
+    expect(report?.issued).toStrictEqual({ invoices: 0, creditNotes: 0 })
+    expect(report?.held).toBe(0)
+    expect(report?.late.invoices).toBe(0)
+    expect(await documentsOf(tenantId)).toStrictEqual([])
+    expect(waiting).toHaveLength(1)
+    expect(waiting[0]?.[1]).toStrictEqual({ tenantId, paymentId, subscriptionId })
+  })
+
+  it('issues an undated charge paid an hour ago or longer without a period', async () => {
+    const MIN = 60 * 1000
+    const old = await paying(new Date(NOW.getTime() - 61 * MIN))
+    const exact = await paying(new Date(NOW.getTime() - 60 * MIN))
+
+    await withUndatedCharges(null, 0, async () => {
+      await reconcileTaxDocuments(old.tenantId, { now: NOW })
+      await reconcileTaxDocuments(exact.tenantId, { now: NOW })
+    })
+
+    for (const { tenantId } of [old, exact]) {
+      const [invoice] = await documentsOf(tenantId)
+      expect(invoice?.snapshot.billingPeriod).toBeNull()
+      expect(invoice?.snapshot.description).toBe('Paid, Monthly')
+    }
+  })
+
+  it('invoices a waiting charge with its period once the subscription has one', async () => {
+    const { tenantId } = await paying(new Date(NOW.getTime() - 5 * 60 * 1000))
+
+    await withUndatedCharges(null, 0, async () => {
+      await reconcileTaxDocuments(tenantId, { now: NOW })
+    })
+    expect(await documentsOf(tenantId)).toStrictEqual([])
+    await withUndatedCharges({ start: -2 * DAY, end: 28 * DAY }, 0, async () => {
+      await reconcileTaxDocuments(tenantId, { now: NOW })
+    })
+
+    const [invoice] = await documentsOf(tenantId)
+    expect(invoice?.number).toBe('INV/26-27/00001')
+    expect(invoice?.snapshot.billingPeriod).toStrictEqual({
+      start: '2026-10-25',
+      end: '2026-11-24',
+    })
+    expect(invoice?.snapshot.description).toBe('Paid, Monthly, 25 Oct 2026 to 24 Nov 2026')
   })
 
   it('gives an undated charge paid outside the current period no dates', async () => {

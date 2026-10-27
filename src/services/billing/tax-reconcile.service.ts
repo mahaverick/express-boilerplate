@@ -11,10 +11,18 @@
  * webhook or one that names no known subscription
  * (`queueTaxReconcileForPayment`), the daily refund sweep and the one-time
  * backfill step (the billing scheduler). None of them rejects.
+ *
+ * A charge paid less than `TAX_UNDATED_CHARGE_WAIT_MINUTES` ago that still
+ * has no billing period is left for a later run, since an issued invoice is
+ * never rewritten; the sync after the subscription's activation triggers it.
  */
 import { gstSellerConfig } from '@/configs/billing.config'
 import type { BillingAlertKind } from '@/constants/billing.constants'
-import { TAX_MAX_TRACKED_SUBSCRIPTIONS, TAX_REFUND_LOOKBACK_DAYS } from '@/constants/gst.constants'
+import {
+  TAX_MAX_TRACKED_SUBSCRIPTIONS,
+  TAX_REFUND_LOOKBACK_DAYS,
+  TAX_UNDATED_CHARGE_WAIT_MINUTES,
+} from '@/constants/gst.constants'
 import type { TaxDocumentRecord } from '@/database/models/tax.model'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { addTaxReconcileJob, type BillingTaxReconcileJobData } from '@/jobs/billing.job'
@@ -334,6 +342,9 @@ function invoiceLines(
  *   lookback) as `heldRefunds`, and staff hear about each one.
  * - A charge with no billing period takes its subscription's current period
  *   when it was paid inside it; otherwise it has none.
+ * - A charge that still has no billing period and was paid less than
+ *   `TAX_UNDATED_CHARGE_WAIT_MINUTES` before the run is not planned (neither
+ *   invoiced nor held) and is logged; a later run plans it.
  * - A payment or subscription the provider refuses to read (a 4xx) is
  *   skipped and logged.
  *
@@ -425,6 +436,20 @@ export async function planTaxDocuments(
       continue
     }
     const { description, charge: dated } = await lineOf(charge)
+    if (
+      (dated.billingStart === null || dated.billingEnd === null) &&
+      now.getTime() - dated.paidAt.getTime() < TAX_UNDATED_CHARGE_WAIT_MINUTES * 60_000
+    ) {
+      logger.info(
+        'A paid charge has no billing period yet; its invoice waits for the next tax run',
+        {
+          tenantId,
+          paymentId: dated.paymentId,
+          subscriptionId: dated.subscriptionId,
+        }
+      )
+      continue
+    }
     if (details?.isSez === true) {
       holds.push({ charge: dated, description })
       heldPayments.set(charge.paymentId, charge.paidAt)
