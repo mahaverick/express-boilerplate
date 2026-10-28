@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.0.3](https://github.com/mahaverick/express-boilerplate/compare/v10.0.2...v10.0.3) (2026-10-28)
+
+
+### Bug Fixes
+
+* **compose:** start the frontends with vp dev ([#170](https://github.com/mahaverick/express-boilerplate/issues/170)) ([42d005b](https://github.com/mahaverick/express-boilerplate/commit/42d005bf917eaf8c75d27b80e14bbad61e1cb407))
+
 ## [10.0.2](https://github.com/mahaverick/express-boilerplate/compare/v10.0.1...v10.0.2) (2026-10-28)
 
 
