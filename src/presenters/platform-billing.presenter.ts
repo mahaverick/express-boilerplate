@@ -79,6 +79,12 @@ export interface StaffTenantBillingView extends TenantBillingView {
    * The workspace's unresolved held SEZ charges, for the "Held: SEZ" badge.
    */
   openHeldCharges: number
+  /**
+   * Whether the workspace has any held SEZ charge, open or resolved: its
+   * held-charge routes answer while registration is off, so its history
+   * stays reachable.
+   */
+  hasHeldCharges: boolean
 }
 
 /**
