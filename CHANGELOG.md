@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.0.2](https://github.com/mahaverick/express-boilerplate/compare/v10.0.1...v10.0.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* **billing:** drop the false period-end alert on first checkout; report held-charge history ([#168](https://github.com/mahaverick/express-boilerplate/issues/168)) ([7feb7e5](https://github.com/mahaverick/express-boilerplate/commit/7feb7e580974e579e332ecfe63a13e1a6665c71b))
+
 ## [10.0.1](https://github.com/mahaverick/express-boilerplate/compare/v10.0.0...v10.0.1) (2026-10-27)
 
 
