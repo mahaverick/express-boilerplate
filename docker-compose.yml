@@ -229,7 +229,7 @@ services:
       - >-
         npm i -g corepack@0.36.0 --silent && corepack enable && corepack install &&
         pnpm install --frozen-lockfile --config.confirm-modules-purge=false &&
-        exec pnpm exec vite --host 0.0.0.0 --strictPort
+        exec pnpm exec vp dev --host 0.0.0.0 --strictPort
     depends_on: [api-dev]
 
   apex-dev:
