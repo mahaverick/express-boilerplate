@@ -888,7 +888,29 @@ describe('held charges', () => {
     const response = await getAs(token, `/tenants/${tenant.id}/billing`)
 
     expect(response.status).toBe(200)
-    expect(dataOf(response.body)).toMatchObject({ openHeldCharges: 1 })
+    expect(dataOf(response.body)).toMatchObject({ openHeldCharges: 1, hasHeldCharges: true })
+  })
+
+  it('reports no held charges on the staff billing read of a workspace that never had one', async () => {
+    const { tenant } = await workspace()
+    const { token } = await staff('viewer')
+
+    const response = await getAs(token, `/tenants/${tenant.id}/billing`)
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body)).toMatchObject({ openHeldCharges: 0, hasHeldCharges: false })
+  })
+
+  it('reports held charges on the staff billing read when the only one is resolved', async () => {
+    const { tenant } = await workspace()
+    const resolvedId = await hold(tenant.id)
+    await sql`update tax_held_charges set resolved_at = now(), resolution = 'Done.' where id = ${resolvedId}`
+    const { token } = await staff('viewer')
+
+    const response = await getAs(token, `/tenants/${tenant.id}/billing`)
+
+    expect(response.status).toBe(200)
+    expect(dataOf(response.body)).toMatchObject({ openHeldCharges: 0, hasHeldCharges: true })
   })
 })
 

@@ -250,6 +250,7 @@ async function staffView(tenantId: string): Promise<StaffTenantBillingView> {
     history: history.map((entry) => toHistoryView(entry)),
     events: events.map((event) => toEventView(event)),
     openHeldCharges: await platformTaxRepository.countOpenHeld(tenantId),
+    hasHeldCharges: await platformTaxRepository.hasHeld(tenantId),
   }
 }
 

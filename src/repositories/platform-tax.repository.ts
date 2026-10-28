@@ -224,7 +224,9 @@ export class PlatformTaxRepository {
   }
 
   /**
-   * Whether a workspace has any held charge, open or resolved.
+   * Whether a workspace has any held charge, open or resolved. It keeps the
+   * held-charge routes answering while registration is off, and gives the
+   * staff billing view its `hasHeldCharges`.
    * @param tenantId - The workspace.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when at least one exists.

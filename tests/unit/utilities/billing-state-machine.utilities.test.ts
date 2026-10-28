@@ -899,7 +899,36 @@ describe('nextBillingRow: the current subscription', () => {
     expect(result).toStrictEqual({ patch: {}, cause: null, actions: [] })
   })
 
-  it('alerts when the workspace is active with no paid period end', () => {
+  it.each(['trialing', 'free'] as const)(
+    'raises no alert on the first invoice.paid sync, which moves a %s row to active before the period end is known',
+    (state) => {
+      const checkingOut = row({
+        state,
+        planId: 'plan-paid',
+        trialStartedAt: state === 'trialing' ? at(-4) : null,
+        trialEndsAt: state === 'trialing' ? at(10) : null,
+        pendingSubscriptionId: 'sub_new',
+      })
+      // Razorpay sends invoice.paid before subscription.activated: the subscription reads authenticated, with no start or paid cycle yet.
+      const result = map(checkingOut, {
+        pending: sub('sub_new', 'authenticated', { startAt: null }),
+      })
+      expect(result.patch).toMatchObject({
+        state: 'active',
+        providerSubscriptionId: 'sub_new',
+      })
+      expect(result.patch).not.toHaveProperty('currentPeriodEnd')
+      expect(result.actions).toStrictEqual([])
+    }
+  )
+
+  it('raises no alert on a re-sync of an active row that has a paid period end', () => {
+    const result = map(paying(), { current: sub('sub_cur', 'authenticated', { startAt: null }) })
+    expect(result.patch).toStrictEqual({})
+    expect(result.actions).toStrictEqual([])
+  })
+
+  it('alerts on the daily reconcile or a staff Resync of a row already active with no paid period end', () => {
     const result = map(paying({ currentPeriodEnd: null }), {
       current: sub('sub_cur', 'active', { latestInvoicePaid: false }),
     })

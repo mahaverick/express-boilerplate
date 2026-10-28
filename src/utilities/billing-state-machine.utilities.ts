@@ -630,7 +630,9 @@ export function nextBillingRow(
     running = mapping.adoptOrRefund(found, running)
   }
 
+  // Only a row already active before this sync: the activating sync (Razorpay's invoice.paid lands before subscription.activated) has no period end yet, and the reconcile or a staff Resync re-syncs a row that stays stuck.
   if (
+    row.state === 'active' &&
     draft.state === 'active' &&
     draft.currentPeriodEnd === null &&
     draft.providerSubscriptionId !== null

@@ -182,6 +182,8 @@ describe('PlatformTaxRepository', () => {
       await withTransaction((tx) => repository.resolveHeld(randomUUID(), id, user.id, 'x', tx))
     ).toBeUndefined()
     expect(await repository.countOpenHeld(tenantId)).toBe(0)
+    expect(await repository.hasHeld(tenantId)).toBe(true)
+    expect(await repository.hasHeld(randomUUID())).toBe(false)
     const found6 = await repository.findHeld(tenantId, id)
     expect(found6?.resolvedBy?.userId).toBe(user.id)
     expect(await repository.findHeld(randomUUID(), id)).toBeUndefined()
