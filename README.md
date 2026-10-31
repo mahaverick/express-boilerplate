@@ -19,10 +19,10 @@ what is left to you.
 
 ## Requirements
 
-- Node.js >= 24 (pinned in [`.node-version`](.node-version)).
+- Node.js >= 26 (pinned in [`.node-version`](.node-version)).
   `devEngines.runtime` in `package.json` makes `pnpm install` refuse an older
   Node.
-- [pnpm](https://pnpm.io) 12.4.1, pinned by `packageManager` in
+- [pnpm](https://pnpm.io) 12.16.1, pinned by `packageManager` in
   `package.json`. Use pnpm only. Node 25 and later do not bundle Corepack, so
   install it first: `npm i -g corepack@0.36.0 && corepack enable`.
 - Docker, for the local Postgres, Redis, OpenTelemetry, Tempo, Loki, Grafana
@@ -131,7 +131,7 @@ docker compose --profile prod up --build  # the real images, no hot reload
 | `dev`   | `api-dev`, `react-dev`, `apex-dev`                      | `localhost:4040`, `:5173`, `:5174`       |
 | `prod`  | `migrate`, `api`, `react`, `apex`, from each Dockerfile | the same ports; nginx serves the clients |
 
-- **`dev`** runs each repo's source, bind-mounted, in the `node:24-alpine`
+- **`dev`** runs each repo's source, bind-mounted, in the `node:26-alpine`
   image the `Dockerfile` pins, with `node_modules` in a named volume per repo
   so the container keeps Linux binaries. `api-dev` runs migrations, then
   `pnpm dev`; the frontends run Vite. Edits reload as they do on the host. The

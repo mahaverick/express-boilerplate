@@ -3,7 +3,7 @@
  * community list (`src/data/passkey-aaguids.json`; its source and refresh
  * steps are in `src/constants/passkey.constants.ts`). The file is read with
  * `readFileSync`, not imported: a compiled ESM JSON import needs an import
- * attribute that Node 24 rejects without one.
+ * attribute that Node rejects without one.
  */
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'

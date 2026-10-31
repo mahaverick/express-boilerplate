@@ -280,7 +280,7 @@ runs monthly, before 6am on the first day.
 - TypeScript is held `<6.1.0` (see [CLAUDE.md](CLAUDE.md#versions)), and every
   Node version pin (the docker `node` image, `.node-version`, `actions/setup-node`'s
   `node-version:` in `pr-title.yml`, the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node`
-  tag) is held `<25`. Lift these deliberately, not by merging a Renovate PR, and
+  tag) is held `<27`. Lift these deliberately, not by merging a Renovate PR, and
   bump `package.json`'s `engines.node` and `devEngines.runtime.version` by hand
   alongside: Renovate does not touch those `>=` ranges.
 - The Corepack version pinned in `Dockerfile`, `.devcontainer/devcontainer.json`
