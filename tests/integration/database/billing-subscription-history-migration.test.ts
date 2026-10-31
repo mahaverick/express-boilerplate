@@ -133,7 +133,7 @@ afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(legacyFolder, { recursive: true, force: true })
-})
+}, 60_000)
 
 describe('migration 0036: backfill', () => {
   it('records the current subscription and every earlier charged one but a refunded duplicate, each with its own workspace', async () => {

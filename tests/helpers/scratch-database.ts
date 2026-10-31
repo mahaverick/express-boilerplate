@@ -8,6 +8,10 @@
  * autovacuum workers on that database itself and waits for them, which needs
  * no privilege. It still answers SQLSTATE 55006 while another client of the
  * caller's own is connected, so that is retried for a few seconds.
+ *
+ * A drop that goes ahead waits on an immediate checkpoint, which queues behind
+ * one already running: measured at 27 s with three test suites loading the
+ * disk. Give a test or hook that drops 60 s, not the default 20 s.
  */
 import { inspect } from 'node:util'
 import type { Sql } from 'postgres'

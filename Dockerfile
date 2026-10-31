@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build on node:24-alpine, the Node line .node-version and engines require.
+# Multi-stage build on node:26-alpine, the Node line .node-version and engines require.
 # Pinned by digest, as in the client images, so a rebuild never picks up a
 # different base silently; Renovate proposes each new digest.
-FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS base
+FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 # Corepack is installed explicitly because Node 25+ does not bundle it. The pnpm
 # version comes from package.json's packageManager field (`corepack install` in deps).

@@ -127,7 +127,7 @@ afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(before, { recursive: true, force: true })
-})
+}, 60_000)
 
 /**
  * Insert an `invitation_link` row with raw SQL; `overrides` replace single columns.

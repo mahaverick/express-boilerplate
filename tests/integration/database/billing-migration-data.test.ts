@@ -107,7 +107,7 @@ afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(legacyFolder, { recursive: true, force: true })
-})
+}, 60_000)
 
 describe('migration 0033 over existing tenants', () => {
   it('seeds the Free and Paid plans with their entitlements', async () => {

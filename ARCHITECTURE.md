@@ -1950,7 +1950,7 @@ collector's image has no shell, `curl` or `wget`, so it carries no Docker
 
 ### Docker
 
-`Dockerfile` builds in four stages from a digest-pinned `node:24-alpine`:
+`Dockerfile` builds in four stages from a digest-pinned `node:26-alpine`:
 
 - `base` installs Corepack and creates the non-root user (uid 10001).
 - `deps` installs with `--frozen-lockfile`, in a layer cached apart from the
