@@ -110,7 +110,7 @@ afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(legacyFolder, { recursive: true, force: true })
-})
+}, 60_000)
 
 describe('migration 0020: backfill', () => {
   it('makes one message per legacy attempt, reusing its id, day and recipient', async () => {

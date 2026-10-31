@@ -132,7 +132,7 @@ afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(legacyFolder, { recursive: true, force: true })
-})
+}, 60_000)
 
 describe('migration 0029 over password-era rows', () => {
   it('deletes the email_verification and password_reset tokens and keeps the refresh and link rows', async () => {

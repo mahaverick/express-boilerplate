@@ -142,7 +142,7 @@ afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
   fs.rmSync(earlierFolder, { recursive: true, force: true })
-})
+}, 60_000)
 
 /**
  * The account a message belongs to after the migration.

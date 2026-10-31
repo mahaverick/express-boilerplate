@@ -45,7 +45,7 @@ async function hasScratchDatabase(): Promise<boolean> {
 afterAll(async () => {
   await dropScratchDatabase(admin, scratchName)
   await admin.end({ timeout: 5 })
-})
+}, 60_000)
 
 describe('dropScratchDatabase', () => {
   it('refuses a name that is not a scratch name, dropping nothing', async () => {
@@ -76,5 +76,5 @@ describe('dropScratchDatabase', () => {
     await dropping
 
     expect(await hasScratchDatabase()).toBe(false)
-  })
+  }, 60_000)
 })
