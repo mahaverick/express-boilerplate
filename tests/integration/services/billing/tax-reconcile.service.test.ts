@@ -130,12 +130,20 @@ async function paidAt(subscriptionId: string, at: Date): Promise<string> {
 
 /**
  * A workspace on a paid monthly subscription whose charge was paid at a time.
+ * The billing periods the tests assert must not change with the month the suite runs in.
  * @param at - When it paid; an hour before the run by default.
  * @returns The workspace, its owner, the subscription and the payment.
  */
 async function paying(at = new Date(NOW.getTime() - 60 * 60 * 1000)) {
   const { tenant, owner } = await workspace()
-  const { subscriptionId } = await makePaying(tenant.id)
+  // The fake sizes a monthly cycle from its charge month, so pin that month.
+  vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+  let subscriptionId: string
+  try {
+    ;({ subscriptionId } = await makePaying(tenant.id))
+  } finally {
+    vi.useRealTimers()
+  }
   const paymentId = await paidAt(subscriptionId, at)
   return { tenantId: tenant.id, ownerId: owner.id, subscriptionId, paymentId }
 }
