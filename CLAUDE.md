@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-Rules and gotchas for anyone, human or agent, changing this repo: the changes
-that look right and break something silently. Each rule gives its reason and
-points at the code or doc that holds the detail. How things work is in
+Rules for anyone, human or agent, who changes this repo. Each rule names a
+change that looks right but breaks something silently. Each gives its reason
+and points at the code or doc that holds the detail. How things work is in
 [ARCHITECTURE.md](ARCHITECTURE.md); the threat model and defences are in
 [SECURITY.md](SECURITY.md).
 
@@ -15,47 +15,53 @@ points at the code or doc that holds the detail. How things work is in
 - **Keep the user-row lock modes and their placement.** `verifySignInLink`
   (`src/services/sign-in-link.service.ts`) and the Google sign-in stamp
   `lastLoggedInAt` before the transaction that re-reads the user `FOR SHARE`
-  and issues the token, and the invitation verify and confirm stamp it after
-  their transaction commits, so that lock covers only the re-read and the
-  writes that need it. The refresh kills run after the rotation
-  commits, never inside it. The lock each of them takes is in
+  and issues the token. The invitation verify and confirm stamp it after
+  their transaction commits. So that lock covers only the re-read and the
+  writes that need it. The refresh kills run after the rotation commits,
+  never inside it. The lock each of them takes is in
   [SECURITY.md](SECURITY.md#deactivation-against-a-concurrent-sign-in).
 - **A sign-in request replies before any lookup.** `POST /auth/link/request`
-  sends its fixed 202 first; the cooldown, the budget, the lookup and the mail
-  run in the follow-up `requestSignInLink` returns. A read before the reply
-  makes its timing an oracle for who has an account. See
+  sends its fixed 202 first. The cooldown, the budget, the lookup and the mail
+  run in the follow-up that `requestSignInLink` returns. A read before the
+  reply makes its timing reveal who has an account. See
   [SECURITY.md](SECURITY.md#sign-in-links-one-answer-one-reply-before-the-lookup).
 - **`sign_in_link` and `invitation_link` rows never carry a user id.** The
   click looks the account up by address, which is what gives a soft-deleted
   user's address a fresh account (`user_tokens_shape_check` enforces it). A
-  user-wide revocation therefore misses them, so revoke-others, a staff
+  user-wide revocation therefore misses them. So revoke-others, a staff
   sign-out and a deactivation also call `revokeSignInLinksOf`
-  (`src/services/session.service.ts`), which revokes both purposes, in their
+  (`src/services/session.service.ts`). It revokes both purposes, in their
   transaction, after the user row lock. A deletion deliberately does not: a
   later click creates a fresh account for the same mailbox owner.
 - **An invitation click never signs anyone in.** Every click gets `202` and an
   emailed confirm link (`verifyInvitation`,
-  `src/services/tenant-invitation.service.ts`): a forwarded invitation must
-  never create a session, and a session on a new address would outlive its
-  owner's first sign-in. A sign-in or confirm verify with no `email` is refused,
-  or removing the parameter would skip the login CSRF check. The confirm
+  `src/services/tenant-invitation.service.ts`). A forwarded invitation must
+  never create a session, and a session on an unclaimed address would outlive
+  its owner's first sign-in. Refuse a sign-in or confirm verify with no
+  `email`: otherwise removing the parameter skips the login cross-site request
+  forgery (CSRF) check. The confirm
   (`confirmInvitation`) locks the user row before it claims the link, the
   order a deactivation takes; claiming first deadlocks against it. See
   [SECURITY.md](SECURITY.md#invitation-links-are-single-use).
 - **A dead link or credential answers 400, never 401** (`LINK_INVALID`;
-  `PASSKEY_VERIFICATION_FAILED`, `PASSKEY_UNKNOWN`): clients sign out on a 401. Keep one body for every dead link, and keep every check that refuses
+  `PASSKEY_VERIFICATION_FAILED`, `PASSKEY_UNKNOWN`), because clients sign out
+  on a 401. Keep one body for every dead link. Keep every check that refuses
   before the claim on a read-only peek, so the refusal spends nothing.
-- **Passkeys follow `PASSKEY_MODE`** (`off`, `optional`, `required`). Under
-  `off` every passkey route but the public config read answers the
-  unknown-route 404 (`requirePasskeysEnabled`) and the rows stay. Every
-  ceremony needs user verification and a single-use challenge bound to its
-  purpose, user and session (`passkey-challenge.service.ts`): a challenge that
-  crosses ceremonies answers `PASSKEY_VERIFICATION_FAILED`. Another user's
-  passkey answers the passkey 404, never 403. `claimNeverVerifiedAccount`
-  deletes the squatter's passkeys, and an unverified account can use none.
-  `PASSKEY_SETUP_ALLOWED` is the only list of routes a required-mode account
-  without a passkey may reach; add a route there only if the lockout path needs
-  it. See [SECURITY.md](SECURITY.md#passkeys).
+- **Passkeys follow `PASSKEY_MODE`** (`off`, `optional`, `required`).
+  - Under `off`, every passkey route but the public config read answers the
+    unknown-route 404 (`requirePasskeysEnabled`), and the rows stay.
+  - Every ceremony needs user verification and a single-use challenge bound
+    to its purpose, user and session (`passkey-challenge.service.ts`). A
+    challenge that crosses ceremonies answers `PASSKEY_VERIFICATION_FAILED`.
+  - Another user's passkey answers the passkey 404, never 403.
+  - `claimNeverVerifiedAccount` deletes the squatter's passkeys, and an
+    unverified account can use none.
+  - `PASSKEY_SETUP_ALLOWED` is the only list of routes a required-mode account
+    without a passkey may reach. Add a route there only if the lockout path
+    needs it.
+
+  See [SECURITY.md](SECURITY.md#passkeys).
+
 - **Confirm it's you is open to every signed-in user,** by link or passkey.
   The link request takes `{ app }`, and `apex` is refused for an account
   without a platform role. User-facing copy says "Confirm it's you", never
@@ -71,9 +77,9 @@ points at the code or doc that holds the detail. How things work is in
   behind. See [SECURITY.md](SECURITY.md#the-refresh-cookie).
 - **The OAuth refresh cookie stays `SameSite=Lax`** (a decision, set by
   `setOAuthRefreshTokenCookie`, `src/controllers/auth.controller.ts`). It costs
-  nothing, since both routes that act on the cookie are `POST`s behind the
-  Origin check and the one `GET` that reads it, the callback, only revokes, and
-  it lasts only until the first rotation re-sets it `Strict`. See
+  nothing, for 3 reasons. Both routes that act on the cookie are `POST`s
+  behind the Origin check. The one `GET` that reads it, the callback, only
+  revokes. And it lasts only until the first rotation re-sets it `Strict`. See
   [SECURITY.md](SECURITY.md#the-refresh-cookie).
 - **Never link a Google identity to an address Google has not verified.**
   `resolveGoogleUser` (`src/services/google-auth.service.ts`) refuses it,
@@ -82,8 +88,8 @@ points at the code or doc that holds the detail. How things work is in
   [SECURITY.md](SECURITY.md#google-sign-in).
 - **`APP_URL` must match the Google Cloud Console redirect URI exactly,**
   scheme and trailing slash included.
-- **Behind TLS termination, set `TRUST_PROXY` and forward
-  `X-Forwarded-Proto`.** When `COOKIE_SECURE` resolves true, `oauth.sid` is
+- **Behind TLS (Transport Layer Security) termination, set `TRUST_PROXY` and
+  forward `X-Forwarded-Proto`.** When `COOKIE_SECURE` resolves true, `oauth.sid` is
   `Secure`, and express-session silently skips a `Secure` cookie on a request
   it doesn't see as HTTPS, which breaks Google sign-in.
 
@@ -102,7 +108,7 @@ points at the code or doc that holds the detail. How things work is in
   or `access` but never authorizes on them.
 - **Members join by invitation only, with one fixed 202 for any address.**
   Don't add a "no such user" 404 or a direct add: either reveals who has an
-  account. The raw token travels in a JSON body, never an API URL, because
+  account. The raw token travels in a JSON body, never in an API URL, because
   tracing and proxy logs record URLs. See
   [SECURITY.md](SECURITY.md#invitations).
 - **Every write that adds a seat takes the seat lock before it writes.** An
@@ -131,28 +137,32 @@ points at the code or doc that holds the detail. How things work is in
 ### Staff routes
 
 - **A staff route answers a refused caller exactly what an unknown path on the
-  same router answers,** for every method, body and header. On a `/platform`
-  route that means the role gate runs first: `requirePlatformRole`, then
-  `requireJsonContentType`, then `requireRecentAuth()` where it applies, then
-  the limiter. Anything earlier answers a non-staff caller a 415, `RateLimit-*`
-  headers or a 401 `REAUTH_REQUIRED`. The step-up routes under `/auth/step-up`
-  and `/auth/passkeys/step-up` are not staff routes: any signed-in user may
-  call them, so they run `requireAuth` and a limiter with no role gate. They
-  keep `refusePlatformOptions`, so an OPTIONS gets the unknown path's 404 and
-  not Express's `Allow` answer. Pin each staff route by comparing it with an
-  unknown sibling path, not with `/api/v1/<unknown>`:
-  `tests/integration/api/platform-route-gates.test.ts`.
+  same router answers,** for every method, body and header.
+  - On a `/platform` route the role gate runs first: `requirePlatformRole`,
+    then `requireJsonContentType`, then `requireRecentAuth()` where it
+    applies, then the limiter. Any other gate placed earlier answers a
+    non-staff caller a 415, `RateLimit-*` headers or a 401 `REAUTH_REQUIRED`.
+  - The step-up routes under `/auth/step-up` and `/auth/passkeys/step-up` are
+    not staff routes. Any signed-in user may call them, so they run
+    `requireAuth` and a limiter with no role gate. They keep
+    `refusePlatformOptions`, so an OPTIONS gets the unknown path's 404 and not
+    Express's `Allow` answer.
+  - Pin each staff route by comparing it with an unknown sibling path, not
+    with `/api/v1/<unknown>`:
+    `tests/integration/api/platform-route-gates.test.ts`.
+
   See [SECURITY.md](SECURITY.md#platform-staff).
+
 - **Only `src/services/platform-*.service.ts` import the seven cross-tenant
   `platform-*` repositories** (lint enforces it). "Your tenants" stays on
   `TenantRepository.listForUser`; never serve it from a query that sees every
   tenant.
-- **The platform tenant's member rules stay on the platform tenant.** There an
-  owner may act on another owner (`canPlatformActorModifyTarget`), and a role
+- **The platform tenant's member rules stay on the platform tenant.** There,
+  an owner may act on another owner (`canPlatformActorModifyTarget`). A role
   change, a removal, leaving, an invitation and a resend need step-up
   (`requireRecentAuthOnPlatformTenant`), because every platform role reads
-  every user and tenant; a revoke only removes a pending grant and needs none.
-  On a customer tenant an owner acts only on their own ownership.
+  every user and tenant. A revoke only removes a pending grant and needs none.
+  On a customer tenant, an owner acts only on their own ownership.
 - **Staff acting on a customer tenant through platform access give a reason**
   (`requireRecentAuthAndReasonOnPlatformAccess`), and the service re-checks it
   under lock (`assertStaffReasonGiven`), since a membership deleted after
@@ -185,7 +195,7 @@ points at the code or doc that holds the detail. How things work is in
   shows only under load ([ARCHITECTURE.md](ARCHITECTURE.md#data-layer)).
 - **Row locks default to `FOR NO KEY UPDATE`.** Pass `'update'` (`RowLockMode`,
   `src/types/lock-mode.ts`) only when the transaction deletes the row or
-  changes a key column: `FOR UPDATE` blocks the `FOR KEY SHARE` every
+  changes a key column. `FOR UPDATE` blocks the `FOR KEY SHARE` that every
   foreign-key insert takes. Take locks in the documented order
   ([ARCHITECTURE.md](ARCHITECTURE.md#layers)); Postgres can't enforce it.
 - **Bind a timestamp in raw `sql` as `${date.toISOString()}::timestamptz`.**
@@ -197,19 +207,18 @@ points at the code or doc that holds the detail. How things work is in
   Add its `EXPLAIN` row to `tests/integration/database/list-indexes.test.ts`
   and its `describeListContract` block, as
   [ARCHITECTURE.md](ARCHITECTURE.md#list-endpoints) describes.
-- **A list sort's timestamp key is validated by `sortAtField`**
-  (`src/validators/cursor.validators.ts`), which `timestampSort` binds; never
-  a bare regex or `z.iso.datetime()`: they let month 13 or year 0000 through,
-  and the `::timestamptz` cast then fails as a 500. Select it as `timestampKey`:
-  the cursor carries the microsecond UTC text, and a `Date` drops the
-  microseconds, so a page boundary repeats or skips rows.
+- **Validate a list sort's timestamp key with `sortAtField`**
+  (`src/validators/cursor.validators.ts`), which `timestampSort` binds. Never
+  use a bare regex or `z.iso.datetime()`: they let month 13 or year 0000
+  through, and the `::timestamptz` cast then fails as a 500. Select it as
+  `timestampKey`. The cursor carries the microsecond UTC text, and a `Date`
+  drops the microseconds, so a page boundary repeats or skips rows.
 - **Never hand back an unsigned cursor or accept one.** Cursors come only from
   `signCursor` and are read only through `verifyCursor`, bound to the
-  request's `listScope`; a list whose rows depend on a path tenant or the
-  caller sets `bound`, and every list has its own `name`, so `bindScope` ties the
-  cursor to them. A list that
-  skipped either would let a client edit its seek values or replay a cursor
-  across tenants.
+  request's `listScope`. A list whose rows depend on a path tenant or the
+  caller sets `bound`, and every list has its own `name`, so `bindScope` ties
+  the cursor to them. A list that skipped either would let a client edit its
+  seek values or replay a cursor across tenants.
 - **Free-text fields use `safeText`:** single-line by default,
   `{ multiline: true }` for prose.
 - **Every Redis key and channel goes through `redisKey()`**
@@ -217,16 +226,20 @@ points at the code or doc that holds the detail. How things work is in
   prefix, and a literal key escapes it.
 - **Wrap a Redis call a request waits on in `withRedisDeadline`**
   (`src/services/redis-deadline.service.ts`), with `getRedis()` inside the
-  operation: node-redis never times out a written command, so a stalled Redis
+  operation. node-redis never times out a written command, so a stalled Redis
   would hold the request. Two kinds of write use `waitForRedisWrite` instead,
-  which is never skipped for the stall cooldown: a write whose loss would widen
-  access (a session deny, a maintenance-mode change), and a dedupe or throttle
-  key's release. A lost release does not widen access; the key lingers until it
-  expires, which suppresses an audit or exposure record meanwhile. See
-  [ARCHITECTURE.md](ARCHITECTURE.md#data-layer).
+  which is never skipped for the stall cooldown:
+  - a write whose loss would widen access (a session deny, a maintenance-mode
+    change);
+  - a dedupe or throttle key's release. A lost release does not widen access,
+    but the key lingers until it expires and suppresses an audit or exposure
+    record meanwhile.
+
+  See [ARCHITECTURE.md](ARCHITECTURE.md#data-layer).
+
 - **Don't remove the Redis clients' retry strategies, and start Workers only
   through `startWorkers()`** (`src/services/worker-supervisor.service.ts`).
-  Without the strategies readiness hangs instead of reporting unreachable;
+  Without the strategies, readiness hangs instead of reporting unreachable.
   Workers started one by one never recover from an outage. An outage test goes
   through a local TCP proxy (`tests/helpers/redis-proxy.ts`); never stop the
   shared Redis. See [ARCHITECTURE.md](ARCHITECTURE.md#data-layer).
@@ -256,25 +269,26 @@ points at the code or doc that holds the detail. How things work is in
 - **Auth mail goes to `auth-email`; never add a template to
   `AUTH_EMAIL_TEMPLATE_KEYS` that a full maintenance should hold.**
   `emailQueueFor` (`src/jobs/email.job.ts`) picks the queue from the template
-  key, and `full` pauses every queue but `auth-email`, so the sign-in, step-up,
-  welcome, invitation and invitation confirm mail still reaches staff who must
-  sign in to switch maintenance off. `tenant_invitation` mail goes through `addEmailJob()`
-  directly, since the invitee may have no account.
-- **Some email channels can't be switched off** (`tenant_invitation`,
-  `maintenance_mode_changed` and the billing notices that carry an email;
-  `workspace_full` is in-app only and stays switchable): disabling them would
-  cut off an invitee or silence the mail an account owner must see. `PUT /notifications/preferences`
-  answers 400 for `emailEnabled: false` on any of them (the repository's
-  `upsert` refuses it too); `inAppEnabled` can still be switched off for any
-  type the caller can see. Change `NON_DISABLEABLE_EMAIL_TYPES`
-  (`src/repositories/notification-preference.repository.ts`) and
-  `NON_DISABLEABLE_NOTIFICATION_TYPES`
-  (`src/validators/notification.validators.ts`) together, or a client can
-  save an email preference the repository then ignores.
+  key. `full` pauses every queue but `auth-email`, so the sign-in, step-up,
+  welcome, invitation and invitation confirm mail still reaches staff who
+  must sign in to switch maintenance off. `tenant_invitation` mail goes
+  through `addEmailJob()` directly, since the invitee may have no account.
+- **These email channels can't be switched off:** `tenant_invitation`,
+  `maintenance_mode_changed` and the billing notices that carry an email.
+  (`workspace_full` is in-app only and stays switchable.) Disabling them would
+  cut off an invitee or silence the mail an account owner must see.
+  - `PUT /notifications/preferences` answers 400 for `emailEnabled: false` on
+    any of them, and the repository's `upsert` refuses it too.
+  - `inAppEnabled` can still be switched off for any type the caller can see.
+  - Change `NON_DISABLEABLE_EMAIL_TYPES`
+    (`src/repositories/notification-preference.repository.ts`) and
+    `NON_DISABLEABLE_NOTIFICATION_TYPES`
+    (`src/validators/notification.validators.ts`) together, or a client can
+    save an email preference the repository then ignores.
 - **Notification `metadata` never holds `variables`.** A link token can
   live there; the worker strips them before the insert and the email fan-out
   reads them from the job payload (`src/workers/notification.worker.ts`).
-- **The SSE stream authenticates with `Authorization: Bearer` and refuses a
+- **The server-sent events (SSE) stream authenticates with `Authorization: Bearer` and refuses a
   token with no `sid`** (`requireSessionId`,
   `src/controllers/notification-stream.controller.ts`). The revocation
   heartbeat closes streams by session id, so a sid-less stream would outlive a
@@ -293,11 +307,12 @@ points at the code or doc that holds the detail. How things work is in
   browser can send `source: 'audit'`, and a reader of PostHog's events trusts
   those fields only when `server_sig` verifies.
 - **Every link a user receives gets its UTM parameters from `withUtm`**
-  (`src/utilities/utm.utilities.ts`), never from a template: fixed code
-  constants only, never an address, a name, an id or a token, on the outer URL
-  and never inside `redirect`. This is the one exception to the frontends'
-  analytics URL allowlist: they keep a `utm_*` key only while its value matches
-  `/^[a-z0-9_-]{1,64}$/`, so a new value must fit that shape. See
+  (`src/utilities/utm.utilities.ts`), never from a template. The values are
+  fixed code constants only, never an address, a name, an id or a token. They
+  go on the outer URL, never inside `redirect`. UTM (Urchin Tracking Module)
+  parameters are the one exception to the frontends' analytics URL
+  allowlist: the frontends keep a `utm_*` key only while its value matches
+  `/^[a-z0-9_-]{1,64}$/`, so any value you add must fit that shape. See
   [SECURITY.md](SECURITY.md#email-links).
 - **Add a staff read view's audit through `auditThrottledView`**
   (`platform-view-audit.service.ts`).
@@ -350,8 +365,8 @@ points at the code or doc that holds the detail. How things work is in
   gate answers the unknown-route 404, never a 403 or a flag-specific message;
   a tenant-scoped gate outside `/tenants/:slug/…` answers 404 for everyone and
   fails `tests/unit/routes/flag-gates.test.ts`.
-- **Never take a flag value from a client, and never add a PII or `app`
-  trait.** The exposure routes re-evaluate on the server, and targeting traits
+- **Never take a flag value from a client, and never add a personally
+  identifiable information (PII) or `app` trait.** The exposure routes re-evaluate on the server, and targeting traits
   are only `FLAG_TRAITS`. Read a flag in request code through
   `flagContextFor(request)`, which memoises per request; a worker uses
   `flagContextForUser`. See [ARCHITECTURE.md](ARCHITECTURE.md#feature-flags).
@@ -463,9 +478,9 @@ The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
 - **To change test parallelism, set `VITEST_WORKERS`** (default 8, an integer
   from 1 to 16; read by `workerCountFrom` in `tests/helpers/worker-database.ts`).
   `WORKER_COUNT` is its result: it provisions one database per worker and sets
-  `maxWorkers`. A worker with no database fails as a bare
-  connection error. Two concurrent `pnpm test` runs on one compose stack share
-  the worker databases and prefixes, so they are unsupported.
+  `maxWorkers`. A worker with no database fails as a bare connection error.
+  Two concurrent `pnpm test` runs on one compose stack share the worker
+  databases and prefixes, so they are unsupported.
 - **The compose ports 5433/6380 are deliberate,** so the stack never meets a
   native Postgres or Redis. `tests/unit/connection-target.test.ts` checks the
   committed `docker-compose.yml` and `.env.test`, never `getEnv()` at runtime,
@@ -560,19 +575,24 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   has a documented, file-local reason not to (a redirect, an SSE stream).
 - **helmet is the first middleware** (`src/app.ts`), so its headers are on a
   preflight, a 404 and an error response too.
-- **Every message a person reads follows the copy rules:** an `HttpError` or
-  success message, a field error, an email, a notification and CLI output.
-  Under 30 words a sentence; no vague failure words, weasel, peacock or filler
-  words, or jargon such as "token" ("couldn't" only with a sentence after it,
-  the frontends' "We couldn't load X. Select Try again."); a next step on every error; an absolute
-  UTC time from `formatUtcDateTime` (`src/utilities/date-text.utilities.ts`) in
-  mail and notifications. The one exception is a billing date: the date alone,
-  in the workspace's time zone (`formatBillingDate`,
-  `src/services/billing/billing-dates.service.ts`), so it matches the day on
-  the customer's bank message. `tests/unit/copy-style.test.ts` fails on a banned
-  phrase or a long sentence. zod's own messages come from
-  `src/validators/zod-messages.validators.ts`; a schema's own message wins.
-  Never rename a `code` to change copy: clients branch on codes.
+- **Every message a person reads follows the copy rules.** That covers an
+  `HttpError` or success message, a field error, an email, a notification and
+  command-line (CLI) output.
+  - Each sentence is under 30 words.
+  - No vague failure words, no weasel, peacock or filler words, and no jargon
+    such as "token". "couldn't" appears only with a sentence after it, as in
+    the frontends' "We couldn't load X. Select Try again."
+  - Every error gives a next step.
+  - Mail and notifications give an absolute UTC time from `formatUtcDateTime`
+    (`src/utilities/date-text.utilities.ts`). The one exception is a billing
+    date: the date alone, in the workspace's time zone (`formatBillingDate`,
+    `src/services/billing/billing-dates.service.ts`), so it matches the day on
+    the customer's bank message.
+  - `tests/unit/copy-style.test.ts` fails on a banned phrase or a long
+    sentence.
+  - zod's own messages come from `src/validators/zod-messages.validators.ts`;
+    a schema's own message wins.
+  - Never rename a `code` to change copy: clients branch on codes.
 - **Comments.** Every named function, method, class, interface, type alias and
   exported const has a JSDoc description, tests included
   (`jsdoc/require-jsdoc`). Describe behaviour in prose; don't repeat the types
@@ -581,9 +601,10 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   `local/comment-style` checks the form.
 - **Scope a lint disable as narrowly as the rule allows, in the directive of
   the tool that runs the rule:** `oxlint-disable` for a rule in
-  `vite.config.ts`, `eslint-disable` for one in `eslint.config.mjs`. Each tool
-  ignores the other's directives and fails on an unused one of its own. Give a
-  scoped disable of a type-aware rule a comment on why the call site is safe.
+  `vite.config.ts`, and `eslint-disable` for one in `eslint.config.mjs`. Each
+  tool ignores the other's directives and fails on an unused one of its own.
+  Give a scoped disable of a type-aware rule a comment on why the call site is
+  safe.
 - **Don't import or "fix" `tests/fixtures/lint-cycle/` or
   `tests/fixtures/lint-zones/`.** They are committed violations that
   `tests/unit/lint-gates.test.ts` lints to prove each gate fires.
@@ -596,7 +617,8 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`,** so
   `drizzle-kit` needs only `DATABASE_URL`
   ([DATABASE.md](DATABASE.md#drizzleconfigts-and-why-it-only-needs-database_url)).
-- **Don't remove `tracing.ts`'s OTel loader hook** (`register()`): without it
+- **Don't remove `tracing.ts`'s OpenTelemetry (OTel) loader hook**
+  (`register()`): without it
   the CommonJS pino imported from ESM is never instrumented. After editing
   `otel-collector.yaml`, run `docker compose restart otel-collector`: it is
   bind-mounted, and `docker compose up -d` doesn't pick up the change.
@@ -604,11 +626,11 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
   `pnpm test:coverage` and `pnpm build` all exit 0, or `pnpm gate` does**
   ([CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr)). `pnpm gate`
   runs all of them (the format check sits inside `pnpm lint`'s `vp check`),
-  and the pre-push hook runs `pnpm gate`. Don't drop
-  type-aware lint from pre-commit to speed it up.
+  and the pre-push hook runs `pnpm gate`. Don't drop type-aware lint from
+  pre-commit to speed it up.
 - **Push with `pnpm push`, not `git push`.** It runs the gate first, then
-  `git push --no-verify`: a long pre-push hook can outlast the SSH connection
-  and drop the push behind a misleading exit code. A clone made while the
+  `git push --no-verify`. A long pre-push hook can outlast the SSH (Secure
+  Shell) connection and drop the push behind a misleading exit code. A clone made while the
   hooks were husky's keeps `core.hooksPath=.husky/_`, and `vp config` skips
   it, so no hook runs; fix it once with
   `git config --unset core.hooksPath && pnpm prepare`.

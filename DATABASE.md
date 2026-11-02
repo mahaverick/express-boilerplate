@@ -1,11 +1,20 @@
 # Database
 
-Drizzle ORM on Postgres, through the `postgres` (postgres-js) driver. This
-document covers the client's exports, the tables, how migrations are generated
-and applied (including on a database that already holds data), the test
-database and the batch-delete query shape. How the client sits in the process,
-and the retention and analytics jobs that delete rows, are in
-[ARCHITECTURE.md](ARCHITECTURE.md#data-layer).
+This file is for a developer who adds a table, writes a migration or applies
+one to a database that holds data. The API stores its data in Postgres through
+Drizzle ORM (object-relational mapper) and the `postgres` (postgres-js) driver.
+
+This file covers:
+
+- the database client and what it exports;
+- the tables and the columns that need explanation;
+- how to generate and apply migrations, including on a database that holds
+  data;
+- the test database;
+- the query shape every batch delete uses.
+
+How the client sits in the process, and the retention and analytics jobs that
+delete rows, are in [ARCHITECTURE.md](ARCHITECTURE.md#data-layer).
 
 ## The client and pool
 
@@ -19,27 +28,35 @@ and the retention and analytics jobs that delete rows, are in
   repository method takes an optional `DbExecutor` last parameter, defaulting
   to `db`, so a service can compose several calls in one transaction.
 
-Why there is one client, and the pool options `DB_POOL_MAX`,
-`DB_STATEMENT_TIMEOUT_MS` and prepared statements off, are in
-[ARCHITECTURE.md](ARCHITECTURE.md#data-layer); the defaults are in its
+[ARCHITECTURE.md](ARCHITECTURE.md#data-layer) explains why there is one
+client, and the pool options: `DB_POOL_MAX`, `DB_STATEMENT_TIMEOUT_MS` and
+prepared statements turned off. Their defaults are in its
 [environment table](ARCHITECTURE.md#environment-variables). Two options are
 fixed in `src/configs/database.config.ts`: an idle connection closes after 20
-seconds, and a connect attempt gives up after 10.
+seconds, and a connection attempt gives up after 10 seconds.
 
 ### Postgres 18
 
-`docker-compose.yml` and CI pin Postgres to major version 18. Migrations and
-models use `uuidv7()` as a column default, which Postgres builds in from 18.
-On 17 or older a migration aborts with `function uuidv7() does not exist`
-unless an extension is installed. Do not lower the image tag without checking
-this.
+`docker-compose.yml` and continuous integration (CI,
+`.github/workflows/ci.yml`) pin Postgres to major version 18. Migrations and
+models use `uuidv7()` as a column default, which Postgres builds in from
+version 18. On version 17 or older, a migration aborts with
+`function uuidv7() does not exist` unless an extension supplies the function.
+Do not lower the image tag without checking this.
 
 ## Models and tables
 
-`src/database/models/*.model.ts` defines the tables, a closely related pair
-sometimes sharing one file. The `*.model.ts` suffix is enforced by `check-file`
-([ARCHITECTURE.md](ARCHITECTURE.md#directory-rules)). A model file under that
-glob is picked up by `drizzle.config.ts` with no config change.
+`src/database/models/*.model.ts` defines the tables. Most files define one
+table; `tenant.model.ts`, `notification.model.ts`, `billing.model.ts` and
+`tax.model.ts` define several related ones. The `check-file` lint rule enforces
+the `*.model.ts` suffix
+([ARCHITECTURE.md](ARCHITECTURE.md#directory-rules)). `drizzle.config.ts`
+picks up any model file under that glob with no config change.
+
+Abbreviations in the table: PII is personally identifiable information; SEZ is
+a Special Economic Zone, an Indian tax zone; GSTIN is the Goods and Services
+Tax Identification Number of an Indian business; a CHECK is a Postgres check
+constraint.
 
 | Table                          | Model file                        | Holds                                                                                                                                           |
 | ------------------------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -83,50 +100,57 @@ Drizzle's own bookkeeping table is separate from these.
 
 ### `users`
 
-`id` is a `uuidv7()` primary key. `email` is unique case-insensitively among
-rows that are not soft-deleted, through a partial `lower(email)` index
-(`users_email_unique`), not a plain unique constraint, so a soft-deleted user's
-address can sign up again. The rest: `first_name`, `last_name`, `active`,
+`id` is a `uuidv7()` primary key. `email` is unique, ignoring case, among rows
+that are not soft-deleted. A partial `lower(email)` index
+(`users_email_unique`) enforces this instead of a plain unique constraint, so a
+soft-deleted user's address can sign up again.
+
+The other columns are `first_name`, `last_name`, `active`,
 `email_verified_at`, `last_logged_in_at`, `analytics_opt_out` (the user turned
 off browser analytics; server events ignore it) and the
 `deleted_at`/`created_at`/`updated_at` trio every soft-deletable table carries.
 
 ### `user_tokens`
 
-One table holds every token purpose (`purpose`: `'refresh'`,
-`'sign_in_link'`, `'step_up_link'`, `'invitation_link'`), since they share
-hashing, lookup, expiry and revocation.
-The `user_tokens_purpose_check` constraint enforces the list in the database,
-not only through TypeScript's `$type<TokenPurpose>()`.
+One table holds every token purpose, because all four share hashing, lookup,
+expiry and revocation. The `purpose` column is `'refresh'`, `'sign_in_link'`,
+`'step_up_link'` or `'invitation_link'`. The `user_tokens_purpose_check`
+constraint enforces that list in the database, not only through TypeScript's
+`$type<TokenPurpose>()`.
 
 - `token_hash` is a SHA-256 digest of the raw token, never the token.
-- `session_id`, `session_started_at` and `authenticated_at` are meaningful only
-  for `'refresh'`, except that `session_id` is meaningful on a
-  `'step_up_link'` too (see Emailed links). `session_id` groups every token
-  descended from one login into a rotation family. `session_started_at` is
-  copied forward unchanged by every rotation, which makes
-  `SESSION_ABSOLUTE_TTL` an absolute ceiling. `authenticated_at` is when the
-  session last proved who its user is, and is the source of the access
-  token's `auth_time`. NULL for a session a Google sign-in started, or one
-  from before 0018.
+- `session_id`, `session_started_at` and `authenticated_at` have meaning only
+  on a `'refresh'` row. The one exception is `session_id`, which a
+  `'step_up_link'` row also carries (see [Emailed links](#emailed-links)).
+  - `session_id` groups every token descended from one login into a rotation
+    family.
+  - `session_started_at` is copied forward unchanged by every rotation, which
+    makes `SESSION_ABSOLUTE_TTL` an absolute ceiling (TTL is time to live).
+  - `authenticated_at` is when the session last proved who its user is, and is
+    the source of the access token's `auth_time`. It is NULL for a session a
+    Google sign-in started, and for one started before migration 0018.
 - `consumed_at` is set only by `UserTokenRepository.claimOnce`, so it
   separates a row spent through its single-use path from one revoked unused.
-- `replaced_by_id` points at the row a token rotated into. Nothing reads it; it
-  is forensic metadata. Its foreign key is `ON DELETE SET NULL`, so a chain
+- `replaced_by_id` points at the row a token rotated into. No code reads it;
+  it is forensic metadata. Its foreign key is `ON DELETE SET NULL`, so a chain
   read back after the retention purge can have gaps.
 - `deleted_at` exists only to satisfy `SoftDeletableTableConfig`. No path sets
   it, and the retention purge ignores it.
 
 #### Emailed links
 
-The three link purposes are the links a mail carries to sign someone in, to
-confirm a step-up, or to confirm an invitation (sign in and join), 32 random
-bytes each, stored as a SHA-256 hash. They use columns no `refresh` row
-fills: `email` (the address, lowercased), `app` (`'web'` or `'apex'`, the
-frontend the link opens; verify reads it from the row, never from the
-request; `user_tokens_app_check`), `redirect` (a same-origin path checked by
-`redirectPathSchema`) and `invitation_id`. `user_tokens_shape_check` holds
-each purpose's shape:
+The three link purposes are the links an email carries: one signs someone in,
+one confirms a step-up (a fresh proof of identity before a sensitive action),
+and one confirms an invitation (signs in and joins). Each token is 32 random
+bytes, stored as a SHA-256 hash. Link rows use columns no `refresh` row fills:
+
+- `email`: the address, lowercased.
+- `app`: `'web'` or `'apex'`, the frontend the link opens. Verify reads it from
+  the row, never from the request. `user_tokens_app_check` enforces the list.
+- `redirect`: a same-origin path checked by `redirectPathSchema`.
+- `invitation_id`.
+
+`user_tokens_shape_check` enforces each purpose's shape:
 
 - A `refresh` row names a user and none of the link columns.
 - A `sign_in_link` row names an address and an app, and never a `user_id` or
@@ -146,34 +170,55 @@ each purpose's shape:
   deletes its links, and `user_tokens_invitation_id_idx` (partial, where
   `invitation_id` is set) serves that cascade.
 
-A link row shares `session_id` with its session's refresh rows, so every
-reader that gives a session's rows refresh meaning is scoped to
-`purpose = 'refresh'`: `isSessionKilled` (a superseded or claimed link would
-otherwise read as a kill marker and end the session), `findRefreshByHash` (the
-rotation and sign-out lookups), `liveSessionIdsExcept` and
-`markSessionAuthenticated`.
+A link row shares `session_id` with its session's refresh rows. So every reader
+that treats a session's rows as refresh tokens is scoped to
+`purpose = 'refresh'`:
 
-Issuing a link revokes the live links it supersedes (every `sign_in_link` of
-the address, or every `invitation_link` of the address and invitation, through
-`user_tokens_live_email_idx`, or every `step_up_link` of the session) and
-inserts the new row in one transaction, under a transaction-scoped advisory
-lock on the address, the address and invitation, or the session taken first,
-so at most one of each stays live. The claim is `claimOnce`, which checks no
-expiry; the caller judges `expires_at` on the claimed row, so an expired link is
-spent by its one presentation. A `sign_in_link` or `invitation_link` row has
-no user, so a user purge deletes the purged address's links itself (`deleteForEmail`), up to the
-deletion and only while no live account holds the address, and the user-wide
-revocations never reach one: a sign-out of the other sessions, a staff
-sign-out and a deactivation revoke the address's live links in their own
-transaction (`revokeSignInLinksOf`, both purposes), and a verify re-checks the
-account under its row lock. The retention rule
-below covers link rows as it covers the rest.
+- `isSessionKilled`, where a superseded or claimed link would otherwise read as
+  a kill marker and end the session;
+- `findRefreshByHash`, the rotation and sign-out lookups;
+- `liveSessionIdsExcept`;
+- `markSessionAuthenticated`.
 
-Rotation is append-only, because reuse detection needs the old row to
-recognise a replay. With a 15-minute `ACCESS_TOKEN_TTL`, a client that stays
-signed in adds about 96 rows a day. The retention purge deletes a row once
-`RETENTION_TOKENS_DAYS` days have passed since its `expires_at`, or since a
-revoke that never consumed it (logout, reuse, a sign-out of other sessions):
+**Issuing a link.** One transaction revokes the live links the new one
+supersedes and inserts the new row, so at most one of each stays live. It first
+takes a transaction-scoped advisory lock on the scope below.
+
+| Purpose           | Superseded links revoked                              | Advisory lock on           |
+| ----------------- | ----------------------------------------------------- | -------------------------- |
+| `sign_in_link`    | every `sign_in_link` of the address                   | the address                |
+| `invitation_link` | every `invitation_link` of the address and invitation | the address and invitation |
+| `step_up_link`    | every `step_up_link` of the session                   | the session                |
+
+The address lookups use `user_tokens_live_email_idx`.
+
+**Claiming a link.** The claim is `claimOnce`, which checks no expiry. The
+caller judges `expires_at` on the claimed row, so one presentation spends an
+expired link.
+
+**Links with no user.** A `sign_in_link` or `invitation_link` row has no user,
+so two things follow:
+
+- A user purge deletes the purged address's links itself (`deleteForEmail`),
+  up to the deletion and only while no live account holds the address.
+- The user-wide revocations never reach these rows. A sign-out of the other
+  sessions, a staff sign-out and a deactivation revoke the address's live links
+  of both purposes in their own transaction (`revokeSignInLinksOf`). A verify
+  re-checks the account under its row lock.
+
+The retention rule below covers link rows as it covers the rest.
+
+**Retention.** Rotation is append-only, because reuse detection needs the old
+row to recognise a replay. With a 15-minute `ACCESS_TOKEN_TTL`, a client that
+stays signed in adds about 96 rows a day (24 hours at 4 rotations an hour).
+The retention purge deletes a row once `RETENTION_TOKENS_DAYS` days have passed
+since either of these:
+
+- its `expires_at`;
+- a revoke that never consumed it (logout, reuse, a sign-out of other
+  sessions).
+
+The query is
 `expires_at < cutoff or (revoked_at < cutoff and consumed_at is null)`. A
 rotated-away row carries `consumed_at`, so it stays until it expires. The
 indexes on `expires_at` and on the revoked-unconsumed partial predicate serve
@@ -186,17 +231,22 @@ One row per purged user (`distinct_id`, the user's id, is the primary key),
 with `not_before`, `attempts`, `last_error` (an HTTP status or an error class
 such as `http_500` or `timeout`, never a response body) and `created_at`. The
 `analytics_deletions_due_idx` index on `not_before` serves the claim. Like
-`analytics_outbox` it holds an id and no PII and has no foreign key, because
-the user row is gone once the purge commits. No retention rule prunes it: a row
-PostHog keeps refusing stays. What writes, claims and deletes the rows is under
+`analytics_outbox`, it holds an id and no PII, and it has no foreign key,
+because the user row is gone once the purge commits. No retention rule prunes
+it, so a row PostHog keeps refusing stays. What writes, claims and deletes the rows is under
 [Purges and what stays in PostHog](ARCHITECTURE.md#analytics).
 
 ## Migrations
 
-`src/database/migrations/` is tracked: one SQL file per migration, and
-`meta/_journal.json` records them in order. `drizzle-kit generate` writes
-everything in it, except the hand-added statements in these migrations, each
-marked by a comment in its file (0024's has none):
+This section explains what each migration does beyond its generated SQL, how
+to generate and apply migrations, and how to apply them to a database that
+holds data.
+
+`src/database/migrations/` is tracked in git: one SQL file per migration, with
+`meta/_journal.json` recording them in order. `drizzle-kit generate` writes
+everything in the directory except the hand-added statements listed below. A
+comment in each file marks its hand-added statements; `0024`'s file has no such
+comment. The list also notes migrations whose generated SQL needs explaining.
 
 - `0010` backfills an `'email'` `auth_providers` row for every user who could
   sign in by email when it ran.
@@ -232,21 +282,25 @@ marked by a comment in its file (0024's has none):
   `tenant_invitations` and `user_tokens_invitation_id_idx`.
 - `0031` is hand-written whole (`drizzle-kit generate --custom`; no schema
   change). It gives each live account the `email_messages` rows its address
-  was sent while no account held it (`user_id` NULL), except rows older than
-  the latest deletion of an earlier, soft-deleted holder of the address,
-  which may be that person's. New accounts adopt theirs when they are created
-  (`EmailMessageRepository.adoptUnowned`).
+  was sent while no account held it (`user_id` NULL). It skips rows older than
+  the latest deletion of an earlier, soft-deleted holder of the address, since
+  those may be that person's. An account created after `0031` adopts its rows
+  at creation (`EmailMessageRepository.adoptUnowned`).
+- `0033` inserts these rows after its generated statements:
+  - the Free and Paid plans (Free: 3 members, no `advanced_example`; Paid: no
+    member cap, `advanced_example` on);
+  - Paid's two active prices in Indian rupees (INR), stored in paise with tax
+    included: `99900` a month (999 INR) and `999000` a year (9,990 INR), with
+    no provider plan ids;
+  - the single `billing_settings` row (trial on, 14 days, 7 days' grace);
+  - a `free` `tenant_billing` row on the Free plan for every tenant that is not
+    the platform tenant, archived and soft-deleted ones included.
 
-- `0033` inserts, after its generated statements, the Free and Paid plans
-  (Free: 3 members, no `advanced_example`; Paid: no member cap,
-  `advanced_example` on), Paid's two active INR prices (`99900` a month,
-  `999000` a year, no provider plan ids), the single `billing_settings` row
-  (trial on, 14 days, 7 days' grace), and a `free` `tenant_billing` row on the
-  Free plan for every tenant that is not the platform tenant, archived and
-  soft-deleted ones included. It moves the `audit_logs` target-type CHECK swap
-  after that backfill, to the end of the file. The `billing_alerts` and
-  `billing_state_history` time indexes are ascending and end in `id`, so a
-  backward scan serves the newest-first order with its id tiebreak and no Sort.
+  It moves the `audit_logs` target-type CHECK swap after that backfill, to the
+  end of the file. The `billing_alerts` and `billing_state_history` time
+  indexes are ascending and end in `id`, so a backward scan serves the
+  newest-first order with its id tiebreak and no Sort.
+
 - `0034` is generated whole. It adds three nullable `tenant_billing` columns:
   `next_authenticated_at` (when a scheduled switch or resubscribe was first
   read authenticated), and `card_change_started_at` with
@@ -273,13 +327,15 @@ marked by a comment in its file (0024's has none):
   `audit_logs_target_type_check` takes an `ACCESS EXCLUSIVE` lock on
   `audit_logs` and rescans it, as `0033` did, so apply it in a quiet window on
   a large log.
-  Tax documents survive their tenant: `tax_documents.tenant_id` is
-  `ON DELETE SET NULL`, because GST records are kept 72 months and each
-  document's snapshot holds every printed field. A tenant purge therefore
-  leaves its invoices and credit notes in place (and in the tax export), and
-  the number series stays gap-free. `tenant_tax_details` and
-  `tax_held_charges` are deleted with the tenant. No code updates or deletes a
-  `tax_documents` row.
+
+  Tax documents survive their tenant. `tax_documents.tenant_id` is
+  `ON DELETE SET NULL`, because Goods and Services Tax (GST) records are kept
+  for 72 months and each document's snapshot holds every printed field. A
+  tenant purge therefore leaves its invoices and credit notes in place (and in
+  the tax export), and the number series stays gap-free. `tenant_tax_details`
+  and `tax_held_charges` are deleted with the tenant. No code updates or
+  deletes a `tax_documents` row.
+
 - `0039` is generated whole. It adds `tax_document_counters_type_check`, so a
   counter row names `invoice` or `credit_note` only, as `tax_documents` does.
   The table holds one row per type and financial year, so the check's scan is
@@ -287,32 +343,39 @@ marked by a comment in its file (0024's has none):
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until
-  its mail goes out, and a claim is never released, so a send that fails is
-  not retried. `trial_reminder_3d_sent_at`, `trial_reminder_last_day_sent_at`
-  and `trial_midpoint_sent_at` are the three trial reminders.
-  `renewal_reminder_for_period_end` holds the period end the yearly renewal
-  reminder was sent for, so each period gets its own. `winback_7d_sent_at` and
-  `winback_30d_sent_at` hold when each win-back email was claimed; a claim
-  older than the workspace's latest move to Free (its newest
-  `billing_state_history` row into `free`) counts as unclaimed, so each Free
-  period gets its own two with no reset write. `trial_ended_notified_at` is
-  reserved and unused: the trial-ended email goes out with the move to Free
-  itself.
+  its email goes out. A claim is never released, so a send that fails is not
+  retried.
+  - `trial_reminder_3d_sent_at`, `trial_reminder_last_day_sent_at` and
+    `trial_midpoint_sent_at` are the three trial reminders.
+  - `renewal_reminder_for_period_end` holds the period end the yearly renewal
+    reminder was sent for, so each period gets its own.
+  - `winback_7d_sent_at` and `winback_30d_sent_at` hold when each win-back
+    email was claimed. A claim older than the workspace's latest move to Free
+    (its newest `billing_state_history` row into `free`) counts as unclaimed,
+    so each Free period gets its own two emails with no reset write.
+  - `trial_ended_notified_at` is reserved and unused: the trial-ended email
+    goes out with the move to Free itself.
 
 Do not hand-edit a migration otherwise, except as
 [Schema migrations on a live database](#schema-migrations-on-a-live-database)
 describes, and only before that database has applied it.
 
 Generated does not mean disposable. The migrations are the ordered, immutable
-record of how the schema reached its current state. `pnpm db:migrate` replays
-them in journal order against a database that may be several migrations
-behind, and CI and the production image cannot regenerate them (`generate`
-diffs the models, not a live database). They must be committed; do not add the
-directory to `.gitignore`. The `fmt` ignore patterns in `vite.config.ts`
-exclude it, because Oxfmt and `drizzle-kit` would otherwise each rewrite
-`meta/_journal.json` and the SQL into their own layout on every run, and the
-`test.coverage` block in `vite.config.ts` excludes
-`**/migrations/**` and `src/database/models/**` from coverage.
+record of how the schema reached its current state:
+
+- `pnpm db:migrate` replays them in journal order against a database that may
+  be several migrations behind.
+- CI and the production image cannot regenerate them, because `generate`
+  diffs the models, not a live database.
+- So commit them, and do not add the directory to `.gitignore`.
+
+`vite.config.ts` excludes the directory in two places:
+
+- The `fmt` ignore patterns, because Oxfmt and `drizzle-kit` would otherwise
+  each rewrite `meta/_journal.json` and the SQL into their own layout on every
+  run.
+- The `test.coverage` block, which excludes `**/migrations/**` and
+  `src/database/models/**` from coverage.
 
 ### `drizzle.config.ts` and why it only needs `DATABASE_URL`
 
@@ -328,19 +391,22 @@ export default defineConfig({
 ```
 
 It calls `getDatabaseUrl()`, not `getEnv()`. `getEnv()` validates the whole
-environment schema (JWT secrets, session secret, everything the app needs to
-boot), and generating or checking a migration needs none of it. Routing the
-config through `getEnv()` would make every `drizzle-kit` run, CI included, need
-application secrets that have nothing to do with writing SQL.
-`getDatabaseUrl()` re-slices the same schema (`EnvSchema.pick({ DATABASE_URL:
-true })`), so the rule for `DATABASE_URL` stays single-sourced.
-`drizzle-kit check` runs with only `DATABASE_URL` set.
+environment schema: the JSON Web Token (JWT) secrets, the session secret and
+everything else the app needs to boot. Generating or checking a migration needs
+none of it. Routing the config through `getEnv()` would make every
+`drizzle-kit` run, CI included, need application secrets that have nothing to
+do with writing SQL.
+
+`getDatabaseUrl()` re-slices the same schema
+(`EnvSchema.pick({ DATABASE_URL: true })`), so the rule for `DATABASE_URL`
+stays defined in one place. `drizzle-kit check` runs with only `DATABASE_URL`
+set.
 
 ### Commands
 
-All three read `DATABASE_URL` from `process.env`. With a `.env` in place (see
-the [README](README.md) quick start), `env.config.ts` loads it, so the inline
-`DATABASE_URL=...` below is needed only without one.
+All three commands read `DATABASE_URL` from `process.env`. With a `.env` in
+place (see the [README](README.md) quick start), `env.config.ts` loads it, so
+you need the inline `DATABASE_URL=...` below only without one.
 
 **Generate a migration** from the model files with `pnpm
 db:migration:generate` (`drizzle-kit generate`):
@@ -354,16 +420,20 @@ It writes the SQL under `src/database/migrations/` and updates
 the models already match. It does not touch the database.
 
 **Apply pending migrations** with `pnpm db:migrate` (`src/database/migrate.ts`,
-run through `tsx`). `runMigrations()` opens its own single-connection client
-from `getDatabaseUrl()`, not the long-lived pool, and closes it when done.
-Drizzle's migrator applies every pending migration in one transaction, so a
-batch lands whole or not at all, and every lock a migration takes is held until
-the whole batch commits. Against an up-to-date database it exits 0 and prints
-nothing, because `migrate.ts` drops Postgres's "already exists, skipping"
-notices. `pnpm db:migrate:prod` runs the same logic from the built output
-(`node dist/database/migrate.js`): `pnpm build` copies the migrations into
-`dist/`, and the production image, which has no `drizzle-kit`, migrates this
-way. CI runs `pnpm db:migrate` before the tests.
+run through `tsx`):
+
+- `runMigrations()` opens its own single-connection client from
+  `getDatabaseUrl()`, not the long-lived pool, and closes it when done.
+- Drizzle's migrator applies every pending migration in one transaction. A
+  batch lands whole or not at all, and every lock a migration takes is held
+  until the whole batch commits.
+- Against an up-to-date database it exits 0 and prints nothing, because
+  `migrate.ts` drops Postgres's "already exists, skipping" notices.
+- `pnpm db:migrate:prod` runs the same logic from the built output
+  (`node dist/database/migrate.js`). `pnpm build` copies the migrations into
+  `dist/`, and the production image, which has no `drizzle-kit`, migrates this
+  way.
+- CI runs `pnpm db:migrate` before the tests.
 
 **Check migration and schema consistency:**
 
@@ -373,20 +443,24 @@ DATABASE_URL=postgres://boilerplate:boilerplate@localhost:5433/boilerplate pnpm 
 
 ### Schema migrations on a live database
 
-`pnpm db:migrate` applies every pending migration in one transaction, so a
-lock any statement takes is held until the whole batch commits. On an empty or
-small database that is brief. On a database that already holds a lot of data,
-some migrations below block reads or writes for as long as their index builds
-or validation scans take. For the ones that offer a manual step, build the
-indexes by hand first with `CREATE INDEX CONCURRENTLY`. **Run each
-`CONCURRENTLY` statement on its own, outside any transaction:** Postgres
-refuses `CONCURRENTLY` inside one, and `psql` running a file with
-`-1`/`--single-transaction` wraps it in one. A failed `CONCURRENTLY` build
-leaves an INVALID index that `IF NOT EXISTS` would then skip; check
-`pg_index.indisvalid`, and if it is false, `DROP INDEX CONCURRENTLY` it and
-build it again. Once the indexes exist, edit the not-yet-applied migration file
-as described so it does not build them a second time under the lock, then run
-`pnpm db:migrate`.
+Read this before you apply migrations to a database with large tables.
+`pnpm db:migrate` applies every pending migration in one transaction, so a lock
+any statement takes is held until the whole batch commits. On an empty or small
+database that is brief. On large tables, the migrations below block reads or
+writes for as long as their index builds or validation scans take.
+
+For a migration that offers a manual step:
+
+1. Build its indexes by hand first with `CREATE INDEX CONCURRENTLY`. **Run each
+   `CONCURRENTLY` statement on its own, outside any transaction.** Postgres
+   refuses `CONCURRENTLY` inside one, and `psql` running a file with
+   `-1`/`--single-transaction` wraps it in one.
+2. Check each index is valid. A failed `CONCURRENTLY` build leaves an INVALID
+   index that `IF NOT EXISTS` would then skip. Check `pg_index.indisvalid`; if
+   it is false, `DROP INDEX CONCURRENTLY` it and build it again.
+3. Edit the not-yet-applied migration file as its entry describes, so it does
+   not build the indexes a second time under the lock.
+4. Run `pnpm db:migrate`.
 
 - **`0013` blocks every read and write on `notifications` until the batch
   commits.** Its `ADD COLUMN` takes an `ACCESS EXCLUSIVE` lock, held while the
@@ -444,9 +518,8 @@ as described so it does not build them a second time under the lock, then run
   commits.** Its `ALTER TABLE tenants` takes an `ACCESS EXCLUSIVE` lock, held
   while the two trigram indexes build, and every tenant-scoped request waits.
   The new `audit_logs` foreign keys also take `SHARE ROW EXCLUSIVE` on `users`,
-  so writes to users wait too. A tenants table is usually small enough that
-  this is brief. On a large one, run each of these on its own, outside any
-  transaction:
+  so writes to users wait too. On a small `tenants` table this is brief. On a
+  large one, run each of these on its own, outside any transaction:
 
   ```sql
   CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -554,10 +627,10 @@ as described so it does not build them a second time under the lock, then run
   that scan; on a large `tenants` table apply it in a quiet window. Its three
   foreign keys to `users` (`onboarding_dismissed_by`, and
   `onboarding_completions.user_id` and `completed_by`) also take
-  `SHARE ROW EXCLUSIVE` on `users` until the transaction commits, so every
+  `SHARE ROW EXCLUSIVE` on `users` until the transaction commits. So every
   write to a user row (a sign-in's `last_logged_in_at` update, an account
-  creation, a profile change) waits for the migration too; reads, including `FOR SHARE`
-  and `FOR NO KEY UPDATE` locks, do not.
+  creation, a profile change) waits for the migration too. Reads, including
+  `FOR SHARE` and `FOR NO KEY UPDATE` locks, do not wait.
 
 - **`0022` holds `users` briefly.** Its `ADD COLUMN analytics_opt_out` is
   metadata-only (the default is a constant, so no row is rewritten), but it
@@ -747,29 +820,34 @@ as described so it does not build them a second time under the lock, then run
 
 ## The test database
 
+This section is for anyone running or debugging the test suites. Tests never
+touch the development database.
+
 `docker/postgres/init.sql` runs once, the first time the `postgres` container
-starts against an empty volume (the `docker-entrypoint-initdb.d` convention; it
-never re-runs against an existing one). It creates a second role and database:
+starts against an empty volume. This is the `docker-entrypoint-initdb.d`
+convention; the script never re-runs against an existing volume. It creates a
+second role and database:
 
 ```sql
 CREATE ROLE test LOGIN PASSWORD 'test' CREATEDB;
 CREATE DATABASE boilerplate_test OWNER test;
 ```
 
-`.env.test`'s `DATABASE_URL` points at `boilerplate_test`, so dev data (the
-`boilerplate` database) and test data never share a database. If the role or
-database goes missing, for example after `docker compose down -v`, the next
-`docker compose up -d` against a fresh volume recreates them. In CI the
-Postgres service is created with `test` as its bootstrap superuser and
-`boilerplate_test` as its database, because a `services:` block cannot mount
-`init.sql`.
+`.env.test`'s `DATABASE_URL` points at `boilerplate_test`, so development data
+(the `boilerplate` database) and test data never share a database. If the role
+or database goes missing, for example after `docker compose down -v`, the next
+`docker compose up -d` against a fresh volume recreates them. CI creates its
+Postgres service with `test` as the bootstrap superuser and `boilerplate_test`
+as the database, because a `services:` block cannot mount `init.sql`.
 
 **Global setup** (`tests/helpers/global-setup.ts`, vitest's `globalSetup`)
 runs once in the main process, before any worker starts:
 
-1. It loads `.env.test` and derives `WORKER_COUNT` (8, from
-   `tests/helpers/worker-database.ts`) database URLs from `DATABASE_URL` by
-   suffixing the name: `boilerplate_test_w1` to `boilerplate_test_w8`.
+1. It loads `.env.test` and derives `WORKER_COUNT` database URLs from
+   `DATABASE_URL` by suffixing the name: `boilerplate_test_w1` to
+   `boilerplate_test_w8`. `WORKER_COUNT` (`tests/helpers/worker-database.ts`)
+   is 8, or `VITEST_WORKERS` (1 to 16) when that is set; this section assumes
+   the default.
 2. It creates each with `CREATE DATABASE`, ignoring `42P04`
    (`duplicate_database`) from an earlier run against the same volume. The
    role's `CREATEDB` is what permits this.
@@ -777,16 +855,21 @@ runs once in the main process, before any worker starts:
 4. It deletes leftover rate-limit counters from the test workers' Redis
    prefixes (`SCAN`, never `FLUSHDB`).
 
-**Isolation.** `tests/helpers/setup-global.ts`, a `setupFiles` entry that runs
-in every forked worker for every test file, calls `useWorkerDatabase()`. That
-rewrites `process.env.DATABASE_URL` to the worker's own database, by
-`VITEST_POOL_ID`, before any `src/` module reads it, and keeps the untouched
-base URL under `TEST_DATABASE_BASE_URL` so a second call cannot suffix the name
-twice. `maxWorkers` in `vite.config.ts` is `WORKER_COUNT`, so each worker has
-a database to itself and two workers cannot race a unique constraint on the
-same row. The migrator lives in `globalSetup` and not in `setupFiles`, which
-would run it again for every file. `.env.test` sets `DB_POOL_MAX=2`, so the
-eight workers hold at most 16 connections.
+**Isolation.** `tests/helpers/setup-global.ts` is a `setupFiles` entry, so it
+runs in every forked worker for every test file. It calls
+`useWorkerDatabase()`, which does two things before any `src/` module reads
+the URL:
+
+- It rewrites `process.env.DATABASE_URL` to the worker's own database, chosen
+  by `VITEST_POOL_ID`.
+- It keeps the untouched base URL under `TEST_DATABASE_BASE_URL`, so a second
+  call cannot suffix the name twice.
+
+`maxWorkers` in `vite.config.ts` is `WORKER_COUNT`, so each worker has a
+database to itself and two workers cannot race a unique constraint on the same
+row. The migrator lives in `globalSetup` and not in `setupFiles`, which would
+run it again for every file. `.env.test` sets `DB_POOL_MAX=2`, so the eight
+workers hold at most 16 connections.
 
 The `unit` project in `vite.config.ts`, which the git hooks use, sets no
 `globalSetup` and excludes `tests/integration/**`, so it runs with Docker down.
@@ -794,8 +877,9 @@ Only the `integration` project has the migrator in `globalSetup`.
 
 ## Batch deletes and claims
 
-Every batch that deletes or claims rows with a limit selects the ids in a
-locking subquery and compares with `= any(array(...))`:
+This section is for anyone writing a query that deletes or claims a limited
+number of rows. Every such batch selects the ids in a locking subquery and
+compares with `= any(array(...))`:
 
 ```ts
 const batch = tx
@@ -812,8 +896,8 @@ Each site orders by a stable key (the id, or the time column and then the id)
 so batches take the oldest rows first.
 
 The shape bounds the batch. With `id in (select ... limit n for update skip
-locked)` the planner may choose a nested loop and rescan the subquery for every
-outer row. Each rescan skips the rows the statement has already locked or
+locked)`, the planner can choose a nested loop and rescan the subquery for
+every outer row. Each rescan skips the rows the statement has already locked or
 updated and takes the next ones, so the statement affects more than `n` rows.
 The planner picks that plan when the table's statistics say it is nearly
 empty. `= any(array(...))` evaluates the subquery once, into an array, whatever

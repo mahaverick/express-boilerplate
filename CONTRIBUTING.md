@@ -1,19 +1,29 @@
 # Contributing
 
+This guide is for anyone who changes this repo. It covers local setup, the
+checks a change must pass, the git hooks, commits, continuous integration
+(CI), releases and the dependency policy. It also lists the places that change
+together when you extend the API.
+
 ## Setup
 
-Follow the [README](README.md) quick start first. Running tests locally needs
-the compose stack up: `tests/integration/**` needs Postgres and Redis. The suite
-loads `.env.test.local` and then `.env.test`, never `.env`. To run against an
-isolated Mailpit, set `MAILPIT_URL` (its HTTP API, default
-`http://localhost:8025`) and `SMTP_PORT` there or in the shell. `tests/unit/**`
-needs neither, but only under `pnpm test:unit`; `pnpm test`'s globalSetup
-provisions the test databases before any test runs, so it needs the stack even
-for unit tests ([DATABASE.md](DATABASE.md#the-test-database)).
+Follow the [README](README.md) Quickstart first. Then:
+
+- **Integration tests need the compose stack up.** `tests/integration/**`
+  needs Postgres and Redis.
+- **The suite never reads `.env`.** It loads `.env.test.local`, then
+  `.env.test`.
+- **To run against an isolated Mailpit,** set `MAILPIT_URL` (its HTTP API,
+  default `http://localhost:8025`) and `SMTP_PORT`, in `.env.test.local` or in
+  the shell.
+- **Unit tests need no stack, but only under `pnpm test:unit`.** `pnpm test`'s
+  globalSetup provisions the test databases before any test runs, so it needs
+  the stack even for `tests/unit/**`
+  ([DATABASE.md](DATABASE.md#the-test-database)).
 
 ## Before you open a PR
 
-Run what CI runs:
+Run what CI runs before you open a pull request (PR):
 
 ```bash
 pnpm lint            # vp check (Oxlint + Oxfmt), the untyped ESLint, tsc --noEmit
@@ -23,15 +33,18 @@ pnpm test:coverage   # vitest, gated at 80% lines/functions/branches/statements
 pnpm build           # tsc + tsc-alias against tsconfig.build.json
 ```
 
-All five must exit 0, or run `pnpm gate`, which runs them all. `pnpm lint`
-fails on unformatted files; `pnpm format` fixes them.
-Oxlint runs every lint rule it can; ESLint runs only the rules Oxlint can't
-yet, listed with their reasons in [docs/lint-deferred.md](docs/lint-deferred.md).
-`pnpm lint` type-checks once, against `tsconfig.json`, which extends
-`tsconfig.build.json` and widens its `include` to `tests/` and
-`drizzle.config.ts`; `pnpm typecheck` runs that step alone.
-The two configs stay separate: see [CLAUDE.md](CLAUDE.md#code-conventions),
-which also holds the code conventions.
+All 5 must exit 0. `pnpm gate` runs them all in one command.
+
+- `pnpm lint` fails on unformatted files; `pnpm format` fixes them.
+- Oxlint runs every lint rule it can. ESLint runs only the rules Oxlint can't
+  yet, listed with their reasons in
+  [docs/lint-deferred.md](docs/lint-deferred.md).
+- `pnpm lint` type-checks once, against `tsconfig.json`. That config extends
+  `tsconfig.build.json` and widens its `include` to `tests/` and
+  `drizzle.config.ts`. `pnpm typecheck` runs that step alone.
+- The two configs stay separate: see
+  [CLAUDE.md](CLAUDE.md#code-conventions), which also holds the code
+  conventions.
 
 ## Tooling
 
@@ -53,33 +66,38 @@ runs the toolchain through `vp`; the `pnpm` scripts wrap it.
 ## Git hooks (Vite+)
 
 Hooks live in `.vite-hooks/` and install with `pnpm install` (the `prepare`
-script runs `vp config`). Commit normally; do not reach for `--no-verify` on a
+script runs `vp config`). Commit normally; do not use `--no-verify` on a
 routine commit.
 
-- **`pre-commit`** checks that the lockfile is not stale, runs `vp staged`
-  (the `staged` block in `vite.config.ts`: `vp check --fix` and `eslint --fix`
-  on staged `src/` and `tests/` TypeScript, `vp fmt` on staged JSON, JSONC and
-  Markdown), runs `vp test run --changed HEAD` on the `unit` project, and
-  regenerates and stages `.env.example` when `env.config.ts` is staged. The
-  `unit` project excludes `tests/integration/**` and skips the database setup,
-  so this hook runs with Docker down. Oxlint runs type-aware here
-  (it catches floating and misused promises); ESLint runs untyped. Keep both in
-  the hook.
+- **`pre-commit`** runs 4 steps:
+  1. It checks that the lockfile is not stale.
+  2. It runs `vp staged`, the `staged` block in `vite.config.ts`:
+     `vp check --fix` and `eslint --fix` on staged `src/` and `tests/`
+     TypeScript, and `vp fmt` on staged JSON, JSONC and Markdown.
+  3. It runs `vp test run --changed HEAD` on the `unit` project. That project
+     excludes `tests/integration/**` and skips the database setup, so this
+     hook runs with Docker down.
+  4. It regenerates and stages `.env.example` when `env.config.ts` is staged.
+
+  Oxlint runs type-aware here (it catches floating and misused promises), and
+  ESLint runs untyped. Keep both in the hook.
+
 - **`commit-msg`** runs `commitlint` ([Commits](#commits)). `pnpm commit` opens
   an interactive prompt.
-- **`pre-push`** runs `pnpm gate` (`scripts/pre-push-gate.sh`), which mirrors
-  CI's `lint` and `test` jobs minus the audits: `pnpm lint`, `pnpm lint:docs`,
-  `pnpm knip`, the domain-terms check, `pnpm test:coverage` (unit and
-  integration), `pnpm build`, and a check that `.env.example` is current. It
-  needs the compose stack (`docker compose up -d postgres redis mailpit`) and
-  checks it first, so a stopped stack fails in about 2 s.
+- **`pre-push`** runs `pnpm gate` (`scripts/pre-push-gate.sh`). The gate
+  mirrors CI's `lint` and `test` jobs minus the audits: `pnpm lint`,
+  `pnpm lint:docs`, `pnpm knip`, the domain-terms check, `pnpm test:coverage`
+  (unit and integration), `pnpm build`, and a check that `.env.example` is
+  current. It needs the compose stack
+  (`docker compose up -d postgres redis mailpit`) and checks it first, so a
+  stopped stack fails in about 2 s.
 
 **Push with `pnpm push`.** It takes `git push`'s arguments
-(`pnpm push origin HEAD`), runs the gate, and pushes only when the gate
+(`pnpm push origin HEAD`) and runs the gate. It pushes only when the gate
 passes, with `--no-verify` so the gate does not run twice. A long pre-push
-hook can outlast the SSH connection and drop the push, and `git push` then
-reports a misleading exit code; `pnpm push` opens the connection only after
-the gate.
+hook can outlast the SSH (Secure Shell) connection and drop the push, and
+`git push` then reports a misleading exit code. `pnpm push` opens the
+connection only after the gate.
 
 ### Existing clones
 
@@ -101,21 +119,26 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
 so a long `BREAKING CHANGE:` footer passes. Common types: `feat`, `fix`,
 `docs`, `chore`, `refactor`, `test`, `ci`.
 
-**The squash title is the commit.** Every PR merges by squash with the PR title
-as the commit subject, and release-please reads that commit to decide the next
-version. The `pr-title` workflow runs commitlint over the title, so a PR title
-must be a conventional commit too.
+**The squash title is the commit.** Every PR merges by squash, with the PR
+title as the commit subject. release-please reads that commit to decide the
+next version. The `pr-title` workflow runs commitlint over the title, so a PR
+title must be a conventional commit too.
 
 **A breaking change puts its migration text in the PR body, inside a commit
-override block.** The repository's squash-merge setting (a GitHub setting to
-confirm, not something in the repo files) commits the PR title and drops the PR
-description, so a `BREAKING CHANGE:` footer written in the description never
-reaches the commit, and the release notes carry the `!` but no migration text.
-release-please reads the merged PR's body, not only the commit, and uses the
-text between `BEGIN_COMMIT_OVERRIDE` and `END_COMMIT_OVERRIDE` in place of the
-squash commit's message. Nothing in this repository parses the block: it is a
-release-please behaviour, reached through `release.yml` and
-`release-please-config.json`. Write the full conventional message inside it:
+override block.**
+
+- The repository's squash-merge setting commits the PR title and drops the PR
+  description. It is a GitHub setting to confirm, not something in the repo
+  files.
+- So a `BREAKING CHANGE:` footer written in the description never reaches the
+  commit. The release notes then carry the `!` but no migration text.
+- release-please reads the merged PR's body, not only the commit. It uses the
+  text between `BEGIN_COMMIT_OVERRIDE` and `END_COMMIT_OVERRIDE` in place of
+  the squash commit's message.
+- Nothing in this repository parses the block: it is a release-please
+  behaviour, reached through `release.yml` and `release-please-config.json`.
+
+Write the full conventional message inside the block:
 
 ```text
 BEGIN_COMMIT_OVERRIDE
@@ -133,13 +156,13 @@ the merge.
 
 ## Adding, renaming or removing an environment variable
 
-These move together, or a gate below catches the one you missed:
+These 6 steps move together. A gate catches each one you miss:
 
 1. Add the field to `EnvSchema` in `src/configs/env.config.ts`, with a
    `.describe()`. That text becomes the variable's `.env.example` comment and
    its row in ARCHITECTURE.md's environment table. When its default depends
-   on `APP_ENV`, make the field optional and add a derivation helper beside
-   `isCookieSecure`/`logFormat` in the same file; never repeat the rule at a
+   on `APP_ENV`, make the field optional, and add a derivation helper beside
+   `isCookieSecure`/`logFormat` in the same file. Never repeat the rule at a
    call site.
 2. Regenerate `.env.example` with `pnpm env:example`. The pre-commit hook does
    this when `env.config.ts` is staged, and CI fails if the committed file
@@ -164,33 +187,39 @@ These move together, or a gate below catches the one you missed:
 ## CI
 
 `ci.yml` runs on every pull request, on `workflow_dispatch`, and as the gate
-`deploy.yml` calls before it builds an image. It has four kinds of job: `lint`, four `test-shard` jobs, `test` and `docker`. The ruleset
-that makes them required, and what runs after they pass on `main`, are in
+`deploy.yml` calls before it builds an image. It has 4 kinds of job: `lint`,
+4 `test-shard` jobs, `test` and `docker`. The ruleset that makes them
+required, and what runs after they pass on `main`, are in
 [ARCHITECTURE.md](ARCHITECTURE.md#deploying).
 
 **`lint`** needs no services:
 
-- `pnpm lint` (`vp check`: Oxlint and Oxfmt over the whole repo minus the
-  ignore patterns, then the untyped ESLint and `tsc --noEmit`), `pnpm lint:docs` (no history phrasing in the Markdown or
-  in `#` comments of config files, no broken relative link or anchor, no code
-  citing an upper-case `.md` file the repo root lacks) and `pnpm knip` (answer a
-  finding as [CLAUDE.md](CLAUDE.md#unused-code-knip) describes).
+- `pnpm lint`: `vp check` (Oxlint and Oxfmt over the whole repo minus the
+  ignore patterns), then the untyped ESLint and `tsc --noEmit`.
+- `pnpm lint:docs`: no history phrasing in the Markdown or in `#` comments of
+  config files, no broken relative link or anchor, and no code citing an
+  upper-case `.md` file the repo root lacks.
+- `pnpm knip`: answer a finding as
+  [CLAUDE.md](CLAUDE.md#unused-code-knip) describes.
 - A domain-leak grep over every tracked file (`git ls-files`, minus
   `.github/domain-terms.txt` itself) for the terms in
   [`.github/domain-terms.txt`](.github/domain-terms.txt). The shipped list is a
-  template of obviously fake placeholders. **If you adopt this boilerplate,**
-  replace them with the names, abbreviations and internal identifiers your
-  project must never leak, or delete the file and the "Reject domain leakage"
-  step in `.github/workflows/ci.yml`: a gate that checks nothing trains
-  reviewers to ignore it. The gate reads the index, so stage a file before you
-  rely on a local run. **The terms file stays pattern-only, with no `#` comments
-  and no blank lines.** `grep -f` treats every line as a pattern: a `#` line is
-  a pattern, not a comment; an unbalanced `(` makes grep exit with an error that
-  the gate's `|| true` turns into a silent pass; and a blank line matches
-  everything. The step refuses to run on a blank line. Explain a term in this
-  document or a commit message instead.
+  template of fake placeholders.
+  - **If you adopt this boilerplate,** replace them with the names,
+    abbreviations and internal identifiers your project must never leak. Or
+    delete the file and the "Reject domain leakage" step in
+    `.github/workflows/ci.yml`: a gate that checks nothing trains reviewers to
+    ignore it.
+  - The gate reads the git index, so stage a file before you rely on a local
+    run.
+  - **The terms file stays pattern-only, with no `#` comments and no blank
+    lines.** `grep -f` treats every line as a pattern. A `#` line is a
+    pattern, not a comment. An unbalanced `(` makes grep exit with an error
+    that the gate's `|| true` turns into a silent pass. A blank line matches
+    everything, so the step refuses to run on one. Explain a term in this
+    document or a commit message instead.
 
-**`test-shard`** runs four times in parallel, each with its own Postgres 18,
+**`test-shard`** runs 4 times in parallel, each with its own Postgres 18,
 Redis and Mailpit services:
 
 - `pnpm db:migrate` against the service database.
@@ -198,10 +227,10 @@ Redis and Mailpit services:
   coverage thresholds off. Each shard uploads its result as a `blob-n` artifact.
   Open the failed shard's log for test output.
 
-**`test`** needs all four shards. It fails if any shard failed or was cancelled.
+**`test`** needs all 4 shards. It fails if any shard failed or was cancelled.
 It runs no tests itself:
 
-- It downloads the four blobs, fails if one is missing, then merges them
+- It downloads the 4 blobs, fails if one is missing, then merges them
   (`vp test --merge-reports --coverage`) and enforces the 80% gate on lines,
   functions, branches and statements over the whole suite.
 - A step that compares the `Test with coverage gate` step's `env:` block in
@@ -221,8 +250,8 @@ it checks is in [ARCHITECTURE.md](ARCHITECTURE.md#deploying).
 Two more workflows run beside it:
 
 - `gitleaks` scans for secrets on every PR and every push to `main`. The
-  optional local hook (`pre-commit install`, from `.pre-commit-config.yaml`) is
-  defence in depth, not the enforcement layer.
+  optional local hook (`pre-commit install`, from `.pre-commit-config.yaml`)
+  is a second layer, not the enforcement layer.
 - `pr-title` lints the PR title ([Commits](#commits)).
 
 ## Secrets
@@ -234,39 +263,44 @@ its own example, so do not add a copy beside it.
 
 ## Releases
 
-Releases are automatic. On every push to `main`, `release.yml` runs
-release-please (`release-please-config.json` and
-`.release-please-manifest.json`; the `node` release type, tags without a
-component), which opens or updates a release pull request from the conventional
-commits since the last release. The workflow then queues that PR with
-`gh pr merge --auto --squash`, falling back to a direct squash merge when
-`--auto` is refused, so it merges once the required checks pass. The next run
-tags `vX.Y.Z` and publishes the GitHub Release, and the tag push makes
-`deploy.yml` add `:X.Y.Z`, `:X.Y` and `:X` to the image digest `main` already
-built and tested; a release rebuilds nothing. Only `feat`, `fix` and breaking
-commits cut a release:
+Releases are automatic:
+
+1. On every push to `main`, `release.yml` runs release-please
+   (`release-please-config.json` and `.release-please-manifest.json`; the
+   `node` release type, tags without a component).
+2. release-please opens or updates a release pull request from the
+   conventional commits since the last release.
+3. The workflow queues that PR with `gh pr merge --auto --squash`. When
+   `--auto` is refused, it falls back to a direct squash merge. Either way the
+   PR merges once the required checks pass.
+4. The next run tags `vX.Y.Z` and publishes the GitHub Release.
+5. The tag push makes `deploy.yml` add `:X.Y.Z`, `:X.Y` and `:X` to the image
+   digest `main` already built and tested. A release rebuilds nothing.
+
+Only `feat`, `fix` and breaking commits cut a release:
 
 - `feat` commits become a minor version bump.
 - `fix` commits become a patch version bump.
 - `feat!` or `BREAKING CHANGE:` commits become a major version bump.
 
 `release.yml` uses a GitHub App token (variable `RELEASE_APP_CLIENT_ID`, secret
-`RELEASE_APP_PRIVATE_KEY`; Contents and Pull requests read/write), because
-events `GITHUB_TOKEN` creates start no workflow: its PR would get no CI and its
-tag no promotion.
+`RELEASE_APP_PRIVATE_KEY`; Contents and Pull requests read/write). It cannot
+use `GITHUB_TOKEN`: events that token creates start no workflow, so its PR
+would get no CI and its tag no promotion.
 
-Every PR merges by squash with the PR title as the commit subject; the
-repository's squash setting drops the PR description, as under
-[Commits](#commits). A PR that needs release notes
-beyond its title uses the override block under [Commits](#commits).
+A PR that needs release notes beyond its title uses the override block under
+[Commits](#commits), since the squash merge drops the PR description.
 
 ## Dependency policy
 
-Renovate (the Renovate GitHub App must be installed on the repo) runs weekly,
-before 6am on Monday, with related packages grouped (dev tooling, OpenTelemetry,
-`@types/*`) and a 3-day minimum release age; pnpm enforces the same 3 days on
-install (`minimumReleaseAge` in `pnpm-workspace.yaml`). Lockfile maintenance
-runs monthly, before 6am on the first day.
+Renovate updates dependencies; the Renovate GitHub App must be installed on
+the repo.
+
+- It runs weekly, before 6am on Monday, with related packages grouped (dev
+  tooling, OpenTelemetry, `@types/*`).
+- It waits for a 3-day minimum release age. pnpm enforces the same 3 days on
+  install (`minimumReleaseAge` in `pnpm-workspace.yaml`).
+- Lockfile maintenance runs monthly, before 6am on the first day.
 
 - Minor, patch and digest updates merge themselves once the required checks
   pass. Majors, and the pinned toolchain (`node`, `typescript`, the
@@ -275,13 +309,15 @@ runs monthly, before 6am on the first day.
   release-age wait, labelled `security`. A fixed version younger than 3 days
   waits: there is no exclude list, and a frozen install refuses a younger
   version. Merge once it is 3 days old.
-- GitHub Actions are pinned to commit SHAs, and Renovate keeps the pins
-  current.
-- TypeScript is held `<6.1.0` (see [CLAUDE.md](CLAUDE.md#versions)), and every
-  Node version pin (the docker `node` image, `.node-version`, `actions/setup-node`'s
-  `node-version:` in `pr-title.yml`, the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node`
-  tag) is held `<27`. Lift these deliberately, not by merging a Renovate PR, and
-  bump `package.json`'s `engines.node` and `devEngines.runtime.version` by hand
+- GitHub Actions are pinned to commit SHAs (hashes), and Renovate keeps the
+  pins current.
+- TypeScript is held `<6.1.0` (see [CLAUDE.md](CLAUDE.md#versions)).
+- Every Node version pin is held `<27`: the docker `node` image,
+  `.node-version`, `actions/setup-node`'s `node-version:` in `pr-title.yml`,
+  and the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node`
+  tag.
+- Lift these holds by hand, never by merging a Renovate PR. Bump
+  `package.json`'s `engines.node` and `devEngines.runtime.version` by hand
   alongside: Renovate does not touch those `>=` ranges.
 - The Corepack version pinned in `Dockerfile`, `.devcontainer/devcontainer.json`
   and `README.md` is tracked by a `customManagers` regex entry in
@@ -297,7 +333,7 @@ that adds it. The file's own comments carry the detail.
   binary and downloads it when the optional per-platform package is missing.
 - **`allowBuilds.msgpackr-extract`**: a transitive dependency of `bullmq` (via
   `msgpackr`). Its install script loads a prebuilt binding from an optional
-  per-platform package or compiles one via `node-gyp`; without a binding,
+  per-platform package, or compiles one via `node-gyp`. Without a binding,
   `msgpackr` falls back to its pure-JS encoder.
 - **`allowBuilds.protobufjs`**: a transitive dependency of
   `@opentelemetry/sdk-node` (via its OTLP gRPC exporters). Its postinstall
@@ -316,17 +352,17 @@ that adds it. The file's own comments carry the detail.
   `brace-expansion` (both major lines), `fast-uri`, and the `esbuild` that
   `drizzle-kit`'s legacy `@esbuild-kit` loader pins. Remove an entry once
   `pnpm why <name>` shows every parent resolving a patched version on its own.
-- **`auditConfig.ignoreGhsas: GHSA-vfj7-8cjw-p6xm`**: `braces` <=3.0.3 can
-  exhaust the stack on deeply nested brace patterns, and no patched version
-  exists yet. It is reached only through `http-proxy-middleware` >
+- **`auditConfig.ignoreGhsas: GHSA-vfj7-8cjw-p6xm`**: a GitHub Security
+  Advisory (GHSA). `braces` <=3.0.3 can exhaust the stack on deeply nested
+  brace patterns, and no patched version exists yet. It is reached only through `http-proxy-middleware` >
   `micromatch`, which runs only for a glob `pathFilter`. The `/collect` proxy
   sets none, and `braces` parses patterns, never request paths. Remove the
   entry once `braces` ships a fix.
 
 ## Extending the Apex API
 
-The places that change together when a product extends what staff see and do
-in Apex. The rules behind them are in
+This section lists the places that change together when a product extends
+what staff see and do in Apex, the staff dashboard. The rules behind them are in
 [ARCHITECTURE.md](ARCHITECTURE.md#extending-apex). Paths that begin with
 `apex-boilerplate/` or `react-boilerplate/` are in those sibling repositories.
 
@@ -380,8 +416,8 @@ in Apex. The rules behind them are in
 
 ## Adding a plan-gated feature
 
-How a product feature or limit comes to depend on the workspace's plan. The
-rules behind it are under [Billing](ARCHITECTURE.md#billing).
+These 4 steps make a product feature or limit depend on the workspace's plan.
+The rules behind them are under [Billing](ARCHITECTURE.md#billing).
 
 1. **Registry entry.** Add the key to `ENTITLEMENTS`
    (`src/constants/entitlements.constants.ts`): `kind` `feature` or `limit`,
@@ -410,6 +446,8 @@ rules behind it are under [Billing](ARCHITECTURE.md#billing).
    Free and Paid workspaces then cover both.
 
 ## Docs to update alongside a change
+
+Update the doc that owns what you changed, in the same PR:
 
 - [README.md](README.md): a new script, requirement or quick-start step.
 - [ARCHITECTURE.md](ARCHITECTURE.md): a change to boot, the request path,
