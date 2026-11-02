@@ -322,6 +322,41 @@ describe('errorHandler', () => {
     })
   })
 
+  it('shows an opted-in 5xx message, still with an error ID, Retry-After and a log line', () => {
+    const { response, body, status } = mockResponse()
+    const guidance = 'Your billing is updating right now. Try again in 30 seconds.'
+    errorHandler(
+      new HttpError(guidance, 503, 'BILLING_BUSY', undefined, {
+        retryAfterSeconds: 30,
+        exposeMessage: true,
+      }),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(status).toHaveBeenCalledWith(503)
+    expect(body()).toMatchObject({
+      message: guidance,
+      code: 'BILLING_BUSY',
+      requestId: 'req-id-1',
+    })
+    expect(typeof (body() as { errorId?: unknown }).errorId).toBe('string')
+    expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '30')
+    expect(loggerError).toHaveBeenCalledWith('Unhandled server error', expect.anything())
+  })
+
+  it('still masks a 5xx HttpError that does not opt in', () => {
+    const { response, body } = mockResponse()
+    errorHandler(new HttpError('pool exhausted', 503), {} as never, response, vi.fn())
+
+    expect(body()).toMatchObject({
+      message:
+        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      statusCode: 503,
+    })
+  })
+
   it('handles a thrown non-Error value', () => {
     const { response, body, status } = mockResponse()
     errorHandler('just a string', {} as never, response, vi.fn())

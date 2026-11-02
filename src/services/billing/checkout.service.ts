@@ -228,7 +228,7 @@ export function billingBusy(): HttpError {
     503,
     BILLING_BUSY_CODE,
     undefined,
-    { retryAfterSeconds: RETRY_AFTER_SECONDS }
+    { retryAfterSeconds: RETRY_AFTER_SECONDS, exposeMessage: true }
   )
 }
 

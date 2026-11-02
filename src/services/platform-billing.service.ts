@@ -822,7 +822,9 @@ export async function cancelByStaff(
     throw new HttpError(
       "Payments are off on this server, so we can't reach the subscription. Cancel it in the provider's dashboard.",
       502,
-      PAYMENT_PROVIDER_UNAVAILABLE_CODE
+      PAYMENT_PROVIDER_UNAVAILABLE_CODE,
+      undefined,
+      { exposeMessage: true }
     )
   }
   /**

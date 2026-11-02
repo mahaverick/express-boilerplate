@@ -11,6 +11,9 @@
  * `BILLING_ALERT_TEXT`, which Apex shows as sent. The frontends' `tests/unit/copy-style.test.ts` is the
  * model.
  *
+ * A 5xx `HttpError` built with `exposeMessage: true` reaches the person, so
+ * its message is scanned like a 4xx's.
+ *
  * Out of scope, by design: log lines, internal `new Error` text outside
  * `src/scripts`, 5xx messages `errorHandler` masks, the email webhook's
  * answers (read by the provider) and the analytics proxy's (read by the
@@ -234,14 +237,36 @@ interface FileKind {
 }
 
 /**
+ * Whether an `HttpError`'s options argument is an object literal that sets
+ * `exposeMessage: true`.
+ * @param options - The options argument, if any.
+ * @returns True when the message opts out of the 5xx mask.
+ */
+function hasExposedMessage(options: ts.Expression | undefined): boolean {
+  if (options === undefined) return false
+  const inner = unwrapped(options)
+  return (
+    ts.isObjectLiteralExpression(inner) &&
+    inner.properties.some(
+      (property) =>
+        ts.isPropertyAssignment(property) &&
+        property.name.getText() === 'exposeMessage' &&
+        property.initializer.kind === ts.SyntaxKind.TrueKeyword
+    )
+  )
+}
+
+/**
  * The message and field `errors` an `HttpError` construction shows a
- * person: none for a 5xx, which `errorHandler` masks.
+ * person: none for a 5xx, which `errorHandler` masks, unless it sets
+ * `exposeMessage: true`.
  * @param callArguments - The construction's arguments.
  * @returns The nodes holding copy.
  */
 function httpErrorCopy(callArguments: readonly ts.Expression[]): ts.Expression[] {
-  const [message, status, , errors] = callArguments
-  if (message === undefined || (statusOf(status) ?? 500) >= 500) return []
+  const [message, status, , errors, options] = callArguments
+  if (message === undefined) return []
+  if ((statusOf(status) ?? 500) >= 500 && !hasExposedMessage(options)) return []
   return errors === undefined ? [message] : [message, errors]
 }
 
@@ -740,6 +765,8 @@ describe('user-facing copy', () => {
     const probe = [
       "throw new HttpError('Probe client message.', 409, 'probe', { field: ['Probe field.'] })",
       "throw new HttpError('Probe masked message.', 500)",
+      "throw new HttpError('Probe guidance.', 503, 'probe', undefined, { exposeMessage: true })",
+      "throw new HttpError(retryable ? 'Probe wait.' : 'Probe refusal.', retryable ? 503 : 502, 'probe', undefined, { cause, exposeMessage: true })",
       "successResponse(response, data, 'Probe success.')",
       "const PROBE_MESSAGE = 'Probe constant.'",
       "logger.warn('Probe log line.')",
@@ -748,6 +775,9 @@ describe('user-facing copy', () => {
     expect(copyInSource('src/controllers/probe.ts', probe).map((copy) => copy.text)).toEqual([
       'Probe client message.',
       'Probe field.',
+      'Probe guidance.',
+      'Probe wait.',
+      'Probe refusal.',
       'Probe success.',
       'Probe constant.',
     ])
@@ -758,6 +788,11 @@ describe('user-facing copy', () => {
     expect(texts.length).toBeGreaterThan(200)
     expect(texts).toContain('Sign in to continue.')
     expect(texts).toContain('Invitation accepted.')
+    expect(texts).toContain('Your billing is updating right now. Try again in 30 seconds.')
+    expect(texts).toContain('Our payment provider did not answer. Try again in 30 seconds.')
+    expect(texts).toContain(
+      "Payments are off on this server, so we can't reach the subscription. Cancel it in the provider's dashboard."
+    )
   })
 
   it('breaks no copy rule in the messages express sends', () => {

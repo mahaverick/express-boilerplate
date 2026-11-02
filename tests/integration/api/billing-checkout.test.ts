@@ -820,7 +820,10 @@ describe('owner billing writes when something fails', () => {
     )
 
     expect(response?.status).toBe(503)
-    expect(response?.body).toMatchObject({ code: 'BILLING_BUSY' })
+    expect(response?.body).toMatchObject({
+      code: 'BILLING_BUSY',
+      message: 'Your billing is updating right now. Try again in 30 seconds.',
+    })
     expect(response?.headers['retry-after']).toBe('30')
     expect(await billingColumn(tenant.id, 'pendingSubscriptionId')).toBeNull()
     const subs = await recentSubscriptionsOf(tenant.id)
@@ -842,7 +845,10 @@ describe('owner billing writes when something fails', () => {
     )
 
     expect(response?.status).toBe(503)
-    expect(response?.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(response?.body).toMatchObject({
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message: 'Our payment provider did not answer. Try again in 30 seconds.',
+    })
     expect(response?.headers['retry-after']).toBe('30')
     expect(await billingColumn(tenant.id, 'pendingSubscriptionId')).toBeNull()
   })
@@ -864,7 +870,11 @@ describe('owner billing writes when something fails', () => {
     )
 
     expect(response?.status).toBe(502)
-    expect(response?.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(response?.body).toMatchObject({
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message:
+        'Our payment provider declined this change. Contact support with the error ID if it happens again.',
+    })
     expect(response?.headers['retry-after']).toBeUndefined()
   })
 

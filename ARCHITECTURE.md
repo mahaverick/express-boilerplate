@@ -648,7 +648,7 @@ A refusal a client can act on also carries `details`, structured facts next
 to `code`: a plan limit's 402 `PLAN_LIMIT_REACHED` sends
 `{ key, used, limit }` and a plan feature's 402 `PLAN_FEATURE_REQUIRED` sends
 `{ key }`. `errorHandler` writes an `HttpError`'s `details` on a 4xx only,
-never on a masked 5xx, and a response without them has no `details` key. A
+never on a 5xx, and a response without them has no `details` key. A
 full workspace refusing an invitee's join sends none, since the invitee is
 not a member.
 
@@ -670,7 +670,9 @@ handler by arity. It decides:
   marks it `expose`; a body-parser refusal answers its own copy and code
   (`malformed_json`, `payload_too_large`). It is not logged, except one value-free `warn` when
   Postgres refused a character in client text.
-- **A 5xx** is masked ("Our server hit an error. Try again, and contact support with the error ID if it happens again."), gets an `errorId`, and is
+- **A 5xx** is masked ("Our server hit an error. Try again, and contact support with the error ID if it happens again."), unless its `HttpError` sets
+  `exposeMessage: true` because the message is guidance written for the client
+  (`billingBusy`, `providerFailure`, the payments-off and purge-check 502s). Either way it gets an `errorId`, and is
   logged redacted (`redactedForLog`, `src/errors/postgres-errors.ts`), except a
   `PosthogUnavailableError`, whose thrower already logged why. It is reported
   to error tracking only when the capture rule admits it
