@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.0](https://github.com/mahaverick/express-boilerplate/compare/v2.0.2...v2.1.0) (2026-11-02)
+
+
+### Features
+
+* **platform:** send the stuck threshold, email retention and error retry limit to staff ([#185](https://github.com/mahaverick/express-boilerplate/issues/185)) ([6cec75f](https://github.com/mahaverick/express-boilerplate/commit/6cec75fef06b5199d9376a07f1bfd0ce8817a48b))
+* **status:** serve link lifetimes and the support address to the apps ([#186](https://github.com/mahaverick/express-boilerplate/issues/186)) ([438253f](https://github.com/mahaverick/express-boilerplate/commit/438253fb9f63b4b720be3c0080ea1d70980b7771))
+
+
+### Bug Fixes
+
+* **billing:** state the amounts in partial-refund staff alerts ([#184](https://github.com/mahaverick/express-boilerplate/issues/184)) ([729016e](https://github.com/mahaverick/express-boilerplate/commit/729016ec9d2f5f6cf57a3f4fec70a3343af9844f))
+
 ## [2.0.2](https://github.com/mahaverick/express-boilerplate/compare/v2.0.1...v2.0.2) (2026-11-02)
 
 
