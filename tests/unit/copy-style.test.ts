@@ -653,19 +653,19 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       appName: 'Acme',
       tenantName: 'Acme Robotics',
       trialEndsOn: '7 November 2026',
+      paidIncludes: 'Workspace insights and no member limit',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
   ],
-  trial_midpoint: ['1', '7'].map((daysLeft) =>
+  trial_midpoint: [
     renderTrialMidpointTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
-      daysLeft,
       trialEndsOn: '7 November 2026',
       usageSummary: '5 members\n12 invitations sent\nWorkspace insights opened 4 times',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
-    })
-  ),
+    }),
+  ],
   trial_ending: ['1', '7'].map((memberLimit) =>
     renderTrialEndingTemplate({
       appName: 'Acme',
@@ -682,6 +682,7 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
     renderTrialEndsTodayTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
+      trialEndsOn: '7 November 2026',
       memberLimit: '3',
       membersUsed: '5',
       monthlyPrice: '999',
@@ -727,14 +728,17 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     })
   ),
-  moved_to_free: (['payment_failed', 'cancelled', 'staff', 'lifecycle'] as const).map(
-    (downgradeCause) =>
-      renderMovedToFreeTemplate({
-        appName: 'Acme',
-        tenantName: 'Acme Robotics',
-        downgradeCause,
-        billingLink: 'https://app.example.test/settings/workspace/acme/billing',
-      })
+  moved_to_free: (
+    ['payment_failed', 'cancelled', 'staff', 'suspended', 'archived', 'lifecycle'] as const
+  ).map((downgradeCause) =>
+    renderMovedToFreeTemplate({
+      appName: 'Acme',
+      tenantName: 'Acme Robotics',
+      downgradeCause,
+      graceEndedOn: downgradeCause === 'payment_failed' ? '7 November 2026' : '',
+      supportEmail: 'support@example.com',
+      billingLink: 'https://app.example.test/settings/workspace/acme/billing',
+    })
   ),
   paid_cancelled: (['false', 'true'] as const).map((beforeFirstCharge) =>
     renderPaidCancelledTemplate({
@@ -792,6 +796,7 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
     renderUpgradeRequestFulfilledTemplate({
       appName: 'Acme',
       tenantName: 'Acme Robotics',
+      paidIncludes: 'Workspace insights and no member limit',
       tenantLink: 'https://app.example.test/tenants/acme',
     }),
   ],
@@ -811,6 +816,7 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       documentType: 'invoice',
       documentNumber: 'INV/26-27/00001',
       invoiceNumber: '',
+      creditAmount: '',
       issuedOn: '27 October 2026',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
@@ -820,6 +826,7 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       documentType: 'credit_note',
       documentNumber: 'CN/26-27/00001',
       invoiceNumber: 'INV/26-27/00001',
+      creditAmount: '1,178.82',
       issuedOn: '27 October 2026',
       billingLink: 'https://app.example.test/settings/workspace/acme/billing',
     }),
@@ -852,7 +859,10 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
   unknownPrice: BILLING_ALERT_TEXT.unknownPrice('sub_Q1'),
   cancelFailed: BILLING_ALERT_TEXT.cancelFailed('sub_Q1'),
   switchCancelFailed: BILLING_ALERT_TEXT.switchCancelFailed('sub_Q1'),
-  switchCancelNotRecorded: BILLING_ALERT_TEXT.switchCancelNotRecorded('sub_Q1'),
+  switchCancelNotRecorded: BILLING_ALERT_TEXT.switchCancelNotRecorded(
+    'sub_Q1',
+    new Date('2026-11-07T10:30:00.000Z')
+  ),
   duplicateCancelFailed: BILLING_ALERT_TEXT.duplicateCancelFailed('sub_Q1'),
   duplicateRefundFailed: BILLING_ALERT_TEXT.duplicateRefundFailed('sub_Q1'),
   duplicateRefunded: BILLING_ALERT_TEXT.duplicateRefunded('sub_Q1', 14_999_950, 'rfnd_R1'),
@@ -873,12 +883,12 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
   lifecycleReadFailed: BILLING_ALERT_TEXT.lifecycleReadFailed('sub_Q1'),
   lifecycleCheckoutReadFailed: BILLING_ALERT_TEXT.lifecycleCheckoutReadFailed('sub_Q1'),
   lifecycleCheckoutSyncFailed: BILLING_ALERT_TEXT.lifecycleCheckoutSyncFailed(),
-  reconcileListFailed: BILLING_ALERT_TEXT.reconcileListFailed('2026-10-27'),
+  reconcileListFailed: BILLING_ALERT_TEXT.reconcileListFailed('2026-10-27', 3),
   disputeStatusUnread: BILLING_ALERT_TEXT.disputeStatusUnread('pay_P1'),
   paidSubscriptionUnheld: BILLING_ALERT_TEXT.paidSubscriptionUnheld('sub_Q1'),
   disputeUnheld: BILLING_ALERT_TEXT.disputeUnheld('pay_P1'),
   disputeOpen: BILLING_ALERT_TEXT.disputeOpen('pay_P1'),
-  webhookFailed: BILLING_ALERT_TEXT.webhookFailed('evt_E1', 'subscription.charged'),
+  webhookFailed: BILLING_ALERT_TEXT.webhookFailed('evt_E1', 'subscription.charged', 31),
   stillRetrying: BILLING_ALERT_TEXT.stillRetrying('Razorpay event evt_E1 (subscription.charged)'),
   taxHeldSez: BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900),
   taxHeldSezRefunded: BILLING_ALERT_TEXT.taxHeldSezRefunded('pay_P1', 99_900, 'rfnd_R1'),
@@ -901,6 +911,10 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
  * Alert wordings a key renders only for some arguments, checked beside `ALERTS`.
  */
 const ALERT_VARIANTS: ReadonlyArray<[string, string]> = [
+  [
+    'switchCancelNotRecorded (no cycle end)',
+    BILLING_ALERT_TEXT.switchCancelNotRecorded('sub_Q1', null),
+  ],
   [
     'taxInvoiceLate (one)',
     BILLING_ALERT_TEXT.taxInvoiceLate(1, 'INV/26-27/00001', 'INV/26-27/00001'),

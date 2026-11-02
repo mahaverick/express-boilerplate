@@ -207,7 +207,7 @@ export function startBillingWorker(): Worker {
     }
     void recordPermanentFailure('billing', job, error, errorId)
     if (job.name === BILLING_WEBHOOK_JOB) {
-      void recordWebhookJobFailure(job.data as BillingWebhookJobData, error)
+      void recordWebhookJobFailure(job.data as BillingWebhookJobData, error, job.attemptsMade)
     }
     if (job.name === BILLING_TAX_RECONCILE_JOB) {
       void recordTaxReconcileFailure(job.data as BillingTaxReconcileJobData, error)

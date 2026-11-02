@@ -99,12 +99,12 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     tenantName: 'Acme',
     trialEndsOn: '7 November 2026',
+    paidIncludes: 'Workspace insights',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
   trial_midpoint: {
     appName: 'App',
     tenantName: 'Acme',
-    daysLeft: '7',
     trialEndsOn: '7 November 2026',
     usageSummary: '5 members',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
@@ -122,6 +122,7 @@ const SAMPLE_VARIABLES: {
   trial_ends_today: {
     appName: 'App',
     tenantName: 'Acme',
+    trialEndsOn: '7 November 2026',
     memberLimit: '3',
     membersUsed: '5',
     monthlyPrice: '999',
@@ -161,6 +162,8 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     tenantName: 'Acme',
     downgradeCause: 'cancelled',
+    graceEndedOn: '',
+    supportEmail: 'support@x.test',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
   paid_cancelled: {
@@ -198,6 +201,7 @@ const SAMPLE_VARIABLES: {
   upgrade_request_fulfilled: {
     appName: 'App',
     tenantName: 'Acme',
+    paidIncludes: 'Workspace insights',
     tenantLink: 'https://x.test/tenants/acme',
   },
   winback: {
@@ -213,6 +217,7 @@ const SAMPLE_VARIABLES: {
     documentType: 'invoice',
     documentNumber: 'INV/26-27/00001',
     invoiceNumber: '',
+    creditAmount: '',
     issuedOn: '27 October 2026',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
@@ -288,19 +293,12 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       trial_started: {
         senderClass: 'general',
-        previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'billingLink'],
+        previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'paidIncludes', 'billingLink'],
         resendAction: null,
       },
       trial_midpoint: {
         senderClass: 'general',
-        previewVariables: [
-          'appName',
-          'tenantName',
-          'daysLeft',
-          'trialEndsOn',
-          'usageSummary',
-          'billingLink',
-        ],
+        previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'usageSummary', 'billingLink'],
         resendAction: null,
       },
       trial_ending: {
@@ -322,6 +320,7 @@ describe('EMAIL_TEMPLATE_META', () => {
         previewVariables: [
           'appName',
           'tenantName',
+          'trialEndsOn',
           'memberLimit',
           'membersUsed',
           'monthlyPrice',
@@ -366,7 +365,14 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       moved_to_free: {
         senderClass: 'general',
-        previewVariables: ['appName', 'tenantName', 'downgradeCause', 'billingLink'],
+        previewVariables: [
+          'appName',
+          'tenantName',
+          'downgradeCause',
+          'graceEndedOn',
+          'supportEmail',
+          'billingLink',
+        ],
         resendAction: null,
       },
       paid_cancelled: {
@@ -405,7 +411,7 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       upgrade_request_fulfilled: {
         senderClass: 'general',
-        previewVariables: ['appName', 'tenantName', 'tenantLink'],
+        previewVariables: ['appName', 'tenantName', 'paidIncludes', 'tenantLink'],
         resendAction: null,
       },
       winback: {
@@ -421,6 +427,7 @@ describe('EMAIL_TEMPLATE_META', () => {
           'documentType',
           'documentNumber',
           'invoiceNumber',
+          'creditAmount',
           'issuedOn',
           'billingLink',
         ],

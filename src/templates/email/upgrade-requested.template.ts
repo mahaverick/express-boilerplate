@@ -89,7 +89,7 @@ export function renderUpgradeRequestedTemplate(
     appName,
     paragraphs: [
       `${requesterName} asked you to move ${tenantName} to Paid.`,
-      `Paid costs ₹${monthlyPrice} a month or ₹${yearlyPrice} a year. Upgrade from Billing.`,
+      `Paid costs ₹${monthlyPrice} a month or ₹${yearlyPrice} a year, GST included. Upgrade from Billing.`,
     ],
     button: { label: 'Upgrade to Paid', link: billingLink },
   })

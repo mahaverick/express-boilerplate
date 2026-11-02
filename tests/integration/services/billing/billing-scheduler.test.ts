@@ -1032,7 +1032,7 @@ describe('runDailyBilling', () => {
     [
       'the read-failed',
       (id: string) =>
-        `Reading subscription ${id} of a suspended or archived workspace from Razorpay failed, so we did not cancel it and it can still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
+        `Reading subscription ${id} of a suspended or archived workspace from Razorpay failed, so we did not cancel it, and it charges until it is cancelled. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
     ],
   ])(
     'syncs a Free row whose current subscription a failed cancel left running, named in %s wording, so the cancel is tried again',
@@ -1140,7 +1140,7 @@ describe('runDailyBilling', () => {
     const now = new Date()
     const { tenant } = await workspace()
     await makePaying(tenant.id)
-    tenantlessAlertTexts.push('Listing recent subscriptions from Razorpay failed')
+    tenantlessAlertTexts.push('Listing the subscriptions of the last 3 days from Razorpay failed')
 
     const reports: BillingRunReport[] = []
     await withMutatedMethod(
@@ -1155,7 +1155,7 @@ describe('runDailyBilling', () => {
     expect(reports[0]?.sweep?.status).toBe('failed')
     expect(reports[0]?.reconcile?.status).toBe('ok')
     const alerts = await sql<{ kind: string }[]>`
-      select kind from billing_alerts where tenant_id is null and strpos(message, 'Listing recent subscriptions from Razorpay failed') > 0`
+      select kind from billing_alerts where tenant_id is null and strpos(message, 'Listing the subscriptions of the last 3 days from Razorpay failed') > 0`
     expect([...alerts]).toStrictEqual([{ kind: 'reconcile_repair' }])
     const queued = await syncJobsFor(tenant.id)
     expect(queued.length).toBeGreaterThanOrEqual(1)

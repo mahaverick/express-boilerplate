@@ -104,7 +104,7 @@ export function payerLeftNextStep(
   periodEndsOn: string
 ): string {
   if (billingState !== 'active') {
-    return `Add your card by ${periodEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`
+    return `Add your card before ${periodEndsOn} to keep Paid. On ${periodEndsOn}, ${tenantName} moves to Free.`
   }
   const renews = periodEndsOn === '' ? '' : ` It renews on ${periodEndsOn}.`
   return `The subscription still charges their card.${renews} To pay with your card, update the payment method in Billing.`
@@ -122,10 +122,10 @@ export function renderPayerLeftTemplate(variables: PayerLeftVariables): Rendered
     requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, PAYER_LEFT_TEMPLATE_KEY)
   return renderBillingEmail({
     templateKey: PAYER_LEFT_TEMPLATE_KEY,
-    subject: `Your ${appName} workspace needs a new card`,
+    subject: `The payer for your ${appName} workspace left`,
     appName,
     paragraphs: [
-      `${payerName} paid for Paid and left ${tenantName} on ${leftOn}.`,
+      `${payerName}, who paid for Paid, left ${tenantName} on ${leftOn}.`,
       payerLeftNextStep(billingState, tenantName, periodEndsOn),
     ],
     button: {

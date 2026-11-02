@@ -78,6 +78,7 @@ import {
   type DowngradeCause,
 } from '@/utilities/billing-transitions.utilities'
 import { formatDateInZone } from '@/utilities/date-text.utilities'
+import { supportAddress } from '@/utilities/email-sender.utilities'
 import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 import { formatRupees } from '@/utilities/money-text.utilities'
 
@@ -447,15 +448,42 @@ async function trialSummary(tenant: Tenant): Promise<string> {
 }
 
 /**
+ * What Paid gives a workspace now, as a phrase list for "Paid is on,
+ * including …": each feature it has on, by its label, and "no … limit" for
+ * each limit it has none of. Read from the effective entitlements, so a staff
+ * plan edit is what the mail says. Called while the workspace is on Paid or
+ * its trial.
+ * @param tenantId - The workspace.
+ * @returns For example "Workspace insights and no member limit", or empty.
+ */
+async function paidIncludes(tenantId: string): Promise<string> {
+  const entitlements = await getEffectiveEntitlements(tenantId)
+  const parts: string[] = []
+  for (const key of Object.keys(ENTITLEMENTS) as EntitlementKey[]) {
+    const definition: EntitlementDefinition = ENTITLEMENTS[key]
+    if (definition.kind === 'feature' && entitlements.features[key] === true) {
+      parts.push(definition.label)
+    }
+    if (definition.kind === 'limit' && entitlements.limits[key]?.limit === null) {
+      parts.push(`no ${definition.unit?.one ?? key} limit`)
+    }
+  }
+  if (parts.length < 2) return parts.join('')
+  return `${parts.slice(0, -1).join(', ')} and ${parts.at(-1) ?? ''}`
+}
+
+/**
  * Send what one transition sends.
  * @param context - The workspace.
  * @param transition - The transition.
+ * @param before - The row before the change.
  * @param after - The row after the change.
  * @param prices - The prices the row names, by id.
  */
 async function sendTransition(
   context: MailContext,
   transition: BillingTransition,
+  before: TenantBillingRecord,
   after: TenantBillingRecord,
   prices: ReadonlyMap<string, PlanPrice>
 ): Promise<void> {
@@ -500,7 +528,7 @@ async function sendTransition(
         type: 'billing_payment_failed',
         stamp: `${stoppedBy}-${String(stoppedAt.getTime())}`,
         title: isPaused ? 'Your Paid subscription is paused' : `Your payment of ₹${amount} failed`,
-        body: `Update your ${isPaused ? 'payment method' : 'card'} by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
+        body: `Update your ${isPaused ? 'payment method' : 'card'} before ${graceEndsOn} to keep Paid. On ${graceEndsOn}, ${tenantName} moves to Free.`,
         email: {
           templateKey: 'payment_failed',
           messageFor: (to) => ({
@@ -550,7 +578,7 @@ async function sendTransition(
       return
     }
     case 'moved_to_free': {
-      await sendMovedToFree(context, transition.cause, after)
+      await sendMovedToFree(context, transition.cause, before, after)
       return
     }
   }
@@ -585,8 +613,8 @@ async function sendPaidCancelled(
     stamp: isBeforeFirstCharge ? `before-first-charge-${subscriptionId}` : subscriptionId,
     title: isBeforeFirstCharge ? 'Your Paid plan is cancelled' : `Paid ends on ${endsOn}`,
     body: isBeforeFirstCharge
-      ? `Paid for ${tenant.name} was cancelled before its first charge, so no payment was taken. ${tenant.name}'s trial continues until ${endsOn}. To keep Paid after that, upgrade again in Billing.`
-      : `${tenant.name} keeps Paid until ${endsOn}, then moves to Free. You won't be charged again. To keep Paid, subscribe again from Billing.`,
+      ? `Paid for ${tenant.name} was cancelled before its first charge, so no payment was taken. The ${tenant.name} trial ends on ${endsOn}. To keep Paid after that, upgrade from Billing.`
+      : `${tenant.name} keeps Paid until it moves to Free on ${endsOn}. You won't be charged again. To keep Paid, subscribe again from Billing.`,
     email: {
       templateKey: 'paid_cancelled',
       messageFor: (to) => ({
@@ -606,14 +634,19 @@ async function sendPaidCancelled(
 
 /**
  * Tell the owners their workspace moved to Free: the trial's end with its
- * summary, or the move with its cause.
+ * summary, or the move with its cause. A failed payment names the day its
+ * grace ended, from the row before the change, when that row was halted or
+ * paused; a lifecycle move names whether the workspace was suspended or
+ * archived.
  * @param context - The workspace.
  * @param cause - Why it moved.
+ * @param before - The row before the change.
  * @param after - The row after the change.
  */
 async function sendMovedToFree(
   context: MailContext,
   cause: DowngradeCause,
+  before: TenantBillingRecord,
   after: TenantBillingRecord
 ): Promise<void> {
   const { tenant, appName } = context
@@ -632,6 +665,16 @@ async function sendMovedToFree(
     }))
     return
   }
+  let graceEndedOn = ''
+  if (cause === 'payment_failed') {
+    const { pastDueGraceDays } = await planRepository.getSettings()
+    const graceEnd = graceEndsAt(before, pastDueGraceDays)
+    graceEndedOn = graceEnd === null ? '' : formatDateInZone(graceEnd, context.timeZone)
+  }
+  const { lifecycleState } = tenant
+  // A deleted workspace can still read active: it keeps the cause that names both states.
+  const downgradeCause =
+    cause === 'lifecycle' && lifecycleState !== 'active' ? lifecycleState : cause
   await mailOwners(
     context,
     'moved_to_free',
@@ -642,7 +685,9 @@ async function sendMovedToFree(
       variables: {
         appName,
         tenantName: tenant.name,
-        downgradeCause: cause,
+        downgradeCause,
+        graceEndedOn,
+        supportEmail: supportAddress(getEnv()),
         billingLink: buildBillingLink(tenant.slug, 'moved_to_free'),
       },
     }),
@@ -662,6 +707,8 @@ async function sendRequestsFulfilled(
   requests: readonly UpgradeRequest[]
 ): Promise<void> {
   const { tenant, appName } = context
+  if (requests.length === 0) return
+  const includes = await paidIncludes(tenant.id)
   for (const request of requests) {
     const requester = await userRepository.findById(request.requestedBy)
     if (requester === undefined || !requester.active) continue
@@ -679,6 +726,7 @@ async function sendRequestsFulfilled(
         variables: {
           appName,
           tenantName: tenant.name,
+          paidIncludes: includes,
           tenantLink: buildTenantHomeLink(tenant.slug, 'upgrade_request_fulfilled'),
         },
       })
@@ -754,7 +802,7 @@ export async function sendBillingDiffEmails(
     if (transitions.length === 0 && fulfilled.length === 0) return
     const context = await loadContext(tenant, after)
     for (const transition of transitions) {
-      await sendTransition(context, transition, after, prices)
+      await sendTransition(context, transition, before, after, prices)
     }
     await sendRequestsFulfilled(context, fulfilled)
   } catch (error) {
@@ -935,7 +983,7 @@ export async function sendTrialEnding(row: TenantBillingRecord, now: Date): Prom
       type: 'billing_trial_ending',
       stamp: String(row.trialEndsAt.getTime()),
       title: `Your Paid trial ends on ${trialEndsOn}`,
-      body: `After ${trialEndsOn}, ${tenant.name} moves to Free. Free allows ${membersCount(members.limit)}, and it has ${membersUsed}. To keep Paid, upgrade from Billing.`,
+      body: `On ${trialEndsOn}, ${tenant.name} moves to Free. Free allows ${membersCount(members.limit)}, and it has ${membersUsed}. To keep Paid, upgrade from Billing.`,
       email: {
         templateKey: 'trial_ending',
         messageFor: (to) => ({
@@ -979,12 +1027,14 @@ export async function sendTrialEndsToday(row: TenantBillingRecord, now: Date): P
       return
     }
     const { tenant, appName } = context
+    const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
     await mailOwners(context, 'trial_ends_today', String(row.trialEndsAt.getTime()), (to) => ({
       to,
       templateKey: 'trial_ends_today',
       variables: {
         appName,
         tenantName: tenant.name,
+        trialEndsOn,
         memberLimit: String(members.limit),
         membersUsed: String(members.used),
         monthlyPrice: prices.monthly,
@@ -1032,7 +1082,6 @@ export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Pr
       return
     }
     const { tenant, appName } = context
-    const daysLeft = String(Math.ceil((row.trialEndsAt.getTime() - now.getTime()) / DAY_MS))
     const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
     const summary = await usageSummary(tenantId)
     await mailOwners(context, 'trial_midpoint', String(row.trialEndsAt.getTime()), (to) => ({
@@ -1041,7 +1090,6 @@ export async function sendTrialMidpoint(row: TenantBillingRecord, now: Date): Pr
       variables: {
         appName,
         tenantName: tenant.name,
-        daysLeft,
         trialEndsOn,
         usageSummary: summary,
         billingLink: buildBillingLink(tenant.slug, 'trial_midpoint'),
@@ -1152,6 +1200,7 @@ export async function sendTrialStarted(tenantId: string): Promise<void> {
     if (context === undefined) return
     const { tenant, appName } = context
     const trialEndsOn = formatDateInZone(row.trialEndsAt, context.timeZone)
+    const includes = await paidIncludes(tenantId)
     await mailOwners(context, 'trial_started', String(row.trialStartedAt.getTime()), (to) => ({
       to,
       templateKey: 'trial_started',
@@ -1159,6 +1208,7 @@ export async function sendTrialStarted(tenantId: string): Promise<void> {
         appName,
         tenantName: tenant.name,
         trialEndsOn,
+        paidIncludes: includes,
         billingLink: buildBillingLink(tenant.slug, 'trial_started'),
       },
     }))
@@ -1301,7 +1351,7 @@ async function tellPayerLeft(
   await notifyOwners(context, {
     type: 'billing_payer_left',
     stamp: `${payerUserId}-${leftOn}`,
-    title: 'Your workspace needs a new card',
+    title: 'The payer for your workspace left',
     body: `The person who paid for ${tenant.name} left on ${leftOn}. ${payerLeftNextStep(row.state, tenant.name, keepPaidBy)}`,
     email: {
       templateKey: 'payer_left',
@@ -1428,6 +1478,7 @@ export async function sendTaxDocumentIssued(
         documentType: document.type,
         documentNumber: document.number,
         invoiceNumber: isCreditNote ? (document.snapshot.original?.number ?? '') : '',
+        creditAmount: isCreditNote ? formatRupees(document.totalMinor) : '',
         issuedOn: formatDateInZone(document.issuedAt, TAX_DOCUMENT_TIME_ZONE),
         billingLink: buildBillingLink(tenant.slug, 'tax_document_issued'),
       },

@@ -85,7 +85,7 @@ export function renderPaidWelcomeTemplate(variables: PaidWelcomeVariables): Rend
     subject: "You're on Paid",
     appName,
     paragraphs: [
-      `${tenantName} is on Paid for ₹${amount} a ${interval}.`,
+      `${tenantName} is on Paid for ₹${amount} a ${interval}, GST included.`,
       `The next charge is on ${nextChargeOn}. Your invoices are on the Billing page.`,
     ],
     button: { label: 'Open Billing', link: billingLink },

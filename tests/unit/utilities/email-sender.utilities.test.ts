@@ -1,9 +1,9 @@
 /**
- * @file Which From address each sender class resolves to, and how a
- * sender's domain is read.
+ * @file Which From address each sender class resolves to, how a
+ * sender's domain is read, and which support address customer mail names.
  */
 import { describe, expect, it } from 'vite-plus/test'
-import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
+import { senderDomain, senderFor, supportAddress } from '@/utilities/email-sender.utilities'
 
 describe('senderFor', () => {
   const both = { MAIL_FROM: 'hello@example.net', MAIL_FROM_TRANSACTIONAL: 'auth@mail.example.net' }
@@ -25,5 +25,19 @@ describe('senderDomain', () => {
   it('reads the domain after the last @, lowercased', () => {
     expect(senderDomain('Auth@Mail.Example.NET')).toBe('mail.example.net')
     expect(senderDomain('"a@b"@example.test')).toBe('example.test')
+  })
+})
+
+describe('supportAddress', () => {
+  it('uses SUPPORT_EMAIL when it is set', () => {
+    expect(
+      supportAddress({ MAIL_FROM: 'hello@example.net', SUPPORT_EMAIL: 'help@desk.example.org' })
+    ).toBe('help@desk.example.org')
+  })
+
+  it("defaults to support@ on MAIL_FROM's domain, lowercased", () => {
+    expect(supportAddress({ MAIL_FROM: 'Billing@Mail.Example.NET' })).toBe(
+      'support@mail.example.net'
+    )
   })
 })

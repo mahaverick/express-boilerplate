@@ -1,14 +1,3 @@
-/**
- * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
- * accept, the signed-out verify, and the confirm link. A verify mails the
- * invited address a 15-minute confirm link, whose click signs in and joins,
- * creating the account for a new address. Multi-step writes run in one transaction with their audit entry,
- * and every query inside one goes through its `tx`. Audit metadata carries
- * the address's domain, never the address. Mail and the in-app notification
- * are enqueued after the write commits, and a failed enqueue is logged,
- * never thrown. A teammate invitation and an accept that adds a membership
- * emit their domain event after commit.
- */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { PLAN_LIMIT_REACHED_CODE } from '@/constants/billing.constants'
@@ -100,6 +89,18 @@ import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { formatWait, requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
+/**
+ * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
+ * accept, the signed-out verify, and the confirm link. A verify mails the
+ * invited address a 15-minute confirm link, whose click signs in and joins,
+ * creating the account for a new address. Multi-step writes run in one transaction with their audit entry,
+ * and every query inside one goes through its `tx`. Audit metadata carries
+ * the address's domain, never the address. Mail and the in-app notification
+ * are enqueued after the write commits, and a failed enqueue is logged,
+ * never thrown. A teammate invitation and an accept that adds a membership
+ * emit their domain event after commit.
+ */
+import { roleWithArticle } from '@/utilities/role-text.utilities'
 import type { InvitationListQuery } from '@/validators/tenant.validators'
 
 const invitationRepository = new TenantInvitationRepository()
@@ -539,7 +540,7 @@ async function dispatchInvitationMessages(
             userId: notifyUser.id,
             type: 'tenant_invitation',
             title: `Invitation to ${tenant.name}`,
-            body: `${inviterName} invited you to join ${tenant.name} as ${invitation.role}. The invitation expires at ${formatUtcDateTime(invitation.expiresAt)}.`,
+            body: `${inviterName} invited you to join ${tenant.name} as ${roleWithArticle(invitation.role)}. The invitation expires at ${formatUtcDateTime(invitation.expiresAt)}.`,
             metadata: { tenantSlug: tenant.slug, invitationId: invitation.id },
           }),
         ]

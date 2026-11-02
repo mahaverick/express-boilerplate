@@ -891,7 +891,13 @@ async function sweepSubscriptions(
       new Date(now.getTime() - RECONCILE_LOOKBACK_DAYS * DAY_MS)
     )
   } catch (error) {
-    await alertOnce(null, BILLING_ALERT_TEXT.reconcileListFailed(now.toISOString().slice(0, 10)))
+    await alertOnce(
+      null,
+      BILLING_ALERT_TEXT.reconcileListFailed(
+        now.toISOString().slice(0, 10),
+        RECONCILE_LOOKBACK_DAYS
+      )
+    )
     throw error
   }
   const { APP_ENV } = getEnv()

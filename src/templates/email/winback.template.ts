@@ -84,7 +84,7 @@ export function renderWinbackTemplate(variables: WinbackVariables): RenderedEmai
     appName,
     paragraphs: [
       `${tenantName} is on Free, which allows ${countOf(memberLimit, 'member')}.`,
-      `Paid has no member limit, for ₹${monthlyPrice} a month.`,
+      `Paid has no member limit, for ₹${monthlyPrice} a month, GST included.`,
     ],
     button: { label: 'Upgrade to Paid', link: billingLink },
   })

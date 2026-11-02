@@ -11,6 +11,7 @@
  * cancel that left a subscription running, and `LIFECYCLE_ALERT_TEXT` inside every lifecycle
  * cancel alert: the scheduler searches for both.
  */
+import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { formatRupees } from '@/utilities/money-text.utilities'
 
 /**
@@ -67,8 +68,8 @@ export const BILLING_ALERT_TEXT = {
   cancelFailed: (id: string) => `${cancelFailedMarker(id)}. Cancel it in Razorpay.`,
   switchCancelFailed: (id: string) =>
     `${cancelFailedMarker(id)}. It was the cycle-end cancel for an interval switch, so both subscriptions charge until you cancel it at its cycle end in Razorpay.`,
-  switchCancelNotRecorded: (id: string) =>
-    `Razorpay will cancel subscription ${id} at its cycle end for an interval switch, but the workspace does not record it, so its billing shows a renewal. Resync the workspace. If a "Cancelling subscription ${id} failed" alert follows, cancel it at its cycle end in Razorpay.`,
+  switchCancelNotRecorded: (id: string, cycleEnd: Date | null) =>
+    `Razorpay will cancel subscription ${id} at its cycle end${cycleEnd === null ? '' : `, ${formatUtcDateTime(cycleEnd)},`} for an interval switch, but the workspace shows a renewal. Resync the workspace. If a cancel-failed alert for it follows, cancel it in Razorpay at that cycle end.`,
 
   // Refunding a duplicate subscription.
   duplicateCancelFailed: (id: string) =>
@@ -104,41 +105,41 @@ export const BILLING_ALERT_TEXT = {
 
   // The scheduler.
   trialEndConflict: () =>
-    'The trial ended, but its billing record changed during every sync attempt, so the workspace is not on Free. The next scheduler run retries it.',
+    'The trial ended, but its billing record changed during every sync attempt, so the workspace is not on Free. The billing scheduler retries it every 15 minutes.',
   trialEndSyncFailed: () =>
-    'The trial ended, but syncing its subscriptions failed, so its billing record still reads trialing, though members already get Free limits. The next scheduler run retries it. If the alert stays open, check Razorpay, then resync the workspace.',
+    'The trial ended, but syncing its subscriptions failed, so its billing record still reads trialing, though members already get Free limits. The billing scheduler retries it every 15 minutes. If this alert is still open after 1 hour, check Razorpay, then resync the workspace.',
   trialEndUnknownSubscription: () =>
     'The trial ended holding a subscription Razorpay does not know, so ending the trial ignores that subscription. Check its billing.',
   lifecycleCancelFailed: (id: string) =>
     `${cancelFailedMarker(id)}, so this subscription ${LIFECYCLE_ALERT_TEXT} still charges. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
   lifecycleReadFailed: (id: string) =>
-    `Reading subscription ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed, so we did not cancel it and it can still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
+    `Reading subscription ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed, so we did not cancel it, and it charges until it is cancelled. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
   lifecycleCheckoutReadFailed: (id: string) =>
     `Reading checkout ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed before its cancel. Check in Razorpay whether it was paid, and refund it if so.`,
   lifecycleCheckoutSyncFailed: () =>
     `Syncing a paid checkout ${LIFECYCLE_ALERT_TEXT} failed, so we cancelled nothing. Resync the workspace.`,
-  reconcileListFailed: (day: string) =>
-    `Listing recent subscriptions from Razorpay failed on ${day}, so the reconcile skipped them. Check Razorpay, then resync workspaces with a recent checkout.`,
+  reconcileListFailed: (day: string, lookbackDays: number) =>
+    `Listing the subscriptions of the last ${String(lookbackDays)} days from Razorpay failed on ${day}, so the daily reconcile skipped them. Check Razorpay, then resync every workspace with a checkout in those ${String(lookbackDays)} days.`,
 
   // Webhooks.
   disputeStatusUnread: (paymentId: string) =>
-    `Payment ${paymentId} has a new dispute, and reading its status from Razorpay failed. Respond in Razorpay before its deadline.`,
+    `Payment ${paymentId} has a new dispute, and reading its status from Razorpay failed. Respond in Razorpay before the respond-by date on the dispute.`,
   paidSubscriptionUnheld: (id: string) =>
     `Subscription ${id} is paid, but no workspace here holds it. Check its notes in Razorpay.`,
   disputeUnheld: (paymentId: string) =>
-    `Payment ${paymentId} has an open dispute, and no workspace here holds its subscription. Respond in Razorpay before its deadline.`,
+    `Payment ${paymentId} has an open dispute, and no workspace here holds its subscription. Respond in Razorpay before the respond-by date on the dispute.`,
   disputeOpen: (paymentId: string) =>
-    `Payment ${paymentId} has an open dispute. Respond in Razorpay before its deadline.`,
-  webhookFailed: (eventId: string, eventType: string) =>
-    `Razorpay event ${eventId} (${eventType}) failed after every retry. Resync the workspace.`,
+    `Payment ${paymentId} has an open dispute. Respond in Razorpay before the respond-by date on the dispute.`,
+  webhookFailed: (eventId: string, eventType: string, attempts: number) =>
+    `Razorpay event ${eventId} (${eventType}) failed on all ${String(attempts)} attempts, and its job stopped retrying. Resync the workspace.`,
   stillRetrying: (what: string) =>
     `${what} is still retrying after an hour of provider outage. It retries for 24 hours. Check Razorpay's status page.`,
 
   // Tax documents.
   taxHeldSez: (paymentId: string, amountMinor: number) =>
-    `Payment ${paymentId} of ₹${formatRupees(amountMinor)} is held: this workspace is an SEZ unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab.`,
+    `Payment ${paymentId} of ₹${formatRupees(amountMinor)} is held: this workspace is a Special Economic Zone (SEZ) unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab.`,
   taxHeldSezRefunded: (paymentId: string, amountMinor: number, refundId: string) =>
-    `Payment ${paymentId} of a held SEZ invoice was refunded ₹${formatRupees(amountMinor)} (refund ${refundId}). Issue a credit note by hand.`,
+    `Payment ${paymentId} of a held Special Economic Zone (SEZ) invoice was refunded ₹${formatRupees(amountMinor)} (refund ${refundId}). Issue a credit note by hand.`,
   taxIssueFailed: (tenantId: string, date: string) =>
     `Tax documents for workspace ${tenantId} were not issued on ${date}. Check the error log for this workspace, then resync it.`,
   taxRefundOverCredit: (
@@ -150,10 +151,10 @@ export const BILLING_ALERT_TEXT = {
     `Refund ${refundId} of ₹${formatRupees(amountMinor)} is more than the ₹${formatRupees(remainingMinor)} left to credit on ${invoiceNumber}. No credit note was issued. Check this invoice's manual credit notes.`,
   taxInvoiceLate: (count: number, first: string, last: string) =>
     count === 1
-      ? `1 tax invoice, ${first}, was issued more than 30 days after payment. Tell your CA.`
-      : `${count} tax invoices, ${first} to ${last}, were issued more than 30 days after payment. Tell your CA.`,
+      ? `1 tax invoice, ${first}, was issued more than 30 days after payment. Tell your chartered accountant (CA).`
+      : `${count} tax invoices, ${first} to ${last}, were issued more than 30 days after payment. Tell your chartered accountant (CA).`,
   taxCreditNoteLate: (number: string, invoiceNumber: string, year: number) =>
-    `Credit note ${number} for ${invoiceNumber} was issued after 30 November ${year}, so it gives no tax reduction. Tell your CA.`,
+    `Credit note ${number} for ${invoiceNumber} was issued after 30 November ${year}, so it gives no tax reduction. Tell your chartered accountant (CA).`,
 } as const
 
 /**

@@ -620,7 +620,7 @@ describe('the manual credit note', () => {
     expect(alerts.map((alert) => alert.message)).toStrictEqual(
       numbers.map(
         (number) =>
-          `Credit note ${number} for ${invoice.number} was issued after 30 November 2025, so it gives no tax reduction. Tell your CA.`
+          `Credit note ${number} for ${invoice.number} was issued after 30 November 2025, so it gives no tax reduction. Tell your chartered accountant (CA).`
       )
     )
   })

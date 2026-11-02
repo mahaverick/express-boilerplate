@@ -282,7 +282,7 @@ describe('tenant-invitation.service', () => {
         userId: invitee.id,
         type: 'tenant_invitation',
         title: 'Invitation to Acme Inc',
-        body: `Ada Lovelace invited you to join Acme Inc as manager. The invitation expires at ${formatUtcDateTime(pending?.expiresAt ?? new Date(0))}.`,
+        body: `Ada Lovelace invited you to join Acme Inc as a manager. The invitation expires at ${formatUtcDateTime(pending?.expiresAt ?? new Date(0))}.`,
         metadata: { tenantSlug: tenant.slug, invitationId: pending?.id },
       })
       expect(JSON.stringify(job.data)).not.toContain(queued.token)

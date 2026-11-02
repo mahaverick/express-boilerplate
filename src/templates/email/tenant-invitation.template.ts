@@ -1,10 +1,3 @@
-/**
- * @file The "you've been invited to join a team" message, with one button,
- * "Join <Tenant>": the click mails the invitee a confirm link, whose own click
- * signs them in and joins them. The accept link carries the raw
- * invitation token, so it never appears in the subject; tenant
- * and inviter names are user-chosen text, so they stay out of it too.
- */
 import {
   escapeHtmlForEmail,
   requireEmailVariables,
@@ -12,6 +5,14 @@ import {
   type EmailTemplateMeta,
   type RenderedEmail,
 } from '@/utilities/email-template.utilities'
+/**
+ * @file The "you've been invited to join a team" message, with one button,
+ * "Join <Tenant>": the click mails the invitee a confirm link, whose own click
+ * signs them in and joins them. The accept link carries the raw
+ * invitation token, so it never appears in the subject; tenant
+ * and inviter names are user-chosen text, so they stay out of it too.
+ */
+import { roleWithArticle } from '@/utilities/role-text.utilities'
 
 /**
  * This template's entry in `EMAIL_TEMPLATE_KEYS`. `satisfies`, not an
@@ -94,7 +95,7 @@ export function renderTenantInvitationTemplate(
   const text = [
     'Hi,',
     '',
-    `${inviterName} invited you to join ${tenantName} as ${role}.`,
+    `${inviterName} invited you to join ${tenantName} as ${roleWithArticle(role)}.`,
     '',
     `Join ${tenantName}:`,
     '',
@@ -109,7 +110,7 @@ export function renderTenantInvitationTemplate(
 
   const escapedTenantName = escapeHtmlForEmail(tenantName)
   const escapedInviterName = escapeHtmlForEmail(inviterName)
-  const escapedRole = escapeHtmlForEmail(role)
+  const escapedRole = escapeHtmlForEmail(roleWithArticle(role))
   const escapedAcceptUrl = escapeHtmlForEmail(acceptUrl)
   const escapedLifetime = escapeHtmlForEmail(lifetime)
   const escapedAppName = escapeHtmlForEmail(appName)

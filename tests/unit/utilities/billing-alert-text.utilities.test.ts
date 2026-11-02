@@ -49,7 +49,7 @@ describe('BILLING_ALERT_TEXT', () => {
   })
 
   it('keeps the text a webhook alert is deduplicated by', () => {
-    expect(BILLING_ALERT_TEXT.webhookFailed('evt_1', 'subscription.charged')).toContain(
+    expect(BILLING_ALERT_TEXT.webhookFailed('evt_1', 'subscription.charged', 31)).toContain(
       'evt_1 (subscription.charged) failed'
     )
     expect(
@@ -57,12 +57,52 @@ describe('BILLING_ALERT_TEXT', () => {
     ).toContain('evt_1 (subscription.charged) is still retrying')
   })
 
+  it('states the real attempt count, the retry interval and the lookback', () => {
+    expect(BILLING_ALERT_TEXT.webhookFailed('evt_1', 'payment.failed', 8)).toBe(
+      'Razorpay event evt_1 (payment.failed) failed on all 8 attempts, and its job stopped retrying. Resync the workspace.'
+    )
+    expect(BILLING_ALERT_TEXT.trialEndSyncFailed()).toContain(
+      'The billing scheduler retries it every 15 minutes. If this alert is still open after 1 hour,'
+    )
+    expect(BILLING_ALERT_TEXT.reconcileListFailed('2026-10-27', 3)).toContain(
+      'Listing the subscriptions of the last 3 days from Razorpay failed on 2026-10-27'
+    )
+    expect(BILLING_ALERT_TEXT.lifecycleReadFailed('sub_X')).not.toMatch(/\bmay\b/)
+  })
+
+  it('names the cycle end of a switch cancel it did not record, when it is known', () => {
+    const at = new Date('2026-11-07T10:30:00.000Z')
+    expect(BILLING_ALERT_TEXT.switchCancelNotRecorded('sub_X', at)).toContain(
+      'Razorpay will cancel subscription sub_X at its cycle end, 10:30 UTC on 7 November 2026, for an interval switch, but the workspace shows a renewal.'
+    )
+    expect(BILLING_ALERT_TEXT.switchCancelNotRecorded('sub_X', null)).toContain(
+      'Razorpay will cancel subscription sub_X at its cycle end for an interval switch, but'
+    )
+  })
+
+  it('fits every reworded alert, with real-length ids, in the 280 characters an alert stores', () => {
+    // Razorpay ids are a prefix and 14 characters.
+    const sub = 'sub_ABCDEFGHIJKLMN'
+    const pay = 'pay_ABCDEFGHIJKLMN'
+    const texts = [
+      BILLING_ALERT_TEXT.switchCancelNotRecorded(sub, new Date('2026-11-07T10:30:00.000Z')),
+      BILLING_ALERT_TEXT.lifecycleReadFailed(sub),
+      BILLING_ALERT_TEXT.trialEndSyncFailed(),
+      BILLING_ALERT_TEXT.reconcileListFailed('2026-10-27', 3),
+      BILLING_ALERT_TEXT.disputeUnheld(pay),
+      BILLING_ALERT_TEXT.webhookFailed('evt_ABCDEFGHIJKLMN', 'subscription.authenticated', 31),
+      BILLING_ALERT_TEXT.taxHeldSez(pay, 14_999_950),
+      BILLING_ALERT_TEXT.taxHeldSezRefunded(pay, 14_999_950, 'rfnd_ABCDEFGHIJKLMN'),
+    ]
+    for (const text of texts) expect(text.length, text).toBeLessThanOrEqual(280)
+  })
+
   it('words the tax alerts as the API contract gives them', () => {
     expect(BILLING_ALERT_TEXT.taxHeldSez('pay_P1', 99_900)).toBe(
-      "Payment pay_P1 of ₹999 is held: this workspace is an SEZ unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab."
+      "Payment pay_P1 of ₹999 is held: this workspace is a Special Economic Zone (SEZ) unit. Issue its tax invoice by hand, then mark it resolved on the workspace's Billing tab."
     )
     expect(BILLING_ALERT_TEXT.taxHeldSezRefunded('pay_P1', 99_900, 'rfnd_R1')).toBe(
-      'Payment pay_P1 of a held SEZ invoice was refunded ₹999 (refund rfnd_R1). Issue a credit note by hand.'
+      'Payment pay_P1 of a held Special Economic Zone (SEZ) invoice was refunded ₹999 (refund rfnd_R1). Issue a credit note by hand.'
     )
     expect(BILLING_ALERT_TEXT.taxIssueFailed('tenant-1', '2026-10-27')).toBe(
       'Tax documents for workspace tenant-1 were not issued on 2026-10-27. Check the error log for this workspace, then resync it.'
@@ -73,13 +113,13 @@ describe('BILLING_ALERT_TEXT', () => {
       "Refund rfnd_R1 of ₹500 is more than the ₹200 left to credit on INV/26-27/00001. No credit note was issued. Check this invoice's manual credit notes."
     )
     expect(BILLING_ALERT_TEXT.taxInvoiceLate(3, 'INV/26-27/00001', 'INV/26-27/00003')).toBe(
-      '3 tax invoices, INV/26-27/00001 to INV/26-27/00003, were issued more than 30 days after payment. Tell your CA.'
+      '3 tax invoices, INV/26-27/00001 to INV/26-27/00003, were issued more than 30 days after payment. Tell your chartered accountant (CA).'
     )
     expect(BILLING_ALERT_TEXT.taxInvoiceLate(1, 'INV/26-27/00007', 'INV/26-27/00007')).toBe(
-      '1 tax invoice, INV/26-27/00007, was issued more than 30 days after payment. Tell your CA.'
+      '1 tax invoice, INV/26-27/00007, was issued more than 30 days after payment. Tell your chartered accountant (CA).'
     )
     expect(BILLING_ALERT_TEXT.taxCreditNoteLate('CN/27-28/00001', 'INV/26-27/00001', 2027)).toBe(
-      'Credit note CN/27-28/00001 for INV/26-27/00001 was issued after 30 November 2027, so it gives no tax reduction. Tell your CA.'
+      'Credit note CN/27-28/00001 for INV/26-27/00001 was issued after 30 November 2027, so it gives no tax reduction. Tell your chartered accountant (CA).'
     )
   })
 })

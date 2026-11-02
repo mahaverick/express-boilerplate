@@ -245,6 +245,10 @@ describe('trial reminders', () => {
 
     const notices = await noticesOf(tenantId)
     expect(notices).toHaveLength(1)
+    // The trial ends during 3 November, so the move happens on that date, not after it.
+    expect(notices[0]?.body).toMatch(
+      /^On 3 November 2030, .+ moves to Free\. Free allows 3 members, and it has 1\. To keep Paid, upgrade from Billing\.$/
+    )
     expect(notices[0]).toMatchObject({
       userId: ownerId,
       type: 'billing_trial_ending',
@@ -290,7 +294,11 @@ describe('trial reminders', () => {
 
     const mails = await mailsOf(tenantId, 'trial_ends_today')
     expect(mails).toHaveLength(2)
-    expect(mails[0]?.variables).toMatchObject({ memberLimit: '3', membersUsed: '1' })
+    expect(mails[0]?.variables).toMatchObject({
+      trialEndsOn: '1 November 2030',
+      memberLimit: '3',
+      membersUsed: '1',
+    })
   })
 
   it('judges the last day in the workspace time zone', async () => {
@@ -308,7 +316,9 @@ describe('trial reminders', () => {
 
     // 00:30 on 2 November in Kolkata: today.
     await runFrequentBilling(new Date('2030-11-01T19:00:00.000Z'))
-    expect(await mailsOf(tenantId, 'trial_ends_today')).toHaveLength(2)
+    const mails = await mailsOf(tenantId, 'trial_ends_today')
+    expect(mails).toHaveLength(2)
+    expect(mails[0]?.variables).toMatchObject({ trialEndsOn: '2 November 2030' })
   })
 
   it('sends the halfway reminder once half the trial has passed', async () => {
@@ -323,7 +333,6 @@ describe('trial reminders', () => {
     const mails = await mailsOf(tenantId, 'trial_midpoint')
     expect(mails).toHaveLength(2)
     expect(mails[0]?.variables).toMatchObject({
-      daysLeft: '7',
       trialEndsOn: '8 November 2030',
       usageSummary: '1 member',
     })

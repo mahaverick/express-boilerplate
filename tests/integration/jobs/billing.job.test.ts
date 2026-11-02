@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-p
 import { createApp } from '@/app'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import {
+  BILLING_JOB_ATTEMPTS,
   BILLING_OTHER_FAILURE_ATTEMPTS,
   BILLING_OUTAGE_ALERT_FAILURES,
   BILLING_SYNC_TENANT_JOB,
@@ -980,7 +981,8 @@ describe('a failed or still-retrying webhook job', () => {
 
       await recordWebhookJobFailure(
         data,
-        new ProviderError(`GET /payments/${String(data.paymentId)}`, status, {}, { cause })
+        new ProviderError(`GET /payments/${String(data.paymentId)}`, status, {}, { cause }),
+        BILLING_JOB_ATTEMPTS
       )
 
       expect(await eventRow(data.eventRowId)).toMatchObject({ error: `provider_error ${status}` })
@@ -992,7 +994,7 @@ describe('a failed or still-retrying webhook job', () => {
     const data = await storedEvent(tenant.id)
 
     await recordProviderOutageRetrying({ name: BILLING_WEBHOOK_JOB, id: 'x', data })
-    await recordWebhookJobFailure(data, new ProviderError('GET /payments/x', 'timeout'))
+    await recordWebhookJobFailure(data, new ProviderError('GET /payments/x', 'timeout'), 31)
 
     const alerts = await sql<{ message: string; tenant_id: string | null }[]>`
       select message, tenant_id from billing_alerts
@@ -1000,6 +1002,6 @@ describe('a failed or still-retrying webhook job', () => {
       order by at, id`
     expect(alerts.map((alert) => alert.tenant_id)).toStrictEqual([tenant.id, tenant.id])
     expect(alerts[0]?.message).toMatch(/still retrying/)
-    expect(alerts[1]?.message).toMatch(/failed after every retry/)
+    expect(alerts[1]?.message).toMatch(/failed on all 31 attempts, and its job stopped retrying/)
   })
 })

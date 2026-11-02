@@ -1,6 +1,6 @@
 /**
- * @file The trial's last-day message: what Free allows against what the
- * workspace has, and the prices. Its one link opens a page in the customer app
+ * @file The trial's last-day message: the date, what Free allows against
+ * what the workspace has, and the prices. Its one link opens a page in the customer app
  * and carries no token, so it mails from the general sender.
  */
 import { countOf, renderBillingEmail } from '@/templates/email/billing-layout.template'
@@ -31,6 +31,10 @@ export interface TrialEndsTodayVariables {
    * The workspace's display name.
    */
   tenantName: string
+  /**
+   * The day the trial ends, as a date in the workspace's time zone.
+   */
+  trialEndsOn: string
   /**
    * Free's member limit, as digits.
    */
@@ -63,6 +67,7 @@ export const TRIAL_ENDS_TODAY_TEMPLATE_META: EmailTemplateMeta<TrialEndsTodayVar
   previewVariables: [
     'appName',
     'tenantName',
+    'trialEndsOn',
     'memberLimit',
     'membersUsed',
     'monthlyPrice',
@@ -75,6 +80,7 @@ export const TRIAL_ENDS_TODAY_TEMPLATE_META: EmailTemplateMeta<TrialEndsTodayVar
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TrialEndsTodayVariables> = [
   'appName',
   'tenantName',
+  'trialEndsOn',
   'memberLimit',
   'membersUsed',
   'monthlyPrice',
@@ -90,15 +96,23 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TrialEndsTodayVariables> = [
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderTrialEndsTodayTemplate(variables: TrialEndsTodayVariables): RenderedEmail {
-  const { appName, tenantName, memberLimit, membersUsed, monthlyPrice, yearlyPrice, billingLink } =
-    requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, TRIAL_ENDS_TODAY_TEMPLATE_KEY)
+  const {
+    appName,
+    tenantName,
+    trialEndsOn,
+    memberLimit,
+    membersUsed,
+    monthlyPrice,
+    yearlyPrice,
+    billingLink,
+  } = requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, TRIAL_ENDS_TODAY_TEMPLATE_KEY)
   return renderBillingEmail({
     templateKey: TRIAL_ENDS_TODAY_TEMPLATE_KEY,
-    subject: 'Your Paid trial ends today',
+    subject: `Last day of your Paid trial: ${trialEndsOn}`,
     appName,
     paragraphs: [
-      `Today ${tenantName} moves to Free. Free allows ${countOf(memberLimit, 'member')}; you have ${membersUsed}.`,
-      `Upgrade to keep Paid: ₹${monthlyPrice} a month or ₹${yearlyPrice} a year.`,
+      `On ${trialEndsOn}, ${tenantName} moves to Free. Free allows ${countOf(memberLimit, 'member')}; ${tenantName} has ${membersUsed}.`,
+      `Upgrade to keep Paid: ₹${monthlyPrice} a month or ₹${yearlyPrice} a year, GST included.`,
     ],
     button: { label: 'Upgrade to Paid', link: billingLink },
   })

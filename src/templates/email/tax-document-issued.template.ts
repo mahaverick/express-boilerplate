@@ -1,7 +1,8 @@
 /**
  * @file The "your tax document is ready" message, sent to the owners when a
  * tax invoice or credit note is issued for their workspace. It carries no
- * amount and no attachment: its one link opens the Billing page, where an
+ * attachment, and only a credit note carries an amount, the one it reduces
+ * its invoice by: its one link opens the Billing page, where an
  * owner signs in to download the PDF. The link carries no token, so it mails
  * from the general sender.
  */
@@ -46,6 +47,11 @@ export interface TaxDocumentIssuedVariables {
    */
   invoiceNumber: string
   /**
+   * The amount a credit note reduces its invoice by, GST included, in rupees,
+   * formatted, without the sign; an empty string for an invoice.
+   */
+  creditAmount: string
+  /**
    * The issue date in IST, such as `27 October 2026`.
    */
   issuedOn: string
@@ -68,6 +74,7 @@ export const TAX_DOCUMENT_ISSUED_TEMPLATE_META: EmailTemplateMeta<TaxDocumentIss
     'documentType',
     'documentNumber',
     'invoiceNumber',
+    'creditAmount',
     'issuedOn',
     'billingLink',
   ],
@@ -80,6 +87,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TaxDocumentIssuedVariables> =
   'documentType',
   'documentNumber',
   'invoiceNumber',
+  'creditAmount',
   'issuedOn',
   'billingLink',
 ]
@@ -100,12 +108,16 @@ export function renderTaxDocumentIssuedTemplate(
     documentType,
     documentNumber,
     invoiceNumber,
+    creditAmount,
     issuedOn,
     billingLink,
   } = requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, TAX_DOCUMENT_ISSUED_TEMPLATE_KEY)
   const isCreditNote = documentType === 'credit_note'
   if (isCreditNote && invoiceNumber === '') {
     throw new Error(`Email template "${TAX_DOCUMENT_ISSUED_TEMPLATE_KEY}" needs invoiceNumber.`)
+  }
+  if (isCreditNote && creditAmount === '') {
+    throw new Error(`Email template "${TAX_DOCUMENT_ISSUED_TEMPLATE_KEY}" needs creditAmount.`)
   }
   return renderBillingEmail({
     templateKey: TAX_DOCUMENT_ISSUED_TEMPLATE_KEY,
@@ -115,7 +127,7 @@ export function renderTaxDocumentIssuedTemplate(
     appName,
     paragraphs: [
       isCreditNote
-        ? `Credit note ${documentNumber} for ${tenantName} is ready. It reduces tax invoice ${invoiceNumber} by the amount refunded. It's dated ${issuedOn}.`
+        ? `Credit note ${documentNumber} for ${tenantName} is ready. It reduces tax invoice ${invoiceNumber} by ₹${creditAmount}, GST included. It's dated ${issuedOn}.`
         : `Tax invoice ${documentNumber} for ${tenantName} is ready. It's dated ${issuedOn}.`,
     ],
     button: { label: 'Download from Billing', link: billingLink },

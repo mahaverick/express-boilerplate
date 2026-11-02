@@ -92,8 +92,8 @@ export function renderPaymentFailedTemplate(variables: PaymentFailedVariables): 
     paragraphs: [
       isPaused
         ? `Your subscription for ${tenantName} was paused from your bank or UPI app.`
-        : `Your payment of ₹${amount} for ${tenantName} failed.`,
-      `Update your ${isPaused ? 'payment method' : 'card'} by ${graceEndsOn} to keep Paid. After that, ${tenantName} moves to Free.`,
+        : `Your payment of ₹${amount}, GST included, for ${tenantName} failed.`,
+      `Update your ${isPaused ? 'payment method' : 'card'} before ${graceEndsOn} to keep Paid. On ${graceEndsOn}, ${tenantName} moves to Free.`,
     ],
     // A pause comes from the bank or UPI app, so the payment method, not a card, needs updating.
     button: { label: isPaused ? 'Update payment method' : 'Update your card', link: billingLink },

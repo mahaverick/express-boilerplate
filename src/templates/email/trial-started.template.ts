@@ -4,7 +4,7 @@
  * it. Its one link opens a page in the customer app and carries no token, so
  * it mails from the general sender.
  */
-import { renderBillingEmail } from '@/templates/email/billing-layout.template'
+import { including, renderBillingEmail } from '@/templates/email/billing-layout.template'
 import {
   requireEmailVariables,
   type EmailTemplateKey,
@@ -37,6 +37,12 @@ export interface TrialStartedVariables {
    */
   trialEndsOn: string
   /**
+   * What Paid includes, as a phrase list such as "Workspace insights and no
+   * member limit", read from the workspace's effective entitlements; empty
+   * when there is nothing to name.
+   */
+  paidIncludes: string
+  /**
    * The workspace's Billing page. Named `…Link`, not `…Url`: it carries no
    * token, so it is stored and previewed.
    */
@@ -49,7 +55,7 @@ export interface TrialStartedVariables {
  */
 export const TRIAL_STARTED_TEMPLATE_META: EmailTemplateMeta<TrialStartedVariables> = {
   senderClass: 'general',
-  previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'billingLink'],
+  previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'paidIncludes', 'billingLink'],
   resendAction: null,
 }
 
@@ -57,6 +63,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TrialStartedVariables> = [
   'appName',
   'tenantName',
   'trialEndsOn',
+  'paidIncludes',
   'billingLink',
 ]
 
@@ -68,17 +75,17 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TrialStartedVariables> = [
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderTrialStartedTemplate(variables: TrialStartedVariables): RenderedEmail {
-  const { appName, tenantName, trialEndsOn, billingLink } = requireEmailVariables(
+  const { appName, tenantName, trialEndsOn, paidIncludes, billingLink } = requireEmailVariables(
     variables,
     REQUIRED_VARIABLE_NAMES,
     TRIAL_STARTED_TEMPLATE_KEY
   )
   return renderBillingEmail({
     templateKey: TRIAL_STARTED_TEMPLATE_KEY,
-    subject: `Your ${appName} Paid trial runs until ${trialEndsOn}`,
+    subject: `Your ${appName} Paid trial ends on ${trialEndsOn}`,
     appName,
     paragraphs: [
-      `Everything in Paid is on until ${trialEndsOn}. Then ${tenantName} moves to Free. Nothing is deleted, and no card is needed.`,
+      `Paid is on for ${tenantName}${including(paidIncludes)}. On ${trialEndsOn}, ${tenantName} moves to Free. Nothing is deleted, and no card is needed.`,
       'To stay on Paid after the trial, upgrade from Billing.',
     ],
     button: { label: 'Open Billing', link: billingLink },

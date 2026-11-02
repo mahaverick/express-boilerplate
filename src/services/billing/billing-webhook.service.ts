@@ -665,10 +665,12 @@ async function tenantOfWebhookJob(data: BillingWebhookJobData): Promise<string |
  * `failed` listener.
  * @param data - The job's payload.
  * @param error - What its last attempt threw.
+ * @param attempts - The attempts the job made, the last included: BullMQ counts it before it emits `failed`.
  */
 export async function recordWebhookJobFailure(
   data: BillingWebhookJobData,
-  error: Error
+  error: Error,
+  attempts: number
 ): Promise<void> {
   try {
     await billingRepository.markEventFailed(data.eventRowId, failureSummary(error))
@@ -677,7 +679,7 @@ export async function recordWebhookJobFailure(
       'webhook_failing',
       // Not the bare event id: the earlier still-retrying alert names it too.
       `${data.providerEventId} (${data.eventType}) failed`,
-      BILLING_ALERT_TEXT.webhookFailed(data.providerEventId, data.eventType)
+      BILLING_ALERT_TEXT.webhookFailed(data.providerEventId, data.eventType, attempts)
     )
   } catch (recordError) {
     logger.error('Could not record a failed billing webhook job', {
@@ -690,7 +692,7 @@ export async function recordWebhookJobFailure(
 /**
  * Tell staff, once per job, that a billing job is still retrying after about
  * an hour of provider outage, the point where it used to fail for good. It
- * keeps retrying; the alert after every retry still follows if it never
+ * keeps retrying; the alert after its last attempt still follows if it never
  * succeeds. A webhook job raises `webhook_failing` for its event's workspace;
  * any other job `reconcile_repair` for the workspace it names. Never rejects.
  * @param job - The job.

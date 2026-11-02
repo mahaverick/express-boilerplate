@@ -112,8 +112,8 @@ export function renderTrialEndingTemplate(variables: TrialEndingVariables): Rend
     subject: `Your Paid trial ends on ${trialEndsOn}`,
     appName,
     paragraphs: [
-      `After ${trialEndsOn}, ${tenantName} moves to Free. Free allows ${countOf(memberLimit, 'member')}; you have ${membersUsed}.`,
-      `Upgrade to keep Paid: ₹${monthlyPrice} a month or ₹${yearlyPrice} a year.`,
+      `On ${trialEndsOn}, ${tenantName} moves to Free. Free allows ${countOf(memberLimit, 'member')}; ${tenantName} has ${membersUsed}.`,
+      `Upgrade to keep Paid: ₹${monthlyPrice} a month or ₹${yearlyPrice} a year, GST included.`,
     ],
     button: { label: 'Upgrade to Paid', link: billingLink },
   })
