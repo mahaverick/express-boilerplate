@@ -944,7 +944,7 @@ PostHog, describes what stays there.
   are allowed inside a word. A name is still not an identifier: it accepts
   cross-script lookalikes, so identify an account by its id or verified address.
 - **The error envelope.** `errorHandler` (`src/middlewares/error.middleware.ts`)
-  answers every 5xx but a maintenance refusal with "Our server hit an error. Try again, and contact support with the error ID if it happens again." and
+  answers every 5xx but a maintenance refusal with "Our server hit an error. Try again, and email <support address> with the error ID if it happens again." and
   an `errorId`, whatever the error says. The one opt-in is an `HttpError` built
   with `exposeMessage: true`: its message is guidance written for the client
   (a busy billing row, a payment provider that did not answer or refused), so

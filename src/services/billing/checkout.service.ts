@@ -93,6 +93,7 @@ import type {
   SourcedEntitlements,
 } from '@/types/billing'
 import type { LinkedInvoice, OwnerInvoiceView } from '@/types/tax'
+import { supportAddress } from '@/utilities/email-sender.utilities'
 import { taxStatusOf } from '@/utilities/gst.utilities'
 import { bindScope, listScope, signCursor, verifyCursor } from '@/utilities/list-cursor.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
@@ -317,9 +318,12 @@ function hasCurrentSubscription(row: TenantBillingRecord): boolean {
 
 /**
  * What an owner reads when their row belongs to another provider or mode.
+ * @param address - The support address, read when the message is built.
+ * @returns The message.
  */
-const OTHER_PROVIDER_OWNER_MESSAGE =
-  'Your subscription is with another payment account. Contact support to change it.'
+function otherProviderOwnerMessage(address = supportAddress(getEnv())): string {
+  return `Your subscription is with another payment account. Email ${address} to change it.`
+}
 
 /**
  * Refuse a write on a live row of another provider or mode: the running
@@ -334,7 +338,7 @@ function assertOwnProviderWhenLive(
   row: TenantBillingRecord,
   provider: BillingProviderClient,
   code: string,
-  message = OTHER_PROVIDER_OWNER_MESSAGE
+  message = otherProviderOwnerMessage()
 ): void {
   if (!isOtherProvider(row, provider)) return
   logger.warn('A billing write met a row of another provider or mode', {
@@ -1460,7 +1464,7 @@ export async function cancelPaid(actor: Actor, tenantId: string): Promise<Tenant
           ? `Your subscription already ends on ${await formatBillingDate(tenantId, row.currentPeriodEnd)}. To keep Paid after that, upgrade again under Billing.`
           : 'Your workspace has no subscription to cancel. There is nothing to do.'
       ),
-    otherProviderMessage: OTHER_PROVIDER_OWNER_MESSAGE,
+    otherProviderMessage: otherProviderOwnerMessage(),
   })
   return getTenantBilling(actor, tenantId)
 }

@@ -31,6 +31,13 @@ import { request } from '../../helpers/request'
 import { settle } from '../../helpers/timing'
 
 const app = createApp()
+
+/**
+ * The missing-settings 404's message, naming the test env's support address
+ * (`support@` on the default `MAIL_FROM`'s domain).
+ */
+const SETTINGS_MISSING_MESSAGE =
+  "We couldn't load this workspace's settings. Refresh the page. If it happens again, email support@example.com."
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
@@ -1393,6 +1400,10 @@ describe('/api/v1/tenants', () => {
             .set('Authorization', `Bearer ${token}`)
 
           expect(response.status).toBe(404)
+          expect(response.body).toMatchObject({
+            code: 'tenant_settings_not_found',
+            message: SETTINGS_MISSING_MESSAGE,
+          })
         }
       )
     })
@@ -1481,6 +1492,10 @@ describe('/api/v1/tenants', () => {
             .send({ locale: 'fr' })
 
           expect(response.status).toBe(404)
+          expect(response.body).toMatchObject({
+            code: 'tenant_settings_not_found',
+            message: SETTINGS_MISSING_MESSAGE,
+          })
         }
       )
     })

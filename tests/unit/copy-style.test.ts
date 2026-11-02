@@ -1069,6 +1069,19 @@ describe('user-facing copy', () => {
     expect(texts).toContain('Your session expired. Sign in again to continue.')
     expect(texts).toContain('Enter text.')
     expect(texts).toContain('Your account no longer exists. Sign in again to continue.')
+    // Each names the support address, built at throw time by a `…Message` function.
+    expect(texts).toContain(
+      "We couldn't load this workspace's settings. Refresh the page. If it happens again, email X."
+    )
+    expect(texts).toContain(
+      'Our payment provider declined this change. Email X with the error ID if it happens again.'
+    )
+    expect(texts).toContain(
+      'Your subscription is with another payment account. Email X to change it.'
+    )
+    expect(texts).toContain(
+      'Our server hit an error. Try again, and email X with the error ID if it happens again.'
+    )
   })
 
   it('breaks no copy rule in the messages express sends', () => {

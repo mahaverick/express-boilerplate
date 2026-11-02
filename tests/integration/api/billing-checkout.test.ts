@@ -457,7 +457,11 @@ describe('POST /api/v1/tenants/:slug/billing/checkout', () => {
     const response = await postAs(owner, `${tenant.slug}/billing/checkout`, { interval: 'month' })
 
     expect(response.status).toBe(409)
-    expect(response.body).toMatchObject({ code: 'SUBSCRIPTION_EXISTS' })
+    expect(response.body).toMatchObject({
+      code: 'SUBSCRIPTION_EXISTS',
+      message:
+        'Your subscription is with another payment account. Email support@example.com to change it.',
+    })
     expect(await readBilling(tenant.id)).toMatchObject({
       provider: 'razorpay',
       pendingSubscriptionId: null,
@@ -873,7 +877,7 @@ describe('owner billing writes when something fails', () => {
     expect(response?.body).toMatchObject({
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
       message:
-        'Our payment provider declined this change. Contact support with the error ID if it happens again.',
+        'Our payment provider declined this change. Email support@example.com with the error ID if it happens again.',
     })
     expect(response?.headers['retry-after']).toBeUndefined()
   })
