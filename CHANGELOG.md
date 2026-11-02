@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/mahaverick/express-boilerplate/compare/v2.1.0...v2.1.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **copy:** name the support address in errors that send a person to support ([#183](https://github.com/mahaverick/express-boilerplate/issues/183)) ([fe822c5](https://github.com/mahaverick/express-boilerplate/commit/fe822c514951a82713eeefa752bd673629cc2d43))
+
 ## [2.1.0](https://github.com/mahaverick/express-boilerplate/compare/v2.0.2...v2.1.0) (2026-11-02)
 
 
