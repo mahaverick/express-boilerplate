@@ -145,7 +145,7 @@ export const ONBOARDING_STEPS: readonly OnboardingStep[] = assertOnboardingRegis
   {
     key: 'configure_settings',
     title: 'Configure your workspace settings',
-    description: 'Set the timezone and locale your team works in.',
+    description: 'Set the time zone, language and region your team works in.',
     scope: 'tenant',
     completion: { kind: 'auto', on: 'tenant_settings_updated' },
     required: true,

@@ -4,7 +4,7 @@
  * home. Its one link opens a page in the customer app and carries no token, so
  * it mails from the general sender.
  */
-import { renderBillingEmail } from '@/templates/email/billing-layout.template'
+import { including, renderBillingEmail } from '@/templates/email/billing-layout.template'
 import {
   requireEmailVariables,
   type EmailTemplateKey,
@@ -34,6 +34,12 @@ export interface UpgradeRequestFulfilledVariables {
    */
   tenantName: string
   /**
+   * What Paid includes, as a phrase list such as "Workspace insights and no
+   * member limit", read from the workspace's effective entitlements; empty
+   * when there is nothing to name.
+   */
+  paidIncludes: string
+  /**
    * The workspace's home page. Named `…Link`, not `…Url`: it carries no token,
    * so it is stored and previewed.
    */
@@ -47,13 +53,14 @@ export interface UpgradeRequestFulfilledVariables {
 export const UPGRADE_REQUEST_FULFILLED_TEMPLATE_META: EmailTemplateMeta<UpgradeRequestFulfilledVariables> =
   {
     senderClass: 'general',
-    previewVariables: ['appName', 'tenantName', 'tenantLink'],
+    previewVariables: ['appName', 'tenantName', 'paidIncludes', 'tenantLink'],
     resendAction: null,
   }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof UpgradeRequestFulfilledVariables> = [
   'appName',
   'tenantName',
+  'paidIncludes',
   'tenantLink',
 ]
 
@@ -67,7 +74,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof UpgradeRequestFulfilledVariab
 export function renderUpgradeRequestFulfilledTemplate(
   variables: UpgradeRequestFulfilledVariables
 ): RenderedEmail {
-  const { appName, tenantName, tenantLink } = requireEmailVariables(
+  const { appName, tenantName, paidIncludes, tenantLink } = requireEmailVariables(
     variables,
     REQUIRED_VARIABLE_NAMES,
     UPGRADE_REQUEST_FULFILLED_TEMPLATE_KEY
@@ -78,7 +85,7 @@ export function renderUpgradeRequestFulfilledTemplate(
     appName,
     paragraphs: [
       `You asked to move ${tenantName} to Paid. An owner upgraded it.`,
-      'Everything in Paid is on for you.',
+      `Paid is on${including(paidIncludes)}.`,
     ],
     button: { label: 'Open your workspace', link: tenantLink },
   })

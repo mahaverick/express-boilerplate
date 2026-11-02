@@ -551,8 +551,9 @@ async function cancelAtCycleEnd(
   subscriptionId: string
 ): Promise<void> {
   const { tenantId } = run
+  let cancelled: ProviderSubscription
   try {
-    await provider.cancelSubscription(subscriptionId, true)
+    cancelled = await provider.cancelSubscription(subscriptionId, true)
   } catch (error) {
     logger.error('Could not schedule the cancel of a switched subscription', {
       error,
@@ -583,7 +584,7 @@ async function cancelAtCycleEnd(
     logger.error('Could not record a scheduled cancel', { error, tenantId, subscriptionId })
     await insertAlert(tenantId, {
       kind: 'reconcile_repair',
-      message: BILLING_ALERT_TEXT.switchCancelNotRecorded(subscriptionId),
+      message: BILLING_ALERT_TEXT.switchCancelNotRecorded(subscriptionId, cancelled.currentEnd),
       subscriptionId,
     })
   }

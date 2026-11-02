@@ -1,9 +1,3 @@
-/**
- * @file The "finish joining" message: one emailed link, mailed when an
- * invitation is opened for an address that has an account, or for any staff
- * invitation. Its click signs the recipient in and joins them. `confirmUrl`
- * arrives fully built, so this stays a pure function of strings.
- */
 import {
   escapeHtmlForEmail,
   requireEmailVariables,
@@ -11,6 +5,13 @@ import {
   type EmailTemplateMeta,
   type RenderedEmail,
 } from '@/utilities/email-template.utilities'
+/**
+ * @file The "finish joining" message: one emailed link, mailed when an
+ * invitation is opened for an address that has an account, or for any staff
+ * invitation. Its click signs the recipient in and joins them. `confirmUrl`
+ * arrives fully built, so this stays a pure function of strings.
+ */
+import { roleWithArticle } from '@/utilities/role-text.utilities'
 
 /**
  * This template's entry in `EMAIL_TEMPLATE_KEYS`. `satisfies`, not an
@@ -76,7 +77,7 @@ export function renderInvitationConfirmTemplate(
   const text = [
     `Hi ${firstName},`,
     '',
-    `Sign in and join ${tenantName} as ${role} with this link. It works once and expires in ${expiresInMinutes} minutes, at ${expiresAt}.`,
+    `Sign in and join ${tenantName} as ${roleWithArticle(role)} with this link. It works once and expires in ${expiresInMinutes} minutes, at ${expiresAt}.`,
     '',
     confirmUrl,
     '',
@@ -87,7 +88,7 @@ export function renderInvitationConfirmTemplate(
 
   const escapedFirstName = escapeHtmlForEmail(firstName)
   const escapedTenantName = escapeHtmlForEmail(tenantName)
-  const escapedRole = escapeHtmlForEmail(role)
+  const escapedRole = escapeHtmlForEmail(roleWithArticle(role))
   const escapedConfirmUrl = escapeHtmlForEmail(confirmUrl)
   const escapedMinutes = escapeHtmlForEmail(expiresInMinutes)
   const escapedAppName = escapeHtmlForEmail(appName)

@@ -106,7 +106,7 @@ describe('buildPreviewMessage', () => {
     const rendered = renderForMessage(message)
 
     expect(isPartial).toBe(false)
-    expect(rendered.text).toContain(`${INVITER_NAME_PLACEHOLDER} paid for Paid and left`)
+    expect(rendered.text).toContain(`${INVITER_NAME_PLACEHOLDER}, who paid for Paid, left`)
     expect(rendered.text).not.toContain('Grace Hopper')
     expect(rendered.text).toContain(billingLink)
   })

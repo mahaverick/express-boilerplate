@@ -49,7 +49,7 @@ describe('renderInvitationConfirmTemplate', () => {
     expect(rendered.text.split('\n')).toEqual([
       'Hi Ada,',
       '',
-      'Sign in and join Acme Inc as editor with this link. It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.',
+      'Sign in and join Acme Inc as an editor with this link. It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.',
       '',
       VARIABLES.confirmUrl,
       '',
@@ -65,7 +65,7 @@ describe('renderInvitationConfirmTemplate', () => {
 
     expect(rendered.html).toContain('<p>Hi Ada,</p>')
     expect(rendered.html).toContain(
-      '<p>Sign in and join Acme Inc as editor with this link. It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.</p>'
+      '<p>Sign in and join Acme Inc as an editor with this link. It works once and expires in 15 minutes, at 15:42 UTC on 20 October 2026.</p>'
     )
     expect(rendered.html).toContain(`<a href="${escapedUrl}"`)
     expect(rendered.html).toContain('>Join Acme Inc</a>')

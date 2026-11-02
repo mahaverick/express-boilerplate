@@ -91,7 +91,7 @@ export function renderIntervalSwitchScheduledTemplate(
     subject: `Your plan switches to ${interval === 'year' ? 'yearly' : 'monthly'} billing on ${switchOn}`,
     appName,
     paragraphs: [
-      `From ${switchOn}, ${tenantName} pays ₹${amount} a ${interval}.`,
+      `From ${switchOn}, ${tenantName} pays ₹${amount} a ${interval}, GST included.`,
       'Your invoices are on the Billing page.',
     ],
     button: { label: 'Open Billing', link: billingLink },

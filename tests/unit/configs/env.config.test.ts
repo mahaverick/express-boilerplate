@@ -29,6 +29,22 @@ const valid = {
   SESSION_SECRET: 'c'.repeat(32),
 }
 
+describe('SUPPORT_EMAIL', () => {
+  it('is optional, so unset reads as undefined', () => {
+    expect(parseEnv(valid).SUPPORT_EMAIL).toBeUndefined()
+    expect(parseEnv({ ...valid, SUPPORT_EMAIL: '' }).SUPPORT_EMAIL).toBeUndefined()
+  })
+
+  it('keeps an address and refuses anything else', () => {
+    expect(parseEnv({ ...valid, SUPPORT_EMAIL: 'help@example.org' }).SUPPORT_EMAIL).toBe(
+      'help@example.org'
+    )
+    expect(() => parseEnv({ ...valid, SUPPORT_EMAIL: 'Support <help@example.org>' })).toThrow(
+      /SUPPORT_EMAIL/
+    )
+  })
+})
+
 describe('CURSOR_SECRET', () => {
   it('refuses a secret shorter than 32 characters', () => {
     expect(() => parseEnv({ ...valid, CURSOR_SECRET: 'short' })).toThrow(/CURSOR_SECRET/)

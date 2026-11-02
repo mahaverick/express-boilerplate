@@ -1,7 +1,7 @@
 /**
- * @file The tax document email: both subjects, both bodies, a link-only
- * message with no amount, HTML escaping, the one button and a missing
- * variable naming itself.
+ * @file The tax document email: both subjects, both bodies, the amount a
+ * credit note reduces the invoice by and no amount on an invoice, HTML
+ * escaping, the one button and a missing variable naming itself.
  */
 import { describe, expect, it } from 'vite-plus/test'
 import {
@@ -18,6 +18,7 @@ const INVOICE: TaxDocumentIssuedVariables = {
   documentType: 'invoice',
   documentNumber: 'INV/26-27/00001',
   invoiceNumber: '',
+  creditAmount: '',
   issuedOn: '27 October 2026',
   billingLink: LINK,
 }
@@ -27,6 +28,7 @@ const CREDIT_NOTE: TaxDocumentIssuedVariables = {
   documentType: 'credit_note',
   documentNumber: 'CN/26-27/00001',
   invoiceNumber: 'INV/26-27/00001',
+  creditAmount: '1,178.82',
 }
 
 /**
@@ -53,17 +55,20 @@ describe('renderTaxDocumentIssuedTemplate', () => {
     expect(email.html).toContain('dated 27 October 2026.')
   })
 
-  it('names the credit note, the invoice it reduces and the date', () => {
+  it('names the credit note, the invoice it reduces, by how much, and the date', () => {
     const email = renderTaxDocumentIssuedTemplate(CREDIT_NOTE)
     expect(email.subject).toBe('Your Acme credit note CN/26-27/00001')
     expect(email.text).toContain(
-      "Credit note CN/26-27/00001 for Northwind is ready. It reduces tax invoice INV/26-27/00001 by the amount refunded. It's dated 27 October 2026."
+      "Credit note CN/26-27/00001 for Northwind is ready. It reduces tax invoice INV/26-27/00001 by ₹1,178.82, GST included. It's dated 27 October 2026."
     )
-    expect(email.html).toContain('It reduces tax invoice INV/26-27/00001 by the amount refunded.')
+    expect(email.html).toContain(
+      'It reduces tax invoice INV/26-27/00001 by ₹1,178.82, GST included.'
+    )
+    expect(email.subject).not.toMatch(/₹/)
   })
 
-  it.each([INVOICE, CREDIT_NOTE])('carries no amount and no digit but the number and date', (v) => {
-    const email = renderTaxDocumentIssuedTemplate(v)
+  it('carries no amount and no digit but the number and date on an invoice', () => {
+    const email = renderTaxDocumentIssuedTemplate(INVOICE)
     for (const part of [email.subject, email.text]) {
       expect(part).not.toMatch(/Rs\.|₹/)
       expect(withoutNumbersAndDate(part)).not.toMatch(/\d/)
@@ -92,6 +97,12 @@ describe('renderTaxDocumentIssuedTemplate', () => {
     expect(() =>
       renderTaxDocumentIssuedTemplate(rest as unknown as TaxDocumentIssuedVariables)
     ).toThrow('billingLink')
+  })
+
+  it('refuses a credit note that names no amount', () => {
+    expect(() => renderTaxDocumentIssuedTemplate({ ...CREDIT_NOTE, creditAmount: '' })).toThrow(
+      'creditAmount'
+    )
   })
 
   it('refuses a credit note that names no invoice', () => {

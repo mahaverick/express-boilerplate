@@ -1,9 +1,9 @@
 /**
- * @file The mid-trial message: the days left and up to three facts about what
+ * @file The mid-trial message: the trial's end date and up to three facts about what
  * the workspace has used so far. Its one link opens a page in the customer app
  * and carries no token, so it mails from the general sender.
  */
-import { countOf, renderBillingEmail } from '@/templates/email/billing-layout.template'
+import { renderBillingEmail } from '@/templates/email/billing-layout.template'
 import {
   requireEmailVariables,
   type EmailTemplateKey,
@@ -32,10 +32,6 @@ export interface TrialMidpointVariables {
    */
   tenantName: string
   /**
-   * Whole days left in the trial, as digits.
-   */
-  daysLeft: string
-  /**
    * When the trial ends, as a date in the workspace's time zone.
    */
   trialEndsOn: string
@@ -56,21 +52,13 @@ export interface TrialMidpointVariables {
  */
 export const TRIAL_MIDPOINT_TEMPLATE_META: EmailTemplateMeta<TrialMidpointVariables> = {
   senderClass: 'general',
-  previewVariables: [
-    'appName',
-    'tenantName',
-    'daysLeft',
-    'trialEndsOn',
-    'usageSummary',
-    'billingLink',
-  ],
+  previewVariables: ['appName', 'tenantName', 'trialEndsOn', 'usageSummary', 'billingLink'],
   resendAction: null,
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TrialMidpointVariables> = [
   'appName',
   'tenantName',
-  'daysLeft',
   'trialEndsOn',
   'usageSummary',
   'billingLink',
@@ -84,14 +72,17 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TrialMidpointVariables> = [
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
  */
 export function renderTrialMidpointTemplate(variables: TrialMidpointVariables): RenderedEmail {
-  const { appName, tenantName, daysLeft, trialEndsOn, usageSummary, billingLink } =
-    requireEmailVariables(variables, REQUIRED_VARIABLE_NAMES, TRIAL_MIDPOINT_TEMPLATE_KEY)
+  const { appName, tenantName, trialEndsOn, usageSummary, billingLink } = requireEmailVariables(
+    variables,
+    REQUIRED_VARIABLE_NAMES,
+    TRIAL_MIDPOINT_TEMPLATE_KEY
+  )
   return renderBillingEmail({
     templateKey: TRIAL_MIDPOINT_TEMPLATE_KEY,
-    subject: `${countOf(daysLeft, 'day')} left in your Paid trial`,
+    subject: `Your Paid trial is halfway: it ends on ${trialEndsOn}`,
     appName,
     paragraphs: [
-      `${tenantName} is on a Paid trial until ${trialEndsOn}. So far it has:`,
+      `The Paid trial of ${tenantName} ends on ${trialEndsOn}. So far the workspace has:`,
       ...usageSummary.split('\n').filter((line) => line !== ''),
       'To keep Paid after the trial, upgrade from Billing.',
     ],

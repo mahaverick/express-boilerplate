@@ -79,10 +79,10 @@ export function renderRenewalUpcomingTemplate(variables: RenewalUpcomingVariable
   )
   return renderBillingEmail({
     templateKey: RENEWAL_UPCOMING_TEMPLATE_KEY,
-    subject: `Your yearly plan renews on ${renewsOn} for ₹${amount}`,
+    subject: `Your yearly plan renews on ${renewsOn} for ₹${amount}, GST included`,
     appName,
     paragraphs: [
-      `${tenantName} renews on Paid on ${renewsOn}, for ₹${amount}.`,
+      `${tenantName} renews on Paid on ${renewsOn}, for ₹${amount}, GST included.`,
       `To stop it, cancel before ${renewsOn} from Billing.`,
     ],
     button: { label: 'Open Billing', link: billingLink },

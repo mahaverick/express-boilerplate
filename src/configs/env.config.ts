@@ -746,6 +746,17 @@ const EnvSchema = z.object({
     .describe(
       'The From address of the transactional sender: every email whose link carries a token (sign-in link, step-up link, welcome, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
     ),
+  /**
+   * No schema default: it falls back to an address on MAIL_FROM's domain,
+   * which `.default()` cannot read, so `supportAddress`
+   * (email-sender.utilities.ts) applies the fallback.
+   */
+  SUPPORT_EMAIL: z
+    .email()
+    .optional()
+    .describe(
+      'The support address customer mail gives for a step only support can take, such as restoring a suspended or archived workspace. A bare address, no display name. Unset uses support@ on the domain of MAIL_FROM.'
+    ),
 
   APP_NAME: z
     .string()

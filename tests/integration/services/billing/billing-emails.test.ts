@@ -436,6 +436,9 @@ describe('billing emails', () => {
       title: 'Your payment of ₹999 failed',
       email: { templateKey: 'payment_failed' },
     })
+    expect(notices[0]?.data.body).toBe(
+      'Update your card before 8 November 2026 to keep Paid. On 8 November 2026, Billing Co moves to Free.'
+    )
 
     for (const job of notices) await processNotificationJob(job)
     expect(await recipientsOf(tenantId, 'payment_failed')).toEqual(
@@ -493,8 +496,10 @@ describe('billing emails', () => {
     const free = { ...row, version: halted.version + 1 }
 
     await emitBillingDiff(halted, free, 'job')
+    // Halted on 1 November with seven days of grace: the card was not updated before 8 November.
     expect(await variablesOf(tenantId, 'moved_to_free')).toMatchObject({
       downgradeCause: 'payment_failed',
+      graceEndedOn: '8 November 2026',
     })
 
     const trialing = { ...row, state: 'trialing' as const, planId: plans.paidId }
@@ -603,7 +608,9 @@ describe('billing emails', () => {
       title: 'Paid ends on 1 November 2026',
       email: { templateKey: 'paid_cancelled' },
     })
-    expect(notices[0]?.data.body).toContain('keeps Paid until 1 November 2026, then moves to Free.')
+    expect(notices[0]?.data.body).toContain(
+      'Billing Co keeps Paid until it moves to Free on 1 November 2026.'
+    )
 
     for (const job of notices) await processNotificationJob(job)
     expect(await recipientsOf(tenantId, 'paid_cancelled')).toEqual(
@@ -644,7 +651,7 @@ describe('billing emails', () => {
       email: { templateKey: 'paid_cancelled' },
     })
     expect(notices[0]?.data.body).toContain(
-      "Paid for Billing Co was cancelled before its first charge, so no payment was taken. Billing Co's trial continues until 1 November 2026."
+      'Paid for Billing Co was cancelled before its first charge, so no payment was taken. The Billing Co trial ends on 1 November 2026. To keep Paid after that, upgrade from Billing.'
     )
     expect(notices[0]?.data.body).not.toContain('You cancelled')
     expect(notices[0]?.data.body).not.toContain('Your trial')
@@ -728,7 +735,7 @@ describe('billing emails', () => {
       [owner.id, coOwner.id].toSorted()
     )
     expect(notices[0]?.data.title).toBe('Your Paid subscription is paused')
-    expect(notices[0]?.data.body).toContain('Update your payment method by')
+    expect(notices[0]?.data.body).toContain('Update your payment method before')
   })
 
   it('warns again for a second halt with its own time', async () => {
@@ -806,7 +813,9 @@ describe('billing emails', () => {
     await emitBillingDiff(cancelling, { ...row, version: cancelling.version + 1 }, 'job')
 
     expect(await variablesOf(tenantId, 'moved_to_free')).toMatchObject({
-      downgradeCause: 'lifecycle',
+      downgradeCause: 'suspended',
+      graceEndedOn: '',
+      supportEmail: 'support@example.com',
     })
   })
 

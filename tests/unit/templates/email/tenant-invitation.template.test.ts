@@ -27,7 +27,7 @@ describe('renderTenantInvitationTemplate', () => {
   it('names the inviter, tenant, role and lifetime in both parts', () => {
     const rendered = renderTenantInvitationTemplate(validVariables)
     for (const part of [rendered.text, rendered.html]) {
-      expect(part).toContain('Ada Lovelace invited you to join Acme Inc as editor.')
+      expect(part).toContain('Ada Lovelace invited you to join Acme Inc as an editor.')
       expect(part).toContain('This link expires in 7 days, at 15:42 UTC on 20 October 2026.')
     }
   })

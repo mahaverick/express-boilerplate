@@ -94,12 +94,13 @@ const CASES: readonly TemplateCase[] = [
       appName: 'Acme',
       tenantName: 'Rocket Co',
       trialEndsOn: '7 November 2026',
+      paidIncludes: 'Workspace insights and no member limit',
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
-    subject: 'Your Acme Paid trial runs until 7 November 2026',
+    subject: 'Your Acme Paid trial ends on 7 November 2026',
     sentences: [
-      'Everything in Paid is on until 7 November 2026. Then Rocket Co moves to Free. Nothing is deleted, and no card is needed.',
+      'Paid is on for Rocket Co, including Workspace insights and no member limit. On 7 November 2026, Rocket Co moves to Free. Nothing is deleted, and no card is needed.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -109,14 +110,17 @@ const CASES: readonly TemplateCase[] = [
     variables: {
       appName: 'Acme',
       tenantName: 'Rocket Co',
-      daysLeft: '7',
       trialEndsOn: '7 November 2026',
       usageSummary: '5 members\n12 invitations sent',
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
-    subject: '7 days left in your Paid trial',
-    sentences: ['5 members', '12 invitations sent'],
+    subject: 'Your Paid trial is halfway: it ends on 7 November 2026',
+    sentences: [
+      'The Paid trial of Rocket Co ends on 7 November 2026. So far the workspace has:',
+      '5 members',
+      '12 invitations sent',
+    ],
     linkVariable: 'billingLink',
   }),
   caseOf({
@@ -135,9 +139,9 @@ const CASES: readonly TemplateCase[] = [
     userChosen: ['tenantName'],
     subject: 'Your Paid trial ends on 7 November 2026',
     sentences: [
-      'After 7 November 2026, Rocket Co moves to Free.',
-      'Free allows 3 members; you have 5.',
-      'Upgrade to keep Paid: ₹999 a month or ₹9,990 a year.',
+      'On 7 November 2026, Rocket Co moves to Free.',
+      'Free allows 3 members; Rocket Co has 5.',
+      'Upgrade to keep Paid: ₹999 a month or ₹9,990 a year, GST included.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -147,6 +151,7 @@ const CASES: readonly TemplateCase[] = [
     variables: {
       appName: 'Acme',
       tenantName: 'Rocket Co',
+      trialEndsOn: '7 November 2026',
       memberLimit: '3',
       membersUsed: '5',
       monthlyPrice: '999',
@@ -154,11 +159,11 @@ const CASES: readonly TemplateCase[] = [
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
-    subject: 'Your Paid trial ends today',
+    subject: 'Last day of your Paid trial: 7 November 2026',
     sentences: [
-      'Today Rocket Co moves to Free.',
-      'Free allows 3 members; you have 5.',
-      'Upgrade to keep Paid: ₹999 a month or ₹9,990 a year.',
+      'On 7 November 2026, Rocket Co moves to Free.',
+      'Free allows 3 members; Rocket Co has 5.',
+      'Upgrade to keep Paid: ₹999 a month or ₹9,990 a year, GST included.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -192,7 +197,10 @@ const CASES: readonly TemplateCase[] = [
     },
     userChosen: ['tenantName'],
     subject: "You're on Paid",
-    sentences: ['Rocket Co is on Paid for ₹999 a month.', 'The next charge is on 7 November 2026.'],
+    sentences: [
+      'Rocket Co is on Paid for ₹999 a month, GST included.',
+      'The next charge is on 7 November 2026.',
+    ],
     linkVariable: 'billingLink',
   }),
   caseOf({
@@ -206,8 +214,11 @@ const CASES: readonly TemplateCase[] = [
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
-    subject: 'Your yearly plan renews on 7 November 2026 for ₹9,990',
-    sentences: ['To stop it, cancel before 7 November 2026 from Billing.'],
+    subject: 'Your yearly plan renews on 7 November 2026 for ₹9,990, GST included',
+    sentences: [
+      'Rocket Co renews on Paid on 7 November 2026, for ₹9,990, GST included.',
+      'To stop it, cancel before 7 November 2026 from Billing.',
+    ],
     linkVariable: 'billingLink',
   }),
   caseOf({
@@ -224,8 +235,8 @@ const CASES: readonly TemplateCase[] = [
     userChosen: ['tenantName'],
     subject: 'Your payment of ₹999 failed',
     sentences: [
-      'Your payment of ₹999 for Rocket Co failed.',
-      'Update your card by 7 November 2026 to keep Paid. After that, Rocket Co moves to Free.',
+      'Your payment of ₹999, GST included, for Rocket Co failed.',
+      'Update your card before 7 November 2026 to keep Paid. On 7 November 2026, Rocket Co moves to Free.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -236,13 +247,15 @@ const CASES: readonly TemplateCase[] = [
       appName: 'Acme',
       tenantName: 'Rocket Co',
       downgradeCause: 'payment_failed',
+      graceEndedOn: '7 November 2026',
+      supportEmail: 'support@example.com',
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName'],
     subject: 'Your Acme workspace moved to Free',
     sentences: [
       'Rocket Co moved to Free.',
-      'The payment for Paid failed, and the card was not updated before the grace period ended.',
+      'The payment for Paid failed, and the card was not updated before 7 November 2026.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -259,7 +272,7 @@ const CASES: readonly TemplateCase[] = [
     userChosen: ['tenantName'],
     subject: 'Paid ends on 7 November 2026',
     sentences: [
-      'Rocket Co keeps Paid until 7 November 2026, then moves to Free.',
+      'Rocket Co keeps Paid until it moves to Free on 7 November 2026.',
       "You won't be charged again.",
       'To keep Paid, subscribe again from Billing.',
     ],
@@ -278,7 +291,7 @@ const CASES: readonly TemplateCase[] = [
     },
     userChosen: ['tenantName'],
     subject: 'Your plan switches to yearly billing on 7 November 2026',
-    sentences: ['From 7 November 2026, Rocket Co pays ₹9,990 a year.'],
+    sentences: ['From 7 November 2026, Rocket Co pays ₹9,990 a year, GST included.'],
     linkVariable: 'billingLink',
   }),
   caseOf({
@@ -294,10 +307,10 @@ const CASES: readonly TemplateCase[] = [
       billingLink: BILLING_LINK,
     },
     userChosen: ['tenantName', 'payerName'],
-    subject: 'Your Acme workspace needs a new card',
+    subject: 'The payer for your Acme workspace left',
     sentences: [
-      'Grace Hopper paid for Paid and left Rocket Co on 1 November 2026.',
-      'Add your card by 7 November 2026 to keep Paid.',
+      'Grace Hopper, who paid for Paid, left Rocket Co on 1 November 2026.',
+      'Add your card before 7 November 2026 to keep Paid. On 7 November 2026, Rocket Co moves to Free.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -316,7 +329,7 @@ const CASES: readonly TemplateCase[] = [
     subject: 'A teammate asked to upgrade your Acme workspace',
     sentences: [
       'Grace Hopper asked you to move Rocket Co to Paid.',
-      'Paid costs ₹999 a month or ₹9,990 a year.',
+      'Paid costs ₹999 a month or ₹9,990 a year, GST included.',
     ],
     linkVariable: 'billingLink',
   }),
@@ -326,11 +339,15 @@ const CASES: readonly TemplateCase[] = [
     variables: {
       appName: 'Acme',
       tenantName: 'Rocket Co',
+      paidIncludes: 'Workspace insights and no member limit',
       tenantLink: 'https://app.example.test/tenants/acme?utm_source=email',
     },
     userChosen: ['tenantName'],
     subject: 'Your Acme workspace is on Paid now',
-    sentences: ['You asked to move Rocket Co to Paid. An owner upgraded it.'],
+    sentences: [
+      'You asked to move Rocket Co to Paid. An owner upgraded it.',
+      'Paid is on, including Workspace insights and no member limit.',
+    ],
     linkVariable: 'tenantLink',
   }),
   caseOf({
@@ -345,7 +362,10 @@ const CASES: readonly TemplateCase[] = [
     },
     userChosen: ['tenantName'],
     subject: 'Paid is still here for your Acme workspace',
-    sentences: ['Rocket Co is on Free, which allows 3 members.'],
+    sentences: [
+      'Rocket Co is on Free, which allows 3 members.',
+      'Paid has no member limit, for ₹999 a month, GST included.',
+    ],
     linkVariable: 'billingLink',
   }),
 ]
@@ -404,7 +424,7 @@ describe('billing email templates', () => {
     })
   })
 
-  it('writes one member and one day in the singular', () => {
+  it('writes one member in the singular', () => {
     const ending = renderTrialEndingTemplate({
       appName: 'Acme',
       tenantName: 'Rocket Co',
@@ -415,21 +435,14 @@ describe('billing email templates', () => {
       yearlyPrice: '9,990',
       billingLink: BILLING_LINK,
     })
-    expect(ending.text).toContain('Free allows 1 member; you have 1.')
-    const midpoint = renderTrialMidpointTemplate({
-      appName: 'Acme',
-      tenantName: 'Rocket Co',
-      daysLeft: '1',
-      trialEndsOn: '7 November 2026',
-      usageSummary: '1 member',
-      billingLink: BILLING_LINK,
-    })
-    expect(midpoint.subject).toBe('1 day left in your Paid trial')
+    expect(ending.text).toContain('Free allows 1 member; Rocket Co has 1.')
   })
 
   it.each([
     ['cancelled', 'Its Paid subscription was cancelled, and its paid period ended.'],
-    ['staff', 'Our support team moved it to Free.'],
+    ['staff', 'Our support team made the change.'],
+    ['suspended', 'Its subscription was cancelled because the workspace was suspended.'],
+    ['archived', 'Its subscription was cancelled because the workspace was archived.'],
     [
       'lifecycle',
       'Its subscription was cancelled because the workspace was suspended or archived.',
@@ -439,9 +452,24 @@ describe('billing email templates', () => {
       appName: 'Acme',
       tenantName: 'Rocket Co',
       downgradeCause,
+      graceEndedOn: '',
+      supportEmail: 'support@example.com',
       billingLink: BILLING_LINK,
     })
     expect(rendered.text).toContain(sentence)
+  })
+
+  it('says no date for a failed payment whose end of grace is unknown', () => {
+    const rendered = renderMovedToFreeTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      downgradeCause: 'payment_failed',
+      graceEndedOn: '',
+      supportEmail: 'support@example.com',
+      billingLink: BILLING_LINK,
+    })
+    expect(rendered.text).toContain('The payment for Paid failed, and the card was not updated.')
+    expect(rendered.text).not.toContain('grace')
   })
 
   it('names the monthly interval in a switch to monthly billing', () => {
@@ -454,7 +482,7 @@ describe('billing email templates', () => {
       billingLink: BILLING_LINK,
     })
     expect(rendered.subject).toBe('Your plan switches to monthly billing on 7 November 2026')
-    expect(rendered.text).toContain('pays ₹999 a month.')
+    expect(rendered.text).toContain('pays ₹999 a month, GST included.')
   })
 })
 
@@ -470,8 +498,8 @@ describe('billing email variants', () => {
     expect(rendered.subject).toBe('Your Acme Paid plan is cancelled')
     for (const sentence of [
       'Paid for Rocket Co was cancelled before its first charge, so no payment was taken.',
-      "Rocket Co's trial continues until 7 November 2026.",
-      'To keep Paid after that, upgrade again in Billing.',
+      'The Rocket Co trial ends on 7 November 2026.',
+      'To keep Paid after that, upgrade from Billing.',
     ]) {
       expect(rendered.text).toContain(sentence)
       expect(rendered.html).toContain(sentence.replaceAll("'", '&#39;'))
@@ -479,6 +507,7 @@ describe('billing email variants', () => {
     expect(rendered.text).not.toContain('moves to Free')
     expect(rendered.text).not.toContain('You cancelled')
     expect(rendered.text).not.toContain('Your trial')
+    expect(rendered.text).not.toContain("Rocket Co's")
     expect(rendered.subject).not.toContain('Rocket Co')
     expect(rendered.html).toContain(
       `<a href="${BILLING_LINK.replaceAll('&', '&amp;')}">Open Billing</a>`
@@ -500,7 +529,7 @@ describe('billing email variants', () => {
     )
     expect(rendered.text).not.toContain('failed')
     expect(rendered.text).toContain(
-      'Update your payment method by 7 November 2026 to keep Paid. After that, Rocket Co moves to Free.'
+      'Update your payment method before 7 November 2026 to keep Paid. On 7 November 2026, Rocket Co moves to Free.'
     )
     expect(rendered.text).not.toContain('card')
     expect(rendered.html).toContain(
@@ -557,17 +586,41 @@ describe('billing email variants', () => {
     )
   })
 
-  it('gives a suspended or archived workspace no button and no upgrade ask', () => {
-    const rendered = renderMovedToFreeTemplate({
+  it.each(['suspended', 'archived', 'lifecycle'])(
+    'gives a %s workspace no button, no upgrade ask, and the support address',
+    (downgradeCause) => {
+      const rendered = renderMovedToFreeTemplate({
+        appName: 'Acme',
+        tenantName: 'Rocket Co',
+        downgradeCause,
+        graceEndedOn: '',
+        supportEmail: 'help@rocket.example',
+        billingLink: BILLING_LINK,
+      })
+      expect(rendered.html).not.toContain('<a ')
+      expect(rendered.text).not.toContain(BILLING_LINK)
+      expect(rendered.text).not.toContain('upgrade')
+      expect(rendered.text).toContain('Rocket Co moved to Free.')
+      expect(rendered.text).toContain('To restore it, email help@rocket.example.')
+      expect(rendered.html).toContain('To restore it, email help@rocket.example.')
+    }
+  )
+
+  it('names no feature when the Paid list is empty', () => {
+    const started = renderTrialStartedTemplate({
       appName: 'Acme',
       tenantName: 'Rocket Co',
-      downgradeCause: 'lifecycle',
+      trialEndsOn: '7 November 2026',
+      paidIncludes: '',
       billingLink: BILLING_LINK,
     })
-    expect(rendered.html).not.toContain('<a ')
-    expect(rendered.text).not.toContain(BILLING_LINK)
-    expect(rendered.text).not.toContain('upgrade')
-    expect(rendered.text).toContain('Rocket Co moved to Free.')
-    expect(rendered.text).toContain('To restore it, contact support.')
+    expect(started.text).toContain('Paid is on for Rocket Co. On 7 November 2026')
+    const fulfilled = renderUpgradeRequestFulfilledTemplate({
+      appName: 'Acme',
+      tenantName: 'Rocket Co',
+      paidIncludes: '',
+      tenantLink: 'https://app.example.test/tenants/acme',
+    })
+    expect(fulfilled.text).toContain('Paid is on.')
   })
 })

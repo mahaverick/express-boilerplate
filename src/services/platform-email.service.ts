@@ -593,6 +593,7 @@ export function buildPreviewMessage(
             appName: fill('appName'),
             tenantName: fill('tenantName'),
             trialEndsOn: fill('trialEndsOn'),
+            paidIncludes: fill('paidIncludes'),
             billingLink: fill('billingLink'),
           },
         }
@@ -604,7 +605,6 @@ export function buildPreviewMessage(
           variables: {
             appName: fill('appName'),
             tenantName: fill('tenantName'),
-            daysLeft: fill('daysLeft'),
             trialEndsOn: fill('trialEndsOn'),
             usageSummary: fill('usageSummary'),
             billingLink: fill('billingLink'),
@@ -634,6 +634,7 @@ export function buildPreviewMessage(
           variables: {
             appName: fill('appName'),
             tenantName: fill('tenantName'),
+            trialEndsOn: fill('trialEndsOn'),
             memberLimit: fill('memberLimit'),
             membersUsed: fill('membersUsed'),
             monthlyPrice: fill('monthlyPrice'),
@@ -703,6 +704,8 @@ export function buildPreviewMessage(
             appName: fill('appName'),
             tenantName: fill('tenantName'),
             downgradeCause: fill('downgradeCause'),
+            graceEndedOn: fill('graceEndedOn'),
+            supportEmail: fill('supportEmail'),
             billingLink: fill('billingLink'),
           },
         }
@@ -772,6 +775,7 @@ export function buildPreviewMessage(
           variables: {
             appName: fill('appName'),
             tenantName: fill('tenantName'),
+            paidIncludes: fill('paidIncludes'),
             tenantLink: fill('tenantLink'),
           },
         }
@@ -799,6 +803,7 @@ export function buildPreviewMessage(
             documentType: fill('documentType'),
             documentNumber: fill('documentNumber'),
             invoiceNumber: fill('invoiceNumber'),
+            creditAmount: fill('creditAmount'),
             issuedOn: fill('issuedOn'),
             billingLink: fill('billingLink'),
           },

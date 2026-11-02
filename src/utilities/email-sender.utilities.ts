@@ -1,7 +1,8 @@
 /**
- * @file Which From address a message goes out from. The sender follows the
- * template's sender class and nothing else, so no caller picks it. A token
- * email uses `MAIL_FROM_TRANSACTIONAL`, which is `MAIL_FROM` while unset.
+ * @file Which From address a message goes out from, and which support
+ * address its copy names. The sender follows the template's sender class and
+ * nothing else, so no caller picks it. A token email uses
+ * `MAIL_FROM_TRANSACTIONAL`, which is `MAIL_FROM` while unset.
  */
 import type { Env } from '@/configs/env.config'
 import type { SenderClass } from '@/constants/email.constants'
@@ -28,4 +29,14 @@ export function senderFor(
  */
 export function senderDomain(address: string): string {
   return address.slice(address.lastIndexOf('@') + 1).toLowerCase()
+}
+
+/**
+ * The support address customer mail names: `SUPPORT_EMAIL`, or `support@`
+ * on `MAIL_FROM`'s domain while it is unset.
+ * @param env - The support and general sender slice of the validated environment.
+ * @returns The address.
+ */
+export function supportAddress(env: Pick<Env, 'SUPPORT_EMAIL' | 'MAIL_FROM'>): string {
+  return env.SUPPORT_EMAIL ?? `support@${senderDomain(env.MAIL_FROM)}`
 }

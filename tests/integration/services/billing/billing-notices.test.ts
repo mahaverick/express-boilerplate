@@ -522,7 +522,10 @@ describe('the payer left notice', () => {
     expect(job?.data.userId).toBe(coOwner?.id)
     // Seven days' grace after the halt.
     expect(job?.data.email?.variables).toMatchObject({ periodEndsOn: '8 January 2030' })
-    expect(job?.data.body).toContain('Add your card by 8 January 2030 to keep Paid.')
+    expect(job?.data.title).toBe('The payer for your workspace left')
+    expect(job?.data.body).toContain(
+      'Add your card before 8 January 2030 to keep Paid. On 8 January 2030,'
+    )
   })
 
   it('gives grace from today as the deadline when the payment is past due but not yet halted', async () => {

@@ -40,6 +40,16 @@ export interface BillingEmailContent {
 }
 
 /**
+ * The ", including …" clause for what Paid includes, or nothing when the
+ * list is empty.
+ * @param paidIncludes - The phrase list, such as "Workspace insights and no member limit".
+ * @returns For example ", including Workspace insights", or an empty string.
+ */
+export function including(paidIncludes: string): string {
+  return paidIncludes === '' ? '' : `, including ${paidIncludes}`
+}
+
+/**
  * A count with its noun, singular for one.
  * @param count - The count, as digits.
  * @param noun - The singular noun.
