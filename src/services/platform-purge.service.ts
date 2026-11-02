@@ -76,10 +76,12 @@ const UNKNOWN_SUBSCRIPTION_MESSAGE =
   "The payment provider doesn't know this tenant's subscription, so nothing was purged. Check that this server uses the account that created it."
 
 /**
- * The refusal when the provider refuses the purge's read.
+ * The refusal when the provider refuses the purge's read. Nothing retries a
+ * refused read and it sends no `Retry-After`, so the 5 minutes is a chosen
+ * wait, long enough for staff to fix the keys or for the provider to recover.
  */
 const PURGE_CHECK_REFUSED_MESSAGE =
-  "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in a few minutes. If it fails again, check the provider keys."
+  "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in 5 minutes. If it fails again, check the provider keys."
 
 /**
  * Refuse the purge of a workspace whose subscription may still charge a
@@ -104,7 +106,9 @@ async function assertNoLiveSubscription(row: TenantBillingRecord): Promise<Reado
     throw new HttpError(
       "This server can't reach the tenant's subscription. Cancel it in the provider's dashboard, then purge from a server that has payments on.",
       502,
-      PAYMENT_PROVIDER_UNAVAILABLE_CODE
+      PAYMENT_PROVIDER_UNAVAILABLE_CODE,
+      undefined,
+      { exposeMessage: true }
     )
   }
   for (const id of ids) {
@@ -113,7 +117,13 @@ async function assertNoLiveSubscription(row: TenantBillingRecord): Promise<Reado
         return await provider.fetchSubscription(id)
       } catch (error) {
         if (!isUnknownIdError(error)) throw error
-        throw new HttpError(UNKNOWN_SUBSCRIPTION_MESSAGE, 502, PAYMENT_PROVIDER_UNAVAILABLE_CODE)
+        throw new HttpError(
+          UNKNOWN_SUBSCRIPTION_MESSAGE,
+          502,
+          PAYMENT_PROVIDER_UNAVAILABLE_CODE,
+          undefined,
+          { exposeMessage: true }
+        )
       }
     }, PURGE_CHECK_REFUSED_MESSAGE)
     if (!ENDED_STATUSES.has(sub.status)) throw new HttpError(LIVE_SUBSCRIPTION_MESSAGE, 409)

@@ -694,6 +694,7 @@ describe('the purge of a workspace that pays', () => {
     await expect(purgeTenant(staff, tenant.id, 'Ticket 42')).rejects.toMatchObject({
       statusCode: 503,
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      exposeMessage: true,
     })
 
     read.mockRejectedValueOnce(
@@ -703,7 +704,8 @@ describe('the purge of a workspace that pays', () => {
       statusCode: 502,
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
       message:
-        "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in a few minutes. If it fails again, check the provider keys.",
+        "The payment provider refused our check of this tenant's subscription, so nothing was purged. Try again in 5 minutes. If it fails again, check the provider keys.",
+      exposeMessage: true,
     })
     expect(await rowsOf(tenant.id)).toStrictEqual({ tenant: true, billing: true })
   })
@@ -726,6 +728,7 @@ describe('the purge of a workspace that pays', () => {
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
       message:
         "The payment provider doesn't know this tenant's subscription, so nothing was purged. Check that this server uses the account that created it.",
+      exposeMessage: true,
     })
     expect(await rowsOf(tenant.id)).toStrictEqual({ tenant: true, billing: true })
   })
@@ -796,6 +799,7 @@ describe('the purge of a workspace that pays', () => {
     await expect(purgeTenant(await staffOwner(), tenant.id, 'Ticket 42')).rejects.toMatchObject({
       statusCode: 502,
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      exposeMessage: true,
     })
   })
 

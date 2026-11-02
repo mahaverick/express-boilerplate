@@ -1730,7 +1730,11 @@ describe('POST /api/v1/platform/tenants/:id/billing/cancel', () => {
     const response = await postAs(token, tenant.id, '/cancel', { when: 'now', reason: REASON })
 
     expect(response.status).toBe(502)
-    expect(response.body).toMatchObject({ code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    expect(response.body).toMatchObject({
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message:
+        "Payments are off on this server, so we can't reach the subscription. Cancel it in the provider's dashboard.",
+    })
   })
 
   it('refuses a bad when with a field error', async () => {

@@ -944,7 +944,12 @@ PostHog, describes what stays there.
   cross-script lookalikes, so identify an account by its id or verified address.
 - **The error envelope.** `errorHandler` (`src/middlewares/error.middleware.ts`)
   answers every 5xx but a maintenance refusal with "Our server hit an error. Try again, and contact support with the error ID if it happens again." and
-  an `errorId`, whatever the error says. A maintenance `503` shows the owner's
+  an `errorId`, whatever the error says. The one opt-in is an `HttpError` built
+  with `exposeMessage: true`: its message is guidance written for the client
+  (a busy billing row, a payment provider that did not answer or refused), so
+  it is shown, still with an `errorId`, logged and reported as before. The flag
+  goes only on literal text written in this repository, never on text taken from a
+  cause, a provider or a driver. A maintenance `503` shows the owner's
   message and `Retry-After`, and carries no `errorId`. Below 500, an
   `HttpError`'s message is shown, since it is written for the client; any other
   error's message only when it is marked for exposure, else the status's reason

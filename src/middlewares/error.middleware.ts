@@ -7,6 +7,8 @@
  * Every 5xx response except a maintenance refusal carries an `errorId`; a
  * 5xx the capture rule (`shouldCaptureHttpError`) admits is also reported to
  * error tracking under that id and recorded, scrubbed, on the active span.
+ * A 5xx's message is masked unless its `HttpError` opts in with
+ * `exposeMessage`, which marks text written as guidance for the client.
  */
 import { STATUS_CODES } from 'node:http'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
@@ -263,7 +265,7 @@ export function errorHandler(
 
   const isCaptured = shouldCaptureHttpError(error, statusCode) && !isClientAbort(error, request)
   const errorId = isCaptured ? captureHttpError(error, request, response, statusCode) : uuidv7()
-  // Masked, so logged here (redacted: a failed write carries its values); a PostHog 502's thrower logged it.
+  // Masked or written guidance, so the cause is logged here (redacted: a failed write carries its values); a PostHog 502's thrower logged it.
   if (!(error instanceof PosthogUnavailableError)) {
     logger.error('Unhandled server error', { error: redactedForLog(error), errorId })
   }
@@ -299,8 +301,9 @@ function clientAnswerOf(
 /**
  * Resolve the client-facing message for a resolved status.
  *
- * Every status of 500 or above is masked, whatever the error; a maintenance
- * refusal never gets here (`errorHandler` answers it first). Below 500, an
+ * Every status of 500 or above is masked, except an `HttpError` built with
+ * `exposeMessage: true`, whose message is guidance written for the client; a
+ * maintenance refusal never gets here (`errorHandler` answers it first). Below 500, an
  * `HttpError`'s message is shown, since it is written for the client; any
  * other error's is vetted by `clientMessageOf`.
  * @param error - The thrown or forwarded error.
@@ -309,8 +312,10 @@ function clientAnswerOf(
  * @returns A message safe to return to the client.
  */
 function messageFor(error: unknown, httpError: HttpError | undefined, statusCode: number): string {
-  if (statusCode >= 500)
+  if (statusCode >= 500) {
+    if (httpError?.exposeMessage === true) return httpError.message
     return 'Our server hit an error. Try again, and contact support with the error ID if it happens again.'
+  }
   if (httpError) return httpError.message
   return clientMessageOf(error, statusCode)
 }

@@ -39,28 +39,41 @@ export function getBillingProvider(): BillingProviderClient | null {
 export const RETRY_AFTER_SECONDS = 30
 
 /**
+ * The 502's default message: the provider refused a change.
+ */
+const PROVIDER_REFUSED_MESSAGE =
+  'Our payment provider declined this change. Contact support with the error ID if it happens again.'
+
+/**
+ * The 503's message: the provider may answer on a retry. Its 30 seconds is
+ * `RETRY_AFTER_SECONDS`, the `Retry-After` the 503 carries.
+ */
+const PROVIDER_UNANSWERED_MESSAGE = 'Our payment provider did not answer. Try again in 30 seconds.'
+
+/**
  * A provider failure as the HTTP answer: 503 with a retry wait when the
  * provider may answer later, 502 when it refused the call. Either reports
- * the failure as its cause; nothing was written.
+ * the failure as its cause; nothing was written. Both messages are guidance
+ * for the client, so `errorHandler` shows them (`exposeMessage`); a caller's
+ * `refusedMessage` must be written guidance too.
  * @param error - What the provider call threw.
  * @param refusedMessage - The 502's message, for a caller whose action is not a change.
  * @returns The error to throw.
  */
-export function providerFailure(
-  error: unknown,
-  refusedMessage = 'Our payment provider declined this change. Contact support if it happens again.'
-): Error {
+export function providerFailure(error: unknown, refusedMessage = PROVIDER_REFUSED_MESSAGE): Error {
   if (!(error instanceof ProviderError)) {
     return error instanceof Error ? error : new Error('A billing step failed', { cause: error })
   }
   return new HttpError(
-    error.retryable
-      ? 'Our payment provider did not answer. Try again in 30 seconds.'
-      : refusedMessage,
+    error.retryable ? PROVIDER_UNANSWERED_MESSAGE : refusedMessage,
     error.retryable ? 503 : 502,
     PAYMENT_PROVIDER_UNAVAILABLE_CODE,
     undefined,
-    { cause: error, ...(error.retryable && { retryAfterSeconds: RETRY_AFTER_SECONDS }) }
+    {
+      cause: error,
+      exposeMessage: true,
+      ...(error.retryable && { retryAfterSeconds: RETRY_AFTER_SECONDS }),
+    }
   )
 }
 

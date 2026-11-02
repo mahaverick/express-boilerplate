@@ -337,6 +337,11 @@ points at the code or doc that holds the detail. How things work is in
   report an error the code already handles and logs. A deliberate 5xx
   `HttpError` is reported only when it carries `{ cause }`. See
   [ARCHITECTURE.md](ARCHITECTURE.md#error-tracking).
+- **A 5xx's message is masked unless its `HttpError` opts in with
+  `exposeMessage: true`.** Set it only on literal guidance written for the
+  client, never on text from a cause, a provider or a driver; the copy rules
+  then apply to that message. See
+  [SECURITY.md](SECURITY.md#input-and-output).
 - **Keep `recordRouteTemplate` ahead of every router** (`src/app.ts`): Express
   restores `request.baseUrl` before `errorHandler` runs, so without it an
   event's `http_route` loses its mount path.
