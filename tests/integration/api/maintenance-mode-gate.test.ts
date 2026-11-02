@@ -216,7 +216,9 @@ describe('sign-in in full', () => {
     const token = await issueTestLink(user.email)
     await enter('full', 'Back at noon.')
 
-    const response = await request(app).post('/api/v1/auth/link/verify').send({ token })
+    const response = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token, email: user.email })
 
     expect(response.status).toBe(503)
     expect(response.body).toMatchObject({ code: 'MAINTENANCE_MODE', message: 'Back at noon.' })
@@ -233,7 +235,7 @@ describe('sign-in in full', () => {
 
     const response = await request(app)
       .post('/api/v1/auth/link/verify')
-      .send({ token: `dead-link-${randomUUID()}` })
+      .send({ token: `dead-link-${randomUUID()}`, email: `dead-link-${randomUUID()}@example.test` })
 
     expect(response.status).toBe(503)
     expect(response.body).toMatchObject({ code: 'MAINTENANCE_MODE' })
@@ -244,7 +246,9 @@ describe('sign-in in full', () => {
     const token = await issueTestLink(user.email)
     await enter('full')
 
-    const response = await request(app).post('/api/v1/auth/link/verify').send({ token })
+    const response = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token, email: user.email })
 
     expect(response.status).toBe(200)
   })
@@ -254,7 +258,9 @@ describe('sign-in in full', () => {
     const token = await issueTestLink(user.email)
     await enter('read_only')
 
-    const response = await request(app).post('/api/v1/auth/link/verify').send({ token })
+    const response = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .send({ token, email: user.email })
 
     expect(response.status).toBe(200)
   })
@@ -284,11 +290,11 @@ describe('sign-in in full', () => {
     await enter('read_only')
     const readOnly = await request(app)
       .post('/api/v1/auth/link/verify')
-      .send({ token: await issueTestLink(email) })
+      .send({ token: await issueTestLink(email), email })
     await enter('full')
     const full = await request(app)
       .post('/api/v1/auth/link/verify')
-      .send({ token: await issueTestLink(email) })
+      .send({ token: await issueTestLink(email), email })
 
     const codes = [readOnly, full].map((response) => (response.body as { code?: string }).code)
     expect(codes).toEqual(['READ_ONLY_MODE', 'MAINTENANCE_MODE'])

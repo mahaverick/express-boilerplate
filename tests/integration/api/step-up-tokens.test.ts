@@ -53,7 +53,7 @@ describe('auth_time on issued access tokens', () => {
 
     const login = await browser
       .post('/api/v1/auth/link/verify')
-      .send({ token: await issueTestLink(email) })
+      .send({ token: await issueTestLink(email), email })
     expect(login.status).toBe(200)
     const atLogin = claimsOf(login)
     expect(atLogin.authTime).toBeGreaterThanOrEqual(before - 1)
@@ -71,7 +71,7 @@ describe('auth_time on issued access tokens', () => {
     const browser = agent(app)
     const login = await browser
       .post('/api/v1/auth/link/verify')
-      .send({ token: await issueTestLink(email) })
+      .send({ token: await issueTestLink(email), email })
     const { sid, authTime } = claimsOf(login)
     await sql`
       update user_tokens set authenticated_at = authenticated_at - interval '1 hour'

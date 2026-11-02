@@ -7,7 +7,10 @@
  * each under the same sub-path. Bodies stream through unread: a replay POST
  * can be megabytes of gzip, and a parsed body never reaches the upstream.
  * Without `POSTHOG_PROJECT_KEY` every request answers 503; with it, a request
- * carrying `Expect` answers 417. Every error answer, the proxy library's own
+ * carrying `Expect` answers 417, a path that could climb out of its prefix
+ * answers the unknown-route 404, and so does `/array/*` for any project but
+ * this deployment's: the assets host serves each project's config as
+ * JavaScript, and on this origin `script-src 'self'` would admit it. Every error answer, the proxy library's own
  * 5xx included, is `Cache-Control: no-store`, as `errorHandler`'s are.
  */
 import { ServerResponse, type ClientRequest, type IncomingMessage } from 'node:http'
@@ -15,6 +18,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { createProxyMiddleware, definePlugin } from 'http-proxy-middleware'
 import { isAnalyticsEnabled, posthogAssetsHost } from '@/configs/analytics.config'
 import { getEnv } from '@/configs/env.config'
+import { notFoundError } from '@/errors/not-found-errors'
 import { logger } from '@/services/logger.service'
 import { errorResponse } from '@/utilities/response.utilities'
 
@@ -45,6 +49,12 @@ const EXPECT_REFUSED = {
  * answers would hold the client's socket and the upstream's open indefinitely.
  */
 const UPSTREAM_TIMEOUT_MS = 30_000
+
+/**
+ * A path segment of dots, or an encoded dot, slash or backslash, or a raw
+ * backslash. No PostHog path holds one.
+ */
+const ESCAPING_PATH = /\/\.\.?(?:\/|$)|%2e|%2f|%5c|\\/i
 
 /**
  * Prepare the upstream request: drop the browser's credentials, name the
@@ -176,6 +186,32 @@ function refuseExpect(request: Request, response: Response, next: NextFunction):
 }
 
 /**
+ * Answer the unknown-route 404 to a path holding a dot segment or an encoded
+ * separator. The upstream may normalize what this server only forwards, so
+ * such a path could reach another prefix or another project there.
+ * @param request - The incoming request.
+ * @param _response - Unused.
+ * @param next - Continues, or receives the 404.
+ */
+function refuseEscapingPath(request: Request, _response: Response, next: NextFunction): void {
+  next(ESCAPING_PATH.test(request.path) ? notFoundError('route') : undefined)
+}
+
+/**
+ * Admit under `/array` only this deployment's own project.
+ * @param projectKey - The configured `POSTHOG_PROJECT_KEY`.
+ * @returns A middleware answering the unknown-route 404 to any other path.
+ */
+function requireOwnProject(
+  projectKey: string
+): (request: Request, response: Response, next: NextFunction) => void {
+  const prefix = `/${projectKey}/`
+  return (request, _response, next) => {
+    next(request.path.startsWith(prefix) ? undefined : notFoundError('route'))
+  }
+}
+
+/**
  * The answer to every request while analytics is not configured. A plain
  * middleware rather than a controller: the proxy has no handlers of its own.
  * @param _request - Unused.
@@ -195,14 +231,16 @@ function answerUnconfigured(_request: Request, response: Response): void {
  */
 export function createAnalyticsProxyRouter(timeoutMs = UPSTREAM_TIMEOUT_MS): Router {
   const router = Router()
-  if (!isAnalyticsEnabled()) {
+  const projectKey = getEnv().POSTHOG_PROJECT_KEY
+  if (!isAnalyticsEnabled() || projectKey === undefined) {
     router.use(answerUnconfigured)
     return router
   }
   router.use(refuseExpect)
+  router.use(refuseEscapingPath)
   const assetsHost = withoutTrailingSlash(posthogAssetsHost())
   router.use('/static', proxyTo(`${assetsHost}/static`, timeoutMs))
-  router.use('/array', proxyTo(`${assetsHost}/array`, timeoutMs))
+  router.use('/array', requireOwnProject(projectKey), proxyTo(`${assetsHost}/array`, timeoutMs))
   // Express strips the mount path, so the ingest host sees /e/, /s/, /flags/ and the rest directly.
   const ingestHost = withoutTrailingSlash(getEnv().POSTHOG_HOST)
   router.use(proxyTo(ingestHost, timeoutMs))

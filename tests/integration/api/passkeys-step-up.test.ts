@@ -15,8 +15,9 @@ import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
 import { sql } from '@/services/database.service'
 import { issuePasskeyChallenge } from '@/services/passkey-challenge.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
-import { verifyAccessToken } from '@/services/session.service'
+import { rotateRefreshToken, verifyAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { refreshCookieHeader } from '../../helpers/grace-sibling'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { SoftwareAuthenticator, type AssertionJson } from '../../helpers/passkey-authenticator'
 import { platformTenant } from '../../helpers/platform-staff'
@@ -86,6 +87,7 @@ interface Session {
   email: string
   token: string
   sid: string
+  refreshCookie: string
 }
 
 /**
@@ -109,7 +111,13 @@ async function signIn(email: string): Promise<Session> {
   const session = await signInByLink(email, 'web')
   const { sid } = claims(session.accessToken)
   if (sid === undefined) throw new Error('the sign-in issued a token without sid')
-  return { userId: session.userId, email, token: session.accessToken, sid }
+  return {
+    userId: session.userId,
+    email,
+    token: session.accessToken,
+    sid,
+    refreshCookie: session.refreshCookie,
+  }
 }
 
 /**
@@ -174,35 +182,41 @@ function stepUpOptions(token: string | undefined): Promise<Response> {
  * @param token - The bearer token.
  * @param challengeId - The challenge id.
  * @param response - The assertion.
+ * @param cookie - A `Cookie` header to present, if any.
  * @returns The response.
  */
 function stepUpVerify(
   token: string,
   challengeId: string,
-  response: AssertionJson
+  response: AssertionJson,
+  cookie?: string
 ): Promise<Response> {
-  return request(app)
+  const pending = request(app)
     .post(`${BASE}/step-up/verify`)
     .set('Authorization', `Bearer ${token}`)
-    .send({ challengeId, response })
+  if (cookie !== undefined) pending.set('Cookie', cookie)
+  return pending.send({ challengeId, response })
 }
 
 /**
  * Step up: ask for options, then post the authenticator's assertion.
  * @param session - The session confirming.
  * @param make - Builds the assertion from the challenge.
+ * @param cookie - A `Cookie` header to present, if any.
  * @returns The verify response.
  */
 async function stepUp(
   session: Session,
-  make: (challenge: string) => AssertionJson
+  make: (challenge: string) => AssertionJson,
+  cookie?: string
 ): Promise<Response> {
   const asked = await stepUpOptions(session.token)
   expect(asked.status).toBe(200)
   return stepUpVerify(
     session.token,
     envelope(asked).data.challengeId,
-    make(envelope(asked).data.options.challenge)
+    make(envelope(asked).data.options.challenge),
+    cookie
   )
 }
 
@@ -215,6 +229,35 @@ async function ageSession(sid: string): Promise<void> {
     update user_tokens set authenticated_at = authenticated_at - interval '1 hour'
     where session_id = ${sid} and purpose = 'refresh'
   `
+}
+
+/**
+ * Split a signed-in session's chain into the owner's live token and a thief's
+ * grace-window sibling, then age the session so a confirmation shows.
+ * @param refreshCookie - The session's refresh cookie, as `name=value`.
+ * @param sid - The session.
+ * @returns The two raw tokens.
+ */
+async function splitIntoOwnerAndThief(
+  refreshCookie: string,
+  sid: string
+): Promise<{ ownerRaw: string; thiefRaw: string }> {
+  const raw = decodeURIComponent(refreshCookie.slice(refreshCookie.indexOf('=') + 1))
+  const owner = await rotateRefreshToken(raw)
+  const thief = await rotateRefreshToken(raw)
+  await ageSession(sid)
+  return { ownerRaw: owner.raw, thiefRaw: thief.raw }
+}
+
+/**
+ * Whether rotating a token carries a confirmation from the last half hour,
+ * where `ageSession` left the session an hour back.
+ * @param raw - The raw refresh token.
+ * @returns True when the rotation carries a recent time.
+ */
+async function hasRecentTimeAfterRotating(raw: string): Promise<boolean> {
+  const rotated = await rotateRefreshToken(raw)
+  return (rotated.authenticatedAt?.getTime() ?? 0) > Date.now() - 30 * 60 * 1000
 }
 
 /**
@@ -304,6 +347,35 @@ describe('POST /step-up/verify', () => {
     const [use] = await sql<{ lastUsedAt: Date | null }[]>`
       select last_used_at as "lastUsedAt" from user_passkeys where user_id = ${session.userId}`
     expect(use?.lastUsedAt).not.toBeNull()
+  })
+
+  it('upgrades the chain the request presents, and not a grace sibling', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const session = await customerWithPasskey(authenticator)
+    const { ownerRaw, thiefRaw } = await splitIntoOwnerAndThief(session.refreshCookie, session.sid)
+
+    const response = await stepUp(
+      session,
+      (challenge) => authenticator.assertionResponse(challenge),
+      refreshCookieHeader(ownerRaw)
+    )
+
+    expect(response.status).toBe(200)
+    expect(await hasRecentTimeAfterRotating(thiefRaw)).toBe(false)
+    expect(await hasRecentTimeAfterRotating(ownerRaw)).toBe(true)
+  })
+
+  it('moves every chain of the session when the request presents no cookie', async () => {
+    const authenticator = new SoftwareAuthenticator()
+    const session = await customerWithPasskey(authenticator)
+    const { thiefRaw } = await splitIntoOwnerAndThief(session.refreshCookie, session.sid)
+
+    const response = await stepUp(session, (challenge) =>
+      authenticator.assertionResponse(challenge)
+    )
+
+    expect(response.status).toBe(200)
+    expect(await hasRecentTimeAfterRotating(thiefRaw)).toBe(true)
   })
 
   it("answers 400 PASSKEY_VERIFICATION_FAILED for another user's credential, and mints nothing", async () => {

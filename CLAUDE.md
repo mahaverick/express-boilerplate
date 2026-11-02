@@ -33,11 +33,12 @@ points at the code or doc that holds the detail. How things work is in
   (`src/services/session.service.ts`), which revokes both purposes, in their
   transaction, after the user row lock. A deletion deliberately does not: a
   later click creates a fresh account for the same mailbox owner.
-- **An invitation click joins in one step only for a new address on a
-  customer invitation.** An address with an account, and every staff
-  invitation, gets `202` and an emailed confirm link (`verifyInvitation`,
+- **An invitation click never signs anyone in.** Every click gets `202` and an
+  emailed confirm link (`verifyInvitation`,
   `src/services/tenant-invitation.service.ts`): a forwarded invitation must
-  never sign in to an existing account or grant staff. The confirm
+  never create a session, and a session on a new address would outlive its
+  owner's first sign-in. A sign-in or confirm verify with no `email` is refused,
+  or removing the parameter would skip the login CSRF check. The confirm
   (`confirmInvitation`) locks the user row before it claims the link, the
   order a deactivation takes; claiming first deadlocks against it. See
   [SECURITY.md](SECURITY.md#invitation-links-are-single-use).
@@ -112,10 +113,11 @@ points at the code or doc that holds the detail. How things work is in
   workspace. A join refusal passes `audience: 'outsider'`, which sends no
   `details`: the invitee is not a member, so the count stays private. Its
   place in the lock order is in [ARCHITECTURE.md](ARCHITECTURE.md#layers).
-- **Keep the revoke UPDATE in `TenantInvitationRepository.createPending`.**
+- **Keep the revoke UPDATE in `TenantInvitationRepository.replacePending`.**
   `tenant_invitations_pending_unique` can't filter on `now()`, so an expired
   invitation still holds the slot, and without the UPDATE every re-invite after
-  an expiry fails with 409.
+  an expiry fails with 409. A re-invite revokes a live invitation, so `invite`
+  applies `canActorGrantRole` to what it replaced and audits the revoke.
 - **Build a limiter once per router and mount that instance on every route
   that shares its budget** (the invite limiter on invite and resend in
   `src/routes/tenant.routes.ts`): two instances keep two in-memory fallback

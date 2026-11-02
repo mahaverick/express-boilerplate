@@ -1264,7 +1264,9 @@ describe('invitations API', () => {
         { intent: 'invitation', email: invitee.email, app: 'web', invitationId },
         requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
       )
-      const confirmed = await request(app).post('/api/v1/invitations/confirm').send({ token: raw })
+      const confirmed = await request(app)
+        .post('/api/v1/invitations/confirm')
+        .send({ token: raw, email: invitee.email })
       expect(confirmed.status).toBe(200)
 
       const again = await acceptVia(rawToken, inviteeToken)

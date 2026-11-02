@@ -16,9 +16,9 @@ import {
 } from '@/configs/passport.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { authController } from '@/controllers/auth.controller'
-import { requireAuth } from '@/middlewares/auth.middleware'
+import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
-import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
+import { refuseCrossSiteOAuthStart, rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { refusePlatformOptions } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
@@ -101,6 +101,8 @@ export function createAuthRouter(): Router {
   router.post(
     '/sessions/revoke-others',
     requireAuth,
+    // A stolen bearer must not sign the owner out and keep the account to itself.
+    requireRecentAuth(),
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
@@ -131,6 +133,7 @@ export function createAuthRouter(): Router {
     router.get(
       '/google',
       createRateLimiter(RATE_LIMITS.googleOAuth),
+      refuseCrossSiteOAuthStart,
       oauthSession,
       rememberOAuthApp,
       passport.initialize(),

@@ -9,6 +9,7 @@ import {
   authenticatedUserId,
   revokePresentedSession,
   setRefreshTokenCookie,
+  readRefreshTokenCookie,
 } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toPublicPasskey } from '@/presenters/passkey.presenter'
@@ -150,7 +151,12 @@ class PasskeyController extends BaseController {
   stepUpVerify = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(passkeyStepUpVerifySchema, request.body)
-    const result = await finishPasskeyStepUp(authenticatedUserId(request), request.sessionId, input)
+    const result = await finishPasskeyStepUp(
+      authenticatedUserId(request),
+      request.sessionId,
+      input,
+      readRefreshTokenCookie(request)
+    )
     successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
   })
 

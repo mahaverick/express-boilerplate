@@ -1,6 +1,6 @@
 /**
  * @file The invitee's side of an invitation: preview (public), the verify
- * (public; it signs a new address in, or mails a confirm link), the confirm
+ * (public; it mails a confirm link), the confirm
  * link's click (public; it signs in) and accept (signed in). A malformed
  * token answers exactly like an unknown one, so the shape check tells a
  * caller nothing the lookup would not.
@@ -116,40 +116,30 @@ class InvitationController extends BaseController {
 
   /**
    * `POST /invitations/verify`: a click on an invitation link, signed out.
-   * A customer invitation to an address with no account joins in one click:
-   * it signs the invitee in, creating a verified account, and joins them.
-   * Every other click answers `202` "Check your inbox" with the invited
-   * address, sets no cookie and leaves the presented session alone; the
-   * confirm-link mail runs after the reply. Every link that signs nobody in,
-   * a used one included, answers one 404 `invitation_invalid` with no
-   * cookie. On a one-click join, a refresh cookie the browser still
-   * presented has its session revoked once the new one is issued, as a
-   * sign-in by link does. `no-store`, as every token response (RFC 6749
-   * §5.1).
+   * Every click answers `202` "Check your inbox" with the invited address,
+   * sets no cookie and leaves the presented session alone; the confirm-link
+   * mail runs after the reply. Every link that signs nobody in, a used one
+   * included, answers one 404 `invitation_invalid` with no cookie. `no-store`,
+   * as every token response (RFC 6749 §5.1).
    */
   verifyInvitation = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const token = invitationTokenFrom(request.body)
     const outcome = await verifyInvitation(token)
-    if (outcome.kind === 'confirm') {
-      successResponse(
-        response,
-        { confirmationSent: true, email: outcome.email },
-        INVITATION_CONFIRM_MESSAGE,
-        202
-      )
-      // Never rejects: the service logs its own failure.
-      void outcome.followUp()
-      return
-    }
-    await revokePresentedSession(request, { emitSignedOut: false })
-    sendInvitationSession(request, response, outcome.session)
+    successResponse(
+      response,
+      { confirmationSent: true, email: outcome.email },
+      INVITATION_CONFIRM_MESSAGE,
+      202
+    )
+    // Never rejects: the service logs its own failure.
+    void outcome.followUp()
   })
 
   /**
    * `POST /invitations/confirm`: a click on the emailed confirm link. Signs
    * the invitee in, counted as a recent sign-in, and joins them, creating
-   * the account for a staff invitation to a new address (`isNewUser`). Every
+   * the account for a new address (`isNewUser`). Every
    * refusal answers one 404 `invitation_invalid` and spends nothing. A
    * refresh cookie the browser still presented has its session revoked once
    * the new one is issued. `no-store`.

@@ -2,22 +2,28 @@
  * @file `PASSKEY_MODE=required`: a signed-in account with no passkey is
  * answered 403 `PASSKEY_SETUP_REQUIRED` everywhere except the routes it needs
  * to create one. Covers the allowlist (method, path, trailing slash, case,
- * query), the lockout path (an invitation's one-click session confirms by
- * link and creates a passkey), the count query running only in required mode,
+ * query), the lockout path (a Google session, never recent, confirms by link
+ * and creates a passkey; an invitation's confirmed session, always recent,
+ * creates one straight away), the count query running only in required mode,
  * and a mode flip leaving stored passkeys intact. The mode is switched by
  * mocking `getEnv`, never `process.env`; the mail is read off `addEmailJob`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import { addEmailJob } from '@/jobs/email.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserPasskeyRepository } from '@/repositories/user-passkey.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { completeGoogleSignIn } from '@/services/google-auth.service'
+import { issueLinkToken } from '@/services/link-token.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
-import { hashToken } from '@/services/session.service'
+import { hashToken, signAccessToken } from '@/services/session.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { SoftwareAuthenticator } from '../../helpers/passkey-authenticator'
 import { passkeyCount, seedPasskey } from '../../helpers/passkey-rows'
@@ -130,8 +136,9 @@ async function codeOf(path: string, token: string): Promise<string | undefined> 
 }
 
 /**
- * Seed a one-click invitation to a new address, then click it.
- * @returns The new account's id, address and one-click access token.
+ * Invite a new address and join through the confirm link its click mails,
+ * minted directly: no Worker runs here.
+ * @returns The new account's id and its access token, a recent sign-in.
  */
 async function invitationSession(): Promise<{ userId: string; token: string }> {
   const email = `required-${randomUUID()}@example.test`
@@ -143,24 +150,90 @@ async function invitationSession(): Promise<{ userId: string; token: string }> {
     ownerId: owner.id,
   })
   tenantIds.push(tenant.id)
-  const rawToken = randomBytes(32).toString('base64url')
-  await db.transaction((tx) =>
+  const invitation = await db.transaction((tx) =>
     new TenantInvitationRepository().createPending(
       {
         tenantId: tenant.id,
         email,
         role: 'editor',
-        tokenHash: hashToken(rawToken),
+        tokenHash: hashToken(randomBytes(32).toString('base64url')),
         invitedBy: owner.id,
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       },
       tx
     )
   )
-  const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+  const { raw } = await issueLinkToken(
+    { intent: 'invitation', email, app: 'web', invitationId: invitation.id },
+    requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+  )
+  const response = await request(app)
+    .post('/api/v1/invitations/confirm')
+    .send({ token: raw, email })
   expect(response.status).toBe(200)
   const data = (response.body as { data: { accessToken: string; user: { id: string } } }).data
   return { userId: data.user.id, token: data.accessToken }
+}
+
+/**
+ * A Google sign-up for a new address, the session a passkey-less account holds
+ * without having proved anyone is present.
+ * @returns The new account's id and an access token with no `auth_time`.
+ */
+async function googleSession(): Promise<{ userId: string; token: string }> {
+  const email = `required-google-${randomUUID()}@example.test`
+  usedEmails.push(email)
+  const id = randomUUID()
+  const { refreshToken } = await completeGoogleSignIn(
+    {
+      provider: 'google',
+      id,
+      displayName: 'Probe User',
+      profileUrl: `https://plus.google.com/${id}`,
+      emails: [{ value: email, verified: true }],
+      _raw: '{}',
+      _json: {
+        iss: 'https://accounts.google.com',
+        aud: 'test-google-client-id',
+        sub: id,
+        iat: 0,
+        exp: 0,
+        email,
+        email_verified: true,
+      },
+    },
+    'web'
+  )
+  const user = await new UserRepository().findById(refreshToken.userId)
+  if (!user) throw new Error('setup: the Google sign-up made no account')
+  const token = signAccessToken(user, refreshToken.sessionId, refreshToken.authenticatedAt)
+  return { userId: user.id, token }
+}
+
+/**
+ * Create a passkey as the bearer of a recent token, then show the gate open.
+ * @param userId - The bearer's account.
+ * @param recentToken - An access token that passes the step-up check.
+ */
+async function expectPasskeyOpensGate(userId: string, recentToken: string): Promise<void> {
+  const options = await request(app)
+    .post(`${BASE}/registration/options`)
+    .set('Authorization', `Bearer ${recentToken}`)
+    .send({ app: 'web' })
+  expect(options.status).toBe(200)
+  const created = await request(app)
+    .post(`${BASE}/registration/verify`)
+    .set('Authorization', `Bearer ${recentToken}`)
+    .send({
+      app: 'web',
+      challengeId: body(options).data.challengeId,
+      response: new SoftwareAuthenticator().registrationResponse(
+        body(options).data.options.challenge
+      ),
+    })
+  expect(created.status).toBe(201)
+  expect(await passkeyCount(userId)).toBe(1)
+  expect(await statusOf('/api/v1/tenants', recentToken)).toBe(200)
 }
 
 describe('the gate', () => {
@@ -226,8 +299,8 @@ describe('the gate', () => {
 })
 
 describe('the lockout path', () => {
-  it('lets a one-click invitation session confirm by link, create a passkey, then reach /tenants', async () => {
-    const { userId, token } = await invitationSession()
+  it('lets a Google session confirm by link, create a passkey, then reach /tenants', async () => {
+    const { userId, token } = await googleSession()
     expect(await codeOf('/api/v1/tenants', token)).toBe('PASSKEY_SETUP_REQUIRED')
 
     const stale = await request(app)
@@ -252,28 +325,16 @@ describe('the lockout path', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ token: linkToken })
     expect(confirmed.status).toBe(200)
-    const fresh = body(confirmed).data.accessToken
 
-    const options = await request(app)
-      .post(`${BASE}/registration/options`)
-      .set('Authorization', `Bearer ${fresh}`)
-      .send({ app: 'web' })
-    expect(options.status).toBe(200)
-    const created = await request(app)
-      .post(`${BASE}/registration/verify`)
-      .set('Authorization', `Bearer ${fresh}`)
-      .send({
-        app: 'web',
-        challengeId: body(options).data.challengeId,
-        response: new SoftwareAuthenticator().registrationResponse(
-          body(options).data.options.challenge
-        ),
-      })
-    expect(created.status).toBe(201)
-    expect(await passkeyCount(userId)).toBe(1)
-
-    expect(await statusOf('/api/v1/tenants', fresh)).toBe(200)
+    await expectPasskeyOpensGate(userId, body(confirmed).data.accessToken)
     expect(await statusOf('/api/v1/tenants', token)).toBe(200)
+  })
+
+  it('lets an invitation session, a recent sign-in, create a passkey straight away and reach /tenants', async () => {
+    const { userId, token } = await invitationSession()
+    expect(await codeOf('/api/v1/tenants', token)).toBe('PASSKEY_SETUP_REQUIRED')
+
+    await expectPasskeyOpensGate(userId, token)
   })
 })
 

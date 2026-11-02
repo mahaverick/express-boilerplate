@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
-import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
+import { ACCESS_TOKEN_EXPIRED_CODE, REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
@@ -61,7 +61,7 @@ afterAll(() => {
  */
 async function sessionFor(user: User): Promise<{ refresh: IssuedRefreshToken; bearer: string }> {
   const refresh = await issueRefreshToken(user.id, randomUUID())
-  return { refresh, bearer: signAccessToken(user, refresh.sessionId) }
+  return { refresh, bearer: signAccessToken(user, refresh.sessionId, refresh.authenticatedAt) }
 }
 
 /**
@@ -76,6 +76,22 @@ async function revokeOthers(token?: string) {
 }
 
 describe('POST /api/v1/auth/sessions/revoke-others', () => {
+  it('asks a session with no recent sign-in to confirm, and ends nothing', async () => {
+    const user = await createTrackedUser()
+    const stale = await issueRefreshToken(user.id, randomUUID())
+    const other = await sessionFor(user)
+
+    const response = await revokeOthers(signAccessToken(user, stale.sessionId))
+
+    expect(response.status).toBe(401)
+    expect(response.body).toMatchObject({ code: REAUTH_REQUIRED_CODE })
+    const [row] = await sql<{ revoked: boolean }[]>`
+      select revoked_at is not null as revoked from user_tokens
+      where session_id = ${other.refresh.sessionId} and purpose = 'refresh'
+    `
+    expect(row?.revoked).toBe(false)
+  })
+
   it('ends every other session and keeps the calling one', async () => {
     const user = await createTrackedUser()
     const current = await sessionFor(user)
@@ -190,10 +206,12 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
     const other = await sessionFor(user)
     const { default: jwt } = await import('jsonwebtoken')
     const { getEnv } = await import('@/configs/env.config')
-    const sidless = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
-      algorithm: 'HS256',
-      expiresIn: 60,
-    })
+    // A recent auth_time, so the refusal is the missing sid and not the step-up gate.
+    const sidless = jwt.sign(
+      { sub: user.id, auth_time: Math.floor(Date.now() / 1000) },
+      getEnv().JWT_ACCESS_SECRET,
+      { algorithm: 'HS256', expiresIn: 60 }
+    )
 
     const response = await revokeOthers(sidless)
 

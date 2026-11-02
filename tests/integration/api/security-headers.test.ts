@@ -210,7 +210,7 @@ describe('Cache-Control', () => {
 
     const loggedIn = await request(app)
       .post('/api/v1/auth/link/verify')
-      .send({ token: await issueTestLink(user.email) })
+      .send({ token: await issueTestLink(user.email), email: user.email })
     expect(loggedIn.status).toBe(200)
     expect(loggedIn.headers['cache-control']).toBe('no-store')
 

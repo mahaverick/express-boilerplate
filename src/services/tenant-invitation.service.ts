@@ -1,9 +1,8 @@
 /**
  * @file Invitations to join a tenant: invite, list, resend, revoke, preview,
- * accept, the signed-out verify, and the confirm link. A verify joins a new
- * address on a customer invitation in one click, creating its account; an
- * address that has an account, and every staff invitation, is mailed a
- * 15-minute confirm link instead, whose click signs in and joins. Multi-step writes run in one transaction with their audit entry,
+ * accept, the signed-out verify, and the confirm link. A verify mails the
+ * invited address a 15-minute confirm link, whose click signs in and joins,
+ * creating the account for a new address. Multi-step writes run in one transaction with their audit entry,
  * and every query inside one goes through its `tx`. Audit metadata carries
  * the address's domain, never the address. Mail and the in-app notification
  * are enqueued after the write commits, and a failed enqueue is logged,
@@ -32,6 +31,7 @@ import { canActorGrantRole } from '@/policies/tenant.policy'
 import {
   TenantInvitationRepository,
   type PendingInvitationSummary,
+  type ReplacedInvitation,
   type ValidInvitation,
 } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -332,6 +332,47 @@ function isNotifiable(user: User | undefined): user is User {
 }
 
 /**
+ * Audit `invitation.revoked` for each live invitation a new one replaced, so
+ * the log shows the old offer ended and who ended it.
+ * @param replaced - The invitations `replacePending` revoked.
+ * @param context - Who replaced them, where, and the staff reason if any.
+ * @param context.actor - The acting user.
+ * @param context.access - How the actor reached the tenant.
+ * @param context.tenantId - The tenant.
+ * @param context.reason - The reason staff gave, if any.
+ * @param tx - The invite's transaction.
+ */
+async function recordReplaced(
+  replaced: readonly ReplacedInvitation[],
+  context: {
+    actor: Actor
+    access: TenantAccess
+    tenantId: string
+    reason: string | undefined
+  },
+  tx: DbTransaction
+): Promise<void> {
+  const { actor, access, tenantId, reason } = context
+  for (const row of replaced) {
+    await record(
+      {
+        action: 'invitation.revoked',
+        actor,
+        access,
+        tenantId,
+        targetId: row.id,
+        metadata: {
+          role: row.role,
+          emailDomain: auditEmailDomain(row.email),
+          ...(reason !== undefined && { reason }),
+        },
+      },
+      tx
+    )
+  }
+}
+
+/**
  * The domain the audit log keeps for an invited address.
  * @param email - The invited address.
  * @returns Its lowercased domain, or null when it has none or it is not a dotted hostname.
@@ -576,7 +617,7 @@ export async function invite(
         seat.check = await assertWithinLimit(tenantId, 'members', 1, tx)
       }
 
-      const invitation = await invitationRepository.createPending(
+      const { created: invitation, replaced } = await invitationRepository.replacePending(
         {
           tenantId,
           email: normalizedEmail,
@@ -587,6 +628,11 @@ export async function invite(
         },
         tx
       )
+      // Replacing is revoking: the rule `revoke` applies holds here, and the refusal rolls the revoke back.
+      if (replaced.some((row) => !canActorGrantRole(actorRole, row.role))) {
+        throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
+      }
+      await recordReplaced(replaced, { actor, access, tenantId, reason: options.reason }, tx)
       // After the writes that can fail, so a 404 or a 409 spends nothing; a refusal rolls the insert back.
       await assertRecipientBudget(normalizedEmail, tenantId)
       await record(
@@ -744,7 +790,7 @@ export async function createOwnerInvitation(
   const tenant = await tenantForMessages(tenantId, tx)
   if (tenant.isPlatform) throw new HttpError(PLATFORM_OWNER_INVITATION_MESSAGE, 409)
   const inviter = await userRepository.findById(actor.userId, {}, tx)
-  const invitation = await invitationRepository.createPending(
+  const { created: invitation, replaced } = await invitationRepository.replacePending(
     {
       tenantId,
       email: normalizedEmail,
@@ -753,6 +799,11 @@ export async function createOwnerInvitation(
       invitedBy: actor.userId,
       expiresAt: invitationExpiry(),
     },
+    tx
+  )
+  await recordReplaced(
+    replaced,
+    { actor, access: 'platform', tenantId, reason: reason ?? undefined },
     tx
   )
   await record(
@@ -1327,19 +1378,14 @@ async function invitedAccount(email: string, refuse: () => HttpError): Promise<U
  * anything is claimed, so the link stays usable for the next click.
  * @param email - The invitation's address.
  * @param tx - The join's transaction.
- * @param refuse - The route's 404 `invitation_invalid`.
  * @returns The new account.
  * @throws {HttpError} 404 `invitation_invalid` when the address was taken meanwhile.
  */
-async function createInvitedAccount(
-  email: string,
-  tx: DbTransaction,
-  refuse: () => HttpError = invitationInvalid
-): Promise<User> {
+async function createInvitedAccount(email: string, tx: DbTransaction): Promise<User> {
   try {
     return await createLinkedAccount(email, tx)
   } catch (error) {
-    if (isAddressTaken(error)) throw refuse()
+    if (isAddressTaken(error)) throw confirmInvalid()
     throw error
   }
 }
@@ -1369,7 +1415,6 @@ async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<Use
  * @param user - The account joining.
  * @param claimed - The invitation, claimed for it.
  * @param sessionId - The new session's id.
- * @param isRecentAuth - Whether the session counts as a recent sign-in.
  * @param tx - The join's transaction.
  * @returns The account, its session, its role, and the membership event when one was added.
  */
@@ -1377,7 +1422,6 @@ async function joinAndIssueSession(
   user: User,
   claimed: TenantInvitation,
   sessionId: string,
-  isRecentAuth: boolean,
   tx: DbTransaction
 ): Promise<VerifyOutcome> {
   const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
@@ -1395,9 +1439,7 @@ async function joinAndIssueSession(
     },
     tx
   )
-  const refreshToken = await issueRefreshToken(user.id, sessionId, tx, {
-    recentAuth: isRecentAuth,
-  })
+  const refreshToken = await issueRefreshToken(user.id, sessionId, tx)
   const settled = { user, refreshToken, role: membership.role }
   if (!inserted) return settled
   const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
@@ -1462,12 +1504,13 @@ async function finishJoin(
 }
 
 /**
- * What a click on an invitation link comes to: a one-click session, or
- * "check your inbox" with the mail work to run after the reply.
+ * What a click on an invitation link comes to: "check your inbox", with the
+ * mail work to run after the reply.
  */
-export type InvitationVerifyOutcome =
-  | { kind: 'session'; session: InvitationSession }
-  | { kind: 'confirm'; email: string; followUp: () => Promise<void> }
+export interface InvitationVerifyOutcome {
+  email: string
+  followUp: () => Promise<void>
+}
 
 /**
  * Claim the confirm mail's cooldown for one address and invitation
@@ -1562,31 +1605,24 @@ function requestInvitationConfirm(
 }
 
 /**
- * A click on an invitation link, signed out. A customer invitation to an
- * address with no account joins in that click: it signs the invitee in,
- * creating their verified account, and joins them. Every other click (an
- * address that holds an account, whether verified or not, or any staff
- * invitation) writes nothing and answers `confirm`, whose follow-up mails a
- * 15-minute confirm link (`requestInvitationConfirm`): a forwarded
- * invitation then signs nobody in to an existing account and grants no
- * staff role. The link is single-use: once accepted it signs nobody in.
+ * A click on an invitation link, signed out. It writes nothing and answers
+ * `confirm`: its follow-up mails a 15-minute confirm link
+ * (`requestInvitationConfirm`) to the invited address, for every invitation.
+ * The link is 3 days old and forwardable, so it proves no mailbox: a forwardee
+ * gets no session, no account and no staff role, and a page opened from
+ * someone else's invitation signs the visitor in to nothing. The link is
+ * single-use: once accepted it signs nobody in.
  *
  * Order: the link is looked up first, outside any transaction, so a used,
  * expired, revoked, suspended-tenant or archived-tenant link touches no
  * account; the maintenance mode is re-checked (`assertJoinAllowedByMode`);
  * the address's account is read and passed through `assertSignInAllowed`
- * (`existingInvitee`), and when it holds one the link is looked up again,
- * so the loser of two concurrent clicks, which reads the account the
- * winner just created, mails no confirm link for an accepted invitation;
- * then, for a one-click join, the mode is checked once
- * more and one transaction creates the account, takes the seat lock
- * (`lockSeatForJoin`), claims the invitation, adds
- * the membership, audits `invitation.accepted` and issues a session that
- * does not count as a recent sign-in. A claim that loses (the link went dead
- * since the lookup) rolls the new account back.
+ * (`existingInvitee`), and when it holds one the link is looked up again, so
+ * a click that lost to a concurrent confirm mails no link for an accepted
+ * invitation.
  * @param rawToken - The raw token from the link.
- * @returns The one-click session, or the confirm branch's address and follow-up.
- * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in and mails nothing; 402 `PLAN_LIMIT_REACHED`, with no `details`, when a one-click join finds the workspace over its members limit.
+ * @returns The address the confirm link goes to, and the follow-up that mails it.
+ * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in and mails nothing.
  * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE` when a mode began after the route's gate.
  */
 export async function verifyInvitation(rawToken: string): Promise<InvitationVerifyOutcome> {
@@ -1595,43 +1631,19 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
   if (!valid) throw invitationInvalid()
   assertJoinAllowedByMode()
   const existing = await existingInvitee(valid.invitation.email)
-  // A concurrent one-click join commits the account and its claim together, so once the account shows, a second read shows the claim too.
+  // A concurrent confirm commits the account and its claim together, so once the account shows, a second read shows the claim too.
   if (existing && !(await invitationRepository.findValidByTokenHash(tokenHash))) {
     throw invitationInvalid()
   }
-  if (existing || valid.tenant.isPlatform) {
-    return {
-      kind: 'confirm',
-      email: valid.invitation.email,
-      followUp: requestInvitationConfirm(valid, existing),
-    }
+  return {
+    email: valid.invitation.email,
+    followUp: requestInvitationConfirm(valid, existing),
   }
-  // Again after the account read, so a mode that began meanwhile writes no join.
-  assertJoinAllowedByMode()
-
-  const sessionId = randomUUID()
-  const outcome = await tellOwnersWhenFull(async (onFull) => {
-    onFull(valid.tenant.id)
-    return db.transaction(async (tx): Promise<VerifyOutcome> => {
-      const user = await createInvitedAccount(valid.invitation.email, tx)
-      await lockSeatForJoin(valid, user.id, tx)
-      const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-      // Dead since the lookup (accepted by a concurrent click, revoked, resent, expired, tenant suspended or archived).
-      if (!claimed) throw invitationInvalid()
-      const trialStarted = await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
-      // A 3-day link anyone it was forwarded to can click is no proof of the mailbox now: step-up asks again.
-      const joined = await joinAndIssueSession(user, claimed, sessionId, false, tx)
-      return trialStarted ? { ...joined, trialStartedFor: claimed.tenantId } : joined
-    })
-  })
-  const session = await finishJoin(outcome, sessionId, true, valid.tenant)
-  return { kind: 'session', session }
 }
 
 /**
  * Join by an invitation confirm link: spend it once, sign the invitee in
- * (creating their verified account when the address has none, which only a
- * staff invitation reaches) and join them. The session counts as a recent
+ * (creating their verified account when the address has none) and join them. The session counts as a recent
  * sign-in: the click proves the mailbox within `SIGN_IN_LINK_TTL`, as a
  * sign-in link does. Every refusal is the one `invitation_invalid`, or a
  * full workspace's 402, and spends nothing, with one exception: a
@@ -1640,7 +1652,7 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * stands even if the join is then refused.
  *
  * Order: the maintenance mode; a read-only peek of the link; the address the
- * client shows, when it sends one, against the link's (neither is logged);
+ * client shows against the link's (neither is logged);
  * the invitation by the link's id, which must still be redeemable, for the
  * link's address, and for the link's frontend (Apex for the platform
  * tenant); the account (`invitedAccount`, which claims a never-verified
@@ -1653,20 +1665,20 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * for an Apex link: the invitee becomes staff by this join, and the
  * invitation's tenant is what authorises Apex.
  * @param rawLink - The raw token from the confirm link.
- * @param shownEmail - The address the link displays, trimmed and lowercased, when the client sends it.
+ * @param shownEmail - The address the link displays, trimmed and lowercased. A link posted without one is refused: the check is what stops another person's link signing a visitor in.
  * @returns The session, and the tenant and role it joined with.
  * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in; 402 `PLAN_LIMIT_REACHED`, with no `details`, when the workspace is over its members limit.
  * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
  */
 export async function confirmInvitation(
   rawLink: string,
-  shownEmail?: string
+  shownEmail: string | undefined
 ): Promise<InvitationSession> {
   assertJoinAllowedByMode()
   const peeked = await peekLinkToken(rawLink, 'invitation')
   if (!peeked?.email || !peeked.app || !peeked.invitationId) throw confirmInvalid()
   const { email, app, invitationId } = peeked
-  if (shownEmail !== undefined && shownEmail.trim().toLowerCase() !== email) {
+  if (shownEmail?.trim().toLowerCase() !== email) {
     throw confirmInvalid()
   }
   const valid = await invitationRepository.findValidById(invitationId)
@@ -1689,7 +1701,7 @@ export async function confirmInvitation(
       // The user row first, then the link row: the order a deactivation takes.
       const user = account
         ? await lockActiveInvitee(account.id, tx)
-        : await createInvitedAccount(email, tx, confirmInvalid)
+        : await createInvitedAccount(email, tx)
       await lockSeatForJoin(valid, user.id, tx)
       const link = await claimLinkToken(rawLink, 'invitation', undefined, tx)
       if (link?.invitationId !== invitationId) throw confirmInvalid()
@@ -1697,7 +1709,7 @@ export async function confirmInvitation(
       // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
       if (!claimed) throw confirmInvalid()
       const trialStarted = await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
-      const joined = await joinAndIssueSession(user, claimed, sessionId, true, tx)
+      const joined = await joinAndIssueSession(user, claimed, sessionId, tx)
       return trialStarted ? { ...joined, trialStartedFor: claimed.tenantId } : joined
     })
   })

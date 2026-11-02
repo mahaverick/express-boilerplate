@@ -8,7 +8,7 @@ all of it.
 On top of that platform it ships sign-in by emailed link, with the account
 created on the first click, optional Google sign-in, passkeys, a "confirm it's
 you" step by emailed link or passkey for every signed-in user, JWT access tokens with rotating opaque refresh tokens, multi-tenancy
-with roles and one-click invitations, an audit log, platform staff access,
+with roles and emailed invitations, an audit log, platform staff access,
 in-app notifications over server-sent events, BullMQ jobs and a daily
 data-retention purge. A staff directory, email delivery tracking, onboarding,
 PostHog analytics, feature flags and a maintenance mode sit on the same base.

@@ -2,9 +2,8 @@
  * @file Mail sent to an address before it had an account joins that account
  * when the account is created, so a staff member's Emails list for the user
  * shows the invitation that brought them in. Every creation path adopts it:
- * a sign-in link's first click, a one-click invitation, an invitation
- * confirm link, a Google sign-up, a staff-created account and
- * `platform:grant`. Mail from before an earlier, soft-deleted holder of the
+ * a sign-in link's first click, a customer or staff invitation's confirm
+ * link, a Google sign-up, a staff-created account and `platform:grant`. Mail from before an earlier, soft-deleted holder of the
  * address left stays unowned, and mail another account owns is never moved.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -23,7 +22,6 @@ import { bootstrapGrant } from '@/services/platform.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { hashToken } from '@/services/session.service'
 import { verifySignInLink } from '@/services/sign-in-link.service'
-import { verifyInvitation } from '@/services/tenant-invitation.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { createTrackedMessage, deleteTrackedEmailRows } from '../../helpers/email-messages'
@@ -192,20 +190,26 @@ describe('mail sent before the account existed', () => {
     const email = uniqueEmail('link')
     const messageId = await unownedInvitationMail(email)
 
-    const session = await verifySignInLink(await issueTestLink(email))
+    const session = await verifySignInLink(await issueTestLink(email), email)
 
     expect(await ownerOf(messageId)).toBe(session.user.id)
   })
 
-  it('joins the account a one-click customer invitation creates', async () => {
-    const email = uniqueEmail('one-click')
+  it('joins the account a customer invitation confirm link creates', async () => {
+    const email = uniqueEmail('customer-confirm')
     const messageId = await unownedInvitationMail(email)
-    const { rawToken } = await seedInvitation(await customerTenant(), email)
+    const { invitationId } = await seedInvitation(await customerTenant(), email)
+    const { raw } = await issueLinkToken(
+      { intent: 'invitation', email, app: 'web', invitationId },
+      requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+    )
 
-    const outcome = await verifyInvitation(rawToken)
+    const response = await request(app)
+      .post('/api/v1/invitations/confirm')
+      .send({ token: raw, email })
 
-    if (outcome.kind !== 'session') throw new Error('a new customer invitee joins in one click')
-    expect(await ownerOf(messageId)).toBe(outcome.session.user.id)
+    expect(response.status).toBe(200)
+    expect(await ownerOf(messageId)).toBe(await accountIdOf(email))
   })
 
   it('joins the account a staff invitation confirm link creates', async () => {
@@ -259,7 +263,7 @@ describe('mail sent before the account existed', () => {
     const email = uniqueEmail('listed')
     const messageId = await unownedInvitationMail(email)
 
-    const session = await verifySignInLink(await issueTestLink(email))
+    const session = await verifySignInLink(await issueTestLink(email), email)
     const response = await request(app)
       .get(`/api/v1/platform/emails?user=${session.user.id}`)
       .set('Authorization', `Bearer ${token}`)
@@ -280,7 +284,7 @@ describe('mail sent before the account existed', () => {
     await sql`update users set deleted_at = now() where id = ${earlier.id}`
     const afterEarlier = await unownedInvitationMail(email, new Date(Date.now() + 1000))
 
-    const session = await verifySignInLink(await issueTestLink(email))
+    const session = await verifySignInLink(await issueTestLink(email), email)
 
     expect(await ownerOf(beforeEarlier)).toBeNull()
     expect(await ownerOf(ownedByEarlier)).toBe(earlier.id)
@@ -292,7 +296,7 @@ describe('mail sent before the account existed', () => {
     const other = uniqueEmail('other')
     const othersMessage = await unownedInvitationMail(other)
 
-    await verifySignInLink(await issueTestLink(email))
+    await verifySignInLink(await issueTestLink(email), email)
 
     expect(await ownerOf(othersMessage)).toBeNull()
   })

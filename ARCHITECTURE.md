@@ -308,9 +308,7 @@ in this order:
    staff sign-out and a sign-out of the other sessions take the user row and
    then revoke the address's links (`revokeSignInLinksOf`), so a confirm that
    claimed its link before the user row would deadlock against them
-   (`tests/integration/services/invitation-confirm-race.test.ts`). A one-click
-   invitation verify inserts the new account and takes the seat lock before it
-   claims the invitation and inserts the refresh row;
+   (`tests/integration/services/invitation-confirm-race.test.ts`);
 2. a tenant's owner rows (`lockOwners`, in id order);
 3. its memberships (`lockMemberships`, in `user_id` order);
 4. when the actor has no membership there, the actor's platform-tenant
@@ -583,7 +581,7 @@ under `/api/v1`:
 | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /auth/link/request`                                                                                                         | `requestSignInLink` (`sign-in-link.service.ts`)                    | Answers 202 before any lookup, then mails a link (or, on Apex, a staff invitee's invitation) in the follow-up.                                                                                                                                                                                                       |
 | `POST /auth/link/verify`                                                                                                          | `verifySignInLink`                                                 | Spends the link and signs in the account its address holds, creating a verified one on the first web click.                                                                                                                                                                                                          |
-| `POST /invitations/verify`                                                                                                        | `verifyInvitation` (`tenant-invitation.service.ts`)                | A new address on a customer invitation joins in one transaction; any other click answers 202 and mails a confirm link in the follow-up (`requestInvitationConfirm`).                                                                                                                                                 |
+| `POST /invitations/verify`                                                                                                        | `verifyInvitation` (`tenant-invitation.service.ts`)                | Every click answers 202 and mails a confirm link in the follow-up (`requestInvitationConfirm`).                                                                                                                                                                                                                      |
 | `POST /invitations/confirm`                                                                                                       | `confirmInvitation` (`tenant-invitation.service.ts`)               | Spends the confirm link and the invitation, signs the invitee in as a recent sign-in, and joins them.                                                                                                                                                                                                                |
 | `GET /auth/google`, `GET /auth/google/callback`                                                                                   | `completeGoogleSignIn` (`google-auth.service.ts`)                  | Google sign-in.                                                                                                                                                                                                                                                                                                      |
 | `POST /auth/step-up/link/request`, `/auth/step-up/link/verify`                                                                    | `requestStepUpLink`, `confirmStepUpLink` (`step-up.service.ts`)    | Any signed-in user: the request takes `{ app }`, mails a link bound to the calling session, and the verify confirms it for that session alone.                                                                                                                                                                       |
@@ -1219,8 +1217,9 @@ browser posthog-js ── /api/v1/collect/* ── its limiter ── stream ─
   with the group's name cleared and its status `purged`; the tenant's events
   stay, under its id.
 - **The proxy** (`src/routes/analytics-proxy.routes.ts`) sends `/static/*` and
-  `/array/*` to the assets host and everything else to the ingest host,
-  streaming bodies untouched. It sits ahead of the body parsers and has no
+  `/array/<POSTHOG_PROJECT_KEY>/*` to the assets host and everything else to the
+  ingest host, streaming bodies untouched. Another project's `/array/*` and a
+  path that could climb out of its prefix answer the unknown-route 404. It sits ahead of the body parsers and has no
   `on.error` handler, which would make http-proxy-middleware skip its own error
   response. Without `POSTHOG_PROJECT_KEY` it answers 503.
 

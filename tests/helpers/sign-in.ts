@@ -56,7 +56,7 @@ export async function signInByLink(
   const token = await issueTestLink(email, app)
   await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
   built.app ??= createApp()
-  const response = await request(built.app).post('/api/v1/auth/link/verify').send({ token })
+  const response = await request(built.app).post('/api/v1/auth/link/verify').send({ token, email })
   if (response.status !== 200) {
     throw new Error(`signInByLink: verify answered ${response.status}`)
   }

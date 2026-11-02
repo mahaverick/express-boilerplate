@@ -355,9 +355,9 @@ async function claimForLink(userId: string): Promise<User> {
  *
  * Order: the maintenance mode is checked on a read-only peek
  * (`assertVerifyAllowedByMode`), so a refused link stays usable; the
- * address the link displays, when the client sends it, is compared with the
- * link's row on another peek (`assertLinkShowsItsAddress`), so a link whose
- * `email` was swapped is `LINK_INVALID` and stays usable for its owner; the
+ * address the link displays is compared with the link's row on another peek
+ * (`assertLinkShowsItsAddress`), so a link whose `email` was swapped or removed
+ * is `LINK_INVALID` and stays usable for its owner; the
  * link is claimed (any dead link is `LINK_INVALID`); the account is resolved
  * (`resolveLinkAccount`); `assertSignInAllowed` runs on it; `lastLoggedInAt`
  * is stamped outside the lock; then one transaction re-reads the user FOR
@@ -365,13 +365,17 @@ async function claimForLink(userId: string): Promise<User> {
  * committed since is `LINK_INVALID` with no session, and one that commits
  * later waits for the lock and revokes it.
  * @param raw - The raw token from the link.
- * @param shownEmail - The address the link displays, trimmed and lowercased, when the client sends it.
+ * @param shownEmail - The address the link displays, trimmed and lowercased. A link posted without one is refused: the check is what stops another person's link signing a visitor in.
  * @returns The session.
  * @throws {HttpError} 400 `LINK_INVALID`; 503 `MAINTENANCE_MODE` or `READ_ONLY_MODE` (a `MaintenanceModeError`).
  */
-export async function verifySignInLink(raw: string, shownEmail?: string): Promise<LinkSession> {
+export async function verifySignInLink(
+  raw: string,
+  shownEmail: string | undefined
+): Promise<LinkSession> {
   await assertVerifyAllowedByMode(raw)
-  if (shownEmail !== undefined) await assertLinkShowsItsAddress(raw, shownEmail)
+  if (shownEmail === undefined) throw linkInvalid()
+  await assertLinkShowsItsAddress(raw, shownEmail)
 
   const row = await claimLinkToken(raw, 'sign_in')
   // Every sign_in_link row has both (user_tokens_shape_check); anything else is not a link.

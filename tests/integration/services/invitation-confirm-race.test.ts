@@ -264,7 +264,7 @@ async function confirmBesideDeactivate(options: { claimFirst: boolean }): Promis
 
   let outcome: [PromiseSettledResult<unknown>, PromiseSettledResult<unknown>] | undefined
   await withMutatedMethod(UserRepository.prototype, 'lockById', seamLock, async () => {
-    const confirming = confirmInvitation(raw)
+    const confirming = confirmInvitation(raw, invitee.email)
     const confirmPid = await untilSignalled(reached.promise, confirming, 'the confirm')
     const deactivating = deactivateUser({ userId: admin.id }, invitee.id, 'lock order test')
     expect(await waitForWaiter(confirmPid, deactivating)).toBe(true)
@@ -298,7 +298,7 @@ async function expectClaimRolledBack(): Promise<void> {
     'claimForAcceptById',
     deadInvitationClaim,
     async () => {
-      ;[result] = await Promise.allSettled([confirmInvitation(raw)])
+      ;[result] = await Promise.allSettled([confirmInvitation(raw, invitee.email)])
     }
   )
 
@@ -307,7 +307,7 @@ async function expectClaimRolledBack(): Promise<void> {
   expect(await refreshCounts(invitee.id)).toEqual({ all: 0, live: 0 })
   expect(await isPending(invitationId)).toBe(true)
 
-  await confirmInvitation(raw)
+  await confirmInvitation(raw, invitee.email)
   expect(await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)).toBeDefined()
 }
 
@@ -316,7 +316,10 @@ describe('invitation confirm races', () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('twice') })
     const { tenant, raw } = await invitedWithLink(invitee.email)
 
-    const results = await Promise.allSettled([confirmInvitation(raw), confirmInvitation(raw)])
+    const results = await Promise.allSettled([
+      confirmInvitation(raw, invitee.email),
+      confirmInvitation(raw, invitee.email),
+    ])
 
     expect(results.map((result) => statusOf(result)).toSorted((a, b) => a - b)).toEqual([200, 404])
     expect(results.find((result) => result.status === 'rejected')).toMatchObject({
@@ -336,7 +339,10 @@ describe('invitation confirm races', () => {
     const email = uniqueEmail('staff-twice')
     const { raw } = await invitationWithLink(platform, inviter, email, 'apex')
 
-    const results = await Promise.allSettled([confirmInvitation(raw), confirmInvitation(raw)])
+    const results = await Promise.allSettled([
+      confirmInvitation(raw, email),
+      confirmInvitation(raw, email),
+    ])
 
     expect(results.map((result) => statusOf(result)).toSorted((a, b) => a - b)).toEqual([200, 404])
     const users = await sql<{ id: string }[]>`select id from users where lower(email) = ${email}`
@@ -344,12 +350,50 @@ describe('invitation confirm races', () => {
     expect(await refreshCounts(users[0]?.id ?? '')).toEqual({ all: 1, live: 1 })
   })
 
+  it('answers invitation_invalid, not 409, when the address is taken mid-confirm, and leaves the link usable', async () => {
+    const email = uniqueEmail('taken')
+    const { tenant, invitationId, raw } = await invitedWithLink(email)
+    const seeded: { id?: string } = {}
+    const realCreate = UserRepository.prototype.create
+    /**
+     * Stands in for `UserRepository.create`: just before the confirm's insert, a
+     * write on another connection commits an unverified account for the address.
+     */
+    const racingCreate: typeof realCreate = async function (this: UserRepository, ...arguments_) {
+      const [values] = arguments_
+      if (seeded.id === undefined && values.email === email) {
+        const squatter = await realCreate.call(this, { email })
+        seeded.id = squatter.id
+      }
+      return realCreate.apply(this, arguments_)
+    }
+
+    let result: PromiseSettledResult<unknown> | undefined
+    await withMutatedMethod(UserRepository.prototype, 'create', racingCreate, async () => {
+      ;[result] = await Promise.allSettled([confirmInvitation(raw, email)])
+    })
+
+    expect(result).toMatchObject({ status: 'rejected', reason: { code: 'invitation_invalid' } })
+    expect(
+      await userMembershipRepository.findByUserAndTenant(seeded.id ?? '', tenant.id)
+    ).toBeUndefined()
+    expect(await isUnspent(raw)).toBe(true)
+    expect(await isPending(invitationId)).toBe(true)
+
+    // The lost race rolled back before the claim: the next click claims the account just created.
+    const joined = await confirmInvitation(raw, email)
+    expect(joined.user.id).toBe(seeded.id)
+    expect(
+      await userMembershipRepository.findByUserAndTenant(joined.user.id, tenant.id)
+    ).toBeDefined()
+  })
+
   it('a confirm racing an admin revoke never leaves a session without a membership', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('revoke') })
     const { tenant, owner, invitationId, raw } = await invitedWithLink(invitee.email)
 
     const [confirmed, revoked] = await Promise.allSettled([
-      confirmInvitation(raw),
+      confirmInvitation(raw, invitee.email),
       revoke({ userId: owner.id }, tenant.id, invitationId),
     ])
 
@@ -389,7 +433,7 @@ describe('invitation confirm races', () => {
 
     let result: PromiseSettledResult<unknown> | undefined
     await withMutatedMethod(UserRepository.prototype, 'lockById', deactivatingLock, async () => {
-      ;[result] = await Promise.allSettled([confirmInvitation(raw)])
+      ;[result] = await Promise.allSettled([confirmInvitation(raw, invitee.email)])
     })
 
     expect(result).toMatchObject({ status: 'rejected', reason: { code: 'invitation_invalid' } })
@@ -468,7 +512,7 @@ describe('invitation confirm races', () => {
 
       let result: PromiseSettledResult<unknown> | undefined
       await withMutatedMethod(UserRepository.prototype, 'lockById', switchingLock, async () => {
-        ;[result] = await Promise.allSettled([confirmInvitation(raw)])
+        ;[result] = await Promise.allSettled([confirmInvitation(raw, invitee.email)])
       })
 
       expect(result).toMatchObject({ status: 'rejected', reason: { statusCode: 503, code } })
@@ -506,7 +550,7 @@ describe('invitation confirm races', () => {
 
       let result: PromiseSettledResult<unknown> | undefined
       await withMutatedMethod(UserRepository.prototype, 'lockById', changingLock, async () => {
-        ;[result] = await Promise.allSettled([confirmInvitation(raw)])
+        ;[result] = await Promise.allSettled([confirmInvitation(raw, invitee.email)])
       })
 
       expect(result).toMatchObject({ status: 'rejected', reason: { code: 'invitation_invalid' } })

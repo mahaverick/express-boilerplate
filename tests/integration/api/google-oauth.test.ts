@@ -228,6 +228,26 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
    * `passport.initialize()`, `handleGoogleCallback`); the account-linking policy behind a successful
    * callback is exercised by the suite below.
    */
+  it.each(['same-origin', 'same-site', 'none'])(
+    'starts the sign-in on Sec-Fetch-Site: %s',
+    async (site) => {
+      const response = await request(app).get('/api/v1/auth/google').set('Sec-Fetch-Site', site)
+
+      expect(response.status).toBe(302)
+      expect(response.headers.location).toMatch(/^https:\/\/accounts\.google\.com\//)
+    }
+  )
+
+  it('sends a cross-site start to the login page, with no session and no trip to Google', async () => {
+    const response = await request(app)
+      .get('/api/v1/auth/google')
+      .set('Sec-Fetch-Site', 'cross-site')
+
+    expect(response.status).toBe(302)
+    expect(response.headers.location).toBe(`${process.env.WEB_URL ?? ''}/login`)
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
   describe('GET /api/v1/auth/google/callback', () => {
     it('redirects to Google when hit with no query parameters at all (indistinguishable from a fresh /google request)', async () => {
       const response = await request(app).get('/api/v1/auth/google/callback')
@@ -485,6 +505,16 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         expect(row?.count).toBe(0)
       }
     )
+
+    it('issues a session that does not count as a recent sign-in, new account or returning', async () => {
+      const profile = googleProfile()
+
+      const created = await completeGoogleSignIn(profile, 'web')
+      const returning = await completeGoogleSignIn(profile, 'web')
+
+      expect(created.refreshToken.authenticatedAt).toBeNull()
+      expect(returning.refreshToken.authenticatedAt).toBeNull()
+    })
 
     it('creates a new user, an email provider, and a google provider, with emailVerifiedAt set, when Google verified the email', async () => {
       const email = uniqueEmail()

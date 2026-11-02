@@ -93,7 +93,7 @@ async function registerAndLogin(
 async function linkSignIn(email: string): Promise<Response> {
   return request(app)
     .post('/api/v1/auth/link/verify')
-    .send({ token: await issueTestLink(email) })
+    .send({ token: await issueTestLink(email), email })
 }
 
 /**
@@ -103,7 +103,7 @@ async function linkSignIn(email: string): Promise<Response> {
 function deadLinkVerify(): Test {
   return request(app)
     .post('/api/v1/auth/link/verify')
-    .send({ token: `dead-link-${randomUUID()}` })
+    .send({ token: `dead-link-${randomUUID()}`, email: uniqueEmail() })
 }
 
 /**
@@ -510,7 +510,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     it('runs a limiter on /link/verify and /refresh', async () => {
       const verifyResponse = await request(app)
         .post('/api/v1/auth/link/verify')
-        .send({ token: `dead-link-${randomUUID()}` })
+        .send({ token: `dead-link-${randomUUID()}`, email: uniqueEmail() })
       const refreshResponse = await request(app).post('/api/v1/auth/refresh')
 
       expect(verifyResponse.headers).toHaveProperty('ratelimit-limit')

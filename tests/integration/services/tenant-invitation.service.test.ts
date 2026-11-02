@@ -143,6 +143,17 @@ async function withStaleRead(
   return claims
 }
 
+/**
+ * The audit rows of one invitation for one action.
+ * @param action - The audit action.
+ * @param targetId - The invitation.
+ * @returns The rows' metadata.
+ */
+async function auditOf(action: string, targetId: string) {
+  return sql<{ metadata: { role: string } }[]>`
+    select metadata from audit_logs where action = ${action} and target_id = ${targetId}`
+}
+
 describe('tenant-invitation.service', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -188,6 +199,26 @@ describe('tenant-invitation.service', () => {
     })
     createdTenantIds.push(tenant.id)
     return { owner, tenant }
+  }
+
+  /**
+   * A tenant with an admin, and a live invitation at `role` the owner sent.
+   * @param role - The pending invitation's role.
+   * @returns The tenant, the admin and the invited address and row.
+   */
+  async function pendingAt(role: MembershipRole) {
+    const { owner, tenant } = await setup()
+    const admin = await createUser()
+    await userMembershipRepository.create({
+      userId: admin.id,
+      tenantId: tenant.id,
+      role: 'admin',
+    })
+    const email = uniqueEmail()
+    await invite({ userId: owner.id }, tenant.id, email, role)
+    const [pending] = await pendingOf(tenant.id)
+    if (!pending) throw new Error('the invitation was not written')
+    return { owner, tenant, admin, email, pending }
   }
 
   describe('invite', () => {
@@ -287,6 +318,61 @@ describe('tenant-invitation.service', () => {
       await expect(preview(first.token)).rejects.toMatchObject(INVALID)
       const secondPreview = await preview(second.token)
       expect(secondPreview.role).toBe('editor')
+    })
+
+    describe('re-inviting an address with a pending invitation', () => {
+      it.each(['owner', 'admin'] as const)(
+        'refuses an admin replacing a live %s invitation, and leaves it live',
+        async (role) => {
+          const { tenant, admin, email, pending } = await pendingAt(role)
+
+          await expect(
+            invite({ userId: admin.id }, tenant.id, email, 'viewer')
+          ).rejects.toMatchObject({ statusCode: 403 })
+
+          const live = await pendingOf(tenant.id)
+          expect(live.map((row) => row.id)).toEqual([pending.id])
+        }
+      )
+
+      it('lets an admin replace an expired owner invitation', async () => {
+        const { tenant, admin, email } = await pendingAt('owner')
+        await sql`update tenant_invitations set expires_at = now() - interval '1 minute'
+          where tenant_id = ${tenant.id}`
+
+        await invite({ userId: admin.id }, tenant.id, email, 'viewer')
+
+        const live = await pendingOf(tenant.id)
+        expect(live.map((row) => [row.email, row.role])).toEqual([[email, 'viewer']])
+      })
+
+      it('lets an admin replace an invitation they could send', async () => {
+        const { tenant, admin, email } = await pendingAt('viewer')
+
+        await invite({ userId: admin.id }, tenant.id, email, 'editor')
+
+        const live = await pendingOf(tenant.id)
+        expect(live.map((row) => row.role)).toEqual(['editor'])
+      })
+
+      it('audits the revoke of the invitation a re-invite replaced', async () => {
+        const { owner, tenant, email, pending } = await pendingAt('admin')
+
+        await invite({ userId: owner.id }, tenant.id, email, 'viewer')
+
+        const rows = await auditOf('invitation.revoked', pending.id)
+        expect(rows.map((row) => row.metadata.role)).toEqual(['admin'])
+      })
+
+      it('audits no revoke when the replaced invitation had already expired', async () => {
+        const { owner, tenant, email, pending } = await pendingAt('viewer')
+        await sql`update tenant_invitations set expires_at = now() - interval '1 minute'
+          where id = ${pending.id}`
+
+        await invite({ userId: owner.id }, tenant.id, email, 'editor')
+
+        await expect(auditOf('invitation.revoked', pending.id)).resolves.toHaveLength(0)
+      })
     })
 
     it('refuses a grant the actor may not make before it reveals already_member', async () => {

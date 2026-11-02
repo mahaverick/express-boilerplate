@@ -119,7 +119,7 @@ function freshEmail(): string {
  * @returns The sign-in's session, as `verifySignInLink` answers it.
  */
 async function linkSignIn(email: string): Promise<Awaited<ReturnType<typeof verifySignInLink>>> {
-  return verifySignInLink(await issueTestLink(email))
+  return verifySignInLink(await issueTestLink(email), email)
 }
 
 /**
@@ -232,11 +232,11 @@ describe('user_signed_in', () => {
     const named = await request(app)
       .post('/api/v1/auth/link/verify')
       .set('X-POSTHOG-SESSION-ID', sessionId)
-      .send({ token: await issueTestLink(user.email) })
+      .send({ token: await issueTestLink(user.email), email: user.email })
     const malformed = await request(app)
       .post('/api/v1/auth/link/verify')
       .set('X-POSTHOG-SESSION-ID', 'not-a-session')
-      .send({ token: await issueTestLink(user.email) })
+      .send({ token: await issueTestLink(user.email), email: user.email })
 
     expect([named.status, malformed.status]).toEqual([200, 200])
     const rows = await outboxRowsOf('user_signed_in')
@@ -285,7 +285,9 @@ describe('user_signed_in', () => {
   })
 
   it('is not written by a link that signs nobody in', async () => {
-    await expect(verifySignInLink(`not-a-link-${randomUUID()}`)).rejects.toThrow()
+    await expect(
+      verifySignInLink(`not-a-link-${randomUUID()}`, `nobody-${randomUUID()}@example.test`)
+    ).rejects.toThrow()
 
     expect(await outboxRows()).toEqual([])
   })

@@ -31,8 +31,8 @@ export const PASSKEY_CHALLENGE_TTL_MS = 5 * 60 * 1000
  * `required`, as `METHOD /full/path` keys (an upper-case method, a lower-case
  * path with no trailing slash and no route parameter). Everything an account
  * needs to create its first passkey is here: the list, the creation pair,
- * confirming it's them by emailed link (an invitation's one-click session is
- * not a recent sign-in, and creating a passkey needs one), the profile and
+ * confirming it's them by emailed link (a Google session is not a recent
+ * sign-in, and creating a passkey needs one), the profile and
  * provider reads a client needs to render the page, and sign-out. The logout
  * route reads the refresh cookie and never meets `requireAuth`; it is listed
  * so the rule holds if that changes.

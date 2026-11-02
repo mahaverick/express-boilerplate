@@ -213,13 +213,15 @@ export async function requestStepUpLink(
  * @param userId - The authenticated caller.
  * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
  * @param raw - The raw token from the link.
+ * @param presentedRefreshToken - The raw refresh token the request carried, naming the chain to upgrade (`markSessionReauthenticated`).
  * @returns A new access token for the same session.
  * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid`, an account gone or inactive, or a session that has ended; 400 `LINK_INVALID` for a link this session cannot use.
  */
 export async function confirmStepUpLink(
   userId: string,
   sessionId: string | undefined,
-  raw: string
+  raw: string,
+  presentedRefreshToken?: string
 ): Promise<{ accessToken: string }> {
   if (sessionId === undefined) throw sessionEnded()
   const user = await activeAccount(userId)
@@ -229,7 +231,7 @@ export async function confirmStepUpLink(
     const claimed = await claimLinkToken(raw, 'step_up', { userId, sessionId }, tx)
     // Commits: a dead link stays spent, so one presentation is one attempt.
     if (!claimed) return 'link_invalid'
-    const at = await markSessionReauthenticated(userId, sessionId, tx)
+    const at = await markSessionReauthenticated(userId, sessionId, tx, presentedRefreshToken)
     await recordStepUp(userId, 'link', tx)
     return at
   })
@@ -289,13 +291,15 @@ export async function startPasskeyStepUp(
  * @param input - The challenge id and the browser's assertion response.
  * @param input.challengeId - The id the options call answered.
  * @param input.response - The browser's assertion response.
+ * @param presentedRefreshToken - The raw refresh token the request carried, naming the chain to upgrade (`markSessionReauthenticated`).
  * @returns A new access token for the same session.
  * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid`, an account gone or inactive, or a session that has ended; 400 `PASSKEY_VERIFICATION_FAILED` for a never-verified account, a challenge that is missing, used, expired or not this session's, a credential that is not the caller's, and a response that does not verify.
  */
 export async function finishPasskeyStepUp(
   userId: string,
   sessionId: string | undefined,
-  input: { challengeId: string; response: unknown }
+  input: { challengeId: string; response: unknown },
+  presentedRefreshToken?: string
 ): Promise<{ accessToken: string }> {
   if (sessionId === undefined) throw sessionEnded()
   const user = await activeAccount(userId)
@@ -315,7 +319,12 @@ export async function finishPasskeyStepUp(
   )
   const at = await withTransaction(async (tx) => {
     // markSessionReauthenticated takes the user row lock and refuses an account gone or inactive.
-    const authenticatedAt = await markSessionReauthenticated(userId, sessionId, tx)
+    const authenticatedAt = await markSessionReauthenticated(
+      userId,
+      sessionId,
+      tx,
+      presentedRefreshToken
+    )
     // Under the user lock markSessionReauthenticated took: a claim that deleted the passkey, or left the account unverified, since the checks above refuses and rolls back.
     const locked = await userRepository.lockById(userId, 'no key update', tx)
     const outcome = await userPasskeyRepository.recordUse(

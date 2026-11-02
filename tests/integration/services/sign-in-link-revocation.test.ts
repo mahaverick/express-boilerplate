@@ -60,7 +60,9 @@ describe("revoking every session revokes the address's sign-in links", () => {
     await revokeOtherSessions(user.id, sessionId)
 
     expect(await isRevoked(raw)).toBe(true)
-    await expect(verifySignInLink(raw)).rejects.toMatchObject({ code: LINK_INVALID_CODE })
+    await expect(verifySignInLink(raw, user.email)).rejects.toMatchObject({
+      code: LINK_INVALID_CODE,
+    })
   })
 
   it('a staff sign-out revokes them', async () => {
@@ -70,7 +72,9 @@ describe("revoking every session revokes the address's sign-in links", () => {
     await signOutUser({ userId: admin.id }, user.id, 'link revocation test')
 
     expect(await isRevoked(raw)).toBe(true)
-    await expect(verifySignInLink(raw)).rejects.toMatchObject({ code: LINK_INVALID_CODE })
+    await expect(verifySignInLink(raw, user.email)).rejects.toMatchObject({
+      code: LINK_INVALID_CODE,
+    })
   })
 
   it('a deactivation revokes them', async () => {
@@ -80,7 +84,9 @@ describe("revoking every session revokes the address's sign-in links", () => {
     await deactivateUser({ userId: admin.id }, user.id, 'link revocation test')
 
     expect(await isRevoked(raw)).toBe(true)
-    await expect(verifySignInLink(raw)).rejects.toMatchObject({ code: LINK_INVALID_CODE })
+    await expect(verifySignInLink(raw, user.email)).rejects.toMatchObject({
+      code: LINK_INVALID_CODE,
+    })
   })
 
   it('leaves the links of another address alone', async () => {
