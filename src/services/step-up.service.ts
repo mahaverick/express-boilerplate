@@ -139,14 +139,14 @@ async function recordStepUp(
  * @param userId - The authenticated caller.
  * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
  * @param app - The frontend the caller is in; the link opens there.
- * @returns When the next request may mail again.
+ * @returns When the next request may mail again, and when the mailed link expires.
  * @throws {HttpError} 401 `ACCESS_TOKEN_EXPIRED` for a token without `sid` or an account gone or inactive; 404 for an Apex link asked by a caller with no platform role; 429 `STEP_UP_LINK_COOLDOWN` with `retryAfterSeconds` inside the cooldown.
  */
 export async function requestStepUpLink(
   userId: string,
   sessionId: string | undefined,
   app: FrontendApp
-): Promise<{ resendAvailableAt: string }> {
+): Promise<{ resendAvailableAt: string; expiresAt: string }> {
   if (sessionId === undefined) throw sessionEnded()
   const user = await activeAccount(userId)
   // A caller with no platform role is refused an Apex link as the old role gate refused them, before the cooldown is spent.
@@ -167,12 +167,14 @@ export async function requestStepUpLink(
     )
   }
   const claimedAt = Date.now()
+  let expiresAt: Date
   try {
     const ttlMs = requireDurationMs(env.STEP_UP_LINK_TTL)
     const { raw, row } = await issueLinkToken(
       { intent: 'step_up', userId, sessionId, email: user.email, app },
       ttlMs
     )
+    expiresAt = row.expiresAt
     await addEmailJob(
       {
         to: user.email.toLowerCase(),
@@ -192,7 +194,10 @@ export async function requestStepUpLink(
     await releaseCooldown(STEP_UP_LINK_COOLDOWN_SCOPE, userId)
     throw error
   }
-  return { resendAvailableAt: new Date(claimedAt + cooldownMs).toISOString() }
+  return {
+    resendAvailableAt: new Date(claimedAt + cooldownMs).toISOString(),
+    expiresAt: expiresAt.toISOString(),
+  }
 }
 
 /**

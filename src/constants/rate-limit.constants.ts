@@ -72,6 +72,7 @@ export type RateLimitName =
   | 'flagEvaluate'
   | 'flagExposure'
   | 'maintenanceStatus'
+  | 'clientSettings'
   | 'maintenanceModeChange'
   | 'revokeOtherSessions'
   | 'signInLinkRequest'
@@ -397,6 +398,19 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 120,
     keyBy: 'ip',
     unit: 'attempts',
+  },
+  /**
+   * 120 a minute per IP for the public `GET /status/client-settings`: each
+   * app reads it once per tab and holds it for an hour, and the answer is
+   * cacheable for five minutes, so a busy office NAT address stays far under
+   * it, and a script polling it is bounded.
+   */
+  clientSettings: {
+    name: 'client-settings',
+    windowMs: 60_000,
+    limit: 120,
+    keyBy: 'ip',
+    unit: 'requests',
   },
   /**
    * 10 a minute per staff member for `PUT /platform/maintenance-mode`, behind

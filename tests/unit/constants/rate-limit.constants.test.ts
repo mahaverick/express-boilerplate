@@ -40,6 +40,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'flag-evaluate',
   'flag-exposure',
   'maintenance-status',
+  'client-settings',
   'maintenance-mode-change',
   'revoke-other-sessions',
   'sign-in-link-request',
@@ -139,6 +140,13 @@ const EXPECTED_RATE_LIMITS: {
   {
     key: 'maintenanceStatus',
     name: 'maintenance-status',
+    windowMs: 60_000,
+    limit: 120,
+    keyBy: 'ip',
+  },
+  {
+    key: 'clientSettings',
+    name: 'client-settings',
     windowMs: 60_000,
     limit: 120,
     keyBy: 'ip',

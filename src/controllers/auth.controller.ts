@@ -274,7 +274,7 @@ class AuthController extends BaseController {
    * `POST /auth/step-up/link/request`: mail a "confirm it's you" link for the
    * caller's session, behind `requireAuth`.
    * Takes `{ app }`, the frontend the link opens (a 400 without it). Answers 202 with when the next request may mail
-   * again; inside the cooldown a 429 `STEP_UP_LINK_COOLDOWN` with
+   * again (`resendAvailableAt`) and when the mailed link expires (`expiresAt`); inside the cooldown a 429 `STEP_UP_LINK_COOLDOWN` with
    * `Retry-After`.
    */
   requestStepUpLink = this.handle(async (request, response) => {

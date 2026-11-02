@@ -837,7 +837,8 @@ needs it to create or delete a passkey.
 - **By link, bound to the session.** `POST /auth/step-up/link/request` takes
   `{ app }` (`web` or `apex`; a missing or unknown value answers 400). It mails
   a link to the account's own address and answers `202` with
-  `resendAvailableAt`. A request for `apex` by an account with no platform role
+  `resendAvailableAt` and the link's own `expiresAt`, so the dialog states the
+  time the mail states. A request for `apex` by an account with no platform role
   answers the unknown-route 404 and mails nothing. Another request by the same
   user, from any of their sessions, inside `STEP_UP_LINK_COOLDOWN` (default
   `1m`) answers `429 STEP_UP_LINK_COOLDOWN` with `Retry-After`. The
@@ -1299,8 +1300,9 @@ in-memory mode, by method and path (`MAINTENANCE_ROUTE_RULES`,
 everything but health, the email and Razorpay webhooks, the collect proxy, the public status,
 `/platform`, the sign-in link routes, Google sign-in, the step-up routes
 (link and passkey), the passkey sign-in routes, refresh, logout,
-`GET /auth/providers`, `GET /auth/passkeys/config`, `GET /profile` and the
-public plan list (`GET /plans`). Listing,
+`GET /auth/providers`, `GET /auth/passkeys/config`, `GET /profile`, the
+public client settings (`GET /status/client-settings`) and the public plan
+list (`GET /plans`). Listing,
 creating, renaming and deleting a passkey are customer routes: `read_only`
 refuses the writes, and on the routes Apex calls, the refusal is decided in `requireAuth`, which lets platform
 staff through. The let-through list is visible during maintenance: a route on
@@ -1344,6 +1346,16 @@ since the list names only routes the frontends already call.
   entry commit together.
 - The public `GET /status/maintenance` returns the mode, the customer message
   and when it began, never the internal reason or who changed it.
+- The public `GET /status/client-settings` returns the lifetimes of the
+  sign-in, step-up and invitation links in seconds (`SIGN_IN_LINK_TTL`,
+  `STEP_UP_LINK_TTL`, `INVITATION_TTL`) and the support address
+  (`SUPPORT_EMAIL`, or `support@` on `MAIL_FROM`'s domain). Every value is
+  already in the mail anyone can request: the sign-in mail states its link's
+  lifetime, and billing mail names the support address. The answer is the same
+  for every caller, so it says nothing about any account, and knowing a
+  lifetime does not help guess a link, which carries 256 random bits. It
+  counts per IP on `client-settings` (120 a minute) and is cacheable for five
+  minutes.
 
 [ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode) describes the store, the
 reload and the queue pause.

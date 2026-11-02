@@ -220,6 +220,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('*', '/api/v1/webhooks/razorpay', 'prefix'),
   letThrough('*', '/api/v1/collect', 'prefix'),
   letThrough('GET', '/api/v1/status/maintenance'),
+  // The link lifetimes and support address the apps state, read signed out too.
+  letThrough('GET', '/api/v1/status/client-settings'),
   letThrough('*', '/api/v1/platform', 'prefix'),
   // Google sign-in: let through; in `full` the auth service refuses non-staff after identifying them.
   letThrough('GET', '/api/v1/auth/google'),

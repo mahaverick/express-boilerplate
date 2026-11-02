@@ -297,10 +297,19 @@ describe('POST /api/v1/auth/step-up/link/request', () => {
     const response = await requestLink(session.token)
 
     expect(response.status).toBe(202)
-    const { resendAvailableAt } = (response.body as { data: { resendAvailableAt: string } }).data
+    const { resendAvailableAt, expiresAt } = (
+      response.body as { data: { resendAvailableAt: string; expiresAt: string } }
+    ).data
     const cooldownMs = requireDurationMs(getEnv().STEP_UP_LINK_COOLDOWN)
     expect(Date.parse(resendAvailableAt)).toBeGreaterThanOrEqual(before + cooldownMs - 1000)
     expect(Date.parse(resendAvailableAt)).toBeLessThanOrEqual(Date.now() + cooldownMs + 1000)
+    // The answer names the mailed link's own expiry, the row's, not a client's estimate.
+    const [link] = await sql<{ expiresAtMs: string }[]>`
+      select (extract(epoch from expires_at) * 1000)::bigint::text as "expiresAtMs" from user_tokens
+      where user_id = ${session.userId} and purpose = 'step_up_link'
+    `
+    expect(link).toBeDefined()
+    expect(Date.parse(expiresAt)).toBe(Number(link?.expiresAtMs))
     expect(await linkRows(session.userId)).toEqual([
       {
         userId: session.userId,

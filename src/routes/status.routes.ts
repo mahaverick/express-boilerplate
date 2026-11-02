@@ -1,7 +1,9 @@
 /**
  * @file Public status routes, mounted at `/api/v1/status`, with no
- * authentication. The maintenance gate lets `GET /maintenance` through in
- * every mode, so a client can always learn the mode.
+ * authentication. The maintenance gate lets `GET /maintenance` and
+ * `GET /client-settings` through in every mode, so a client can always learn
+ * the mode, and a signed-out page can still state a link's lifetime and the
+ * support address.
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -18,6 +20,11 @@ export function createStatusRouter(): Router {
     '/maintenance',
     createRateLimiter(RATE_LIMITS.maintenanceStatus),
     statusController.getMaintenance
+  )
+  router.get(
+    '/client-settings',
+    createRateLimiter(RATE_LIMITS.clientSettings),
+    statusController.getClientSettings
   )
   return router
 }
