@@ -65,6 +65,12 @@ export interface OnboardingFunnel {
    * since onboarding tracking began.
    */
   trackedTenants: number
+  /**
+   * `ONBOARDING_STUCK_AFTER_DAYS`: the days without progress after which a
+   * tenant counts as `stuck`, so a client states the server's value
+   * instead of the default.
+   */
+  stuckAfterDays: number
   steps: OnboardingFunnelStep[]
 }
 

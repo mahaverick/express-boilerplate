@@ -34,6 +34,7 @@ function sampleStatus(): counters.ErrorTrackingStatus {
   return {
     enabled: true,
     window: '15m',
+    retryLimit: 5,
     sent: 42,
     dropped: { throttled: 3, buffer_full: 0, rejected: 0, retry_exhausted: 0 },
     lastSendOkAt: '2026-10-04T10:00:00.000Z',

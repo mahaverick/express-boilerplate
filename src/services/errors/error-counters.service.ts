@@ -11,6 +11,7 @@ import { isErrorTrackingEnabled } from '@/configs/analytics.config'
 import {
   ERROR_COUNTER_TTL_SECONDS,
   ERROR_DROP_REASONS,
+  ERROR_RETRY_LIMIT,
   ERROR_STATUS_WINDOW_MINUTES,
   type ErrorDropReason,
 } from '@/constants/error-tracking.constants'
@@ -31,6 +32,11 @@ export type ErrorOutcome = 'sent' | ErrorDropReason
 export interface ErrorTrackingStatus {
   enabled: boolean
   window: '15m'
+  /**
+   * `ERROR_RETRY_LIMIT`: how many sends a batch gets before it is dropped as
+   * `retry_exhausted`, so a client states the server's value.
+   */
+  retryLimit: number
   sent: number
   dropped: Record<ErrorDropReason, number>
   /**
@@ -180,6 +186,7 @@ export async function getErrorTrackingStatus(at: Date = new Date()): Promise<Err
   const status: ErrorTrackingStatus = {
     enabled: isTrackingSwitchOn(),
     window: '15m',
+    retryLimit: ERROR_RETRY_LIMIT,
     sent: 0,
     dropped: noDrops(),
     lastSendOkAt: null,

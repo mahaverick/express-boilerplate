@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import { NOT_FOUND } from '@/errors/not-found-errors'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -43,6 +44,7 @@ interface FunnelBody {
   totals: Record<string, number>
   completionRate: number | null
   trackedTenants: number
+  stuckAfterDays: number
   steps: { key: string; completed: number; staffCompleted: number }[]
 }
 
@@ -111,6 +113,7 @@ describe('GET /api/v1/platform/onboarding/funnel', () => {
     expect(response.status).toBe(200)
     const funnel = dataOf<FunnelBody>(response)
     expect(funnel.range).toBe('30d')
+    expect(funnel.stuckAfterDays).toBe(getEnv().ONBOARDING_STUCK_AFTER_DAYS)
     expect(Object.keys(funnel.totals).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'complete',
       'dismissed',
