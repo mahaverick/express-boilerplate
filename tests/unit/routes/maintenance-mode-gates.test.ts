@@ -283,6 +283,7 @@ describe('maintenance-mode route classification', () => {
         '* /api/v1/webhooks/razorpay',
         '* /api/v1/collect',
         'GET /api/v1/status/maintenance',
+        'GET /api/v1/status/client-settings',
         '* /api/v1/platform',
         'GET /api/v1/auth/google',
         'GET /api/v1/auth/google/callback',

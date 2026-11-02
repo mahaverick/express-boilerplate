@@ -35,6 +35,7 @@ const ALWAYS: [string, string][] = [
   ['POST', '/api/v1/collect/e/'],
   ['GET', '/api/v1/collect/static/array.js'],
   ['GET', '/api/v1/status/maintenance'],
+  ['GET', '/api/v1/status/client-settings'],
   ['GET', '/api/v1/platform/tenants'],
   ['POST', '/api/v1/platform/tenants/0190a8e2-0000-7000-8000-000000000001/suspend'],
   ['PUT', '/api/v1/platform/maintenance-mode'],
