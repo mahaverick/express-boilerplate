@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/mahaverick/express-boilerplate/compare/v2.0.0...v2.0.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **errors:** show the client guidance on four 5xx errors ([#178](https://github.com/mahaverick/express-boilerplate/issues/178)) ([27e0a44](https://github.com/mahaverick/express-boilerplate/commit/27e0a440e9c3f6949dc093b474a2acfdbcf96207))
+
 ## [2.0.0](https://github.com/mahaverick/express-boilerplate/compare/v1.0.0...v2.0.0) (2026-11-02)
 
 
