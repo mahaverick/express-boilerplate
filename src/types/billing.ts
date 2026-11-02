@@ -342,7 +342,9 @@ export type ProviderPlanPrice = Pick<
  * What a refund of a subscription's latest payment did: `refunded` with the
  * refund the provider accepted; `nothing_paid` when no payment exists;
  * `already_refunded` when the payment was refunded in full before;
- * `partly_refunded` when part of it was, so nothing more was refunded.
+ * `partly_refunded` when part of it was, so nothing more was refunded, with
+ * the amounts the provider reported. Amounts are in the currency's minor unit
+ * (paise).
  */
 export type ProviderRefundOutcome =
   | {
@@ -358,7 +360,18 @@ export type ProviderRefundOutcome =
     }
   | { status: 'nothing_paid' }
   | { status: 'already_refunded' }
-  | { status: 'partly_refunded' }
+  | {
+      status: 'partly_refunded'
+      /**
+       * The amount paid; null when the provider did not report it.
+       */
+      amountMinor: number | null
+      /**
+       * The amount refunded so far; null when the provider reported a refund
+       * but no refunded amount.
+       */
+      refundedMinor: number | null
+    }
 
 /**
  * How a provider invoice page is narrowed and bounded.

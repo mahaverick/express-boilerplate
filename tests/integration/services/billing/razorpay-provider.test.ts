@@ -389,22 +389,39 @@ describe('refundLatestPayment', () => {
   })
 
   it.each([
-    ['a full refund', { amount_refunded: 99_900, refund_status: 'full' }, 'already_refunded'],
+    [
+      'a full refund',
+      { amount_refunded: 99_900, refund_status: 'full' },
+      { status: 'already_refunded' },
+    ],
     [
       'the whole amount refunded',
       { amount_refunded: 99_900, refund_status: null },
-      'already_refunded',
+      { status: 'already_refunded' },
     ],
-    ['a partial refund', { amount_refunded: 10_000, refund_status: 'partial' }, 'partly_refunded'],
-    ['a refund status alone', { amount_refunded: 0, refund_status: 'partial' }, 'partly_refunded'],
-  ])('refunds nothing when the payment has %s', async (_label, state, status) => {
+    [
+      'a partial refund',
+      { amount_refunded: 10_000, refund_status: 'partial' },
+      { status: 'partly_refunded', amountMinor: 99_900, refundedMinor: 10_000 },
+    ],
+    [
+      'a refund status alone',
+      { amount_refunded: 0, refund_status: 'partial' },
+      { status: 'partly_refunded', amountMinor: 99_900, refundedMinor: null },
+    ],
+    [
+      'a partial refund and no amount',
+      { amount: undefined, amount_refunded: 10_000, refund_status: 'partial' },
+      { status: 'partly_refunded', amountMinor: null, refundedMinor: 10_000 },
+    ],
+  ])('refunds nothing when the payment has %s', async (_label, state, outcome) => {
     fake.reply('GET', '/invoices', 200, fixture('api-invoices-paid').json)
     fake.reply('GET', '/payments/pay_Traz18reMgTm3F', 200, {
       id: 'pay_Traz18reMgTm3F',
       amount: 99_900,
       ...state,
     })
-    expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toStrictEqual({ status })
+    expect(await provider.refundLatestPayment('sub_Trax7OfeENGU9N')).toStrictEqual(outcome)
     expect(fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0)
   })
 

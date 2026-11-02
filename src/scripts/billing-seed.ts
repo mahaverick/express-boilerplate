@@ -68,7 +68,13 @@ function refundAlert(subscriptionId: string, refund: ProviderRefundOutcome): { a
       return { alert: BILLING_ALERT_TEXT.duplicateNothingPaid(subscriptionId) }
     }
     case 'partly_refunded': {
-      return { alert: BILLING_ALERT_TEXT.duplicatePartlyRefunded(subscriptionId) }
+      return {
+        alert: BILLING_ALERT_TEXT.duplicatePartlyRefunded(
+          subscriptionId,
+          refund.amountMinor,
+          refund.refundedMinor
+        ),
+      }
     }
     case 'already_refunded': {
       return {}

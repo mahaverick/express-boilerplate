@@ -867,12 +867,12 @@ const ALERTS: Record<BillingAlertTextKey, string> = {
   duplicateRefundFailed: BILLING_ALERT_TEXT.duplicateRefundFailed('sub_Q1'),
   duplicateRefunded: BILLING_ALERT_TEXT.duplicateRefunded('sub_Q1', 14_999_950, 'rfnd_R1'),
   duplicateNothingPaid: BILLING_ALERT_TEXT.duplicateNothingPaid('sub_Q1'),
-  duplicatePartlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_Q1'),
+  duplicatePartlyRefunded: BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_Q1', 99_900, 49_900),
   archivedCancelFailed: BILLING_ALERT_TEXT.archivedCancelFailed('sub_Q1'),
   archivedRefundFailed: BILLING_ALERT_TEXT.archivedRefundFailed('sub_Q1'),
   archivedRefunded: BILLING_ALERT_TEXT.archivedRefunded('sub_Q1', 99_900, 'rfnd_R1'),
   archivedNothingPaid: BILLING_ALERT_TEXT.archivedNothingPaid('sub_Q1'),
-  archivedPartlyRefunded: BILLING_ALERT_TEXT.archivedPartlyRefunded('sub_Q1'),
+  archivedPartlyRefunded: BILLING_ALERT_TEXT.archivedPartlyRefunded('sub_Q1', 99_900, 49_900),
   subscriptionCompleted: BILLING_ALERT_TEXT.subscriptionCompleted('sub_Q1'),
   lateSwitchRefunded: BILLING_ALERT_TEXT.lateSwitchRefunded('sub_Q2', 'sub_Q1'),
   activeWithoutPeriodEnd: BILLING_ALERT_TEXT.activeWithoutPeriodEnd('sub_Q1'),
@@ -914,6 +914,18 @@ const ALERT_VARIANTS: ReadonlyArray<[string, string]> = [
   [
     'switchCancelNotRecorded (no cycle end)',
     BILLING_ALERT_TEXT.switchCancelNotRecorded('sub_Q1', null),
+  ],
+  [
+    'duplicatePartlyRefunded (no refunded amount)',
+    BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_Q1', 99_900, null),
+  ],
+  [
+    'duplicatePartlyRefunded (no amount paid)',
+    BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_Q1', null, 49_900),
+  ],
+  [
+    'archivedPartlyRefunded (no amounts)',
+    BILLING_ALERT_TEXT.archivedPartlyRefunded('sub_Q1', null, null),
   ],
   [
     'taxInvoiceLate (one)',

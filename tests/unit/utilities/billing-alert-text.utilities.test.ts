@@ -16,6 +16,45 @@ describe('BILLING_ALERT_TEXT', () => {
     )
   })
 
+  it('states the paid, refunded and remaining amounts of a partial refund', () => {
+    expect(BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_X', 99_900, 49_900)).toBe(
+      'Duplicate subscription sub_X is only partly refunded: ₹499 of ₹999 refunded. Refund the remaining ₹500 in Razorpay.'
+    )
+    expect(BILLING_ALERT_TEXT.archivedPartlyRefunded('sub_X', 14_999_950, 10_000)).toBe(
+      'Subscription sub_X, which an archived workspace adopted, is only partly refunded: ₹100 of ₹1,49,999.50 refunded. Refund the remaining ₹1,49,899.50 in Razorpay.'
+    )
+  })
+
+  it('says which amount Razorpay did not report, rather than printing ₹0', () => {
+    expect(BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_X', 99_900, null)).toBe(
+      'Duplicate subscription sub_X is only partly refunded, and Razorpay did not report how much of its ₹999 payment. Refund the rest in Razorpay.'
+    )
+    expect(BILLING_ALERT_TEXT.duplicatePartlyRefunded('sub_X', null, 49_900)).toBe(
+      'Duplicate subscription sub_X is only partly refunded: ₹499 refunded, and Razorpay did not report the amount paid. Refund the rest in Razorpay.'
+    )
+    expect(BILLING_ALERT_TEXT.archivedPartlyRefunded('sub_X', null, null)).toBe(
+      'Subscription sub_X, which an archived workspace adopted, is only partly refunded, and Razorpay did not report how much. Refund the rest in Razorpay.'
+    )
+  })
+
+  it('keeps every partial-refund alert under 30 words', () => {
+    const sub = 'sub_ABCDEFGHIJKLMN'
+    const amounts: ReadonlyArray<[number | null, number | null]> = [
+      [14_999_950, 10_000],
+      [14_999_950, null],
+      [null, 10_000],
+      [null, null],
+    ]
+    for (const [paid, refunded] of amounts) {
+      for (const text of [
+        BILLING_ALERT_TEXT.duplicatePartlyRefunded(sub, paid, refunded),
+        BILLING_ALERT_TEXT.archivedPartlyRefunded(sub, paid, refunded),
+      ]) {
+        expect(text.split(/\s+/).length, text).toBeLessThan(30)
+      }
+    }
+  })
+
   it('keeps the failed-cancel marker in every alert for a cancel that left a subscription running', () => {
     const marker = cancelFailedMarker('sub_X')
     for (const text of [
@@ -93,6 +132,9 @@ describe('BILLING_ALERT_TEXT', () => {
       BILLING_ALERT_TEXT.webhookFailed('evt_ABCDEFGHIJKLMN', 'subscription.authenticated', 31),
       BILLING_ALERT_TEXT.taxHeldSez(pay, 14_999_950),
       BILLING_ALERT_TEXT.taxHeldSezRefunded(pay, 14_999_950, 'rfnd_ABCDEFGHIJKLMN'),
+      BILLING_ALERT_TEXT.archivedPartlyRefunded(sub, 14_999_950, 14_999_949),
+      BILLING_ALERT_TEXT.archivedPartlyRefunded(sub, null, 14_999_950),
+      BILLING_ALERT_TEXT.archivedPartlyRefunded(sub, 14_999_950, null),
     ]
     for (const text of texts) expect(text.length, text).toBeLessThanOrEqual(280)
   })
