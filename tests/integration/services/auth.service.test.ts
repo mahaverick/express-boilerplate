@@ -50,7 +50,7 @@ describe('platformRoleForLogin', () => {
       'findPlatformRole',
       failingQuery,
       async () => {
-        ;({ platformRole } = await verifySignInLink(token))
+        ;({ platformRole } = await verifySignInLink(token, email))
       }
     )
 

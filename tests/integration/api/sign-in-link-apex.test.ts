@@ -397,7 +397,6 @@ describe('POST /auth/link/request on Apex', () => {
     const email = uniqueEmail('after-join')
     const { invitationId, rawToken } = await staffInvitationFor(email, 2 * HOUR_MS)
     const outcome = await verifyInvitation(rawToken)
-    if (outcome.kind !== 'confirm') throw new Error('a staff invitation always confirms by email')
     await outcome.followUp()
 
     await requestSignInLink({ email, app: 'apex' })()
@@ -416,7 +415,6 @@ describe('POST /auth/link/request on Apex', () => {
     await requestSignInLink({ email, app: 'apex' })()
 
     const outcome = await verifyInvitation(rawToken)
-    if (outcome.kind !== 'confirm') throw new Error('a staff invitation always confirms by email')
     await outcome.followUp()
 
     expect(await messageCount(email, 'invitation_confirm')).toBe(1)
@@ -506,7 +504,7 @@ describe('POST /auth/link/verify on Apex', () => {
     const email = uniqueEmail('apex-new')
     const token = await issueTestLink(email, 'apex')
 
-    const response = await postVerify({ token })
+    const response = await postVerify({ token, email })
 
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({ code: LINK_INVALID_CODE })
@@ -519,12 +517,16 @@ describe('POST /auth/link/verify on Apex', () => {
     const customer = await createTrackedUser({ email: uniqueEmail('customer-apex') })
 
     const webToken = await issueTestLink(staff.email, 'web')
-    const staffResponse = await postVerify({ token: webToken, app: 'apex' })
+    const staffResponse = await postVerify({ token: webToken, email: staff.email, app: 'apex' })
     expect(staffResponse.status).toBe(200)
     expect((staffResponse.body as { data: { user: { id: string } } }).data.user.id).toBe(staff.id)
 
     const apexToken = await issueTestLink(customer.email, 'apex')
-    const customerResponse = await postVerify({ token: apexToken, app: 'web' })
+    const customerResponse = await postVerify({
+      token: apexToken,
+      email: customer.email,
+      app: 'web',
+    })
     expect(customerResponse.status).toBe(400)
     expect(customerResponse.body).toMatchObject({ code: LINK_INVALID_CODE })
     const [refresh] = await sql<{ count: number }[]>`
@@ -540,7 +542,7 @@ describe('POST /auth/link/verify on Apex', () => {
     const platform = await platformTenant()
     await sql`delete from user_memberships where user_id = ${user.id} and tenant_id = ${platform.id}`
 
-    const response = await postVerify({ token })
+    const response = await postVerify({ token, email: user.email })
 
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({ code: LINK_INVALID_CODE })
@@ -555,7 +557,7 @@ describe('POST /auth/link/verify on Apex', () => {
     const { user } = await createTrackedStaff('admin', { email: uniqueEmail('staff-apex') })
     const token = await issueTestLink(user.email, 'apex')
 
-    const response = await postVerify({ token })
+    const response = await postVerify({ token, email: user.email })
 
     expect(response.status).toBe(200)
     expect(

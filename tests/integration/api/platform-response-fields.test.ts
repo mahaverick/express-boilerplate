@@ -77,7 +77,7 @@ function keysOf(value: unknown): string[] {
 async function login(email: string): Promise<Response> {
   return request(app)
     .post('/api/v1/auth/link/verify')
-    .send({ token: await issueTestLink(email) })
+    .send({ token: await issueTestLink(email), email })
 }
 
 describe('platform response fields', () => {

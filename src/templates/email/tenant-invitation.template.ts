@@ -1,7 +1,7 @@
 /**
  * @file The "you've been invited to join a team" message, with one button,
- * "Join <Tenant>": one click signs the invitee in and joins them, creating
- * their account when the address has none. The accept link carries the raw
+ * "Join <Tenant>": the click mails the invitee a confirm link, whose own click
+ * signs them in and joins them. The accept link carries the raw
  * invitation token, so it never appears in the subject; tenant
  * and inviter names are user-chosen text, so they stay out of it too.
  */

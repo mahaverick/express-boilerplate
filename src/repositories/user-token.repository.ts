@@ -546,19 +546,49 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     userId: string,
     sessionId: string,
     startedAfter: Date,
-    executor: DbExecutor = db
+    executor: DbExecutor = db,
+    presentedTokenHash?: string
   ): Promise<Date | undefined> {
     const authenticatedAt = new Date()
     const session = sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.purpose} = 'refresh'`
+    const presented =
+      presentedTokenHash === undefined
+        ? undefined
+        : await this.findLiveRowId(presentedTokenHash, session, executor)
+    const rows =
+      presented === undefined
+        ? session
+        : sql`${session} and (${userTokenModel.id} = ${presented} or ${userTokenModel.replacedById} = ${presented})`
     // Raw table name in the EXISTS: an uncorrelated InitPlan, so the plan keeps one LockRows node.
     const liveTokenExists = sql`exists (select 1 from user_tokens live where live.user_id = ${userId} and live.session_id = ${sessionId} and live.purpose = 'refresh' and live.revoked_at is null and live.deleted_at is null and live.expires_at > now() and live.session_started_at > ${startedAfter.toISOString()}::timestamptz)`
-    const locked = this.lockedIds(this.scope(session), executor)
+    const locked = this.lockedIds(this.scope(rows), executor)
     const updated = await executor
       .update(userTokenModel)
       .set(this.touched({ authenticatedAt }))
       .where(and(inArray(userTokenModel.id, locked), liveTokenExists))
       .returning({ id: userTokenModel.id })
     return updated.length > 0 ? authenticatedAt : undefined
+  }
+
+  /**
+   * The live refresh row a token hashes to, within a session.
+   * @param tokenHash - The token's hash.
+   * @param session - The condition naming the session's refresh rows.
+   * @param executor - Where to run the query.
+   * @returns The row's id, or undefined when no live row in the session matches.
+   */
+  private async findLiveRowId(
+    tokenHash: string,
+    session: SQL,
+    executor: DbExecutor
+  ): Promise<string | undefined> {
+    const [row] = await executor
+      .select({ id: userTokenModel.id })
+      .from(userTokenModel)
+      .where(
+        sql`${session} and ${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.revokedAt} is null and ${userTokenModel.deletedAt} is null and ${userTokenModel.expiresAt} > now()`
+      )
+    return row?.id
   }
 
   /**

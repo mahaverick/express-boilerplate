@@ -1,11 +1,9 @@
 /**
  * @file `POST /api/v1/invitations/verify`: one click on an invitation link.
- * A customer invitation to an address with no account signs the invitee in
- * and joins them in that click, creating a verified account. Any other
- * click (an address that has an account, or any staff invitation) answers
- * `202` "Check your inbox", spends nothing, sets no cookie, and mails a
- * 15-minute confirm link after the reply. Every dead link answers the
- * generic `invitation_invalid`. No Worker runs; the file reads rows and
+ * Every valid click, for a new address, an existing account or a staff
+ * invitation, answers `202` "Check your inbox", spends nothing, sets no
+ * cookie, and mails a 15-minute confirm link after the reply. Every dead link
+ * answers the generic `invitation_invalid`. No Worker runs; the file reads rows and
  * queued jobs straight from the database and the queue.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -23,7 +21,6 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
-import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { addressDigest } from '@/services/mail-cooldown.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
@@ -33,7 +30,6 @@ import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import { requestSignInLink } from '@/services/sign-in-link.service'
 import { verifyInvitation } from '@/services/tenant-invitation.service'
 import { INVITATION_CONFIRM_TEMPLATE_KEY } from '@/templates/email/invitation-confirm.template'
-import type { DomainEvent } from '@/types/domain-event'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deferred } from '../../helpers/lock-probe'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
@@ -81,21 +77,6 @@ const usedEmails: string[] = []
  * Every tenant this file created, for `afterEach` to delete.
  */
 const createdTenantIds: string[] = []
-
-/**
- * Every domain event emitted while this file runs, in order.
- */
-const emitted: DomainEvent[] = []
-for (const type of [
-  'user_signed_up',
-  'user_signed_in',
-  'email_verified',
-  'invitation_accepted',
-] as const) {
-  subscribeDomainEvent(type, (event) => {
-    emitted.push(event)
-  })
-}
 
 afterAll(async () => {
   await getEmailQueue().obliterate({ force: true })
@@ -187,23 +168,13 @@ function postVerify(token: string, cookie?: string): Promise<Response> {
 }
 
 /**
- * The `data` of a verify that answered 200.
+ * Read the raw token off a queued confirm mail.
+ * @param job - The queued mail.
+ * @returns The link's token.
  */
-interface VerifyData {
-  user: { id: string; email: string; platformRole: string | null }
-  accessToken: string
-  isNewUser: boolean
-  tenant: { name: string; slug: string }
-  role: MembershipRole
-}
-
-/**
- * Read a 200 verify's data.
- * @param response - The response.
- * @returns Its `data`.
- */
-function verifyData(response: Response): VerifyData {
-  return (response.body as { data: VerifyData }).data
+function tokenOfConfirmMail(job: EmailJobData): string | null {
+  if (job.templateKey !== INVITATION_CONFIRM_TEMPLATE_KEY) throw new Error('wrong template')
+  return new URL(job.variables.confirmUrl).searchParams.get('token')
 }
 
 /**
@@ -310,12 +281,12 @@ async function waitForConfirmJob(email: string): Promise<EmailJobData> {
  * Run a verify at the service level and await its follow-up, for tests of
  * what the follow-up mails or skips.
  * @param rawToken - The raw invitation token.
- * @returns The outcome's kind.
+ * @returns The address the confirm link goes to.
  */
 async function verifyAndFollowUp(rawToken: string): Promise<string> {
   const outcome = await verifyInvitation(rawToken)
-  if (outcome.kind === 'confirm') await outcome.followUp()
-  return outcome.kind
+  await outcome.followUp()
+  return outcome.email
 }
 
 /**
@@ -338,15 +309,6 @@ async function clearConfirmCooldowns(): Promise<void> {
   const batches = redis.scanIterator({ MATCH: `${redisKey('invitation-confirm')}:*` })
   for await (const batch of batches) keys.push(...batch)
   if (keys.length > 0) await redis.del(keys)
-}
-
-/**
- * The events emitted for one user.
- * @param userId - The user.
- * @returns The events, in emit order.
- */
-function eventsFor(userId: string): DomainEvent[] {
-  return emitted.filter((event) => 'userId' in event && event.userId === userId)
 }
 
 /**
@@ -382,96 +344,34 @@ afterEach(async () => {
 })
 
 describe('POST /api/v1/invitations/verify', () => {
-  it('creates a verified account, joins with the invited role and signs in', async () => {
+  it('mails a confirm link for a customer invitation to a new address, and creates no account', async () => {
     const email = uniqueEmail('new')
-    const { tenant, rawToken, invitationId } = await customerInvitation(email, 'manager')
+    const { rawToken, invitationId } = await customerInvitation(email, 'manager')
 
     const response = await postVerify(rawToken)
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(202)
     expect(response.headers['cache-control']).toBe('no-store')
-    expect((response.body as { message: string }).message).toBe('Invitation accepted.')
-    const data = verifyData(response)
-    expect(data.isNewUser).toBe(true)
-    expect(data.tenant).toStrictEqual({ name: 'Acme Inc', slug: tenant.slug })
-    expect(data.role).toBe('manager')
-    expect(data.user.email).toBe(email)
-    expect(data.user.platformRole).toBeNull()
-    expect(data.accessToken).toEqual(expect.any(String))
-    expect(hasRefreshCookie(response)).toBe(true)
-
-    const created = await userRepository.findByEmail(email)
-    expect(created?.id).toBe(data.user.id)
-    expect(created?.emailVerifiedAt).toBeInstanceOf(Date)
-    expect(created?.lastLoggedInAt).toBeInstanceOf(Date)
-    const membership = await userMembershipRepository.findByUserAndTenant(data.user.id, tenant.id)
-    expect(membership?.role).toBe('manager')
-    expect(await refreshRows(data.user.id)).toEqual([{ revoked: false }])
-    const [invitation] = await sql<{ acceptedBy: string | null }[]>`
-      select accepted_by as "acceptedBy" from tenant_invitations where id = ${invitationId}
-    `
-    expect(invitation?.acceptedBy).toBe(data.user.id)
-    const audits = await sql<{ actorId: string; targetId: string; metadata: unknown }[]>`
-      select actor_user_id as "actorId", target_id as "targetId", metadata from audit_logs
-      where action = 'invitation.accepted' and tenant_id = ${tenant.id}
-    `
-    expect(audits).toEqual([
-      {
-        actorId: data.user.id,
-        targetId: membership?.id,
-        metadata: { role: 'manager', invitationId },
-      },
+    expect(response.body).toMatchObject({ data: { confirmationSent: true, email } })
+    expect(hasRefreshCookie(response)).toBe(false)
+    const job = await waitForConfirmJob(email)
+    expect(job.userId).toBe('')
+    expect(await userCount(email)).toBe(0)
+    expect(await isPending(invitationId)).toBe(true)
+    expect(await confirmLinks(email)).toEqual([
+      { userId: null, app: 'web', invitationId, revoked: false },
     ])
-    expect(eventsFor(data.user.id).map((event) => event.type)).toEqual(
-      expect.arrayContaining([
-        'email_verified',
-        'invitation_accepted',
-        'user_signed_up',
-        'user_signed_in',
-      ])
-    )
-    expect(eventsFor(data.user.id)).toContainEqual(
-      expect.objectContaining({ type: 'user_signed_up', method: 'link' })
-    )
-    expect(eventsFor(data.user.id)).toContainEqual(
-      expect.objectContaining({
-        type: 'invitation_accepted',
-        tenantId: tenant.id,
-        role: 'manager',
-        wasFirstMember: false,
-      })
-    )
-    expect(await confirmLinks(email)).toEqual([])
   })
 
-  it('issues a one-click session that does not count as a recent sign-in', async () => {
-    const email = uniqueEmail('stale')
-    const { rawToken } = await customerInvitation(email)
-
-    const response = await postVerify(rawToken)
-    expect(response.status).toBe(200)
-    const data = verifyData(response)
-
-    const [row] = await sql<{ authenticated: boolean }[]>`
-      select authenticated_at is not null as authenticated from user_tokens
-      where user_id = ${data.user.id} and purpose = 'refresh'
-    `
-    expect(row?.authenticated).toBe(false)
-    const [, payload] = data.accessToken.split('.', 2)
-    const claims = JSON.parse(Buffer.from(payload ?? '', 'base64url').toString()) as object
-    expect(claims).not.toHaveProperty('auth_time')
-  })
-
-  it('joins in one click for an address whose only account was deleted', async () => {
+  it('mails a confirm link for an address whose only account was deleted', async () => {
     const gone = await createTrackedUser({ email: uniqueEmail('soft-deleted') })
     await sql`update users set deleted_at = now() where id = ${gone.id}`
     const { rawToken } = await customerInvitation(gone.email)
 
     const response = await postVerify(rawToken)
 
-    expect(response.status).toBe(200)
-    expect(verifyData(response).isNewUser).toBe(true)
-    expect(verifyData(response).user.id).not.toBe(gone.id)
+    expect(response.status).toBe(202)
+    expect(hasRefreshCookie(response)).toBe(false)
   })
 
   it('mails a confirm link instead of signing in an existing verified account', async () => {
@@ -530,7 +430,7 @@ describe('POST /api/v1/invitations/verify', () => {
       .post('/api/v1/invitations/confirm')
       .send({ token: link.searchParams.get('token'), email: link.searchParams.get('email') })
     expect(confirmed.status).toBe(200)
-    expect(verifyData(confirmed).user.id).toBe(invitee.id)
+    expect((confirmed.body as { data: { user: { id: string } } }).data.user.id).toBe(invitee.id)
     expect(await isPending(invitationId)).toBe(false)
   })
 
@@ -601,7 +501,7 @@ describe('POST /api/v1/invitations/verify', () => {
     const first = await postVerify(rawToken)
     await waitForConfirmJob(invitee.email)
     const second = await postVerify(rawToken)
-    expect(await verifyAndFollowUp(rawToken)).toBe('confirm')
+    expect(await verifyAndFollowUp(rawToken)).toBe(invitee.email)
 
     expect(first.status).toBe(202)
     expect(second.status).toBe(202)
@@ -615,7 +515,7 @@ describe('POST /api/v1/invitations/verify', () => {
     const { rawToken } = await customerInvitation(invitee.email)
     await requestSignInLink({ email: invitee.email, app: 'web' })()
 
-    expect(await verifyAndFollowUp(rawToken)).toBe('confirm')
+    expect(await verifyAndFollowUp(rawToken)).toBe(invitee.email)
 
     expect(await confirmLinks(invitee.email)).toHaveLength(1)
     expect(await confirmJobs(invitee.email)).toHaveLength(1)
@@ -626,9 +526,7 @@ describe('POST /api/v1/invitations/verify', () => {
     const { rawToken } = await customerInvitation(invitee.email)
     vi.mocked(spendSignInLinkBudget).mockResolvedValueOnce('exhausted')
 
-    const outcome = await verifyInvitation(rawToken)
-    if (outcome.kind !== 'confirm') throw new Error('expected the confirm branch')
-    await outcome.followUp()
+    await verifyAndFollowUp(rawToken)
 
     expect(vi.mocked(spendSignInLinkBudget)).toHaveBeenCalledWith(invitee.email)
     expect(await confirmLinks(invitee.email)).toEqual([])
@@ -654,8 +552,8 @@ describe('POST /api/v1/invitations/verify', () => {
     const second = await customerInvitation(invitee.email)
 
     // Join on B a moment after Join on A: inside A's cooldown.
-    expect(await verifyAndFollowUp(first.rawToken)).toBe('confirm')
-    expect(await verifyAndFollowUp(second.rawToken)).toBe('confirm')
+    expect(await verifyAndFollowUp(first.rawToken)).toBe(invitee.email)
+    expect(await verifyAndFollowUp(second.rawToken)).toBe(invitee.email)
 
     const jobs = await confirmJobs(invitee.email)
     expect(jobs).toHaveLength(2)
@@ -664,12 +562,11 @@ describe('POST /api/v1/invitations/verify', () => {
       [first.invitationId, false],
       [second.invitationId, false],
     ])
-    const tokens = jobs.map((job) => {
-      if (job.templateKey !== INVITATION_CONFIRM_TEMPLATE_KEY) throw new Error('wrong template')
-      return new URL(job.variables.confirmUrl).searchParams.get('token')
-    })
+    const tokens = jobs.map((job) => tokenOfConfirmMail(job))
     for (const token of tokens) {
-      const confirmed = await request(app).post('/api/v1/invitations/confirm').send({ token })
+      const confirmed = await request(app)
+        .post('/api/v1/invitations/confirm')
+        .send({ token, email: invitee.email })
       expect(confirmed.status).toBe(200)
     }
     for (const { tenant } of [first, second]) {
@@ -750,9 +647,13 @@ describe('POST /api/v1/invitations/verify', () => {
   it('answers invitation_invalid for a used link, even for the invitee, and issues no session', async () => {
     const email = uniqueEmail('used')
     const { rawToken } = await customerInvitation(email)
-    const first = await postVerify(rawToken)
+    expect(await verifyAndFollowUp(rawToken)).toBe(email)
+    const job = await waitForConfirmJob(email)
+    const first = await request(app)
+      .post('/api/v1/invitations/confirm')
+      .send({ token: tokenOfConfirmMail(job), email })
     expect(first.status).toBe(200)
-    const inviteeId = verifyData(first).user.id
+    const inviteeId = (first.body as { data: { user: { id: string } } }).data.user.id
     const firstCookie = ((first.headers['set-cookie'] as unknown as string[] | undefined) ?? [])
       .map((line) => line.split(';', 1)[0] ?? '')
       .find((pair) => pair.startsWith(`${REFRESH_COOKIE_NAME}=`))
@@ -810,10 +711,9 @@ describe('POST /api/v1/invitations/verify', () => {
     }
   })
 
-  it('revokes the session the browser presented on a one-click join', async () => {
+  it('leaves the session the browser presented alone', async () => {
     const signedIn = await signInByLink(uniqueEmail('someone-else'))
-    const email = uniqueEmail('presented')
-    const { tenant, rawToken } = await customerInvitation(email)
+    const { rawToken } = await customerInvitation(uniqueEmail('presented'))
 
     const response = await request(app)
       .post('/api/v1/invitations/verify')
@@ -821,14 +721,8 @@ describe('POST /api/v1/invitations/verify', () => {
       .set('Authorization', `Bearer ${signedIn.accessToken}`)
       .send({ token: rawToken })
 
-    expect(response.status).toBe(200)
-    const data = verifyData(response)
-    expect(data.user.email).toBe(email)
-    expect(await refreshRows(signedIn.userId)).toEqual([{ revoked: true }])
-    expect(await refreshRows(data.user.id)).toEqual([{ revoked: false }])
-    expect(
-      await userMembershipRepository.findByUserAndTenant(signedIn.userId, tenant.id)
-    ).toBeUndefined()
+    expect(response.status).toBe(202)
+    expect(await refreshRows(signedIn.userId)).toEqual([{ revoked: false }])
   })
 
   it('refuses a disallowed Origin', async () => {

@@ -133,9 +133,10 @@ export const userTokenModel = pgTable(
     /**
      * When the session last proved who its user is. Set with
      * `sessionStartedAt` when the session starts, copied forward by every
-     * rotation, and moved to now on every row of the session by
+     * rotation, and moved to now on the presented chain by
      * `markSessionReauthenticated` (session.service.ts), so a rotation or a
-     * grace-window sibling minted from any row carries the new time. Signed
+     * sibling minted from the row it replaced carries the new time, and a
+     * sibling already minted does not. Signed
      * into access tokens as `auth_time` for `requireRecentAuth`
      * (auth.middleware.ts). Null outside `'refresh'`. Null on a refresh row
      * leaves the claim out, which step-up routes treat as stale.

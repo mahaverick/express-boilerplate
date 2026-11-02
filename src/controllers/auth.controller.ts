@@ -298,7 +298,8 @@ class AuthController extends BaseController {
     const result = await confirmStepUpLink(
       authenticatedUserId(request),
       request.sessionId,
-      input.token
+      input.token,
+      readRefreshTokenCookie(request)
     )
 
     successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')

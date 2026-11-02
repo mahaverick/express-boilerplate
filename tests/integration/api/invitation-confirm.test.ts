@@ -1,7 +1,6 @@
 /**
- * @file `POST /api/v1/invitations/confirm`: the emailed link an existing
- * account or a staff invitee gets instead of the one-click join. Its click
- * signs the invitee in, counted as a recent sign-in, and joins them. Every
+ * @file `POST /api/v1/invitations/confirm`: the emailed link every invitee
+ * gets after clicking their invitation. Its click signs the invitee in, counted as a recent sign-in, and joins them. Every
  * refusal (a dead or mismatched link, a dead invitation, a deactivated
  * account) answers one `404 invitation_invalid` and spends nothing. The
  * links are minted straight through `issueLinkToken`, as the verify's
@@ -22,6 +21,7 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { issueLinkToken } from '@/services/link-token.service'
@@ -44,6 +44,7 @@ import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 import { clearRateLimiter, signInByLink } from '../../helpers/sign-in'
 
+const userRepository = new UserRepository()
 const app = createApp()
 const authProviderRepository = new AuthProviderRepository()
 const invitationRepository = new TenantInvitationRepository()
@@ -391,6 +392,42 @@ describe('POST /api/v1/invitations/confirm', () => {
     expect(stepUp.status).toBe(200)
   })
 
+  it('creates a customer account for a new address, joins it and signs it in as a recent sign-in', async () => {
+    const email = uniqueEmail('new-customer')
+    const { tenant, invitationId, raw } = await invitedWithLink(email, 'manager')
+
+    const response = await postConfirm({ token: raw, email })
+
+    expect(response.status).toBe(200)
+    const data = confirmData(response)
+    expect(data.isNewUser).toBe(true)
+    expect(data.role).toBe('manager')
+    expect(data.tenant.slug).toBe(tenant.slug)
+    const created = await userRepository.findByEmail(email)
+    expect(created?.emailVerifiedAt).toBeInstanceOf(Date)
+    const [row] = await sql<{ accepted: boolean }[]>`
+      select accepted_at is not null as accepted from tenant_invitations where id = ${invitationId}
+    `
+    expect(row?.accepted).toBe(true)
+    const [, payload] = data.accessToken.split('.', 2)
+    const claims = JSON.parse(Buffer.from(payload ?? '', 'base64url').toString()) as object
+    expect(claims).toHaveProperty('auth_time')
+  })
+
+  it('refuses a link posted with no email, spends nothing, and the email then joins', async () => {
+    const email = uniqueEmail('stripped')
+    const { raw } = await invitedWithLink(email)
+    const dead = await postConfirm({ token: randomBytes(32).toString('base64url'), email })
+
+    const refused = await postConfirm({ token: raw })
+
+    expect(refused.status).toBe(404)
+    expect(refusalBody(refused)).toStrictEqual(refusalBody(dead))
+    expect(await userRepository.findByEmail(email)).toBeUndefined()
+    const joined = await postConfirm({ token: raw, email })
+    expect(joined.status).toBe(200)
+  })
+
   it('creates the staff account, makes it staff and signs it in', async () => {
     const platform = await platformTenant()
     const inviter = await createTrackedUser()
@@ -428,7 +465,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     const invitationId = await seedInvitation(platform, inviter, invitee.email, 'viewer')
     const raw = await issueConfirmLink(invitee.email, invitationId, 'apex')
 
-    const response = await postConfirm({ token: raw })
+    const response = await postConfirm({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(200)
     const data = confirmData(response)
@@ -484,7 +521,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       role: 'admin',
     })
 
-    const response = await postConfirm({ token: raw })
+    const response = await postConfirm({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(200)
     expect(confirmData(response).role).toBe('admin')
@@ -494,10 +531,10 @@ describe('POST /api/v1/invitations/confirm', () => {
   it('refuses a reused link with invitation_invalid and no session', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('reused') })
     const { raw } = await invitedWithLink(invitee.email)
-    const first = await postConfirm({ token: raw })
+    const first = await postConfirm({ token: raw, email: invitee.email })
     expect(first.status).toBe(200)
 
-    const second = await postConfirm({ token: raw })
+    const second = await postConfirm({ token: raw, email: invitee.email })
 
     expect(second.status).toBe(404)
     expect(second.body).toMatchObject(INVALID)
@@ -513,7 +550,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       where token_hash = ${hashToken(raw)}
     `
 
-    const response = await postConfirm({ token: raw })
+    const response = await postConfirm({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(404)
     expect(response.body).toMatchObject(INVALID)
@@ -539,7 +576,10 @@ describe('POST /api/v1/invitations/confirm', () => {
   it('refuses a link whose email names another address, spends nothing, and the right email then joins', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('bound') })
     const { invitationId, raw } = await invitedWithLink(invitee.email)
-    const dead = await postConfirm({ token: randomBytes(32).toString('base64url') })
+    const dead = await postConfirm({
+      token: randomBytes(32).toString('base64url'),
+      email: invitee.email,
+    })
 
     const mismatched = await postConfirm({ token: raw, email: 'someone-else@example.test' })
 
@@ -602,25 +642,27 @@ describe('POST /api/v1/invitations/confirm', () => {
         },
       },
     ]
-    const suspended: { tenant?: Tenant; raw?: string; inviteeId?: string } = {}
+    const suspended: { tenant?: Tenant; raw?: string; email?: string; inviteeId?: string } = {}
 
     for (const { label, kill } of cases) {
       const invitee = await createTrackedUser({ email: uniqueEmail(label) })
       const { tenant, invitationId, raw } = await invitedWithLink(invitee.email)
       await kill(tenant, invitationId)
 
-      const response = await postConfirm({ token: raw })
+      const response = await postConfirm({ token: raw, email: invitee.email })
 
       expect(response.status).toBe(404)
       expect(response.body).toMatchObject(INVALID)
       expect(hasRefreshCookie(response)).toBe(false)
       expect(await isUnspent(raw)).toBe(true)
       expect(await refreshRows(invitee.id)).toEqual([])
-      if (label === 'suspended') Object.assign(suspended, { tenant, raw, inviteeId: invitee.id })
+      if (label === 'suspended') {
+        Object.assign(suspended, { tenant, raw, email: invitee.email, inviteeId: invitee.id })
+      }
     }
 
     await sql`update tenants set lifecycle_state = 'active' where id = ${suspended.tenant?.id ?? ''}`
-    const joined = await postConfirm({ token: suspended.raw })
+    const joined = await postConfirm({ token: suspended.raw, email: suspended.email })
     expect(joined.status).toBe(200)
     expect(confirmData(joined).user.id).toBe(suspended.inviteeId)
   })
@@ -636,7 +678,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       where id = ${invitationId}
     `
 
-    const response = await postConfirm({ token: raw })
+    const response = await postConfirm({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(200)
     expect(await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)).toBeDefined()
@@ -646,7 +688,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('deactivated'), active: false })
     const { invitationId, raw } = await invitedWithLink(invitee.email)
 
-    const response = await postConfirm({ token: raw })
+    const response = await postConfirm({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(404)
     expect(response.body).toMatchObject(INVALID)
@@ -661,7 +703,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('presented') })
     const { raw } = await invitedWithLink(invitee.email)
 
-    const response = await postConfirm({ token: raw }, earlier.refreshCookie)
+    const response = await postConfirm({ token: raw, email: invitee.email }, earlier.refreshCookie)
 
     expect(response.status).toBe(200)
     expect(confirmData(response).user.id).toBe(invitee.id)
@@ -675,9 +717,9 @@ describe('POST /api/v1/invitations/confirm', () => {
     const { invitationId, raw } = await invitedWithLink(invitee.email)
 
     await switchMode('read_only')
-    const readOnly = await postConfirm({ token: raw })
+    const readOnly = await postConfirm({ token: raw, email: invitee.email })
     await switchMode('full')
-    const full = await postConfirm({ token: raw })
+    const full = await postConfirm({ token: raw, email: invitee.email })
 
     expect(readOnly.status).toBe(503)
     expect(readOnly.body).toMatchObject({ code: READ_ONLY_MODE_CODE })
@@ -687,7 +729,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     expect(await isPending(invitationId)).toBe(true)
 
     await switchMode('off')
-    const joined = await postConfirm({ token: raw })
+    const joined = await postConfirm({ token: raw, email: invitee.email })
     expect(joined.status).toBe(200)
   })
 
@@ -718,7 +760,7 @@ describe('POST /api/v1/invitations/confirm', () => {
         'findValidById',
         switchingFind,
         async () => {
-          response = await postConfirm({ token: raw })
+          response = await postConfirm({ token: raw, email: invitee.email })
         }
       )
 
@@ -740,7 +782,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     const response = await request(app)
       .post('/api/v1/invitations/confirm')
       .set('Origin', 'https://evil.test')
-      .send({ token: raw })
+      .send({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(403)
     expect(response.body).toMatchObject({ code: 'ORIGIN_NOT_ALLOWED' })
@@ -788,7 +830,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       await sql`update users set active = true where id = ${invitee.id}`
 
       expect(await isUnspent(raw)).toBe(false)
-      const response = await postConfirm({ token: raw })
+      const response = await postConfirm({ token: raw, email: invitee.email })
       expect(response.status).toBe(404)
       expect(response.body).toMatchObject(INVALID)
     })
@@ -801,7 +843,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       await signOutUser({ userId: admin.id }, invitee.id, 'invitation link revocation test')
 
       expect(await isUnspent(raw)).toBe(false)
-      const refused = await postConfirm({ token: raw })
+      const refused = await postConfirm({ token: raw, email: invitee.email })
       expect(refused.status).toBe(404)
     })
 
@@ -814,7 +856,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       await revokeOtherSessions(invitee.id, sessionId)
 
       expect(await isUnspent(raw)).toBe(false)
-      const refused = await postConfirm({ token: raw })
+      const refused = await postConfirm({ token: raw, email: invitee.email })
       expect(refused.status).toBe(404)
     })
   })
@@ -846,7 +888,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     const earlier = await issueRefreshToken(invitee.id, sessionId)
     const { raw } = await invitedWithLink(invitee.email)
 
-    const confirmed = await postConfirm({ token: raw })
+    const confirmed = await postConfirm({ token: raw, email: invitee.email })
     expect(confirmed.status).toBe(200)
 
     const rotated = await request(app)
@@ -866,7 +908,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     const invitationId = await seedInvitation(platform, inviter, invitee.email, 'editor')
     const raw = await issueConfirmLink(invitee.email, invitationId, 'apex')
 
-    const response = await postConfirm({ token: raw })
+    const response = await postConfirm({ token: raw, email: invitee.email })
 
     expect(response.status).toBe(200)
     expect(confirmData(response).user.platformRole).toBe('editor')
@@ -883,8 +925,11 @@ describe('POST /api/v1/invitations/confirm', () => {
     const staffInvite = await seedInvitation(platform, owner, staffEmail)
     const staffRaw = await issueConfirmLink(staffEmail, staffInvite, 'web')
 
-    for (const token of [raw, staffRaw]) {
-      const response = await postConfirm({ token })
+    for (const [token, email] of [
+      [raw, invitee.email],
+      [staffRaw, staffEmail],
+    ] as const) {
+      const response = await postConfirm({ token, email })
       expect(response.status).toBe(404)
       expect(response.body).toMatchObject(INVALID)
       expect(await isUnspent(token)).toBe(true)

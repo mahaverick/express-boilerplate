@@ -110,7 +110,7 @@ beforeAll(async () => {
 
   const login = await request(app)
     .post('/api/v1/auth/link/verify')
-    .send({ token: await issueTestLink(email) })
+    .send({ token: await issueTestLink(email), email })
   expect(login.status).toBe(200)
   const { accessToken } = (login.body as { data: { accessToken: string } }).data
   const verified = verifyAccessToken(accessToken)

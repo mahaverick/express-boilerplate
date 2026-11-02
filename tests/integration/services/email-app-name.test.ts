@@ -104,7 +104,6 @@ async function seedInvitation(tenant: Tenant, inviter: User, email: string): Pro
  */
 async function verifyAndFollowUp(rawToken: string): Promise<void> {
   const outcome = await verifyInvitation(rawToken)
-  if (outcome.kind !== 'confirm') throw new Error('expected the confirm branch')
   await outcome.followUp()
 }
 

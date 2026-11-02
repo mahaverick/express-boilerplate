@@ -197,6 +197,16 @@ async function confirmLinkFor(email: string, invitationId: string): Promise<stri
 }
 
 /**
+ * Post a confirm carrying the address the link was issued to.
+ * @param link - The confirm link's raw token.
+ * @param email - The invited address.
+ * @returns The response.
+ */
+function postConfirm(link: string, email: string): Promise<Response> {
+  return request(app).post('/api/v1/invitations/confirm').send({ token: link, email })
+}
+
+/**
  * Move a workspace from Paid back to Free, as a lapse would.
  */
 async function downgrade(tenantId: string): Promise<void> {
@@ -352,15 +362,16 @@ describe('the members limit on joins', () => {
     expect(row?.accepted_at).toBeNull()
   })
 
-  it('refuses a one-click verify after a downgrade and creates no account', async () => {
+  it("refuses a new address's confirm after a downgrade and creates no account", async () => {
     const { tenant, owner } = await workspace()
     await putTenantOnPaid(tenant.id)
     await addViewers(tenant, 3)
     const email = freshEmail()
-    const { rawToken } = await seedInvitation(tenant, { email, invitedBy: owner.id })
+    const { invitationId } = await seedInvitation(tenant, { email, invitedBy: owner.id })
+    const link = await confirmLinkFor(email, invitationId)
     await downgrade(tenant.id)
 
-    const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+    const response = await postConfirm(link, email)
 
     expect(response.status).toBe(402)
     expect(response.body).toMatchObject(FULL)
@@ -380,7 +391,7 @@ describe('the members limit on joins', () => {
     const link = await confirmLinkFor(invitee.email, invitationId)
     await downgrade(tenant.id)
 
-    const response = await request(app).post('/api/v1/invitations/confirm').send({ token: link })
+    const response = await postConfirm(link, invitee.email)
 
     expect(response.status).toBe(402)
     expect(response.body).toMatchObject(FULL)
@@ -456,35 +467,45 @@ describe('who a full workspace still lets join', () => {
     const { invitee, invitationId } = await overLimitWithInvitation('owner')
     const link = await confirmLinkFor(invitee.email, invitationId)
 
-    const response = await request(app).post('/api/v1/invitations/confirm').send({ token: link })
+    const response = await postConfirm(link, invitee.email)
 
     expect(response.status).toBe(402)
     expect(response.body).toMatchObject(FULL)
     expect(response.body).not.toHaveProperty('details')
   })
 
-  it("refuses an owner's owner invitation to a new address at one-click verify when full", async () => {
+  it("refuses an owner's owner invitation to a new address at confirm when full", async () => {
     const { tenant, owner } = await workspace()
     await putTenantOnPaid(tenant.id)
     await addViewers(tenant, 4)
     const email = freshEmail()
-    const { rawToken } = await seedInvitation(tenant, { email, role: 'owner', invitedBy: owner.id })
+    const { invitationId } = await seedInvitation(tenant, {
+      email,
+      role: 'owner',
+      invitedBy: owner.id,
+    })
+    const link = await confirmLinkFor(email, invitationId)
     await downgrade(tenant.id)
 
-    const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+    const response = await postConfirm(link, email)
 
     expect(response.status).toBe(402)
     expect(response.body).toMatchObject(FULL)
     expect(response.body).not.toHaveProperty('details')
   })
 
-  it('lets a new address join an ownerless workspace at 3 of 3 as owner by one click', async () => {
+  it('lets a new address confirm into an ownerless workspace at 3 of 3 as owner', async () => {
     const tenant = await ownerlessWorkspace(3)
     const { user: staff } = await createTrackedStaff('admin')
     const email = freshEmail()
-    const { rawToken } = await seedInvitation(tenant, { email, role: 'owner', invitedBy: staff.id })
+    const { invitationId } = await seedInvitation(tenant, {
+      email,
+      role: 'owner',
+      invitedBy: staff.id,
+    })
+    const link = await confirmLinkFor(email, invitationId)
 
-    const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+    const response = await postConfirm(link, email)
 
     expect(response.status).toBe(200)
   })
@@ -500,7 +521,7 @@ describe('who a full workspace still lets join', () => {
     })
     const link = await confirmLinkFor(invitee.email, invitationId)
 
-    const response = await request(app).post('/api/v1/invitations/confirm').send({ token: link })
+    const response = await postConfirm(link, invitee.email)
 
     expect(response.status).toBe(200)
     const membership = await membershipRepository.findByUserAndTenant(invitee.id, tenant.id)
@@ -509,13 +530,18 @@ describe('who a full workspace still lets join', () => {
 })
 
 describe("a staff-made workspace's trial on its first owner's join", () => {
-  it('starts when a new address joins as owner by one click', async () => {
+  it('starts when a new address confirms as owner', async () => {
     const tenant = await ownerlessWorkspace()
     const { user: staff } = await createTrackedStaff('admin')
     const email = freshEmail()
-    const { rawToken } = await seedInvitation(tenant, { email, role: 'owner', invitedBy: staff.id })
+    const { invitationId } = await seedInvitation(tenant, {
+      email,
+      role: 'owner',
+      invitedBy: staff.id,
+    })
+    const link = await confirmLinkFor(email, invitationId)
 
-    const response = await request(app).post('/api/v1/invitations/verify').send({ token: rawToken })
+    const response = await postConfirm(link, email)
 
     expect(response.status).toBe(200)
     expect(await storedState(tenant.id)).toBe('trialing')
@@ -532,7 +558,7 @@ describe("a staff-made workspace's trial on its first owner's join", () => {
     })
     const link = await confirmLinkFor(invitee.email, invitationId)
 
-    const response = await request(app).post('/api/v1/invitations/confirm').send({ token: link })
+    const response = await postConfirm(link, invitee.email)
 
     expect(response.status).toBe(200)
     expect(await storedState(tenant.id)).toBe('trialing')

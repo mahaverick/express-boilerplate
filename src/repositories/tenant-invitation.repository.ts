@@ -79,6 +79,11 @@ function seatCondition() {
 }
 
 /**
+ * A still-redeemable invitation `replacePending` revoked.
+ */
+export type ReplacedInvitation = Pick<TenantInvitation, 'id' | 'role' | 'email'>
+
+/**
  * What `createPending` writes. The caller must pass `email` already trimmed
  * and lowercased; nothing below normalises it.
  */
@@ -291,7 +296,25 @@ export class TenantInvitationRepository {
     input: NewPendingInvitation,
     executor: DbExecutor = db
   ): Promise<TenantInvitation> {
-    await executor
+    const { created } = await this.replacePending(input, executor)
+    return created
+  }
+
+  /**
+   * `createPending`, also answering which still-redeemable invitations it
+   * revoked, read from the revoke itself so a concurrent invite can't slip
+   * between a read and the write. Call it inside a transaction: a caller that
+   * refuses what it replaced throws, and the revoke rolls back with the insert.
+   * @param input - The new invitation's columns.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The inserted row and the unexpired rows it replaced.
+   * @throws {HttpError} 409 `invitation_conflict`, as `createPending`.
+   */
+  async replacePending(
+    input: NewPendingInvitation,
+    executor: DbExecutor = db
+  ): Promise<{ created: TenantInvitation; replaced: ReplacedInvitation[] }> {
+    const revoked = await executor
       .update(invitation)
       .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
       .where(
@@ -301,13 +324,22 @@ export class TenantInvitationRepository {
           pendingCondition()
         )
       )
+      .returning({
+        id: invitation.id,
+        role: invitation.role,
+        email: invitation.email,
+        isLive: sql<boolean>`${invitation.expiresAt} > now()`,
+      })
+    const replaced = revoked
+      .filter((row) => row.isLive)
+      .map(({ id, role, email }) => ({ id, role, email }))
     try {
       const [row] = await executor
         .insert(invitation)
         .values({ ...input, lastSentAt: sql`now()` })
         .returning()
       if (!row) throw new HttpError('Insert returned no row', 500)
-      return row
+      return { created: row, replaced }
     } catch (error) {
       if (isUniqueViolation(error, PENDING_UNIQUE_CONSTRAINT)) {
         throw new HttpError(

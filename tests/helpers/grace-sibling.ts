@@ -39,7 +39,12 @@ export async function sessionWithSibling(user: User): Promise<SessionWithSibling
   if (sibling.sessionId !== head.sessionId || sibling.raw === head.raw) {
     throw new Error('sessionWithSibling: the replay did not mint a sibling')
   }
-  return { spent: first.raw, head, sibling, bearer: signAccessToken(user, head.sessionId) }
+  return {
+    spent: first.raw,
+    head,
+    sibling,
+    bearer: signAccessToken(user, head.sessionId, head.authenticatedAt),
+  }
 }
 
 /**

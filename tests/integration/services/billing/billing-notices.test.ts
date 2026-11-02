@@ -30,7 +30,7 @@ import {
 } from '@/services/queue.service'
 import { closeRedis, getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
-import { accept, confirmInvitation, verifyInvitation } from '@/services/tenant-invitation.service'
+import { accept, confirmInvitation } from '@/services/tenant-invitation.service'
 import { leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import { createTenant } from '@/services/tenant.service'
 import { formatDateInZone } from '@/utilities/date-text.utilities'
@@ -76,7 +76,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const ownTenantIds: string[] = []
 
 /**
- * Addresses whose accounts a one-click join created.
+ * Addresses whose accounts a confirmed join created.
  */
 const usedEmails: string[] = []
 
@@ -266,15 +266,23 @@ describe('the trial started email', () => {
     expect(mails.map((mail) => mail.recipient)).toStrictEqual([invitee.email])
   })
 
-  it('mails the first owner of a staff-made workspace when they join by one click', async () => {
+  it('mails the first owner of a staff-made workspace when they confirm from a new address', async () => {
     const tenant = await ownerlessWorkspace()
     const { user: staff } = await createTrackedStaff('admin')
     const email = freshEmail()
-    const { rawToken } = await seedInvitation(tenant, { email, role: 'owner', invitedBy: staff.id })
+    const { invitationId } = await seedInvitation(tenant, {
+      email,
+      role: 'owner',
+      invitedBy: staff.id,
+    })
+    const { raw } = await issueLinkToken(
+      { intent: 'invitation', email, app: 'web', invitationId },
+      requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+    )
 
-    const outcome = await verifyInvitation(rawToken)
+    const session = await confirmInvitation(raw, email)
 
-    expect(outcome.kind).toBe('session')
+    expect(session.isNewUser).toBe(true)
     const mails = await mailsOf(tenant.id, 'trial_started')
     expect(mails.map((mail) => mail.recipient)).toStrictEqual([email])
   })
@@ -295,7 +303,7 @@ describe('the trial started email by confirm link', () => {
       requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
     )
 
-    await confirmInvitation(raw)
+    await confirmInvitation(raw, invitee.email)
 
     expect(await billingColumn(tenant.id, 'state')).toBe('trialing')
     const mails = await mailsOf(tenant.id, 'trial_started')
@@ -318,7 +326,17 @@ describe('the workspace full notice', () => {
       })
       tokens.push(rawToken)
     }
-    const oneClick = await seedInvitation(tenant, { email: freshEmail(), invitedBy: owner.id })
+    const newcomerEmail = freshEmail()
+    const newcomer = await seedInvitation(tenant, { email: newcomerEmail, invitedBy: owner.id })
+    const { raw: newcomerLink } = await issueLinkToken(
+      {
+        intent: 'invitation',
+        email: newcomerEmail,
+        app: 'web',
+        invitationId: newcomer.invitationId,
+      },
+      requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+    )
     const before = await readBilling(tenant.id)
 
     for (const [index, invitee] of invitees.entries()) {
@@ -327,7 +345,9 @@ describe('the workspace full notice', () => {
         code: 'PLAN_LIMIT_REACHED',
       })
     }
-    await expect(verifyInvitation(oneClick.rawToken)).rejects.toMatchObject({ statusCode: 402 })
+    await expect(confirmInvitation(newcomerLink, newcomerEmail)).rejects.toMatchObject({
+      statusCode: 402,
+    })
 
     // Nothing the refused joins began survives.
     const members = await sql`select 1 from user_memberships where tenant_id = ${tenant.id}`

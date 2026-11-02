@@ -1,27 +1,27 @@
 /**
- * @file Races on `POST /api/v1/invitations/verify`: two concurrent one-click
- * joins for an address with no account join once, and the loser gets the
- * generic `invitation_invalid` with no session; an account created for the
- * address mid-click rolls the click back; and a maintenance mode that begins
- * after the route's gate is refused with the code sign-in verify answers,
- * before anything is written. The races of the confirm link that existing
- * accounts and staff invitees get are in invitation-confirm-race.test.ts.
+ * @file Races on `POST /api/v1/invitations/verify`: a click that loses to a
+ * concurrent confirm gets the generic `invitation_invalid` with no session,
+ * and a maintenance mode that begins after the route's gate is refused with
+ * the code sign-in verify answers, before anything is written. The races of
+ * the confirm link itself are in invitation-confirm-race.test.ts.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import { MAINTENANCE_MODE_CODE, READ_ONLY_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
-import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { issueLinkToken } from '@/services/link-token.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -32,7 +32,6 @@ import { request } from '../../helpers/request'
 const app = createApp()
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
-const userMembershipRepository = new UserMembershipRepository()
 const { name: REFRESH_COOKIE_NAME } = testRefreshCookie()
 
 const HOUR_MS = 60 * 60 * 1000
@@ -51,9 +50,11 @@ const createdTenantIds: string[] = []
  * A customer tenant owned by a fresh user, with one pending editor
  * invitation for `email`.
  * @param email - The invited address.
- * @returns The tenant and the invitation's raw token.
+ * @returns The tenant, the invitation's raw token and its id.
  */
-async function invitedTo(email: string): Promise<{ tenant: Tenant; rawToken: string }> {
+async function invitedTo(
+  email: string
+): Promise<{ tenant: Tenant; rawToken: string; invitationId: string }> {
   const owner: User = await createTrackedUser()
   const tenant = await tenantRepository.create({
     name: 'Acme Inc',
@@ -62,7 +63,7 @@ async function invitedTo(email: string): Promise<{ tenant: Tenant; rawToken: str
   })
   createdTenantIds.push(tenant.id)
   const rawToken = randomBytes(32).toString('base64url')
-  await db.transaction((tx) =>
+  const invitation = await db.transaction((tx) =>
     invitationRepository.createPending(
       {
         tenantId: tenant.id,
@@ -75,7 +76,7 @@ async function invitedTo(email: string): Promise<{ tenant: Tenant; rawToken: str
       tx
     )
   )
-  return { tenant, rawToken }
+  return { tenant, rawToken, invitationId: invitation.id }
 }
 
 /**
@@ -142,50 +143,27 @@ afterEach(async () => {
 })
 
 describe('invitation verify races', () => {
-  it('one of two concurrent verifies joins and the other creates no account', async () => {
-    const email = `invite-race-${randomUUID()}@example.test`
-    usedEmails.push(email)
-    const { tenant, rawToken } = await invitedTo(email)
-
-    const responses = await Promise.all([postVerify(rawToken), postVerify(rawToken)])
-
-    expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
-      200, 404,
-    ])
-    const loser = responses.find((response) => response.status === 404)
-    expect(loser?.body).toMatchObject({ code: 'invitation_invalid' })
-    expect(hasRefreshCookie(loser)).toBe(false)
-    const users = await sql<{ id: string }[]>`
-      select id from users where lower(email) = ${email}
-    `
-    expect(users).toHaveLength(1)
-    const memberships = await sql<{ count: number }[]>`
-      select count(*)::int as count from user_memberships where tenant_id = ${tenant.id}
-        and user_id = ${users[0]?.id ?? ''}
-    `
-    expect(memberships[0]?.count).toBe(1)
-    const refresh = await sql<{ count: number }[]>`
-      select count(*)::int as count from user_tokens
-      where user_id = ${users[0]?.id ?? ''} and purpose = 'refresh'
-    `
-    expect(refresh[0]?.count).toBe(1)
-  })
-
-  it('answers invitation_invalid, not 202, when a concurrent join creates the account between the lookup and the account read', async () => {
+  it('answers invitation_invalid, not 202, when a concurrent confirm creates the account between the lookup and the account read', async () => {
     const email = `invite-race-late-${randomUUID()}@example.test`
     usedEmails.push(email)
-    const { tenant, rawToken } = await invitedTo(email)
+    const { tenant, rawToken, invitationId } = await invitedTo(email)
+    const { raw } = await issueLinkToken(
+      { intent: 'invitation', email, app: 'web', invitationId },
+      requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
+    )
     const realFind = UserRepository.prototype.findByEmail
     const winner: { started: boolean; response?: Response } = { started: false }
     /**
      * Stands in for `UserRepository.findByEmail`: on the losing click's
-     * account read, the winning click runs to the end first. The winner's
-     * own read goes straight through.
+     * account read, the confirm runs to the end first. The confirm's own read
+     * goes straight through.
      */
     const lateFind: typeof realFind = async function (this: UserRepository, ...arguments_) {
       if (!winner.started && arguments_[0] === email) {
         winner.started = true
-        winner.response = await postVerify(rawToken)
+        winner.response = await request(app)
+          .post('/api/v1/invitations/confirm')
+          .send({ token: raw, email })
       }
       return realFind.apply(this, arguments_)
     }
@@ -204,43 +182,6 @@ describe('invitation verify races', () => {
         and user_id in (select id from users where lower(email) = ${email})
     `
     expect(memberships[0]?.count).toBe(1)
-  })
-
-  it('answers invitation_invalid, not 409, when the address is taken mid-click, and leaves the link usable', async () => {
-    const email = `invite-race-taken-${randomUUID()}@example.test`
-    usedEmails.push(email)
-    const { tenant, rawToken } = await invitedTo(email)
-    const seeded: { id?: string } = {}
-    const realCreate = UserRepository.prototype.create
-    /**
-     * Stands in for `UserRepository.create`: just before the click's insert, a
-     * write on another connection commits an unverified account for the address.
-     */
-    const racingCreate: typeof realCreate = async function (this: UserRepository, ...arguments_) {
-      const [values] = arguments_
-      if (seeded.id === undefined && values.email === email) {
-        const squatter = await realCreate.call(this, { email })
-        seeded.id = squatter.id
-      }
-      return realCreate.apply(this, arguments_)
-    }
-
-    let refused: Response | undefined
-    await withMutatedMethod(UserRepository.prototype, 'create', racingCreate, async () => {
-      refused = await postVerify(rawToken)
-    })
-
-    expect(refused?.status).toBe(404)
-    expect(refused?.body).toMatchObject({ code: 'invitation_invalid' })
-    expect(hasRefreshCookie(refused)).toBe(false)
-    // The lost race rolled back before the claim: the address now has an account, so the next click asks to confirm by email.
-    const retried = await postVerify(rawToken)
-    expect(retried.status).toBe(202)
-    expect(hasRefreshCookie(retried)).toBe(false)
-    expect(
-      await userMembershipRepository.findByUserAndTenant(seeded.id ?? '', tenant.id)
-    ).toBeUndefined()
-    expect(await isPendingToken(rawToken)).toBe(true)
   })
 
   it.each([

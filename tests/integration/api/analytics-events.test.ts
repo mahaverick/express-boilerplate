@@ -175,7 +175,7 @@ async function signUpVerifyAndSignIn(
   const { app } = running()
   const signInRequest = request(app).post('/api/v1/auth/link/verify')
   if (sessionId !== undefined) void signInRequest.set('X-POSTHOG-SESSION-ID', sessionId)
-  const signIn = await traced(signInRequest.send({ token: await issueTestLink(email) }))
+  const signIn = await traced(signInRequest.send({ token: await issueTestLink(email), email }))
   expect(signIn.status).toBe(200)
   const user = await userRepository.findByEmail(email)
   if (!user) throw new Error(`no user for ${email}`)
@@ -533,7 +533,7 @@ describe('browser session attribution', () => {
       request(app)
         .post('/api/v1/auth/link/verify')
         .set('Cookie', first.refreshCookie.split(';', 1)[0] as string)
-        .send({ token: await issueTestLink(email) })
+        .send({ token: await issueTestLink(email), email })
     )
     expect(second.status).toBe(200)
 

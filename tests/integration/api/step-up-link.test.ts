@@ -21,10 +21,11 @@ import { sql } from '@/services/database.service'
 import { appNameFor, frontendUrl } from '@/services/frontend-links.service'
 import { closeQueue, getAuthEmailQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
-import { verifyAccessToken } from '@/services/session.service'
+import { rotateRefreshToken, verifyAccessToken } from '@/services/session.service'
 import { confirmStepUpLink } from '@/services/step-up.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { refreshCookieHeader } from '../../helpers/grace-sibling'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 import { clearRateLimiter, signInByLink } from '../../helpers/sign-in'
@@ -245,6 +246,35 @@ async function refreshAuthenticatedTimes(sid: string): Promise<number[]> {
 }
 
 /**
+ * Split a signed-in session's chain into the owner's live token and a thief's
+ * grace-window sibling, then age the session so a confirmation shows.
+ * @param refreshCookie - The session's refresh cookie, as `name=value`.
+ * @param sid - The session.
+ * @returns The two raw tokens.
+ */
+async function splitIntoOwnerAndThief(
+  refreshCookie: string,
+  sid: string
+): Promise<{ ownerRaw: string; thiefRaw: string }> {
+  const raw = decodeURIComponent(refreshCookie.slice(refreshCookie.indexOf('=') + 1))
+  const owner = await rotateRefreshToken(raw)
+  const thief = await rotateRefreshToken(raw)
+  await ageSession(sid)
+  return { ownerRaw: owner.raw, thiefRaw: thief.raw }
+}
+
+/**
+ * Whether rotating a token carries a confirmation from the last half hour,
+ * where `ageSession` left the session an hour back.
+ * @param raw - The raw refresh token.
+ * @returns True when the rotation carries a recent time.
+ */
+async function hasRecentTimeAfterRotating(raw: string): Promise<boolean> {
+  const rotated = await rotateRefreshToken(raw)
+  return (rotated.authenticatedAt?.getTime() ?? 0) > Date.now() - 30 * 60 * 1000
+}
+
+/**
  * The step-up audit entries about one user.
  * @param userId - The user.
  * @returns Each entry's action, metadata and tenant.
@@ -445,6 +475,33 @@ describe('POST /api/v1/auth/step-up/link/verify', () => {
     expect(
       claims((refreshed.body as { data: { accessToken: string } }).data.accessToken).authTime
     ).toBe(confirmedAt)
+  })
+
+  it('upgrades the chain the request presents, and not a grace sibling', async () => {
+    const session = await signIn(await createStaff())
+    const { ownerRaw, thiefRaw } = await splitIntoOwnerAndThief(session.refreshCookie, session.sid)
+    const linkToken = await issueLink(session)
+
+    const response = await request(app)
+      .post('/api/v1/auth/step-up/link/verify')
+      .set('Authorization', `Bearer ${session.token}`)
+      .set('Cookie', refreshCookieHeader(ownerRaw))
+      .send({ token: linkToken })
+
+    expect(response.status).toBe(200)
+    expect(await hasRecentTimeAfterRotating(thiefRaw)).toBe(false)
+    expect(await hasRecentTimeAfterRotating(ownerRaw)).toBe(true)
+  })
+
+  it('moves every chain of the session when the request presents no cookie', async () => {
+    const session = await signIn(await createStaff())
+    const { thiefRaw } = await splitIntoOwnerAndThief(session.refreshCookie, session.sid)
+    const linkToken = await issueLink(session)
+
+    const response = await verifyLink(session.token, linkToken)
+
+    expect(response.status).toBe(200)
+    expect(await hasRecentTimeAfterRotating(thiefRaw)).toBe(true)
   })
 
   it('confirms once when the same link is presented twice at once', async () => {

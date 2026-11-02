@@ -26,6 +26,7 @@ afterEach(async () => {
  */
 async function verifyAround(
   raw: string,
+  email: string,
   change: () => Promise<void>
 ): Promise<PromiseSettledResult<unknown>> {
   const reached = deferred()
@@ -45,7 +46,7 @@ async function verifyAround(
   }
   let settled: PromiseSettledResult<unknown> | undefined
   await withMutatedMethod(UserRepository.prototype, 'update', pausingUpdate, async () => {
-    const verifying = verifySignInLink(raw)
+    const verifying = verifySignInLink(raw, email)
     await untilSignalled(reached.promise, verifying, 'verify')
     await change()
     release.resolve()
@@ -71,7 +72,7 @@ describe('sign-in link verify vs a concurrent deactivation', () => {
     const user = await createTrackedUser()
     const raw = await issueTestLink(user.email)
 
-    const settled = await verifyAround(raw, async () => {
+    const settled = await verifyAround(raw, user.email, async () => {
       await sql`update users set active = false where id = ${user.id}`
     })
 
@@ -87,7 +88,7 @@ describe('sign-in link verify vs a concurrent deactivation', () => {
     const user = await createTrackedUser()
     const raw = await issueTestLink(user.email)
 
-    const settled = await verifyAround(raw, async () => {
+    const settled = await verifyAround(raw, user.email, async () => {
       await sql`update users set deleted_at = now() where id = ${user.id}`
     })
 
@@ -100,7 +101,7 @@ describe('sign-in link verify vs a concurrent deactivation', () => {
     const user = await createTrackedUser()
     const raw = await issueTestLink(user.email)
 
-    const settled = await verifyAround(raw, async () => {})
+    const settled = await verifyAround(raw, user.email, async () => {})
 
     expect(settled.status).toBe('fulfilled')
     expect(await refreshRows(user.id)).toBe(1)

@@ -89,8 +89,9 @@ link's address holds (`verifySignInLink`):
   address it shows, and verify compares it, trimmed and lowercased, with the
   row's on a read-only peek before the claim (`assertLinkShowsItsAddress`). A
   mismatch answers `LINK_INVALID` and spends nothing, so the owner's link still
-  works. Neither address is logged. A client that sends no `email` skips the
-  check, so a frontend sends it whenever the link carries one.
+  works. Neither address is logged. A verify with no `email` is refused the same
+  way, or removing the parameter would skip the check, and a frontend given a
+  link with no `email` never posts it.
 - **Maintenance decides before the claim.** In `full` and `read_only`, verify
   reads the row without spending it first, so a refused link still works once
   the mode ends ([Maintenance mode](#maintenance-mode)).
@@ -153,7 +154,10 @@ it without `GOOGLE_CLIENT_SECRET` (`src/configs/passport.config.ts`). The OAuth
 minutes and exists only on the Google routes and their callback.
 `GET /auth/google` takes `app` and an optional `redirect`, which the session
 keeps; a `redirect` that fails `redirectPathSchema` is dropped
-(`rememberOAuthApp`). `resolveGoogleUser` (`src/services/google-auth.service.ts`)
+(`rememberOAuthApp`). A start with `Sec-Fetch-Site: cross-site` goes to the login
+page instead, before any session or trip to Google
+(`refuseCrossSiteOAuthStart`), since Google may approve with no prompt and another
+site could otherwise switch the browser's account. `resolveGoogleUser` (`src/services/google-auth.service.ts`)
 decides the account:
 
 - A Google address that Google has not verified never creates an account and
@@ -320,7 +324,8 @@ What revokes sessions: logout, reuse, the absolute lifetime, a claim of a
 never-verified account (every session;
 [Account creation on click](#account-creation-on-click)),
 `POST /auth/sessions/revoke-others` (every session but the caller's, 10 an hour
-per user), and a staff deactivation, sign-out or deletion (every session).
+per user, and only after a recent sign-in, so a stolen session can't sign its
+owner out and keep the account), and a staff deactivation, sign-out or deletion (every session).
 Revoke-others spares only the caller's own row when the request presents the
 caller's refresh cookie and that cookie is not revoked, so a grace-window
 sibling in the caller's session ends too; with no such cookie it spares the
@@ -448,9 +453,9 @@ mode, so a frontend knows whether to show the passkey screens.
   config read, both link confirm routes, logout, `GET /profile` and
   `GET /auth/providers`. The match is on method and the lower-cased path
   without a trailing slash or query. The count query runs only in required mode
-  and only off the allowlist. A person signed in by a one-click invitation has
-  no recent sign-in, so they confirm it's them by link, then create a passkey;
-  nothing else is needed to leave the lockout.
+  and only off the allowlist. A person signed in by Google has no recent
+  sign-in, so they confirm it's them by link, then create a passkey; nothing
+  else is needed to leave the lockout.
 
 ## Email links
 
@@ -492,24 +497,24 @@ pasted into one is dropped; the server never reads them.
 
 ### Invitation links are single-use
 
-An invitation link lives 3 days and is forwardable, so one click on it
+An invitation link lives 3 days and is forwardable, so a click on it
 (`POST /invitations/verify`, `verifyInvitation`,
-`src/services/tenant-invitation.service.ts`) joins in one step only where
-there is nothing to take over: a customer invitation to an address with no
-account (a soft-deleted account released its address). Every other click
-answers `202` "Check your inbox", and the server mails the invited address a
-15-minute, single-use confirm link. That covers an address that has an
-account, verified or not, and every staff (platform-tenant) invitation, even
-to a new address. The confirm link's click (`POST /invitations/confirm`,
-`confirmInvitation`) signs in and joins in one step. A forwarded invitation
-therefore gets no session on an existing account and no staff role: only the
-invitee's mailbox receives the confirm link.
+`src/services/tenant-invitation.service.ts`) proves no mailbox and signs nobody
+in. Every click answers `202` "Check your inbox", and the server mails the
+invited address a 15-minute, single-use confirm link, whether the address has an
+account or not. The confirm link's click (`POST /invitations/confirm`,
+`confirmInvitation`) signs in and joins in one step, creating the account for a
+new address. A forwarded invitation therefore gets no session, no account and no
+staff role: only the invitee's mailbox receives the confirm link. A session on a
+new address would otherwise outlive its owner's first sign-in, and an
+attacker's own invitation sent to a victim would sign the victim in to the
+attacker's account.
 
 - **The link is checked before any account is touched.**
   `findValidByTokenHash` runs first, outside a transaction, so a used, expired,
-  revoked, suspended-tenant or archived-tenant link creates nothing. A one-click
-  join is then one transaction that creates the account, claims the
-  invitation, joins, audits the join and issues the session. When two clicks
+  revoked, suspended-tenant or archived-tenant link creates nothing. A confirm
+  is one transaction that creates the account when the address has none, claims
+  the invitation, joins, audits the join and issues the session. When two clicks
   race, the loser's transaction rolls back, the new account included, and it
   answers `404 invitation_invalid` with no cookie.
 - **The `202` writes nothing.** It sets no cookie, leaves the browser's
@@ -541,11 +546,9 @@ invitee's mailbox receives the confirm link.
   that claim stands even if the join is then refused. Neither address is
   logged. The answer's message names both next steps: select Join again in
   the invitation email, or ask for a new invite.
-- **The confirm session is a recent sign-in; the one-click session is not.**
-  The confirm click proves the mailbox within 15 minutes with a single-use
-  link, the proof a sign-in link gives. The one-click session starts with
-  `authenticated_at` NULL, so every `requireRecentAuth` route answers
-  `401 REAUTH_REQUIRED` until the user confirms it's them. Sessions are not
+- **The confirm session is a recent sign-in.** The confirm click proves the
+  mailbox within 15 minutes with a single-use link, the proof a sign-in link
+  gives. Sessions are not
   bound to an app: Apex access follows the platform role, which a staff
   invitation grants only through the confirm link.
 - **Once accepted, it signs nobody in,** the invitee included. A signed-in
@@ -602,8 +605,8 @@ registered address to a tenant directly
   and an owner invitation while the workspace has no active owner, so a
   workspace can always get an owner. An owner invitation to a workspace that
   has an owner is checked like any other.
-- **Consent.** The link was mailed to the invited address, so one click on it
-  proves the mailbox
+- **Consent.** The confirm link was mailed to the invited address, so one click
+  on it proves the mailbox
   ([Invitation links are single-use](#invitation-links-are-single-use)). A
   never-verified account is claimed as a sign-in link claims one
   ([Account creation on click](#account-creation-on-click)). Accepting signed
@@ -618,7 +621,9 @@ registered address to a tenant directly
   frontend's (`react-boilerplate/nginx.conf`).
 - **The grant is re-checked.** Invite, resend and revoke apply
   `canActorGrantRole` to the actor's role re-read under lock, so an admin can
-  neither send, resend nor revoke an owner or admin invitation. Resending
+  neither send, resend nor revoke an owner or admin invitation. An invite that
+  replaces a live invitation to the same address is a revoke: it is refused the
+  same way (an expired one does not count) and audits `invitation.revoked`. Resending
   replaces the token, so the old link dies.
 - **A pending invitation stands on its sender's authority.** Removing a member,
   or a member leaving, revokes the invitations they sent there; a role change
@@ -784,8 +789,8 @@ their role there is their platform role (`src/services/platform.service.ts`).
 `requireRecentAuth` (`src/middlewares/auth.middleware.ts`) refuses a session
 that last authenticated more than `STEP_UP_MAX_AGE_MS` (10 minutes) ago with
 `401 REAUTH_REQUIRED`. The time comes from the token's `auth_time`, which the
-refresh row records at sign-in (a one-click invitation join records none) and
-rotation carries forward; a token without it counts as stale. Staff move it
+refresh row records at sign-in (a Google sign-in records none) and rotation
+carries forward; a token without it counts as stale. Staff move it
 forward by confirming it's them, by an emailed link or a passkey
 ([Confirm it's you](#confirm-its-you)). Every signed-in user can.
 A client must not sign out on `REAUTH_REQUIRED`.
@@ -841,8 +846,11 @@ needs it to create or delete a passkey.
   it. `POST /auth/step-up/link/verify` claims it only for that user and
   session, so a bearer from another session, the same user's included, gets
   `400 LINK_INVALID` and leaves the link unspent. The confirm is one
-  transaction: it locks the user row, claims the link, moves the session's
-  `authenticated_at` and audits `auth.step_up_confirmed { method: 'link' }`. A
+  transaction: it locks the user row, claims the link, moves the
+  `authenticated_at` of the chain the request's refresh cookie names, and audits
+  `auth.step_up_confirmed { method: 'link' }`. A grace-window sibling keeps its
+  old time, so a thief who replayed a token gains nothing from the owner's
+  confirmation; a request with no live cookie in the session moves every row. A
   dead link writes no audit entry: it is not attributable beyond the bearer,
   and the limiter bounds it.
 - **By passkey, bound to the session.** `POST /auth/passkeys/step-up/options`
@@ -850,7 +858,7 @@ needs it to create or delete a passkey.
   credentials as the allowed list (`409 NO_PASSKEY` when there are none).
   `POST /auth/passkeys/step-up/verify` accepts only an assertion by one of the
   caller's credentials and applies the same counter rule as sign-in. In one
-  transaction it moves `authenticated_at`, records the use and audits
+  transaction it moves `authenticated_at` on the same terms, records the use and audits
   `auth.step_up_confirmed { method: 'passkey' }`. A refusal answers
   `400 PASSKEY_VERIFICATION_FAILED`, never 401. An unverified account is
   refused. A passkey sign-in counts as a recent sign-in, so it needs no
@@ -861,7 +869,9 @@ needs it to create or delete a passkey.
   ignores `max_age`, and `auth_time`, when Google sends it at all, is the
   user's last Google sign-in on that browser, not a fresh one. A Google
   round-trip therefore cannot prove the person is present, and an unattended,
-  signed-in browser would pass it. Google stays a sign-in method only. Audit
+  signed-in browser would pass it. Google stays a sign-in method only, and for
+  the same reason a Google sign-in does not count as a recent sign-in: its
+  session starts with `authenticated_at` NULL, so a step-up route asks first. Audit
   rows with `method: 'google'` are old; new ones are `link` or `passkey`.
 
 ### The audit log
@@ -1059,6 +1069,11 @@ unread (`src/routes/analytics-proxy.routes.ts`).
   (which could overwrite the refresh cookie) and `Access-Control-*` headers are
   dropped. An upstream silent for 30 s gets a 504.
 - It reaches only the configured PostHog hosts, so it is not an open relay.
+- **It serves only this deployment's project.** The assets host answers each
+  project's `/array/<key>/config.js` as JavaScript, which `script-src 'self'`
+  would admit from this origin, so `/array/*` for any other key answers the
+  unknown-route 404. So does any path holding a dot segment or an encoded
+  separator, which the upstream might normalize into another prefix.
 
 ### Server events
 

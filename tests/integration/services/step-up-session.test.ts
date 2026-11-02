@@ -2,9 +2,10 @@
  * @file `authenticated_at`: set when a session starts, carried by every
  * rotation (grace-window siblings included), and moved by a confirmed
  * step-up link (`confirmStepUpLink`, through `markSessionReauthenticated`)
- * on every refresh row of that session and nowhere else: not on the link's
- * own row, which shares the session id, and not on the user's other
- * sessions. Real per-worker Postgres; deleting the user cascades to its
+ * on the presented chain, or on every refresh row of that session when the
+ * request presents no live token, and nowhere else: not on a grace sibling of
+ * the presented chain, not on the link's own row, which shares the session id,
+ * and not on the user's other sessions. Real per-worker Postgres; deleting the user cascades to its
  * token rows.
  */
 import { randomUUID } from 'node:crypto'
@@ -67,6 +68,16 @@ async function stepUpLinkFor(userId: string, sessionId: string): Promise<string>
     requireDurationMs(getEnv().STEP_UP_LINK_TTL)
   )
   return raw
+}
+
+/**
+ * The `authenticated_at` a rotation of a token carries forward.
+ * @param raw - The raw refresh token.
+ * @returns The time as epoch milliseconds.
+ */
+async function rotatedTime(raw: string): Promise<number | undefined> {
+  const rotated = await rotateRefreshToken(raw)
+  return rotated.authenticatedAt?.getTime()
 }
 
 describe('session authentication time', () => {
@@ -217,6 +228,57 @@ describe('session authentication time', () => {
     // The next rotation copies the reauthenticated time forward.
     const next = await rotateRefreshToken(rotated.raw)
     expect(next.authenticatedAt?.getTime()).toBe(at.getTime())
+  })
+
+  /**
+   * A session whose chain rotated and whose rotated token was replayed in the
+   * grace window, so it holds the owner's live row and a thief's sibling.
+   * @returns The user id, the session id, and the raw tokens.
+   */
+  async function sessionWithThief() {
+    const userId = await createStaffUser()
+    const start = await issueRefreshToken(userId, randomUUID())
+    const owner = await rotateRefreshToken(start.raw)
+    const thief = await rotateRefreshToken(start.raw)
+    await ageSession(start.sessionId)
+    return {
+      userId,
+      sessionId: start.sessionId,
+      startRaw: start.raw,
+      ownerRaw: owner.raw,
+      thiefRaw: thief.raw,
+    }
+  }
+
+  describe('when the request presents its refresh token', () => {
+    it('a step-up link upgrades the presented chain and not a grace sibling', async () => {
+      const { userId, sessionId, ownerRaw, thiefRaw } = await sessionWithThief()
+      const staleTimes = await authenticatedTimes(sessionId)
+      const link = await stepUpLinkFor(userId, sessionId)
+
+      await confirmStepUpLink(userId, sessionId, link, ownerRaw)
+
+      expect(await rotatedTime(thiefRaw)).toBe(staleTimes[0])
+      expect(await rotatedTime(ownerRaw)).toBeGreaterThan(staleTimes[0] ?? Infinity)
+    })
+
+    it('upgrades the token the chain just rotated away, so a tab in its grace window keeps the time', async () => {
+      const { sessionId, userId, startRaw, ownerRaw } = await sessionWithThief()
+      const staleTimes = await authenticatedTimes(sessionId)
+
+      await markSessionReauthenticated(userId, sessionId, undefined, ownerRaw)
+
+      expect(await rotatedTime(startRaw)).toBeGreaterThan(staleTimes[0] ?? Infinity)
+    })
+
+    it('marks the whole session when the presented token names no live row in it', async () => {
+      const { userId, sessionId, thiefRaw } = await sessionWithThief()
+      const staleTimes = await authenticatedTimes(sessionId)
+
+      await markSessionReauthenticated(userId, sessionId, undefined, 'not-a-live-token')
+
+      expect(await rotatedTime(thiefRaw)).toBeGreaterThan(staleTimes[0] ?? Infinity)
+    })
   })
 
   it('a grace sibling minted after a reauthentication carries the new time', async () => {

@@ -165,13 +165,14 @@ function postRequest(body: Record<string, unknown>): Promise<Response> {
 /**
  * Post a link verify.
  * @param token - The raw token.
+ * @param email - The address the link displays; omitted, the body carries none, as a stripped link does.
  * @param cookie - A `Cookie` header to present, if any.
  * @returns The response.
  */
-function postVerify(token: string, cookie?: string): Promise<Response> {
+function postVerify(token: string, email?: string, cookie?: string): Promise<Response> {
   const pending = request(app).post('/api/v1/auth/link/verify')
   if (cookie !== undefined) pending.set('Cookie', cookie)
-  return pending.send({ token })
+  return pending.send({ token, email })
 }
 
 /**
@@ -387,7 +388,7 @@ describe('POST /auth/link/request', () => {
     const link = await mailedLink(exact)
     expect(await linkRows(exact)).toHaveLength(1)
 
-    const verified = await postVerify(link.searchParams.get('token') ?? '')
+    const verified = await postVerify(link.searchParams.get('token') ?? '', exact)
 
     expect(verified.status).toBe(200)
     const stored = await userRepository.findByEmail(exact)
@@ -558,7 +559,7 @@ describe('POST /auth/link/request', () => {
       const redirect = '/tenants/acme/members?tenant=acme&tab=2#x'
       const token = await issueTestLink(email, 'web', redirect)
 
-      const response = await postVerify(token)
+      const response = await postVerify(token, email)
 
       expect(response.status).toBe(200)
       expect(verifyData(response).redirect).toBe(redirect)
@@ -584,7 +585,7 @@ describe('POST /auth/link/verify', () => {
     const email = uniqueEmail('first-click')
     const token = await issueTestLink(email)
 
-    const response = await postVerify(token)
+    const response = await postVerify(token, email)
 
     expect(response.status).toBe(200)
     expect(response.headers['cache-control']).toBe('no-store')
@@ -618,7 +619,7 @@ describe('POST /auth/link/verify', () => {
     const user = await createTrackedUser({ email: uniqueEmail('existing-signin') })
     const token = await issueTestLink(user.email, 'web', '/tenants/acme')
 
-    const response = await postVerify(token)
+    const response = await postVerify(token, user.email)
 
     expect(response.status).toBe(200)
     const data = verifyData(response)
@@ -648,7 +649,7 @@ describe('POST /auth/link/verify', () => {
     })
     const token = await issueTestLink(user.email)
 
-    const response = await postVerify(token)
+    const response = await postVerify(token, user.email)
 
     expect(response.status).toBe(200)
     expect(verifyData(response).isNewUser).toBe(false)
@@ -665,7 +666,7 @@ describe('POST /auth/link/verify', () => {
     const email = uniqueEmail('created-verified')
     const token = await issueTestLink(email)
 
-    const response = await postVerify(token)
+    const response = await postVerify(token, email)
 
     expect(response.status).toBe(200)
     const types = eventsFor(verifyData(response).user.id).map((event) => event.type)
@@ -674,20 +675,22 @@ describe('POST /auth/link/verify', () => {
   })
 
   it('answers LINK_INVALID for unknown, used, expired and malformed tokens, identically', async () => {
-    const usedToken = await issueTestLink(uniqueEmail('used'))
-    const firstUse = await postVerify(usedToken)
+    const usedEmail = uniqueEmail('used')
+    const usedToken = await issueTestLink(usedEmail)
+    const firstUse = await postVerify(usedToken, usedEmail)
     expect(firstUse.status).toBe(200)
-    const expiredToken = await issueTestLink(uniqueEmail('expired'))
+    const expiredEmail = uniqueEmail('expired')
+    const expiredToken = await issueTestLink(expiredEmail)
     await sql`
       update user_tokens set expires_at = now() - interval '1 minute'
       where token_hash = ${hashToken(expiredToken)}
     `
 
     const responses = [
-      await postVerify(randomBytes(32).toString('base64url')),
-      await postVerify(usedToken),
-      await postVerify(expiredToken),
-      await postVerify('not a token at all'),
+      await postVerify(randomBytes(32).toString('base64url'), usedEmail),
+      await postVerify(usedToken, usedEmail),
+      await postVerify(expiredToken, expiredEmail),
+      await postVerify('not a token at all', usedEmail),
     ]
 
     for (const response of responses) {
@@ -704,7 +707,7 @@ describe('POST /auth/link/verify', () => {
     const user = await createTrackedUser({ email: uniqueEmail('deactivated'), active: false })
     const token = await issueTestLink(user.email)
 
-    const response = await postVerify(token)
+    const response = await postVerify(token, user.email)
 
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({ code: LINK_INVALID_CODE })
@@ -721,7 +724,7 @@ describe('POST /auth/link/verify', () => {
     await sql`update users set deleted_at = now() where id = ${deleted.id}`
     const token = await issueTestLink(email)
 
-    const response = await postVerify(token)
+    const response = await postVerify(token, email)
 
     expect(response.status).toBe(200)
     const data = verifyData(response)
@@ -734,7 +737,10 @@ describe('POST /auth/link/verify', () => {
     const user = await createTrackedUser({ email: uniqueEmail('twice') })
     const token = await issueTestLink(user.email)
 
-    const responses = await Promise.all([postVerify(token), postVerify(token)])
+    const responses = await Promise.all([
+      postVerify(token, user.email),
+      postVerify(token, user.email),
+    ])
 
     expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
       200, 400,
@@ -767,7 +773,7 @@ describe('POST /auth/link/verify', () => {
 
     let response: Response | undefined
     await withMutatedMethod(UserRepository.prototype, 'create', racingCreate, async () => {
-      response = await postVerify(token)
+      response = await postVerify(token, email)
     })
 
     expect(response?.status).toBe(200)
@@ -806,7 +812,7 @@ describe('POST /auth/link/verify', () => {
 
       let response: Response | undefined
       await withMutatedMethod(UserRepository.prototype, 'lockById', changingLock, async () => {
-        response = await postVerify(token)
+        response = await postVerify(token, user.email)
       })
 
       expect(response?.status).toBe(400)
@@ -836,7 +842,7 @@ describe('POST /auth/link/verify', () => {
 
     let response: Response | undefined
     await withMutatedMethod(UserTokenRepository.prototype, 'claimOnce', flippingClaim, async () => {
-      response = await postVerify(token)
+      response = await postVerify(token, email)
     })
 
     expect(response?.status).toBe(503)
@@ -851,7 +857,7 @@ describe('POST /auth/link/verify', () => {
     const second = await issueTestLink(email)
     await sql`update user_tokens set revoked_at = null where token_hash = ${hashToken(first)}`
 
-    const responses = await Promise.all([postVerify(first), postVerify(second)])
+    const responses = await Promise.all([postVerify(first, email), postVerify(second, email)])
 
     expect(responses.map((response) => response.status)).toEqual([200, 200])
     const data = responses.map((response) => verifyData(response))
@@ -864,11 +870,26 @@ describe('POST /auth/link/verify', () => {
   })
 
   describe('the link email bound to its token', () => {
+    it('refuses a link posted with no email, spends nothing, and the right email still signs in', async () => {
+      const email = uniqueEmail('stripped')
+      const token = await issueTestLink(email)
+      const dead = await postVerifyWithEmail(randomBytes(32).toString('base64url'), email)
+
+      const refused = await postVerify(token)
+
+      expect(refused.status).toBe(400)
+      expect(refusalBody(refused)).toStrictEqual(refusalBody(dead))
+      expect(await isUnspent(token)).toBe(true)
+      expect(await userRepository.findByEmail(email)).toBeUndefined()
+      const allowed = await postVerifyWithEmail(token, email)
+      expect(allowed.status).toBe(200)
+    })
+
     it('refuses a link whose email names another address, spends nothing, and the right email still signs in', async () => {
       const attackerEmail = uniqueEmail('swap-attacker')
       const victimEmail = uniqueEmail('swap-victim')
       const token = await issueTestLink(attackerEmail)
-      const dead = await postVerify(randomBytes(32).toString('base64url'))
+      const dead = await postVerify(randomBytes(32).toString('base64url'), victimEmail)
 
       const refused = await postVerifyWithEmail(token, victimEmail)
 
@@ -954,24 +975,25 @@ describe('POST /auth/link/verify', () => {
     const earlier = await signInByLink(email)
     const token = await issueTestLink(email)
 
-    const response = await postVerify(token, earlier.refreshCookie)
+    const response = await postVerify(token, email, earlier.refreshCookie)
 
     expect(response.status).toBe(200)
     expect(await refreshRows(earlier.userId)).toEqual([{ revoked: true }, { revoked: false }])
   })
 
   it("refuses a disallowed Origin with the origin middleware's answer", async () => {
-    const token = await issueTestLink(uniqueEmail('origin'))
+    const email = uniqueEmail('origin')
+    const token = await issueTestLink(email)
 
     const response = await request(app)
       .post('/api/v1/auth/link/verify')
       .set('Origin', 'https://evil.test')
-      .send({ token })
+      .send({ token, email })
 
     expect(response.status).toBe(403)
     expect(response.body).toMatchObject({ code: 'ORIGIN_NOT_ALLOWED' })
     // The link was never presented, so it still signs in.
-    const presented = await postVerify(token)
+    const presented = await postVerify(token, email)
     expect(presented.status).toBe(200)
   })
 
@@ -1000,13 +1022,13 @@ describe('POST /auth/link/verify', () => {
     await storeMaintenanceMode('full')
     await reloadMaintenanceMode()
 
-    const refused = await postVerify(token)
+    const refused = await postVerify(token, user.email)
 
     expect(refused.status).toBe(503)
     expect(refused.body).toMatchObject({ code: MAINTENANCE_MODE_CODE })
     await resetMaintenanceMode()
     await reloadMaintenanceMode()
-    const allowed = await postVerify(token)
+    const allowed = await postVerify(token, user.email)
     expect(allowed.status).toBe(200)
     expect(verifyData(allowed).user.id).toBe(user.id)
   })
@@ -1019,8 +1041,8 @@ describe('POST /auth/link/verify', () => {
     await storeMaintenanceMode('read_only')
     await reloadMaintenanceMode()
 
-    const refused = await postVerify(freshToken)
-    const signedIn = await postVerify(existingToken)
+    const refused = await postVerify(freshToken, freshEmail)
+    const signedIn = await postVerify(existingToken, existing.email)
 
     expect(refused.status).toBe(503)
     expect(refused.body).toMatchObject({ code: READ_ONLY_MODE_CODE })
@@ -1029,7 +1051,7 @@ describe('POST /auth/link/verify', () => {
     expect(verifyData(signedIn).user.id).toBe(existing.id)
     await resetMaintenanceMode()
     await reloadMaintenanceMode()
-    const created = await postVerify(freshToken)
+    const created = await postVerify(freshToken, freshEmail)
     expect(created.status).toBe(200)
     expect(verifyData(created).isNewUser).toBe(true)
   })

@@ -108,6 +108,27 @@ describe('routing', () => {
     expect(posthog.requests.map((received) => received.path)).toEqual([upstreamPath])
   })
 
+  it.each([
+    // Another project's config is JavaScript on this origin, which `script-src 'self'` would admit.
+    ['another project key', '/api/v1/collect/array/phc_someone_else/config.js'],
+    ['no project key', '/api/v1/collect/array/config.js'],
+    ['a key this key prefixes', '/api/v1/collect/array/phc_test_key_not_real_2/config.js'],
+    ['an encoded dot segment', '/api/v1/collect/static/%2e%2e/array/phc_someone_else/config.js'],
+    [
+      'an encoded slash',
+      '/api/v1/collect/array/phc_test_key_not_real%2f..%2fphc_someone_else/config.js',
+    ],
+    ['an encoded backslash', '/api/v1/collect/static/..%5carray%5cphc_someone_else/config.js'],
+    ['a dot segment on the ingest route', '/api/v1/collect/e/%2E%2E/array/phc_someone_else/a.js'],
+  ])('answers 404 for %s and sends nothing upstream', async (_name, path) => {
+    const { app, posthog } = running()
+
+    const response = await request(app).get(path)
+
+    expect(response.status).toBe(404)
+    expect(posthog.requests).toEqual([])
+  })
+
   it('passes the upstream status through', async () => {
     const { app, posthog } = running()
     posthog.respondWith(400)

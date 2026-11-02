@@ -693,21 +693,27 @@ export async function revokeOtherSessions(
 /**
  * Record that a session's user just proved their identity again, by step-up
  * (a confirmed link, step-up.service.ts): move `authenticated_at` to the
- * current time on every refresh row of the session
- * (`markSessionAuthenticated`).
+ * current time on the chain the request presents: its live row, and the row
+ * that row replaced, so a tab still in that row's grace window keeps the new
+ * time. A grace sibling stays as it was, since a token replayed by a thief
+ * must not gain step-up from the owner's confirmation. A request presenting no
+ * live row in the session (a non-browser client, or a rotation that just spent
+ * it) marks every refresh row of the session (`markSessionAuthenticated`).
  * Holds the user row FOR NO KEY UPDATE, which waits for a rotation holding it
  * FOR SHARE, so that rotation's new row exists before the update and gets
  * the new time.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id, from the access token's `sid`.
  * @param tx - A caller's transaction to run in, so an audit entry can commit with the change; a transaction of its own when omitted.
+ * @param presentedRefreshToken - The raw refresh token the request carried, if any.
  * @returns The new authentication time, for the caller to sign into a fresh access token.
  * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE when the user is gone, soft-deleted or inactive, or the session has no live refresh token (logged out, revoked, expired, past SESSION_ABSOLUTE_TTL, or not this user's): the client's refresh then fails and it signs in again.
  */
 export function markSessionReauthenticated(
   userId: string,
   sessionId: string,
-  tx?: DbTransaction
+  tx?: DbTransaction,
+  presentedRefreshToken?: string
 ): Promise<Date> {
   /**
    * The step-up itself: the locked active check and the `authenticated_at`
@@ -725,7 +731,8 @@ export function markSessionReauthenticated(
       userId,
       sessionId,
       absoluteLifetimeCutoff(),
-      transaction
+      transaction,
+      presentedRefreshToken === undefined ? undefined : hashToken(presentedRefreshToken)
     )
     if (!authenticatedAt)
       throw new HttpError(

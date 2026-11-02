@@ -204,7 +204,7 @@ describe('POST /api/v1/platform/users', () => {
 
     const verify = await request(app)
       .post('/api/v1/auth/link/verify')
-      .send({ token: signInUrl.searchParams.get('token') ?? '' })
+      .send({ token: signInUrl.searchParams.get('token') ?? '', email })
 
     expect(verify.status).toBe(200)
     expect(dataOf<{ accessToken: string; user: { id: string } }>(verify)).toMatchObject({
