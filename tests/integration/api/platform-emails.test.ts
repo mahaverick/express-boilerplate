@@ -435,6 +435,18 @@ describe('GET /api/v1/platform/emails/:id', () => {
     expect(await statusOf(get(token, `/emails/${unknownId}`))).toBe(404)
     expect(await statusOf(get(token, '/emails/health'))).toBe(200)
   })
+
+  it('names RETENTION_EMAIL_LOGS_DAYS as details.retentionDays on an unknown id', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const response = await get(token, `/emails/${randomUUID()}`)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toMatchObject({
+      code: 'email_not_found',
+      details: { retentionDays: getEnv().RETENTION_EMAIL_LOGS_DAYS },
+    })
+  })
 })
 
 describe('GET /api/v1/platform/emails/:id/preview', () => {

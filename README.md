@@ -372,7 +372,10 @@ the user's address: they belong to the mailbox, not the account.
 
 - `GET /platform/emails` lists messages newest first (searchable by recipient), and
   `GET /platform/emails/:id` returns one message's timeline: attempts,
-  provider events, the address's active suppression and the resend chain.
+  provider events, the address's active suppression and the resend chain. Its
+  404 (`email_not_found`) carries `details.retentionDays`, the server's
+  `RETENTION_EMAIL_LOGS_DAYS` (0 when messages are never purged), so Apex
+  states the real retention.
 - `GET /platform/emails/health?range=7d|30d` counts messages per UTC day and
   reports rates over the messages that left the server. Without a webhook
   every successful send stays `sent`, and every rate except the undelivered
@@ -425,7 +428,9 @@ never count as customer progress.
 
 **Staff** (`platform-onboarding.service.ts`, under `/api/v1/platform`):
 `GET /onboarding/funnel?range=7d|30d|90d` (default 30d) counts each step's
-completions and the cohort by state; `GET /onboarding/tenants?state=` pages
+completions and the cohort by state, with `stuckAfterDays`, the server's
+`ONBOARDING_STUCK_AFTER_DAYS` (`GET /stats` sends it too, beside
+`totals.stuckTenants`), so Apex states the real threshold; `GET /onboarding/tenants?state=` pages
 active tracked tenants in one state (`stuck` by default) on the shared list
 params, `search` matching the name and `sort` one of `progress`, `-started`,
 `name`;

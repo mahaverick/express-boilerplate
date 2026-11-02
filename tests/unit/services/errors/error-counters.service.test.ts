@@ -5,7 +5,7 @@
  * tests/integration/services/errors/error-counters.service.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
-import { ERROR_GLOBAL_PER_MINUTE } from '@/constants/error-tracking.constants'
+import { ERROR_GLOBAL_PER_MINUTE, ERROR_RETRY_LIMIT } from '@/constants/error-tracking.constants'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import {
   countErrorOutcome,
@@ -169,6 +169,7 @@ describe('getErrorTrackingStatus', () => {
     await expect(getErrorTrackingStatus(AT)).resolves.toEqual({
       enabled: false,
       window: '15m',
+      retryLimit: ERROR_RETRY_LIMIT,
       sent: 6,
       dropped: { throttled: 0, buffer_full: 7, rejected: 0, retry_exhausted: 0 },
       lastSendOkAt: '2026-10-04T11:59:00.000Z',
@@ -183,6 +184,7 @@ describe('getErrorTrackingStatus', () => {
     await expect(getErrorTrackingStatus(AT)).resolves.toEqual({
       enabled: false,
       window: '15m',
+      retryLimit: ERROR_RETRY_LIMIT,
       sent: 0,
       dropped: { throttled: 0, buffer_full: 0, rejected: 0, retry_exhausted: 0 },
       lastSendOkAt: null,
@@ -272,6 +274,7 @@ describe('a 5xx storm while Redis is down', () => {
     expect(status).toEqual({
       enabled: true,
       window: '15m',
+      retryLimit: ERROR_RETRY_LIMIT,
       sent: 0,
       dropped: { throttled: 0, buffer_full: 0, rejected: 0, retry_exhausted: 0 },
       lastSendOkAt: null,

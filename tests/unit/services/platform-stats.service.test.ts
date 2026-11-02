@@ -1,5 +1,13 @@
-import { describe, expect, it, vi } from 'vite-plus/test'
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
+import { getEnv } from '@/configs/env.config'
 import { emailMessageDays, getPlatformStats, utcDays } from '@/services/platform-stats.service'
+
+vi.mock('@/configs/env.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/env.config')>()
+  return { ...actual, getEnv: vi.fn(actual.getEnv) }
+})
+
+const realEnv = getEnv()
 
 vi.mock('@/repositories/platform-stats.repository', () => ({
   PlatformStatsRepository: class {
@@ -101,14 +109,25 @@ describe('emailMessageDays', () => {
 })
 
 describe('getPlatformStats', () => {
-  it('answers exactly range, totals, signups and emailMessages', async () => {
+  afterEach(() => {
+    vi.mocked(getEnv).mockReturnValue(realEnv)
+  })
+
+  it('answers exactly range, stuckAfterDays, totals, signups and emailMessages', async () => {
     const stats = await getPlatformStats('7d', new Date('2026-09-29T12:00:00.000Z'))
     expect(Object.keys(stats).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'emailMessages',
       'range',
       'signups',
+      'stuckAfterDays',
       'totals',
     ])
     expect(stats.totals).toEqual({ tenants: 2, users: 3, staff: 1, stuckTenants: 0 })
+  })
+
+  it('sends the configured ONBOARDING_STUCK_AFTER_DAYS as stuckAfterDays', async () => {
+    vi.mocked(getEnv).mockReturnValue({ ...realEnv, ONBOARDING_STUCK_AFTER_DAYS: 14 })
+    const stats = await getPlatformStats('7d', new Date('2026-09-29T12:00:00.000Z'))
+    expect(stats.stuckAfterDays).toBe(14)
   })
 })

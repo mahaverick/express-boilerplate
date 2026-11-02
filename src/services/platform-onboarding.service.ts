@@ -245,8 +245,8 @@ export function emailDomainsOf(emails: readonly string[]): string[] {
  * The funnel over the active, tracked tenants whose onboarding started in
  * the range: one entry per registry step, in registry order (a member step
  * counts a tenant once any active owner has done it), the cohort's
- * totals by state, and how many tenants are tracked at all, in or out of
- * the range.
+ * totals by state, how many tenants are tracked at all, in or out of
+ * the range, and the stuck threshold in days.
  * @param range - The window, back from `now`.
  * @param now - The current instant; injectable for tests.
  * @returns The funnel.
@@ -275,6 +275,7 @@ export async function getOnboardingFunnel(
     totals: { started, ...totals },
     completionRate: started === 0 ? null : totals.complete / started,
     trackedTenants,
+    stuckAfterDays: getEnv().ONBOARDING_STUCK_AFTER_DAYS,
     steps: ONBOARDING_STEPS.map((step) => ({
       key: step.key,
       title: step.title,

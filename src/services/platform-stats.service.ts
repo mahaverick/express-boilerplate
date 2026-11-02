@@ -2,6 +2,7 @@
  * @file The platform Overview: totals plus zero-filled daily series. The route
  * has already checked the platform role.
  */
+import { getEnv } from '@/configs/env.config'
 import {
   EMAIL_MESSAGE_GROUPS,
   type EmailMessageGroup,
@@ -40,6 +41,12 @@ export type EmailMessageDay = { date: string } & Record<EmailMessageGroup, numbe
  */
 export interface PlatformStats {
   range: StatsRange
+  /**
+   * `ONBOARDING_STUCK_AFTER_DAYS`: the days without progress after which a
+   * tenant counts in `totals.stuckTenants`, so a client states the
+   * server's value instead of the default.
+   */
+  stuckAfterDays: number
   totals: PlatformTotals & { stuckTenants: number }
   signups: { date: string; users: number; tenants: number }[]
   emailMessages: EmailMessageDay[]
@@ -113,7 +120,7 @@ function byDay(rows: readonly DayCount[]): Map<string, number> {
  * The Overview for one range.
  * @param range - The window.
  * @param now - The current instant; injectable for tests.
- * @returns Totals (the stuck-tenant count included), and one zero-filled entry per day for sign-ups and email messages.
+ * @returns Totals (the stuck-tenant count included), the stuck threshold in days, and one zero-filled entry per day for sign-ups and email messages.
  */
 export async function getPlatformStats(
   range: StatsRange,
@@ -130,6 +137,7 @@ export async function getPlatformStats(
   const tenants = byDay(signups.tenants)
   return {
     range,
+    stuckAfterDays: getEnv().ONBOARDING_STUCK_AFTER_DAYS,
     totals: { ...totals, stuckTenants },
     signups: days.map((date) => ({
       date,

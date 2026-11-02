@@ -7,6 +7,7 @@
  * own gates, errors and audit entry. The only module in `src/` that imports
  * `platform-email.repository.ts`.
  */
+import { getEnv } from '@/configs/env.config'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import {
   EMAIL_MESSAGE_GROUPS,
@@ -320,14 +321,22 @@ export async function listEmails(
 }
 
 /**
- * The message or a 404.
+ * The message or a 404. The 404 carries `details.retentionDays`
+ * (`RETENTION_EMAIL_LOGS_DAYS`, 0 for never purged), so a client can say
+ * how long messages are kept without assuming the default. Only staff the
+ * route's role gate let through reach it; the gate's own 404 stays plain.
  * @param id - The message id.
  * @returns The record.
  * @throws {HttpError} 404 when no message has that id.
  */
 async function requireMessage(id: string): Promise<PlatformEmailRecord> {
   const message = await platformEmailRepository.findRecord(id)
-  if (!message) throw notFoundError('email')
+  if (!message) {
+    const { message: text, code } = notFoundError('email')
+    throw new HttpError(text, 404, code, undefined, {
+      details: { retentionDays: getEnv().RETENTION_EMAIL_LOGS_DAYS },
+    })
+  }
   return message
 }
 

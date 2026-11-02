@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
@@ -89,15 +90,17 @@ describe('GET /api/v1/platform/stats', () => {
     expect(data.totals.staff).toBeGreaterThanOrEqual(1)
   })
 
-  it('answers exactly range, totals, signups and emailMessages', async () => {
+  it('answers exactly range, stuckAfterDays, totals, signups and emailMessages', async () => {
     const response = await stats(await createStaff('viewer'))
-    const data = (response.body as { data: StatsBody }).data
+    const data = (response.body as { data: StatsBody & { stuckAfterDays: number } }).data
     expect(Object.keys(data).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'emailMessages',
       'range',
       'signups',
+      'stuckAfterDays',
       'totals',
     ])
+    expect(data.stuckAfterDays).toBe(getEnv().ONBOARDING_STUCK_AFTER_DAYS)
   })
 
   it('counts emailMessages[] in five groups, one entry per day', async () => {
