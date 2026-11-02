@@ -1,8 +1,17 @@
 # Lint rules still on ESLint
 
+This file lists every lint rule that still runs on ESLint instead of Oxlint, with the reason and what would let it move. It is for anyone who changes the lint setup.
+
 Oxlint (`vp check`, configured in the `lint` block of `vite.config.ts`) runs every rule it can, type-aware ones included. ESLint (`eslint.config.mjs`) runs, untyped, only the rules below. `tests/unit/lint-inventory.test.ts` pins each rule to its linter, so a rule moves only with an edit to `tests/fixtures/lint-inventory.json`.
 
-To move a rule: enable it in `vite.config.ts`, delete it from `eslint.config.mjs`, move it from `eslint` to `oxlint` in the inventory, and point its `lint-gates.test.ts` case at Oxlint.
+"JS plugins" below means Oxlint's JavaScript plugin support, which runs an ESLint plugin unchanged and is in alpha. "No native port" means Oxlint has no built-in version of the rule.
+
+To move a rule to Oxlint:
+
+1. Enable it in `vite.config.ts`.
+2. Delete it from `eslint.config.mjs`.
+3. Move it from `eslint` to `oxlint` in the inventory.
+4. Point its `lint-gates.test.ts` case at Oxlint.
 
 ## Rules on ESLint
 
@@ -47,7 +56,7 @@ To move a rule: enable it in `vite.config.ts`, delete it from `eslint.config.mjs
 | `sonarjs/publicly-writable-directories`           | No native port: Oxlint has no sonarjs plugin. An untyped security check for an Express, JWT and cookie API.                                                                                                                             | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
 | `sonarjs/session-regeneration`                    | No native port: Oxlint has no sonarjs plugin. An untyped security check for an Express, JWT and cookie API.                                                                                                                             | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
 | `sonarjs/strict-transport-security`               | No native port: Oxlint has no sonarjs plugin. An untyped security check for an Express, JWT and cookie API.                                                                                                                             | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
-| `sonarjs/super-linear-regex`                      | No native port: Oxlint has no sonarjs or regexp plugin. The ReDoS check.                                                                                                                                                                | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
+| `sonarjs/super-linear-regex`                      | No native port: Oxlint has no sonarjs or regexp plugin. The regular-expression denial-of-service (ReDoS) check.                                                                                                                         | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
 | `sonarjs/unverified-certificate`                  | No native port: Oxlint has no sonarjs plugin. An untyped security check for an Express, JWT and cookie API.                                                                                                                             | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
 | `sonarjs/unverified-hostname`                     | No native port: Oxlint has no sonarjs plugin. An untyped security check for an Express, JWT and cookie API.                                                                                                                             | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
 | `sonarjs/weak-ssl`                                | No native port: Oxlint has no sonarjs plugin. An untyped security check for an Express, JWT and cookie API.                                                                                                                             | JS plugins leaving alpha (they run the ESLint plugin unchanged)                                               | [#14812](https://github.com/oxc-project/oxc/issues/14812) |
@@ -74,7 +83,7 @@ Oxlint's `correctness` category also turns on 26 rules the ESLint config never h
 
 ## Dropped with known effects
 
-- `jsdoc/no-undefined-types` is dropped (the migration audit), so a `@throws {X}` tag may name an `X` the file no longer imports. Those tags stay as they are.
+- `jsdoc/no-undefined-types` is dropped, as the audit of the move to Oxlint decided. So a `@throws {X}` tag may name an `X` the file does not import. Those tags stay as they are.
 
 ## Not adopted yet
 

@@ -1,12 +1,15 @@
 # Skills
 
-This directory is where project-specific agent skills go — a `SKILL.md`
-per skill, one directory per skill, matching the directory name to the
-skill's `name` field. None are shipped here on purpose: this boilerplate
-has no product-specific workflow yet (no design system, no deploy target,
-no domain-specific tooling) for a skill to encode. Add one here once this
-project has a repeated, multi-step procedure worth teaching an agent —
-don't add one just to have one.
+This directory holds project-specific agent skills: written procedures that
+a coding agent such as Claude Code loads and follows. It is for anyone who
+adds a skill to a project built from this boilerplate.
+
+Each skill is one directory with one `SKILL.md`, and the directory name
+matches the skill's `name` field. This boilerplate ships 0 skills on purpose.
+It has no product-specific workflow for a skill to encode: no design system,
+no deploy target and no domain-specific tooling. Add a skill once the project
+has a repeated, multi-step procedure worth teaching an agent. Don't add one
+just to have one.
 
 A skill earns its place by being **executable by someone who wasn't
 there.** If it only makes sense to the person who wrote it, it's a note to
@@ -53,22 +56,22 @@ procedure make sense.>
 ## Safety checklist
 ```
 
-- **`description` is the routing key** — it's the only field read when
-  deciding whether to invoke a skill, so put the trigger phrases someone
-  would actually type in it, plus an explicit boundary ("do NOT use this
-  for X; that's `<other-skill>`"). A vague description makes a skill
-  invisible even when it's exactly the right one.
-- Prefer a short **Fast path** section for the common case if the full
-  procedure has more than a few steps — most invocations should not need
-  to read past it.
-- If a project maintains a shared skills repository with a fuller
-  `TEMPLATE.md` and house conventions, start from that instead of this
-  skeleton — this one exists so this directory is self-sufficient when no
+- **`description` is the routing key.** It is the only field the agent reads
+  when it decides whether to invoke a skill. Put in it the trigger phrases
+  someone would type, plus an explicit boundary ("do NOT use this for X;
+  that's `<other-skill>`"). A vague description hides a skill even when it is
+  the right one.
+- **Add a short Fast path section** for the common case when the full
+  procedure has more than a few steps. Most invocations should not need to read
+  past it.
+- **Prefer a shared template when one exists.** If the project maintains a
+  shared skills repository with a fuller `TEMPLATE.md` and house conventions,
+  start from that. This skeleton keeps this directory self-sufficient when no
   such repository is configured.
 
 ## What doesn't belong here
 
-A one-off script, a personal alias, or anything that only ever runs on one
-person's machine isn't a skill — put it in the relevant doc
+A one-off script, a personal alias, or anything that runs on one person's
+machine only is not a skill. Put it in the relevant doc
 ([CONTRIBUTING.md](../../CONTRIBUTING.md) for workflow,
 [CLAUDE.md](../../CLAUDE.md) for a gotcha) instead.

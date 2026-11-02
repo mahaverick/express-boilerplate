@@ -1,10 +1,15 @@
 # CI performance
 
-Timing record for the Vite+ migration and the test-speed work. The first table is CI, then local, then method and findings.
+This file records continuous integration (CI) and local timings before and after two pull requests (PRs), both merged on 23 October 2026. It is for anyone who changes the CI workflow or the test setup and needs a baseline.
+
+- **PR 1** is [#146](https://github.com/mahaverick/express-boilerplate/pull/146): the Vite+ migration (Oxlint, Oxfmt, Vitest, Vite+ hooks).
+- **PR 2** is [#147](https://github.com/mahaverick/express-boilerplate/pull/147): 4 test shards and a Docker layer cache.
+
+The sections cover CI, then local runs, then the method and the findings.
 
 ## Summary
 
-CI wall-clock fell from a 305.5 s median to 154.5 s, a 49% cut. Sharding the tests into four parallel jobs did it. PR 1 (Vite+ lint and format) did not move wall-clock, because `lint` ran beside `test` and `test` set the time.
+The CI wall-clock median fell from 305.5 s to 154.5 s, a 49% cut. Sharding the tests into 4 parallel jobs (PR 2) gave the cut. PR 1 (Vite+ lint and format) did not move wall-clock: `lint` ran beside `test`, and `test` set the time.
 
 ## CI
 
@@ -27,13 +32,13 @@ Per job, median (min-max):
 | `test` (merge and coverage gate) |               n/a |               n/a |           32.5 s (27-36) |
 | `docker`                         |      not recorded |    47.5 s (41-67) | 31 s (23-38), warm cache |
 
-The critical path is now the slowest shard plus the merge job: 118 s + 32.5 s, about 151 s, plus queue time.
+After PR 2, the critical path is the slowest shard plus the merge job: 118 s + 32.5 s, about 151 s, plus queue time.
 
-The `docker` figure is warm. The first run on a head writes the layer cache and takes longer (78 s for the build step, against 14 s warm). The `docker` job is off the critical path, so this does not move wall-clock.
+The `docker` figure is warm. The first run on a head commit writes the layer cache and takes longer: 78 s for the build step, against 14 s warm. The `docker` job is off the critical path, so this does not move wall-clock.
 
 ## Local
 
-Apple silicon laptop, 10 cores. `hyperfine --warmup 1 --runs 3`, mean ± σ. PR 2 changes CI only, so the per-step figures are the ones from PR 1.
+Measured on an Apple silicon laptop with 10 cores, using `hyperfine --warmup 1 --runs 3`, as mean ± σ (standard deviation). PR 2 changes CI only, so the per-step figures are the ones from PR 1.
 
 | Step                                   |           Before |                                After PR 1 |
 | :------------------------------------- | ---------------: | ----------------------------------------: |
@@ -45,21 +50,21 @@ Apple silicon laptop, 10 cores. `hyperfine --warmup 1 --runs 3`, mean ± σ. PR 
 | Pre-push, no integration (old hook)    | 93.90 s ± 5.34 s |                                       n/a |
 | `pnpm gate`, with integration          |              n/a |              103.8 s (load 10.3 at start) |
 
-On PR 2's head, one `pnpm gate` run took 136 s (exit 0, 608 s user CPU). The load average was 2.4 at the start and 10.4 at the end. The earlier 103.8 s run started at a higher load but ran faster, so the laptop's other work swings this figure by 30% or more. Read the gate as 100-140 s. The gate runs the suite in one process; sharding applies to CI only.
+On PR 2's head commit, one `pnpm gate` run took 136 s (exit 0, 608 s user CPU). The load average was 2.4 at the start and 10.4 at the end. The 103.8 s run on PR 1 started at a higher load but ran faster. So the laptop's other work swings this figure by 30% or more; read the gate as 100-140 s. The gate runs the suite in one process; sharding applies to CI only.
 
 ## Method
 
 - **CI before:** median and p90 of the last 20 successful `pull_request` runs of `ci.yml` on main (f0d804af, v8.0.1), 2026-10-21.
 - **CI after PR 1:** run 39845569908, attempt 1 plus 10 reruns, 10 successes.
 - **CI after PR 2:** run 39860848023 on head `cede1686`. Attempt 1 wrote the Docker cache and attempt 2 reran `docker` alone. Attempts 3-12 are 10 full sequential reruns (`gh run rerun`, then `gh run watch --exit-status`), and all 10 passed. Stats cover those 10. p90 is the nearest-rank value (the 9th of 10). The commit that adds this file changes no workflow, so timings carry over.
-- **Local:** `hyperfine --warmup 1 --runs 3` and `time pnpm gate`, with the user's compose stack up (Postgres 5433, Redis 6380).
-- **Load:** the laptop carries load from other apps (2-4 idle, 10+ under test). Treat local figures as indicative.
+- **Local:** `hyperfine --warmup 1 --runs 3` and `time pnpm gate`, with the developer's compose stack up (Postgres on port 5433, Redis on port 6380).
+- **Load:** the laptop carries load from other apps, with a load average of 2-4 idle and 10 or more under test. Treat local figures as indicative.
 
 ## Findings
 
-- **Four shards, four workers each.** At three shards and 3 runs each, 8 workers per shard gave a slowest shard of 130-148 s and 4 workers gave 129-140 s. Four shards at four workers gave 115-118 s. Each shard adds about 45 s of setup (checkout, install, migrations), so a fifth shard gains little.
-- **Coverage is enforced on the merge.** Each shard writes a blob and applies no threshold. The `test` job merges the blobs and applies the 80% thresholds from `vite.config.ts` to the whole suite. Two proofs show both gates work: with the threshold temporarily at 99% lines the merged run failed ([run 39859048128](https://github.com/mahaverick/express-boilerplate/actions/runs/39859048128): lines 98.29%), and a deliberately failing shard failed `test` ([run 39859534908](https://github.com/mahaverick/express-boilerplate/actions/runs/39859534908)).
-- **Test isolation stays on.** In the spike, `--no-isolate` broke 46 unit tests (module-level `vi.mock` state) and saved nothing (41 s against 43 s). CI time is set by the integration suite under coverage, so sharding is the lever.
+- **4 shards, 4 workers each.** With 3 shards and 3 runs each, 8 workers per shard gave a slowest shard of 130-148 s, and 4 workers gave 129-140 s. 4 shards at 4 workers gave 115-118 s. Each shard adds about 45 s of setup (checkout, install, migrations), so a fifth shard gains little.
+- **Coverage is enforced on the merge.** Each shard writes a blob and applies no threshold. The `test` job merges the blobs and applies the 80% thresholds from `vite.config.ts` to the whole suite. Two runs show both gates work. With the threshold set to 99% lines for one run, the merged run failed ([run 39859048128](https://github.com/mahaverick/express-boilerplate/actions/runs/39859048128): lines 98.29%), and a deliberately failing shard failed `test` ([run 39859534908](https://github.com/mahaverick/express-boilerplate/actions/runs/39859534908)).
+- **Test isolation stays on.** In a trial run, `--no-isolate` broke 46 unit tests (module-level `vi.mock` state) and saved nothing (41 s against 43 s). CI time is set by the integration suite under coverage, so sharding is the lever.
 - **Docker layer cache.** The cache cut the build step from 78 s (cold) to 14 s (warm).
 
 ## Try next
