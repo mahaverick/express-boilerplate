@@ -572,7 +572,9 @@ export class RazorpayProvider implements BillingProviderClient {
    * Refund the payment of the subscription's newest paid invoice in full,
    * unless that payment already has a refund: `already_refunded` when
    * `amount_refunded` covers the amount or `refund_status` is `full`,
-   * `partly_refunded` for any other refund. Calls for one subscription run
+   * `partly_refunded` for any other refund, with the amount paid and the
+   * amount refunded (null when Razorpay reports a `refund_status` but no
+   * `amount_refunded`). Calls for one subscription run
    * one at a time, so two callers in this process cannot both refund it.
    * @param subscriptionId - The subscription id.
    * @returns What the refund did.
@@ -594,7 +596,13 @@ export class RazorpayProvider implements BillingProviderClient {
       if (refundStatus === 'full' || (amount !== null && refunded >= amount && refunded > 0)) {
         return { status: 'already_refunded' as const }
       }
-      if (refunded > 0 || refundStatus !== null) return { status: 'partly_refunded' as const }
+      if (refunded > 0 || refundStatus !== null) {
+        return {
+          status: 'partly_refunded' as const,
+          amountMinor: amount,
+          refundedMinor: refunded > 0 ? refunded : null,
+        }
+      }
       const json = asRecord(
         await this.#call('POST', `/payments/${encodeURIComponent(paymentId)}/refund`, { body: {} })
       )

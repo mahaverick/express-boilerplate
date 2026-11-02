@@ -625,7 +625,11 @@ describe('syncTenantBilling', () => {
     const duplicateId = await createSubscription({ tenantId, priceId: plans.monthPriceId })
     await fake.fakeAdvance(duplicateId, 'active')
     await setBilling(tenantId, { pendingSubscriptionId: duplicateId })
-    const partly: ProviderRefundOutcome = { status: 'partly_refunded' }
+    const partly: ProviderRefundOutcome = {
+      status: 'partly_refunded',
+      amountMinor: 99_900,
+      refundedMinor: 49_900,
+    }
 
     await withMutatedMethod(
       FakeBillingProvider.prototype,
@@ -640,7 +644,7 @@ describe('syncTenantBilling', () => {
     expect(alerts).toStrictEqual([
       {
         kind: 'reconcile_repair',
-        message: `Duplicate subscription ${duplicateId} is only partly refunded. Refund the rest in Razorpay.`,
+        message: `Duplicate subscription ${duplicateId} is only partly refunded: ₹499 of ₹999 refunded. Refund the remaining ₹500 in Razorpay.`,
       },
     ])
   })

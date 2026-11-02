@@ -717,7 +717,7 @@ async function refundDuplicate(
     case 'partly_refunded': {
       await insertAlert(tenantId, {
         kind: 'reconcile_repair',
-        message: alerts.partlyRefunded(subscriptionId),
+        message: alerts.partlyRefunded(subscriptionId, outcome.amountMinor, outcome.refundedMinor),
         subscriptionId,
       })
       break

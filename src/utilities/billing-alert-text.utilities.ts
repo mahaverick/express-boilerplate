@@ -55,6 +55,26 @@ export function legacyCancelFailedMarker(subscriptionId: string): string {
 }
 
 /**
+ * The end of a partial-refund alert: the amounts Razorpay reported and what
+ * staff refund, worded so an amount it did not report never reads as ₹0.
+ * @param amountMinor - The amount paid, in paise; null when not reported.
+ * @param refundedMinor - The amount refunded, in paise; null when not reported.
+ * @returns The text after "is only partly refunded".
+ */
+function partlyRefundedTail(amountMinor: number | null, refundedMinor: number | null): string {
+  const check = 'Refund the rest in Razorpay.'
+  if (refundedMinor === null) {
+    return amountMinor === null
+      ? `, and Razorpay did not report how much. ${check}`
+      : `, and Razorpay did not report how much of its ₹${formatRupees(amountMinor)} payment. ${check}`
+  }
+  if (amountMinor === null) {
+    return `: ₹${formatRupees(refundedMinor)} refunded, and Razorpay did not report the amount paid. ${check}`
+  }
+  return `: ₹${formatRupees(refundedMinor)} of ₹${formatRupees(amountMinor)} refunded. Refund the remaining ₹${formatRupees(amountMinor - refundedMinor)} in Razorpay.`
+}
+
+/**
  * Each staff billing alert's text, by what happened.
  */
 export const BILLING_ALERT_TEXT = {
@@ -80,8 +100,8 @@ export const BILLING_ALERT_TEXT = {
     `We cancelled duplicate subscription ${id} and refunded ₹${formatRupees(amountMinor)} in refund ${refundId}. No action needed.`,
   duplicateNothingPaid: (id: string) =>
     `We cancelled duplicate subscription ${id}. It had no payment to refund, so no action is needed.`,
-  duplicatePartlyRefunded: (id: string) =>
-    `Duplicate subscription ${id} is only partly refunded. Refund the rest in Razorpay.`,
+  duplicatePartlyRefunded: (id: string, amountMinor: number | null, refundedMinor: number | null) =>
+    `Duplicate subscription ${id} is only partly refunded${partlyRefundedTail(amountMinor, refundedMinor)}`,
 
   // Refunding a subscription an archived workspace adopted.
   archivedCancelFailed: (id: string) =>
@@ -92,8 +112,8 @@ export const BILLING_ALERT_TEXT = {
     `We cancelled subscription ${id}, which an archived workspace adopted, and refunded ₹${formatRupees(amountMinor)} in refund ${refundId}. No action needed.`,
   archivedNothingPaid: (id: string) =>
     `We cancelled subscription ${id}, which an archived workspace adopted. It had no payment to refund, so no action is needed.`,
-  archivedPartlyRefunded: (id: string) =>
-    `Subscription ${id}, which an archived workspace adopted, is only partly refunded. Refund the rest in Razorpay.`,
+  archivedPartlyRefunded: (id: string, amountMinor: number | null, refundedMinor: number | null) =>
+    `Subscription ${id}, which an archived workspace adopted, is only partly refunded${partlyRefundedTail(amountMinor, refundedMinor)}`,
 
   // The state machine.
   subscriptionCompleted: (id: string) =>
