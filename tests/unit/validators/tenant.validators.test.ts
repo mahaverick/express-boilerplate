@@ -11,7 +11,29 @@ import {
   scanJson,
   slugSchema,
   updateTenantSchema,
+  updateTenantSettingsSchema,
 } from '@/validators/tenant.validators'
+
+/**
+ * The metadata field's messages for one value.
+ * @param metadata - The value sent.
+ * @returns The messages.
+ */
+const messagesFor = (metadata: unknown): string[] =>
+  updateTenantSettingsSchema.safeParse({ metadata }).error?.issues.map((issue) => issue.message) ??
+  []
+
+describe('updateTenantSettingsSchema metadata', () => {
+  it('names the field Custom data, as the customer app labels it', () => {
+    expect(messagesFor(['a'])).toEqual(['Custom data must be a JSON object.'])
+    expect(messagesFor({ key: 'a\u0000b' })).toEqual([
+      'Custom data has a hidden character. Remove it. Line breaks and tabs are allowed.',
+    ])
+    expect(messagesFor({ key: 'x'.repeat(16_384) })).toEqual([
+      'Custom data must be at most 16384 characters as JSON.',
+    ])
+  })
+})
 
 describe('slugSchema', () => {
   it('reserves the seeded platform tenant’s slug', () => {

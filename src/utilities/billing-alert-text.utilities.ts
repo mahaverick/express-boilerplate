@@ -112,7 +112,7 @@ export const BILLING_ALERT_TEXT = {
   lifecycleCancelFailed: (id: string) =>
     `${cancelFailedMarker(id)}, so this subscription ${LIFECYCLE_ALERT_TEXT} still charges. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
   lifecycleReadFailed: (id: string) =>
-    `Reading subscription ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed, so we did not cancel it and it may still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
+    `Reading subscription ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed, so we did not cancel it and it can still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
   lifecycleCheckoutReadFailed: (id: string) =>
     `Reading checkout ${id} ${LIFECYCLE_ALERT_TEXT} from Razorpay failed before its cancel. Check in Razorpay whether it was paid, and refund it if so.`,
   lifecycleCheckoutSyncFailed: () =>

@@ -99,7 +99,9 @@ describe('listParamsSchema', () => {
 
   it('takes total=1 only', () => {
     expect(schema.parse({ total: '1' }).params.total).toBe(true)
-    expect(errorsOf({ total: 'yes' }).total).toEqual(['total must be 1.'])
+    expect(errorsOf({ total: 'yes' }).total).toEqual([
+      'total must be 1, which asks for the row count. Leave it out otherwise.',
+    ])
   })
 
   it('refuses an unknown value in a comma list, naming the allowed ones', () => {

@@ -1206,7 +1206,7 @@ describe('/api/v1/tenants', () => {
         expect(response.status).toBe(200)
         expect(response.body).toMatchObject({
           success: true,
-          message: 'You left the tenant.',
+          message: 'You left the workspace.',
           data: null,
         })
         expect(
@@ -1610,7 +1610,7 @@ describe('/api/v1/tenants', () => {
         .send(body)
       expect(response.status).toBe(400)
       const { errors } = response.body as { errors: Record<string, string[]> }
-      expect(errors.metadata).toEqual(['Metadata must be nested at most 10 levels deep.'])
+      expect(errors.metadata).toEqual(['Custom data must be nested at most 10 levels deep.'])
     })
 
     it('accepts metadata at the size and depth caps, and refuses one past each', async () => {

@@ -25,4 +25,4 @@ function isRealSortAt(value: string): boolean {
 export const sortAtField = z
   .string()
   .regex(SORT_AT_PATTERN)
-  .refine(isRealSortAt, 'sortAt is not a real timestamp.')
+  .refine(isRealSortAt, 'sortAt is not a real timestamp. Reload the list from its first page.')

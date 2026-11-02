@@ -92,7 +92,10 @@ export function parseFireEventArguments(argv: readonly string[]): FireEventArgum
 async function headerFor(messageId: string): Promise<string> {
   if (messageId.startsWith('<')) return messageId
   const header = await messageIdHeaderFor(messageId)
-  if (header === undefined) throw new Error(`No email message with id ${messageId}`)
+  if (header === undefined)
+    throw new Error(
+      `No email message has the id ${messageId}. Copy an id from Emails in Apex, then run the command again.`
+    )
   return header
 }
 

@@ -64,7 +64,10 @@ import {
   frontendUrl,
   MISSING_FIRST_NAME_FALLBACK,
 } from '@/services/frontend-links.service'
-import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
+import {
+  INVITATION_RECIPIENT_TENANT_SHARE,
+  spendInvitationRecipientBudget,
+} from '@/services/invitation-recipient-limit.service'
 import {
   buildInvitationConfirmUrl,
   claimLinkToken,
@@ -189,10 +192,17 @@ const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
 
 /**
- * The 429 message when an address has had its day's share of invitation mail.
+ * The 429 message when an address has had its day's share of invitation mail,
+ * worded by which count refused it.
+ * @param refusedBy - The tenant's share of the address, or the address's total from every workspace.
+ * @returns The message.
  */
-const INVITATION_RECIPIENT_LIMITED_MESSAGE =
-  'This address has reached its daily invitation limit. Try again in 24 hours.'
+function invitationRecipientLimitedMessage(refusedBy: 'tenant_share' | 'address_total'): string {
+  if (refusedBy === 'tenant_share') {
+    return `This workspace has sent this address ${String(INVITATION_RECIPIENT_TENANT_SHARE)} invitations in 24 hours, the limit for one workspace. Try again in 24 hours.`
+  }
+  return `This address has had ${String(getEnv().INVITATION_RECIPIENT_DAILY_LIMIT)} invitations in 24 hours from all workspaces together, the limit for one address. Try again in 24 hours.`
+}
 
 const INVITATION_NOT_FOUND_MESSAGE =
   'This invitation is no longer pending. Refresh the invitation list to see the current ones.'
@@ -398,8 +408,9 @@ function invitationNotFound(): HttpError {
  * @throws {HttpError} 429 `RATE_LIMITED` when the tenant has had its share of the address's invitation mails in the window, or the address has had `INVITATION_RECIPIENT_DAILY_LIMIT`.
  */
 async function assertRecipientBudget(email: string, tenantId: string): Promise<void> {
-  if ((await spendInvitationRecipientBudget(email, tenantId)) === 'exhausted') {
-    throw new HttpError(INVITATION_RECIPIENT_LIMITED_MESSAGE, 429, RATE_LIMITED_CODE)
+  const budget = await spendInvitationRecipientBudget(email, tenantId)
+  if (budget !== 'spent') {
+    throw new HttpError(invitationRecipientLimitedMessage(budget), 429, RATE_LIMITED_CODE)
   }
 }
 

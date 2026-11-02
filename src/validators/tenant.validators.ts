@@ -11,7 +11,11 @@ import { MEMBERSHIP_ROLES, RESERVED_SLUGS } from '@/constants/tenant.constants'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import { emailSchema } from '@/validators/auth.validators'
 import { listFilter, listParamsSchema } from '@/validators/list.validators'
-import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
+import {
+  normalizeMultilineText,
+  safeText,
+  unsafeTextMessage,
+} from '@/validators/safe-text.validators'
 
 const MAX_TENANT_NAME_LENGTH = 255
 const MAX_TENANT_DESCRIPTION_LENGTH = 1000
@@ -48,14 +52,14 @@ const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 export const slugSchema = z
   .string()
   .trim()
-  .min(3, 'Slug must be at least 3 characters.')
-  .max(MAX_SLUG_LENGTH, `Slug must be at most ${MAX_SLUG_LENGTH} characters.`)
+  .min(3, 'The web address must be at least 3 characters.')
+  .max(MAX_SLUG_LENGTH, `The web address must be at most ${MAX_SLUG_LENGTH} characters.`)
   .regex(
     SLUG_PATTERN,
-    'Slug must be lowercase alphanumeric characters and hyphens, and cannot start or end with a hyphen.'
+    'Use lowercase letters, digits and hyphens in the web address, with no hyphen at the start or end.'
   )
   .refine((slug) => !RESERVED_SLUGS_SET.has(slug), {
-    message: 'This slug is reserved and cannot be used.',
+    message: 'This web address is reserved. Choose another one.',
   })
 
 /**
@@ -82,7 +86,7 @@ const tenantDescriptionField = z
     MAX_TENANT_DESCRIPTION_LENGTH,
     `Description must be at most ${MAX_TENANT_DESCRIPTION_LENGTH} characters.`
   )
-  .refine(safeText({ multiline: true }), 'Description contains characters that are not allowed')
+  .refine(safeText({ multiline: true }), unsafeTextMessage('Description', { multiline: true }))
 
 /**
  * A tenant's `logo` or `website`: an absolute `http:` or `https:` URL, trimmed
@@ -101,7 +105,7 @@ function httpUrlField(label: string, maxLength: number) {
     .trim()
     .min(1, 'Must not be empty.')
     .max(maxLength, `${label} must be at most ${maxLength} characters.`)
-    .refine(safeText(), `${label} contains characters that are not allowed`)
+    .refine(safeText(), unsafeTextMessage(label))
     .refine((value) => {
       if (value.includes('\\')) return false
       if (!URL.canParse(value)) return true
@@ -127,7 +131,7 @@ export const newTenantSchema = z.object({
     .trim()
     .min(1, 'Name is required.')
     .max(MAX_TENANT_NAME_LENGTH, `Name must be at most ${MAX_TENANT_NAME_LENGTH} characters.`)
-    .refine(safeText(), 'Name contains characters that are not allowed'),
+    .refine(safeText(), unsafeTextMessage('Name')),
   slug: slugSchema,
   description: z.preprocess(normalizeMultilineText, tenantDescriptionField).optional(),
   logo: httpUrlField('Logo', MAX_TENANT_LOGO_LENGTH).optional(),
@@ -156,7 +160,7 @@ export const updateTenantSchema = z.object({
     .trim()
     .min(1, 'Name is required.')
     .max(MAX_TENANT_NAME_LENGTH, `Name must be at most ${MAX_TENANT_NAME_LENGTH} characters.`)
-    .refine(safeText(), 'Name contains characters that are not allowed')
+    .refine(safeText(), unsafeTextMessage('Name'))
     .optional(),
   description: z.preprocess(normalizeMultilineText, tenantDescriptionField).nullable().optional(),
   logo: httpUrlField('Logo', MAX_TENANT_LOGO_LENGTH).nullable().optional(),
@@ -178,7 +182,7 @@ export type UpdateTenantInput = z.infer<typeof updateTenantSchema>
  */
 export const inviteMemberSchema = z.object({
   email: emailSchema.refine((email) => hostnameDomain(email) !== undefined, {
-    message: 'Email must have a valid domain.',
+    message: 'Enter an email address with a full domain, such as ada@example.com.',
   }),
   role: z.enum(MEMBERSHIP_ROLES),
 })
@@ -291,39 +295,45 @@ export const updateTenantSettingsSchema = z.object({
     .min(1, 'Must not be empty.')
     .max(
       MAX_TENANT_TIMEZONE_LENGTH,
-      `Timezone must be at most ${MAX_TENANT_TIMEZONE_LENGTH} characters.`
+      `Time zone must be at most ${MAX_TENANT_TIMEZONE_LENGTH} characters.`
     )
-    .refine(safeText(), 'Timezone contains characters that are not allowed')
-    .refine(isTimeZoneName, 'Timezone must be a time zone name such as Europe/Paris.')
+    .refine(safeText(), unsafeTextMessage('Time zone'))
+    .refine(isTimeZoneName, 'Time zone must be a time zone name such as Europe/Paris.')
     .optional(),
   locale: z
     .string()
     .trim()
     .min(1, 'Must not be empty.')
-    .max(MAX_TENANT_LOCALE_LENGTH, `Locale must be at most ${MAX_TENANT_LOCALE_LENGTH} characters.`)
-    .refine(safeText(), 'Locale contains characters that are not allowed')
-    .refine(isLocaleTag, 'Locale must be a language tag such as en or en-US.')
+    .max(
+      MAX_TENANT_LOCALE_LENGTH,
+      `Language and region must be at most ${MAX_TENANT_LOCALE_LENGTH} characters.`
+    )
+    .refine(safeText(), unsafeTextMessage('Language and region'))
+    .refine(
+      isLocaleTag,
+      'Enter a language code such as en, or a language and region such as en-IN.'
+    )
     .optional(),
   metadata: z
-    .record(z.string(), z.unknown())
+    .record(z.string(), z.unknown(), { error: 'Custom data must be a JSON object.' })
     .superRefine((value, context) => {
       const scan = scanJson(value)
       if (scan.depth > MAX_TENANT_METADATA_DEPTH) {
         context.addIssue({
           code: 'custom',
-          message: `Metadata must be nested at most ${MAX_TENANT_METADATA_DEPTH} levels deep.`,
+          message: `Custom data must be nested at most ${MAX_TENANT_METADATA_DEPTH} levels deep.`,
         })
       } else if (JSON.stringify(value).length > MAX_TENANT_METADATA_LENGTH) {
         // Only serialized once shallow: stringify recurses and a deep value could overflow the stack.
         context.addIssue({
           code: 'custom',
-          message: `Metadata must be at most ${MAX_TENANT_METADATA_LENGTH} characters as JSON.`,
+          message: `Custom data must be at most ${MAX_TENANT_METADATA_LENGTH} characters as JSON.`,
         })
       }
       if (scan.hasNul) {
         context.addIssue({
           code: 'custom',
-          message: 'Metadata contains characters that are not allowed',
+          message: unsafeTextMessage('Custom data', { multiline: true }),
         })
       }
     })

@@ -1032,7 +1032,7 @@ describe('runDailyBilling', () => {
     [
       'the read-failed',
       (id: string) =>
-        `Reading subscription ${id} of a suspended or archived workspace from Razorpay failed, so we did not cancel it and it may still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
+        `Reading subscription ${id} of a suspended or archived workspace from Razorpay failed, so we did not cancel it and it can still charge. Cancel it in Razorpay, at its cycle end if the workspace was paying.`,
     ],
   ])(
     'syncs a Free row whose current subscription a failed cancel left running, named in %s wording, so the cancel is tried again',

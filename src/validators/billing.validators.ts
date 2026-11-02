@@ -37,7 +37,10 @@ function confirmField(label: string) {
   return z
     .string({ error: `Send the ${label} from the checkout.` })
     .min(1, `Send the ${label} from the checkout.`)
-    .max(CONFIRM_FIELD_MAX_LENGTH, `The ${label} is too long. Send the one from the checkout.`)
+    .max(
+      CONFIRM_FIELD_MAX_LENGTH,
+      `The ${label} is over ${String(CONFIRM_FIELD_MAX_LENGTH)} characters. Send the one from the checkout.`
+    )
 }
 
 /**
@@ -68,14 +71,20 @@ const ENTITLEMENT_KEYS = Object.keys(ENTITLEMENTS) as [EntitlementKey, ...Entitl
  */
 export const upgradeRequestBodySchema = z.strictObject({
   key: z
-    .enum(ENTITLEMENT_KEYS, { error: 'Choose a limit or feature this product has.' })
+    .enum(ENTITLEMENT_KEYS, {
+      error: `Send key as one of: ${ENTITLEMENT_KEYS.join(', ')}. Each names a limit or feature.`,
+    })
     .optional(),
-  surface: z.enum(UPGRADE_SURFACES, { error: 'Say where the request came from.' }),
+  surface: z.enum(UPGRADE_SURFACES, {
+    error: `Send surface as one of: ${UPGRADE_SURFACES.join(', ')}. Each names where the request came from.`,
+  }),
 })
 
 /**
  * `POST /banner-dismissals`: which banner to stop showing.
  */
 export const bannerDismissalBodySchema = z.strictObject({
-  banner: z.enum(DISMISSIBLE_BANNERS, { error: 'Choose a banner that can be dismissed.' }),
+  banner: z.enum(DISMISSIBLE_BANNERS, {
+    error: `Send banner as one of: ${DISMISSIBLE_BANNERS.join(', ')}. Each names a banner that can be dismissed.`,
+  }),
 })

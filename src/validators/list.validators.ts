@@ -111,7 +111,11 @@ export function listParamsSchema<
       .enum(['next', 'prev'], { error: 'direction must be next or prev.' })
       .default('next'),
     limit: limitField,
-    total: z.literal('1', { error: 'total must be 1.' }).optional(),
+    total: z
+      .literal('1', {
+        error: 'total must be 1, which asks for the row count. Leave it out otherwise.',
+      })
+      .optional(),
   })
   return z
     .object({ ...shared.shape, ...options.filters })

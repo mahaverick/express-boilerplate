@@ -86,7 +86,7 @@ class TenantController extends BaseController {
     const actor = actorFrom(request)
     const input = parseBody(newTenantSchema, request.body)
     const tenant = await createTenant(actor, input)
-    successResponse(response, toPublicTenant(tenant), 'Tenant created.', 201)
+    successResponse(response, toPublicTenant(tenant), 'Workspace created.', 201)
   })
 
   /**
@@ -100,7 +100,7 @@ class TenantController extends BaseController {
     successResponse(
       response,
       { ...page, items: page.items.map((entry) => toTenantListRow(entry)) },
-      'Tenants retrieved.'
+      'Workspaces retrieved.'
     )
   })
 
@@ -112,7 +112,7 @@ class TenantController extends BaseController {
   getTenant = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const tenant = await getTenant(principal.tenantId)
-    successResponse(response, toTenantDetail(tenant, principal), 'Tenant retrieved.')
+    successResponse(response, toTenantDetail(tenant, principal), 'Workspace retrieved.')
   })
 
   /**
@@ -126,7 +126,7 @@ class TenantController extends BaseController {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSchema, request.body)
     const tenant = await updateTenant(actorFrom(request), principal.tenantId, input)
-    successResponse(response, toPublicTenant(tenant), 'Tenant updated.')
+    successResponse(response, toPublicTenant(tenant), 'Workspace updated.')
   })
 
   /**
@@ -204,7 +204,7 @@ class TenantController extends BaseController {
     await leaveTenant(actorFrom(request), principal.tenantId, {
       isPlatformTenant: principal.isPlatformTenant,
     })
-    messageResponse(response, 'You left the tenant.')
+    messageResponse(response, 'You left the workspace.')
   })
 
   /**

@@ -460,7 +460,7 @@ describe('refusals while creating', () => {
     expect(replay.status).toBe(400)
     expect(envelope(replay).code).toBe('PASSKEY_VERIFICATION_FAILED')
     expect(envelope(replay).message).toBe(
-      "We couldn't confirm this passkey. Try again, or use another method."
+      "We couldn't confirm this passkey. Try again, or use an email link instead."
     )
   })
 

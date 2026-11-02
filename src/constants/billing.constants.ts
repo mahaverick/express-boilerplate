@@ -483,12 +483,14 @@ export const TAX_CITY_TOO_LONG_MESSAGE = 'Use 60 characters or fewer.'
 /**
  * Tax details: a character the invoice font can't draw.
  */
-export const TAX_TEXT_CHARACTERS_MESSAGE = 'Use English letters, digits and common punctuation.'
+export const TAX_TEXT_CHARACTERS_MESSAGE =
+  'Use letters A to Z, Western European accented letters such as é, digits and keyboard punctuation. Remove other scripts and emoji.'
 
 /**
  * Tax details: a GSTIN of the wrong shape.
  */
-export const GSTIN_SHAPE_MESSAGE = 'Enter the 15-character GSTIN, such as 29ABCDE1234F1ZW.'
+export const GSTIN_SHAPE_MESSAGE =
+  'Enter your 15-character GST Identification Number (GSTIN), such as 29ABCDE1234F1ZW.'
 
 /**
  * Tax details: a GSTIN whose check character is wrong.
@@ -499,7 +501,8 @@ export const GSTIN_CHECKSUM_MESSAGE =
 /**
  * Tax details: a GSTIN whose first two digits are no selectable state.
  */
-export const GSTIN_STATE_MESSAGE = "This GSTIN's first two digits aren't a state code."
+export const GSTIN_STATE_MESSAGE =
+  "This GSTIN's first two digits aren't a state code. Check it against your registration certificate."
 
 /**
  * Tax details: address line 1 is missing with a GSTIN.
@@ -537,7 +540,8 @@ export const TAX_PINCODE_FORMAT_MESSAGE = 'Enter the 6-digit PIN code.'
 /**
  * Tax details: an SEZ unit with no GSTIN.
  */
-export const TAX_SEZ_NEEDS_GSTIN_MESSAGE = 'An SEZ unit has a GSTIN. Enter it first.'
+export const TAX_SEZ_NEEDS_GSTIN_MESSAGE =
+  'A Special Economic Zone (SEZ) unit has a GSTIN. Enter it first.'
 
 /**
  * Tax details: a PATCH that changes nothing.

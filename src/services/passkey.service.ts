@@ -100,7 +100,7 @@ const PASSKEY_VERIFICATION_FAILED_CODE = 'PASSKEY_VERIFICATION_FAILED'
  */
 export function passkeyVerificationFailed(): HttpError {
   return new HttpError(
-    "We couldn't confirm this passkey. Try again, or use another method.",
+    "We couldn't confirm this passkey. Try again, or use an email link instead.",
     400,
     PASSKEY_VERIFICATION_FAILED_CODE
   )

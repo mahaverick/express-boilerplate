@@ -693,7 +693,7 @@ function reminderRefusal(block: {
     }
     case 'not_in_progress': {
       return new HttpError(
-        'A reminder goes only while onboarding is in progress or stuck.',
+        "Reminders go only to tenants whose onboarding is in progress or stuck. This tenant's is untracked, waiting for an owner, complete or dismissed.",
         409,
         NOT_IN_PROGRESS_CODE
       )

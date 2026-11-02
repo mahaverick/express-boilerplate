@@ -3,8 +3,11 @@
  * banned phrasing (vague failure words, weasel, peacock and filler words,
  * jargon) and no sentence over 30 words. The scan parses `src/` and collects
  * the text at each user-facing position: `HttpError` messages and their
- * field `errors`, success messages, the `…_MESSAGE` and `…_SENTENCE`
- * constants, validator messages, notification titles and bodies, onboarding
+ * field `errors` (a message held in a local variable is read where it is
+ * set), the argument of a file's own message helper such as
+ * `noSubscription(message)`, success messages, the `…_MESSAGE`,
+ * `…_MESSAGES` and `…_SENTENCE` constants, what a `…Message` function
+ * returns, every `message` property outside `src/configs`, validator messages, notification titles and bodies, onboarding
  * step copy and the CLI output of `src/scripts`. Each email template is
  * rendered instead of scanned, so its subject and text are checked as a
  * person reads them, and each staff billing alert is rendered from
@@ -82,7 +85,10 @@ const BANNED: readonly RegExp[] = [
   /\ban error occurred\b/i,
   /\bfailed to\b/i,
   /\boops\b/i,
-  // Weasel words.
+  // Weasel words. `may` is a hedge; the month in a date ("7 May 2027", "May 2027") is not.
+  /(?<!\d )\bmay\b(?! \d)/i,
+  /\ba few\b/i,
+  /\ba while\b/i,
   /\bnearly\b/i,
   /\bsignificant(?:ly)?\b/i,
   /\bgenerally\b/i,
@@ -125,6 +131,13 @@ const BANNED: readonly RegExp[] = [
   /\bUUID\b/,
   /\bNUL\b/,
 ]
+
+/**
+ * The contracted failure word. Allowed only with a next step after it, the
+ * frontends' "We couldn't load X. Select Try again." pattern, since every
+ * error must say what to do next; alone it says only that something failed.
+ */
+const CONTRACTED_FAILURE = /\bcouldn['’]t\b/i
 
 /**
  * The longest sentence the rules allow, in words.
@@ -227,13 +240,77 @@ function isInHttpErrorClass(node: ts.Node): boolean {
 }
 
 /**
- * Which positions a file's copy sits at, by where the file lives.
+ * Which positions a file's copy sits at, by where the file lives, and the
+ * file's own message helpers.
  */
 interface FileKind {
   isValidator: boolean
   isScript: boolean
   isOnboardingSteps: boolean
   isService: boolean
+  isConfig: boolean
+  /**
+   * Each function in the file that turns a `message` parameter into a 4xx
+   * `HttpError`, by name, with that parameter's position.
+   */
+  messageHelpers: ReadonlyMap<string, number>
+}
+
+/**
+ * Whether an `HttpError` construction's status is a 4xx a person reads, not
+ * a 5xx `errorHandler` masks.
+ * @param callArguments - The construction's arguments.
+ * @returns True for a literal status under 500.
+ */
+function isClientStatus(callArguments: readonly ts.Expression[]): boolean {
+  return (statusOf(callArguments[1]) ?? 500) < 500
+}
+
+/**
+ * The function, method or arrow function a node sits in.
+ * @param node - Any node.
+ * @returns The innermost function-like node, or the source file.
+ */
+function enclosingFunction(node: ts.Node): ts.Node {
+  let current = node.parent
+  while (!ts.isSourceFile(current) && !ts.isFunctionLike(current)) current = current.parent
+  return current
+}
+
+/**
+ * Each value a local variable holds where it is declared and assigned in its
+ * function: what `let message = '…'` and each later `message = '…'` set.
+ * @param identifier - The variable as an `HttpError` message argument.
+ * @returns The initializer and each assigned value.
+ */
+function assignedValues(identifier: ts.Identifier): ts.Expression[] {
+  const name = identifier.text
+  const values: ts.Expression[] = []
+  /**
+   * Collect the declarations and assignments of `name` under `node`.
+   * @param node - The node to check.
+   */
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name &&
+      node.initializer !== undefined
+    ) {
+      values.push(node.initializer)
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left) &&
+      node.left.text === name
+    ) {
+      values.push(node.right)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(enclosingFunction(identifier))
+  return values
 }
 
 /**
@@ -259,15 +336,92 @@ function hasExposedMessage(options: ts.Expression | undefined): boolean {
 /**
  * The message and field `errors` an `HttpError` construction shows a
  * person: none for a 5xx, which `errorHandler` masks, unless it sets
- * `exposeMessage: true`.
+ * `exposeMessage: true`. A message held in a local variable is read where
+ * the variable is set.
  * @param callArguments - The construction's arguments.
  * @returns The nodes holding copy.
  */
 function httpErrorCopy(callArguments: readonly ts.Expression[]): ts.Expression[] {
-  const [message, status, , errors, options] = callArguments
+  const message = callArguments[0]
+  const errors = callArguments[3]
+  const options = callArguments[4]
   if (message === undefined) return []
-  if ((statusOf(status) ?? 500) >= 500 && !hasExposedMessage(options)) return []
-  return errors === undefined ? [message] : [message, errors]
+  if (!isClientStatus(callArguments) && !hasExposedMessage(options)) return []
+  const messages = ts.isIdentifier(message) ? assignedValues(message) : [message]
+  return errors === undefined ? messages : [...messages, errors]
+}
+
+/**
+ * The position of a function's parameter named `message`.
+ * @param node - A function-like node.
+ * @returns The position, or -1.
+ */
+function messageParameterIndex(node: ts.SignatureDeclaration): number {
+  return node.parameters.findIndex(
+    (parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === 'message'
+  )
+}
+
+/**
+ * Whether a function body hands its `message` parameter to a 4xx
+ * `HttpError`, directly or through a helper already known.
+ * @param body - The function's body.
+ * @param helpers - The helpers found so far.
+ * @returns True when it does.
+ */
+function didForwardMessage(body: ts.Node, helpers: ReadonlyMap<string, number>): boolean {
+  let didForward = false
+  /**
+   * Look for the hand-off under `node`.
+   * @param node - The node to check.
+   */
+  const visit = (node: ts.Node): void => {
+    if (ts.isNewExpression(node) && node.expression.getText() === 'HttpError') {
+      const [first] = node.arguments ?? []
+      if (first?.getText() === 'message' && isClientStatus(node.arguments ?? [])) didForward = true
+    }
+    if (ts.isCallExpression(node)) {
+      const index = helpers.get(node.expression.getText())
+      if (index !== undefined && node.arguments[index]?.getText() === 'message') didForward = true
+    }
+    if (!didForward) ts.forEachChild(node, visit)
+  }
+  visit(body)
+  return didForward
+}
+
+/**
+ * The file's message helpers, such as `noSubscription(message)`: each named
+ * function with a `message` parameter it turns into a 4xx `HttpError`,
+ * itself or through another helper, so a call's argument there is copy.
+ * @param source - The parsed file.
+ * @returns Each helper's name and its `message` parameter's position.
+ */
+function messageHelpersIn(source: ts.SourceFile): Map<string, number> {
+  const candidates: { name: string; index: number; body: ts.Node }[] = []
+  /**
+   * Collect each named function with a `message` parameter under `node`.
+   * @param node - The node to check.
+   */
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name !== undefined && node.body !== undefined) {
+      const index = messageParameterIndex(node)
+      if (index !== -1) candidates.push({ name: node.name.text, index, body: node.body })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  const helpers = new Map<string, number>()
+  for (let didGrow = true; didGrow;) {
+    didGrow = false
+    for (const { name, index, body } of candidates) {
+      if (!helpers.has(name) && didForwardMessage(body, helpers)) {
+        helpers.set(name, index)
+        didGrow = true
+      }
+    }
+  }
+  return helpers
 }
 
 /**
@@ -287,6 +441,8 @@ function callCopy(node: ts.CallExpression | ts.NewExpression, kind: FileKind): t
   if (node.expression.kind === ts.SyntaxKind.SuperKeyword) {
     return isInHttpErrorClass(node) ? httpErrorCopy(callArguments) : []
   }
+  const helperIndex = kind.messageHelpers.get(callee)
+  if (helperIndex !== undefined) return callArguments.slice(helperIndex, helperIndex + 1)
   const position = { successResponse: 2, messageResponse: 1, errorResponse: 1 }[callee]
   if (position !== undefined) return callArguments.slice(position, position + 1)
   if (kind.isScript && /^(?:process\.std(?:out|err)\.write|console\.\w+)$/.test(callee)) {
@@ -299,24 +455,50 @@ function callCopy(node: ts.CallExpression | ts.NewExpression, kind: FileKind): t
 }
 
 /**
- * The node holding copy in one declaration or property, if any: a
- * `…_MESSAGE` or `…_SENTENCE` constant, a validator's `message` or `error`,
- * a notification's `title` or `body`, or an onboarding step's copy.
+ * What a function returns, from its own `return` statements; a function
+ * nested inside it returns for itself.
+ * @param body - The function's body.
+ * @returns Each returned expression.
+ */
+function returnedValues(body: ts.Node): ts.Expression[] {
+  const values: ts.Expression[] = []
+  /**
+   * Collect the returns under `node`.
+   * @param node - The node to check.
+   */
+  const visit = (node: ts.Node): void => {
+    if (ts.isReturnStatement(node) && node.expression !== undefined) values.push(node.expression)
+    if (!ts.isFunctionLike(node)) ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(body, visit)
+  return values
+}
+
+/**
+ * The nodes holding copy in one declaration or property: a `…_MESSAGE`,
+ * `…_MESSAGES` or `…_SENTENCE` constant, what a `…Message` function returns,
+ * a `message` property (and a validator's `error`), a notification's `title`
+ * or `body`, or an onboarding step's copy.
  * @param node - Any node.
  * @param kind - Where its file lives.
- * @returns The node, or undefined.
+ * @returns The nodes, or none.
  */
-function namedCopy(node: ts.Node, kind: FileKind): ts.Expression | undefined {
+function namedCopy(node: ts.Node, kind: FileKind): ts.Expression[] {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-    return /_(?:MESSAGE|SENTENCE)$/.test(node.name.text) ? node.initializer : undefined
+    const isCopy = /_(?:MESSAGES?|SENTENCE)$/.test(node.name.text)
+    return isCopy && node.initializer !== undefined ? [node.initializer] : []
   }
-  if (!ts.isPropertyAssignment(node) || !ts.isIdentifier(node.name)) return undefined
+  if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
+    return (node.name?.text ?? '').endsWith('Message') ? returnedValues(node.body) : []
+  }
+  if (!ts.isPropertyAssignment(node) || !ts.isIdentifier(node.name)) return []
   const key = node.name.text
   const isCopy =
-    (kind.isValidator && (key === 'message' || key === 'error')) ||
+    (!kind.isConfig && key === 'message') ||
+    (kind.isValidator && key === 'error') ||
     (kind.isService && (key === 'title' || key === 'body')) ||
     (kind.isOnboardingSteps && (key === 'title' || key === 'description'))
-  return isCopy ? node.initializer : undefined
+  return isCopy ? [node.initializer] : []
 }
 
 /**
@@ -333,6 +515,8 @@ function copyInSource(relative: string, text: string): Copy[] {
     isScript: relative.startsWith('src/scripts/'),
     isOnboardingSteps: relative === 'src/constants/onboarding.constants.ts',
     isService: relative.startsWith('src/services/'),
+    isConfig: relative.startsWith('src/configs/'),
+    messageHelpers: messageHelpersIn(source),
   }
   const found: Copy[] = []
   /**
@@ -340,10 +524,9 @@ function copyInSource(relative: string, text: string): Copy[] {
    * @param node - The node to check.
    */
   const visit = (node: ts.Node): void => {
-    const named = namedCopy(node, kind)
     const holders = [
       ...(ts.isCallExpression(node) || ts.isNewExpression(node) ? callCopy(node, kind) : []),
-      ...(named === undefined ? [] : [named]),
+      ...namedCopy(node, kind),
     ]
     for (const holder of holders) {
       const { line } = source.getLineAndCharacterOfPosition(holder.getStart())
@@ -733,11 +916,16 @@ function problemsIn(text: string): string[] {
   const banned = BANNED.filter((pattern) => pattern.test(text)).map(
     (pattern) => `banned ${pattern.source}`
   )
-  const long = text
-    .split(/(?<=[.!?])\s+/)
+  const sentences = text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.trim() !== '')
+  const lastContracted = sentences.findLastIndex((sentence) => CONTRACTED_FAILURE.test(sentence))
+  const contracted =
+    lastContracted !== -1 && lastContracted === sentences.length - 1
+      ? [`banned ${CONTRACTED_FAILURE.source} with no next step`]
+      : []
+  const long = sentences
     .filter((sentence) => sentence.trim().split(/\s+/).length > MAX_SENTENCE_WORDS)
     .map((sentence) => `over ${MAX_SENTENCE_WORDS} words: ${sentence}`)
-  return [...banned, ...long]
+  return [...banned, ...contracted, ...long]
 }
 
 /**
@@ -759,6 +947,53 @@ describe('user-facing copy', () => {
     expect(problemsIn('Name must be at most 100 characters.')).toEqual([])
     expect(problemsIn(`${'word '.repeat(30)}end.`)).toHaveLength(1)
     expect(problemsIn(`${'word '.repeat(29)}end.`)).toEqual([])
+  })
+
+  it('flags a contracted failure word with no next step, and allows one with a next step', () => {
+    expect(problemsIn("We couldn't load the list.")).toHaveLength(1)
+    expect(problemsIn('We couldn’t load the list.')).toHaveLength(1)
+    expect(problemsIn("Refresh the page. We couldn't load the list.")).toHaveLength(1)
+    expect(problemsIn("We couldn't load the list. Refresh the page.")).toEqual([])
+  })
+
+  it('flags the hedges "may", "a few" and "a while", and allows the month May', () => {
+    expect(problemsIn('It may have been deleted. Refresh the list.')).toHaveLength(1)
+    expect(problemsIn('Try again in a few minutes.')).toHaveLength(1)
+    expect(problemsIn('This can take a while. Refresh the page.')).toHaveLength(1)
+    expect(problemsIn('Your trial ends on 7 May 2027.')).toEqual([])
+    expect(problemsIn('Statements for May 2027 are ready.')).toEqual([])
+  })
+
+  it('collects copy passed through a message helper, a message variable and a message function', () => {
+    const probe = [
+      'function refuse(message: string): HttpError { return new HttpError(message, 409) }',
+      'function masked(message: string): HttpError { return new HttpError(message, 502) }',
+      "throw refuse('Probe helper argument.')",
+      "throw masked('Probe masked helper.')",
+      'function pick(flag: boolean): HttpError {',
+      "  let message = 'Probe first branch.'",
+      "  if (flag) message = 'Probe second branch.'",
+      '  return new HttpError(message, 409)',
+      '}',
+      'function probeMessage(count: number): string { return `Probe ${String(count)} returned.` }',
+      "const answer = { code: 'probe', message: 'Probe property.' }",
+      "const PROBE_MESSAGES = { one: 'Probe map entry.' }",
+      "logger.warn('Probe log line.', { reason: 'Probe log field.' })",
+    ].join('\n')
+    expect(
+      copyInSource('src/services/probe.ts', probe)
+        .map((copy) => copy.text)
+        .toSorted()
+    ).toEqual(
+      [
+        'Probe helper argument.',
+        'Probe first branch.',
+        'Probe second branch.',
+        'Probe X returned.',
+        'Probe property.',
+        'Probe map entry.',
+      ].toSorted()
+    )
   })
 
   it('collects copy from every user-facing position, and not from logs or comments', () => {
@@ -793,6 +1028,21 @@ describe('user-facing copy', () => {
     expect(texts).toContain(
       "Payments are off on this server, so we can't reach the subscription. Cancel it in the provider's dashboard."
     )
+    // One per position the scan reads besides direct literals, so a rename that drops one fails here.
+    expect(texts).toContain('Your workspace has no subscription to switch. Upgrade to Paid first.')
+    expect(texts).toContain("You can't delete your own account. Ask another platform admin.")
+    expect(texts).toContain("You're the last owner. Make someone else an owner before you leave.")
+    expect(texts).toContain(
+      "This tenant's subscription is with another payment account or mode, so we can't confirm it ended. Ask engineering to check it in that payment account."
+    )
+    expect(texts).toContain('Credit note X issued for ₹X.')
+    expect(texts).toContain("You've reached the limit of X X in X. Try again in X.")
+    expect(texts).toContain(
+      "We couldn't read the request body as JSON. Fix its syntax, then send it again."
+    )
+    expect(texts).toContain('Your session expired. Sign in again to continue.')
+    expect(texts).toContain('Enter text.')
+    expect(texts).toContain('Your account no longer exists. Sign in again to continue.')
   })
 
   it('breaks no copy rule in the messages express sends', () => {

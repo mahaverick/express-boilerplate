@@ -62,6 +62,20 @@ export function safeText(options: { multiline?: boolean } = {}): (value: string)
 }
 
 /**
+ * What a field `safeText` refuses reads. A single-line field allows no line
+ * break or tab, so the message names them; a multiline one allows both.
+ * @param label - The field's name as a person reads it, capitalized (`Name`, `Description`).
+ * @param options - Configures which variant to use.
+ * @param options.multiline - `true` for a field validated with `safeText({ multiline: true })`.
+ * @returns The message.
+ */
+export function unsafeTextMessage(label: string, options: { multiline?: boolean } = {}): string {
+  return options.multiline
+    ? `${label} has a hidden character. Remove it. Line breaks and tabs are allowed.`
+    : `${label} has a line break, tab or hidden character. Remove it.`
+}
+
+/**
  * Normalise `\r\n` to `\n` before validation, for a multiline field. A
  * lone `\r` that survives this (not part of a `\r\n` pair) is left for
  * `safeText({ multiline: true })` to reject as a control character.

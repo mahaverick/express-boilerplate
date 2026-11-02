@@ -15,7 +15,6 @@ import {
   dailyRecipientKey,
   incrementDailyCount,
   spendDailyRecipientBudget,
-  type RecipientBudget,
 } from '@/services/daily-recipient-budget.service'
 import { logger } from '@/services/logger.service'
 
@@ -34,6 +33,14 @@ const SCOPE = 'invitation-recipient'
 export const INVITATION_RECIPIENT_TENANT_SHARE = 3
 
 /**
+ * What one invitation send to an address comes to: `spent` when the mail may
+ * go, `tenant_share` when the sending tenant has had its
+ * `INVITATION_RECIPIENT_TENANT_SHARE`, `address_total` when the address has
+ * had `INVITATION_RECIPIENT_DAILY_LIMIT` from every tenant together.
+ */
+export type InvitationRecipientBudget = 'spent' | 'tenant_share' | 'address_total'
+
+/**
  * Count one invitation send to `email` from `tenantId` and say whether it
  * fits the budget. The tenant's share is counted first, under the address's
  * key suffixed with the tenant; a send past it is refused without touching
@@ -44,19 +51,24 @@ export const INVITATION_RECIPIENT_TENANT_SHARE = 3
  * the limiters do.
  * @param email - The invited address, in any case.
  * @param tenantId - The tenant the invitation belongs to.
- * @returns `spent` when the mail may go, `exhausted` when the tenant or the address has had its share.
+ * @returns `spent` when the mail may go, else which count refused it.
  */
 export async function spendInvitationRecipientBudget(
   email: string,
   tenantId: string
-): Promise<RecipientBudget> {
+): Promise<InvitationRecipientBudget> {
   try {
     const tenantCount = await incrementDailyCount(
       `${dailyRecipientKey(SCOPE, email)}:${tenantId}`,
       'invitation recipient budget'
     )
-    if (tenantCount > INVITATION_RECIPIENT_TENANT_SHARE) return 'exhausted'
-    return await spendDailyRecipientBudget(SCOPE, email, getEnv().INVITATION_RECIPIENT_DAILY_LIMIT)
+    if (tenantCount > INVITATION_RECIPIENT_TENANT_SHARE) return 'tenant_share'
+    const budget = await spendDailyRecipientBudget(
+      SCOPE,
+      email,
+      getEnv().INVITATION_RECIPIENT_DAILY_LIMIT
+    )
+    return budget === 'exhausted' ? 'address_total' : 'spent'
   } catch (error) {
     logger.warn('Invitation recipient budget unavailable; allowing the invitation', { error })
     return 'spent'

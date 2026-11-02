@@ -86,7 +86,7 @@ export function updatePreferencesSchemaFor(isStaff: boolean) {
   const entry = z
     .object({
       notificationType: z.enum(NOTIFICATION_TYPES).refine((type) => visibleTypes.includes(type), {
-        message: 'This notification type does not exist.',
+        message: "This notification type doesn't exist. Reload the page to see the current types.",
       }),
       emailEnabled: z.boolean(),
       inAppEnabled: z.boolean(),
@@ -116,7 +116,7 @@ export function updatePreferencesSchemaFor(isStaff: boolean) {
             context.addIssue({
               code: 'custom',
               path: [index, 'notificationType'],
-              message: 'Each notification type may appear only once.',
+              message: 'List each notification type once.',
             })
           }
           seen.add(value.notificationType)

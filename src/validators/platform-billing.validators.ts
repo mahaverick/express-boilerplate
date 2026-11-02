@@ -27,7 +27,7 @@ import {
 import { MAX_CURSOR_LENGTH } from '@/utilities/list-cursor.utilities'
 import { listFilter, listParamsSchema } from '@/validators/list.validators'
 import { reasonSchema } from '@/validators/platform.validators'
-import { safeText } from '@/validators/safe-text.validators'
+import { safeText, unsafeTextMessage } from '@/validators/safe-text.validators'
 
 /**
  * The largest limit a grant or a plan may set; null is no cap at all.
@@ -115,7 +115,7 @@ export const grantBodySchema = z
       context.addIssue({
         code: 'custom',
         path: ['expiresAt'],
-        message: 'Choose today or a date after it, or leave it empty for no end date.',
+        message: 'Choose an end time after now, or leave it empty for no end date.',
       })
     }
   })
@@ -219,7 +219,7 @@ export const updatePlanBodySchema = z
         MAX_PLAN_NAME_LENGTH,
         `Keep the plan name to ${String(MAX_PLAN_NAME_LENGTH)} characters.`
       )
-      .refine(safeText(), 'Remove the control characters from the plan name.')
+      .refine(safeText(), unsafeTextMessage('Plan name'))
       .optional(),
     description: z
       .string({ error: 'Enter the description as text.' })
@@ -228,7 +228,7 @@ export const updatePlanBodySchema = z
         MAX_PLAN_DESCRIPTION_LENGTH,
         `Keep the description to ${String(MAX_PLAN_DESCRIPTION_LENGTH)} characters.`
       )
-      .refine(safeText(), 'Remove the control characters from the description.')
+      .refine(safeText(), unsafeTextMessage('Description'))
       .optional(),
     entitlements: planEntitlementsSchema.optional(),
     reason: reasonSchema,

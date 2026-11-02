@@ -383,7 +383,7 @@ describe('platform.service', () => {
         async () => {
           await expect(bootstrapGrant(user.email, 'owner')).rejects.toMatchObject({
             statusCode: 409,
-            message: 'The account for that address is unverified. Run the grant again.',
+            message: 'The account for that address is unverified. Run pnpm platform:grant again.',
           })
         }
       )

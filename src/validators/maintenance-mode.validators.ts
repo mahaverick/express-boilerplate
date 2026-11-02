@@ -8,7 +8,11 @@ import {
   MAINTENANCE_MODE_TEXT_MAX_LENGTH,
   MAINTENANCE_MODES,
 } from '@/constants/maintenance-mode.constants'
-import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
+import {
+  normalizeMultilineText,
+  safeText,
+  unsafeTextMessage,
+} from '@/validators/safe-text.validators'
 
 /**
  * The longest `confirm` accepted: longer than any `APP_ENV` value.
@@ -22,6 +26,9 @@ const CONFIRM_MAX_LENGTH = 32
  * @param field - The field's name, for the messages.
  */
 function maintenanceText(field: string) {
+  const unsafeText = unsafeTextMessage(`${field.charAt(0).toUpperCase()}${field.slice(1)}`, {
+    multiline: true,
+  })
   return z.preprocess(
     normalizeMultilineText,
     z
@@ -32,7 +39,7 @@ function maintenanceText(field: string) {
         MAINTENANCE_MODE_TEXT_MAX_LENGTH,
         `${field} must be at most ${String(MAINTENANCE_MODE_TEXT_MAX_LENGTH)} characters.`
       )
-      .refine(safeText({ multiline: true }), `${field} contains characters that are not allowed.`)
+      .refine(safeText({ multiline: true }), unsafeText)
   )
 }
 
@@ -45,7 +52,10 @@ export const changeMaintenanceModeBody = z.strictObject({
   mode: z.enum(MAINTENANCE_MODES),
   message: maintenanceText('message').optional(),
   reason: maintenanceText('reason').nullable().optional(),
-  expectedVersion: z.number().int().min(0),
+  expectedVersion: z
+    .number({ error: 'Send the version you loaded, a whole number of 0 or more.' })
+    .int('Send the version you loaded, a whole number of 0 or more.')
+    .min(0, 'Send the version you loaded, a whole number of 0 or more.'),
   confirm: z.string().max(CONFIRM_MAX_LENGTH).optional(),
 })
 

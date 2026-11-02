@@ -227,11 +227,12 @@ function assertChangeAllowed(kind: ChangeKind, body: ChangeMaintenanceModeBody):
   if (kind !== 'switch_on' && kind !== 'escalate') return
   if (body.reason === undefined || body.reason === null) {
     throw new HttpError(VALIDATION_FAILED_MESSAGE, 400, undefined, {
-      reason: ['reason is required to switch maintenance mode on or escalate it.'],
+      reason: ['reason is required to switch maintenance mode on or to a stricter mode.'],
     })
   }
-  if (body.confirm !== getEnv().APP_ENV) {
-    throw new HttpError('Type the environment name to confirm.', 400, CONFIRMATION_MISMATCH_CODE)
+  const { APP_ENV } = getEnv()
+  if (body.confirm !== APP_ENV) {
+    throw new HttpError(`Type ${APP_ENV} to confirm.`, 400, CONFIRMATION_MISMATCH_CODE)
   }
 }
 
