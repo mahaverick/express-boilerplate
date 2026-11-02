@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.2](https://github.com/mahaverick/express-boilerplate/compare/v2.0.1...v2.0.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* **copy:** name limits, next steps and the workspace in API messages ([#180](https://github.com/mahaverick/express-boilerplate/issues/180)) ([f20e4b3](https://github.com/mahaverick/express-boilerplate/commit/f20e4b37409d190a02d191d1f20ae3f7cc17be1c))
+* **emails:** give trial deadlines as dates and follow the writing guide ([#181](https://github.com/mahaverick/express-boilerplate/issues/181)) ([ce25845](https://github.com/mahaverick/express-boilerplate/commit/ce258450212d59762fb2f97b60df4b37aec5d69c))
+
 ## [2.0.1](https://github.com/mahaverick/express-boilerplate/compare/v2.0.0...v2.0.1) (2026-11-02)
 
 
