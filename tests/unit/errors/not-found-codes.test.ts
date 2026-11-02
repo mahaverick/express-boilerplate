@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vite-plus/test'
-import { NOT_FOUND } from '@/errors/not-found-errors'
+import { NOT_FOUND, notFoundError } from '@/errors/not-found-errors'
 
 const SOURCE_ROOT = path.resolve(process.cwd(), 'src')
 
@@ -83,7 +83,8 @@ describe('404 codes', () => {
 
   it.each(Object.entries(NOT_FOUND))(
     'answers %s with a snake_case code and a short message that ends in a next step',
-    (_kind, { code, message }) => {
+    (_kind, { code, message: entry }) => {
+      const message = typeof entry === 'function' ? entry() : entry
       expect(code).toMatch(/^[a-z]+(?:_[a-z]+)*$/)
       expect(message.split(/\s+/).length).toBeLessThan(30)
       expect(message).toMatch(/\.$/)
@@ -91,4 +92,13 @@ describe('404 codes', () => {
       expect(message.split('. ').length).toBeGreaterThanOrEqual(2)
     }
   )
+
+  it('names the support address in the missing-settings 404, read when it is thrown', () => {
+    expect(notFoundError('tenantSettings')).toMatchObject({
+      statusCode: 404,
+      code: 'tenant_settings_not_found',
+      message:
+        "We couldn't load this workspace's settings. Refresh the page. If it happens again, email support@example.com.",
+    })
+  })
 })

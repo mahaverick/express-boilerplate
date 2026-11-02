@@ -5,12 +5,14 @@
  * mapping of a provider failure to the HTTP answer every billing request shares.
  */
 import { billingProviderConfig } from '@/configs/billing.config'
+import { getEnv } from '@/configs/env.config'
 import { PAYMENT_PROVIDER_UNAVAILABLE_CODE } from '@/constants/billing.constants'
 import { ProviderError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { FakeBillingProvider } from '@/services/billing/fake-billing-provider.service'
 import { RazorpayProvider } from '@/services/billing/razorpay-provider.service'
 import type { BillingProviderClient } from '@/types/billing'
+import { supportAddress } from '@/utilities/email-sender.utilities'
 
 /**
  * The process's client once built; undefined until the first call.
@@ -40,9 +42,12 @@ export const RETRY_AFTER_SECONDS = 30
 
 /**
  * The 502's default message: the provider refused a change.
+ * @param address - The support address, read when the message is built.
+ * @returns The message.
  */
-const PROVIDER_REFUSED_MESSAGE =
-  'Our payment provider declined this change. Contact support with the error ID if it happens again.'
+function providerRefusedMessage(address = supportAddress(getEnv())): string {
+  return `Our payment provider declined this change. Email ${address} with the error ID if it happens again.`
+}
 
 /**
  * The 503's message: the provider may answer on a retry. Its 30 seconds is
@@ -60,7 +65,7 @@ const PROVIDER_UNANSWERED_MESSAGE = 'Our payment provider did not answer. Try ag
  * @param refusedMessage - The 502's message, for a caller whose action is not a change.
  * @returns The error to throw.
  */
-export function providerFailure(error: unknown, refusedMessage = PROVIDER_REFUSED_MESSAGE): Error {
+export function providerFailure(error: unknown, refusedMessage = providerRefusedMessage()): Error {
   if (!(error instanceof ProviderError)) {
     return error instanceof Error ? error : new Error('A billing step failed', { cause: error })
   }

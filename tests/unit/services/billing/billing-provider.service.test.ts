@@ -1,6 +1,7 @@
 /**
  * @file `getBillingProvider` builds the client the config names, none when
- * payments are off, and the same instance on every call.
+ * payments are off, and the same instance on every call. `providerFailure`'s
+ * default refusal names the support address.
  */
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import type { BillingProviderConfig } from '@/configs/billing.config'
@@ -59,5 +60,20 @@ describe('getBillingProvider', () => {
     expect(provider?.mode).toBe('live')
     expect(getBillingProvider()).toBe(provider)
     expect(configMock.billingProviderConfig).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('providerFailure', () => {
+  it('answers a refusal 502 that names the support address', async () => {
+    // Imported after the reset, alongside the module, so `instanceof` sees one class.
+    const { ProviderError } = await import('@/errors/billing-provider-errors')
+    const { providerFailure } = await import('@/services/billing/billing-provider.service')
+    const refusal = new ProviderError('POST /subscriptions', 400, { code: 'BAD_REQUEST_ERROR' })
+    expect(providerFailure(refusal)).toMatchObject({
+      statusCode: 502,
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message:
+        'Our payment provider declined this change. Email support@example.com with the error ID if it happens again.',
+    })
   })
 })

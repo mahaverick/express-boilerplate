@@ -14,6 +14,7 @@ import { STATUS_CODES } from 'node:http'
 import { SpanStatusCode, trace } from '@opentelemetry/api'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import { type NextFunction, type Request, type Response } from 'express'
+import { getEnv } from '@/configs/env.config'
 import { REQUEST_ID_HEADER } from '@/constants/global.constants'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
@@ -29,6 +30,7 @@ import {
   shouldCaptureHttpError,
 } from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
+import { supportAddress } from '@/utilities/email-sender.utilities'
 import { errorResponse } from '@/utilities/response.utilities'
 
 const CLIENT_ERROR_MIN = 400
@@ -299,6 +301,15 @@ function clientAnswerOf(
 }
 
 /**
+ * The message every masked 5xx answers.
+ * @param address - The support address, read when the message is built.
+ * @returns The message.
+ */
+function maskedServerErrorMessage(address = supportAddress(getEnv())): string {
+  return `Our server hit an error. Try again, and email ${address} with the error ID if it happens again.`
+}
+
+/**
  * Resolve the client-facing message for a resolved status.
  *
  * Every status of 500 or above is masked, except an `HttpError` built with
@@ -314,7 +325,7 @@ function clientAnswerOf(
 function messageFor(error: unknown, httpError: HttpError | undefined, statusCode: number): string {
   if (statusCode >= 500) {
     if (httpError?.exposeMessage === true) return httpError.message
-    return 'Our server hit an error. Try again, and contact support with the error ID if it happens again.'
+    return maskedServerErrorMessage()
   }
   if (httpError) return httpError.message
   return clientMessageOf(error, statusCode)

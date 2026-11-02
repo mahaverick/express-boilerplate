@@ -18,6 +18,13 @@ import { requestContextStore } from '@/services/request-context.service'
 
 const tracking = vi.hoisted(() => ({ isEnabled: false }))
 
+/**
+ * The masked 5xx message, naming the test env's support address (`support@`
+ * on the default `MAIL_FROM`'s domain).
+ */
+const MASKED_MESSAGE =
+  'Our server hit an error. Try again, and email support@example.com with the error ID if it happens again.'
+
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
   return { ...actual, isErrorTrackingEnabled: () => tracking.isEnabled }
@@ -103,8 +110,7 @@ describe('errorHandler', () => {
     expect(status).toHaveBeenCalledWith(502)
     expect(body()).toMatchObject({
       success: false,
-      message:
-        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      message: MASKED_MESSAGE,
       statusCode: 502,
       code: 'POSTHOG_UNAVAILABLE',
     })
@@ -237,8 +243,7 @@ describe('errorHandler', () => {
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({
       success: false,
-      message:
-        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      message: MASKED_MESSAGE,
     })
   })
 
@@ -284,8 +289,7 @@ describe('errorHandler', () => {
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({
       success: false,
-      message:
-        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      message: MASKED_MESSAGE,
     })
     // The ORIGINAL error object is logged, not the masked message: masking is for the client; the whole point of logging is that the real cause stays recoverable server-side.
     expect(loggerError).toHaveBeenCalledWith('Unhandled server error', {
@@ -316,8 +320,7 @@ describe('errorHandler', () => {
     errorHandler(new HttpError('db exploded', 500), {} as never, response, vi.fn())
 
     expect(body()).toMatchObject({
-      message:
-        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      message: MASKED_MESSAGE,
       statusCode: 500,
     })
   })
@@ -351,8 +354,7 @@ describe('errorHandler', () => {
     errorHandler(new HttpError('pool exhausted', 503), {} as never, response, vi.fn())
 
     expect(body()).toMatchObject({
-      message:
-        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      message: MASKED_MESSAGE,
       statusCode: 503,
     })
   })
@@ -363,8 +365,7 @@ describe('errorHandler', () => {
 
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({
-      message:
-        'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+      message: MASKED_MESSAGE,
     })
   })
 
@@ -500,8 +501,7 @@ describe('errorHandler', () => {
       expect(status).toHaveBeenCalledWith(500)
       expect(body()).toMatchObject({
         success: false,
-        message:
-          'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+        message: MASKED_MESSAGE,
       })
       expect(JSON.stringify(body())).not.toContain(email)
     })
@@ -566,8 +566,7 @@ describe('errorHandler', () => {
 
       expect(status).toHaveBeenCalledWith(500)
       expect(body()).toMatchObject({
-        message:
-          'Our server hit an error. Try again, and contact support with the error ID if it happens again.',
+        message: MASKED_MESSAGE,
       })
       expect(loggerError).toHaveBeenCalled()
     })

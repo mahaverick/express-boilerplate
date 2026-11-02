@@ -4,19 +4,32 @@
  * what to do. `tests/unit/errors/not-found-codes.test.ts` fails on a 404
  * thrown without a code.
  */
+import { getEnv } from '@/configs/env.config'
 import {
   TAX_DOCUMENTS_EXPORT_DISABLED_MESSAGE,
   TAX_DOCUMENTS_READ_DISABLED_MESSAGE,
   TAX_DOCUMENTS_WRITE_DISABLED_MESSAGE,
 } from '@/constants/billing.constants'
 import { HttpError } from '@/errors/http-error'
+import { supportAddress } from '@/utilities/email-sender.utilities'
 
 /**
- * One kind of 404: its code and its message.
+ * One kind of 404: its code and its message. A message that names the
+ * support address is a function of it, so the address is read from the
+ * environment when the 404 is thrown, not when this module loads.
  */
 interface NotFoundAnswer {
   code: string
-  message: string
+  message: string | (() => string)
+}
+
+/**
+ * The missing-settings 404's message.
+ * @param address - The support address, read when the message is built.
+ * @returns The message.
+ */
+function tenantSettingsMissingMessage(address = supportAddress(getEnv())): string {
+  return `We couldn't load this workspace's settings. Refresh the page. If it happens again, email ${address}.`
 }
 
 /**
@@ -42,8 +55,7 @@ export const NOT_FOUND = {
   },
   tenantSettings: {
     code: 'tenant_settings_not_found',
-    message:
-      "We couldn't load this workspace's settings. Refresh the page. If it happens again, contact support.",
+    message: tenantSettingsMissingMessage,
   },
   member: {
     code: 'member_not_found',
@@ -147,7 +159,10 @@ export function notFoundError(kind: Exclude<NotFoundKind, 'taxDocumentsDisabled'
  * @returns The error to throw or pass to `next`.
  */
 export function notFoundError(kind: NotFoundKind, where?: TaxDocumentsDisabledWhere): HttpError {
-  const answer = NOT_FOUND[kind]
-  const message = where === undefined ? answer.message : TAX_DOCUMENTS_DISABLED_MESSAGES[where]
+  const answer: NotFoundAnswer = NOT_FOUND[kind]
+  if (where !== undefined) {
+    return new HttpError(TAX_DOCUMENTS_DISABLED_MESSAGES[where], 404, answer.code)
+  }
+  const message = typeof answer.message === 'function' ? answer.message() : answer.message
   return new HttpError(message, 404, answer.code)
 }

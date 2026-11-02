@@ -755,7 +755,7 @@ const EnvSchema = z.object({
     .email()
     .optional()
     .describe(
-      'The support address customer mail and the apps give for a step only support can take, such as restoring a suspended or archived workspace. The apps read it from the public GET /api/v1/status/client-settings. A bare address, no display name. Unset uses support@ on the domain of MAIL_FROM.'
+      'The support address customer mail, API error messages and the apps name: mail and the apps, for a step only support can take, such as restoring a suspended or archived workspace; an error, for a failure that happens again. The apps read it from the public GET /api/v1/status/client-settings. A bare address, no display name. Unset uses support@ on the domain of MAIL_FROM.'
     ),
 
   APP_NAME: z
