@@ -622,16 +622,20 @@ async function switchSlot(
   }
   assertOwnProviderWhenLive(row, provider, NO_SUBSCRIPTION_CODE)
   if (row.state === 'past_due') {
-    throw noSubscription('Your last payment failed. Update your card, then switch the interval.')
+    throw noSubscription(
+      'Your last payment failed. Update your card, then switch between monthly and yearly.'
+    )
   }
   if (row.cancelAtPeriodEnd) {
     throw noSubscription(
-      'Your subscription ends at the end of this period. Upgrade again to choose an interval.'
+      row.currentPeriodEnd === null
+        ? 'Your subscription ends at the end of this period. Upgrade again after that to choose monthly or yearly billing.'
+        : `Your subscription ends on ${await formatBillingDate(row.tenantId, row.currentPeriodEnd)}. Upgrade again after that to choose monthly or yearly billing.`
     )
   }
   if (row.trialEndsAt !== null && row.trialEndsAt > now) {
     throw new HttpError(
-      `Your first payment is due when your trial ends on ${await formatBillingDate(row.tenantId, row.trialEndsAt)}. Switch the interval after that.`,
+      `Your first payment is due when your trial ends on ${await formatBillingDate(row.tenantId, row.trialEndsAt)}. Switch between monthly and yearly after that.`,
       409,
       SWITCH_BEFORE_FIRST_CHARGE_CODE
     )
@@ -652,7 +656,7 @@ async function switchSlot(
   const current = await priceById(row.priceId)
   if (current?.interval === interval) {
     throw new HttpError(
-      `Your workspace is already billed every ${interval}. Choose the other interval.`,
+      `Your workspace is already billed every ${interval}. Choose ${interval === 'month' ? 'yearly' : 'monthly'} billing instead.`,
       409,
       SAME_INTERVAL_CODE
     )

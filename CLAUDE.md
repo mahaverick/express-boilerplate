@@ -563,7 +563,8 @@ inside `new Promise`, `setTimeout` imported from `timers/promises`, and
 - **Every message a person reads follows the copy rules:** an `HttpError` or
   success message, a field error, an email, a notification and CLI output.
   Under 30 words a sentence; no vague failure words, weasel, peacock or filler
-  words, or jargon such as "token"; a next step on every error; an absolute
+  words, or jargon such as "token" ("couldn't" only with a sentence after it,
+  the frontends' "We couldn't load X. Select Try again."); a next step on every error; an absolute
   UTC time from `formatUtcDateTime` (`src/utilities/date-text.utilities.ts`) in
   mail and notifications. The one exception is a billing date: the date alone,
   in the workspace's time zone (`formatBillingDate`,

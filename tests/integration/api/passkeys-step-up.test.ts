@@ -299,7 +299,7 @@ describe('POST /step-up/options', () => {
     expect(response.status).toBe(409)
     expect(envelope(response).code).toBe('NO_PASSKEY')
     expect(envelope(response).message).toBe(
-      "You don't have a passkey yet. Use another method to confirm it's you."
+      "You don't have a passkey yet. Confirm it's you with an email link instead."
     )
   })
 

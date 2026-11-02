@@ -259,7 +259,7 @@ export async function startPasskeyStepUp(
   const passkeys = await userPasskeyRepository.listByUser(userId)
   if (passkeys.length === 0) {
     throw new HttpError(
-      "You don't have a passkey yet. Use another method to confirm it's you.",
+      "You don't have a passkey yet. Confirm it's you with an email link instead.",
       409,
       NO_PASSKEY_CODE
     )

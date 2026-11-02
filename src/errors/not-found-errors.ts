@@ -38,8 +38,7 @@ export const NOT_FOUND = {
   },
   platformTenant: {
     code: 'tenant_not_found',
-    message:
-      "We couldn't find this tenant. It may have been purged. Go back to Tenants and search again.",
+    message: "This tenant doesn't exist or was purged. Go back to Tenants and search again.",
   },
   tenantSettings: {
     code: 'tenant_settings_not_found',
@@ -52,12 +51,11 @@ export const NOT_FOUND = {
   },
   user: {
     code: 'user_not_found',
-    message:
-      "We couldn't find this user. They may have been purged. Go back to Users and search again.",
+    message: "This user doesn't exist or was purged. Go back to Users and search again.",
   },
   ownAccount: {
     code: 'user_not_found',
-    message: "We couldn't find your account. It may have been deleted. Sign in again to continue.",
+    message: 'Your account no longer exists. Sign in again to continue.',
   },
   notification: {
     code: 'notification_not_found',
@@ -66,12 +64,11 @@ export const NOT_FOUND = {
   },
   email: {
     code: 'email_not_found',
-    message:
-      "We couldn't find this email. It may have been purged. Go back to Emails and search again.",
+    message: "This email doesn't exist or was purged. Go back to Emails and search again.",
   },
   passkey: {
     code: 'passkey_not_found',
-    message: "We couldn't find this passkey. It may have been deleted. Refresh your passkey list.",
+    message: "This passkey doesn't exist or was deleted. Refresh your passkey list.",
   },
   tenantBilling: {
     code: 'tenant_billing_not_found',
@@ -89,8 +86,7 @@ export const NOT_FOUND = {
   },
   suppression: {
     code: 'suppression_not_found',
-    message:
-      "We couldn't find this suppression. It may have been lifted already. Refresh the suppression list.",
+    message: "This suppression doesn't exist or was lifted already. Refresh the suppression list.",
   },
   // Registration is off. `notFoundError` takes where it is answered and words it for that.
   taxDocumentsDisabled: {

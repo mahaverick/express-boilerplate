@@ -147,7 +147,7 @@ class GrantAccountUnverifiedError extends HttpError {
    * The 409 the second attempt answers.
    */
   constructor() {
-    super('The account for that address is unverified. Run the grant again.', 409)
+    super('The account for that address is unverified. Run pnpm platform:grant again.', 409)
   }
 }
 

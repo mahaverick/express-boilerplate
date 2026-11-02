@@ -730,7 +730,11 @@ describe('the manual credit note guards', () => {
     for (const response of [rupee, twoLines]) {
       expect(response.status).toBe(400)
       expect(response.body).toMatchObject({
-        errors: { reason: ['Use English letters, digits and common punctuation.'] },
+        errors: {
+          reason: [
+            'Use letters A to Z, Western European accented letters such as é, digits and keyboard punctuation. Remove other scripts and emoji.',
+          ],
+        },
       })
     }
     expect(quoted.status).toBe(200)

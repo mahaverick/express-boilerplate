@@ -18,5 +18,8 @@ export const onboardingStepParametersSchema = z.object({
       ONBOARDING_STEP_KEY_MAX_LENGTH,
       `Step key must be at most ${String(ONBOARDING_STEP_KEY_MAX_LENGTH)} characters.`
     )
-    .regex(ONBOARDING_STEP_KEY_PATTERN, 'Step key must be lowercase snake_case.'),
+    .regex(
+      ONBOARDING_STEP_KEY_PATTERN,
+      'Step key must start with a lowercase letter and use lowercase letters, digits and single underscores, such as invite_teammate.'
+    ),
 })

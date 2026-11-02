@@ -110,11 +110,14 @@ export async function runBillingTaxReconcile(argv: readonly string[]): Promise<n
     const { shouldApply, slug } = parseArguments(argv)
     if (gstSellerConfig() === null) {
       throw new Error(
-        'GST registration is off. Set BILLING_GST_REGISTERED=true and the seller details first.'
+        'GST registration is off. Set BILLING_GST_REGISTERED=true and BILLING_SELLER_GSTIN, BILLING_SELLER_LEGAL_NAME, BILLING_SELLER_ADDRESS and BILLING_SELLER_STATE_CODE first.'
       )
     }
     const provider = getBillingProvider()
-    if (provider === null) throw new Error('Payments are off. Set the Razorpay keys first.')
+    if (provider === null)
+      throw new Error(
+        'Payments are off. Set RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET first.'
+      )
 
     let targets: Array<{ id: string; slug: string }>
     if (slug === null) {
@@ -129,7 +132,10 @@ export async function runBillingTaxReconcile(argv: readonly string[]): Promise<n
       }
     } else {
       const tenant = await tenantRepository.findBySlug(slug)
-      if (tenant === undefined) throw new Error(`No workspace has the slug ${slug}.`)
+      if (tenant === undefined)
+        throw new Error(
+          `No workspace has the slug ${slug}. Check the slug, then run the command again.`
+        )
       targets = [{ id: tenant.id, slug: tenant.slug }]
     }
 

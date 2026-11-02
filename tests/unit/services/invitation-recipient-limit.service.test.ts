@@ -90,10 +90,17 @@ describe('spendInvitationRecipientBudget', () => {
   it('refuses past the tenant share without spending the address budget', async () => {
     const keys = spentKeys([INVITATION_RECIPIENT_TENANT_SHARE + 1])
     await expect(spendInvitationRecipientBudget('someone@example.test', TENANT_ID)).resolves.toBe(
-      'exhausted'
+      'tenant_share'
     )
     expect(keys).toHaveLength(1)
     expect(keys[0]?.endsWith(`:${TENANT_ID}`)).toBe(true)
+  })
+
+  it('says the address total refused a send within the tenant share', async () => {
+    spentKeys([1, Number.MAX_SAFE_INTEGER])
+    await expect(spendInvitationRecipientBudget('someone@example.test', TENANT_ID)).resolves.toBe(
+      'address_total'
+    )
   })
 
   it('lets the invitation through within the deadline when Redis does not answer', async () => {

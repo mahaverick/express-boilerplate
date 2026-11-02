@@ -10,7 +10,11 @@ import { notFoundError, type NotFoundKind } from '@/errors/not-found-errors'
 import { emailSchema } from '@/validators/auth.validators'
 import { booleanFilter, listFilter, listParamsSchema } from '@/validators/list.validators'
 import { updateProfileSchema } from '@/validators/profile.validators'
-import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
+import {
+  normalizeMultilineText,
+  safeText,
+  unsafeTextMessage,
+} from '@/validators/safe-text.validators'
 import { newTenantSchema } from '@/validators/tenant.validators'
 
 /**
@@ -105,7 +109,7 @@ export const reasonSchema = z.preprocess(
     .trim()
     .min(1, 'reason must not be empty.')
     .max(MAX_REASON_LENGTH, `reason must be at most ${MAX_REASON_LENGTH} characters.`)
-    .refine(safeText({ multiline: true }), 'reason contains characters that are not allowed.')
+    .refine(safeText({ multiline: true }), unsafeTextMessage('Reason', { multiline: true }))
 )
 
 /**

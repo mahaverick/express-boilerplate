@@ -166,14 +166,16 @@ describe('billing:tax-reconcile', () => {
     gst.on = false
     expect(await runBillingTaxReconcile([])).toBe(1)
     expect(errorOutput).toBe(
-      'GST registration is off. Set BILLING_GST_REGISTERED=true and the seller details first.\n'
+      'GST registration is off. Set BILLING_GST_REGISTERED=true and BILLING_SELLER_GSTIN, BILLING_SELLER_LEGAL_NAME, BILLING_SELLER_ADDRESS and BILLING_SELLER_STATE_CODE first.\n'
     )
   })
 
   it('refuses when payments are off', async () => {
     paymentsSwitch.on = false
     expect(await runBillingTaxReconcile([])).toBe(1)
-    expect(errorOutput).toBe('Payments are off. Set the Razorpay keys first.\n')
+    expect(errorOutput).toBe(
+      'Payments are off. Set RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET first.\n'
+    )
   })
 
   it('prints one line per workspace on a dry run and writes nothing', async () => {
@@ -239,6 +241,8 @@ describe('billing:tax-reconcile', () => {
 
   it('refuses a slug no workspace has', async () => {
     expect(await runBillingTaxReconcile(['--tenant', 'unknown'])).toBe(1)
-    expect(errorOutput).toBe('No workspace has the slug unknown.\n')
+    expect(errorOutput).toBe(
+      'No workspace has the slug unknown. Check the slug, then run the command again.\n'
+    )
   })
 })

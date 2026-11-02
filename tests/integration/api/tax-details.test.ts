@@ -397,7 +397,7 @@ describe('PATCH /api/v1/tenants/:slug/billing/tax-details', () => {
 
     expect(response.status).toBe(400)
     expect(errorsOf(response.body)).toStrictEqual({
-      isSez: ['An SEZ unit has a GSTIN. Enter it first.'],
+      isSez: ['A Special Economic Zone (SEZ) unit has a GSTIN. Enter it first.'],
     })
   })
 
@@ -435,7 +435,9 @@ describe('PATCH /api/v1/tenants/:slug/billing/tax-details', () => {
 
     expect(response.status).toBe(400)
     expect(errorsOf(response.body)).toStrictEqual({
-      legalName: ['Use English letters, digits and common punctuation.'],
+      legalName: [
+        'Use letters A to Z, Western European accented letters such as é, digits and keyboard punctuation. Remove other scripts and emoji.',
+      ],
     })
   })
 
@@ -544,7 +546,9 @@ describe('PATCH /api/v1/tenants/:slug/billing/tax-details', () => {
 
     expect(state.status).toBe(400)
     expect(errorsOf(state.body)).toStrictEqual({
-      gstin: ["This GSTIN's first two digits aren't a state code."],
+      gstin: [
+        "This GSTIN's first two digits aren't a state code. Check it against your registration certificate.",
+      ],
     })
     expect(city.status).toBe(200)
     expect(dataOf(city.body)).toMatchObject({

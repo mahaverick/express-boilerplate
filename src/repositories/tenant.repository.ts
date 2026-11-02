@@ -195,7 +195,7 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new HttpError(
-          'Another workspace uses this slug. Choose a different one.',
+          'Another workspace uses this web address. Choose a different one.',
           409,
           SLUG_TAKEN_CODE
         )

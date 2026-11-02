@@ -4,22 +4,26 @@
  */
 import { z } from 'zod'
 import { MAX_NAME_LENGTH } from '@/constants/auth.constants'
-import { safeText } from '@/validators/safe-text.validators'
+import { safeText, unsafeTextMessage } from '@/validators/safe-text.validators'
 
 /**
  * A name field with PATCH's three states: absent leaves the column unchanged
  * (`toUpdateValues` checks presence with `Object.hasOwn`), `null` clears it,
  * and a string (trimmed) sets it. Absent and `null` stay distinct, so "clear
  * my last name" differs from "leave it alone".
+ * @param label - The field's name in its unsafe-text message (`First name`, `Last name`).
+ * @returns The field schema.
  */
-const optionalNameField = z
-  .string()
-  .trim()
-  .min(1, 'Must not be empty.')
-  .max(MAX_NAME_LENGTH, `Must be at most ${MAX_NAME_LENGTH} characters.`)
-  .refine(safeText(), 'This field contains characters that are not allowed')
-  .nullable()
-  .optional()
+function optionalNameField(label: string) {
+  return z
+    .string()
+    .trim()
+    .min(1, 'Must not be empty.')
+    .max(MAX_NAME_LENGTH, `Must be at most ${MAX_NAME_LENGTH} characters.`)
+    .refine(safeText(), unsafeTextMessage(label))
+    .nullable()
+    .optional()
+}
 
 /**
  * `PATCH /api/v1/profile` request body: the only fields this endpoint lets a
@@ -32,8 +36,8 @@ const optionalNameField = z
  * address nobody has verified.
  */
 export const updateProfileSchema = z.object({
-  firstName: optionalNameField,
-  lastName: optionalNameField,
+  firstName: optionalNameField('First name'),
+  lastName: optionalNameField('Last name'),
   analyticsOptOut: z.boolean().optional(),
 })
 

@@ -18,11 +18,14 @@ import {
 const LEGAL_NAME = 'Enter the legal name to print on your tax invoices.'
 const LONGER_THAN_100 = 'Use 100 characters or fewer.'
 const LONGER_THAN_60 = 'Use 60 characters or fewer.'
-const OUTSIDE_PATTERN = 'Use English letters, digits and common punctuation.'
-const GSTIN_SHAPE = 'Enter the 15-character GSTIN, such as 29ABCDE1234F1ZW.'
+const OUTSIDE_PATTERN =
+  'Use letters A to Z, Western European accented letters such as é, digits and keyboard punctuation. Remove other scripts and emoji.'
+const GSTIN_SHAPE =
+  'Enter your 15-character GST Identification Number (GSTIN), such as 29ABCDE1234F1ZW.'
 const GSTIN_CHECKSUM =
   "This GSTIN's last character doesn't match the rest. Check it against your registration certificate."
-const GSTIN_STATE = "This GSTIN's first two digits aren't a state code."
+const GSTIN_STATE =
+  "This GSTIN's first two digits aren't a state code. Check it against your registration certificate."
 const STATE_MISMATCH = 'This GSTIN is registered in Maharashtra. Choose Maharashtra as the state.'
 const ADDRESS_NEEDED = 'Enter address line 1. Invoices with a GSTIN need your registered address.'
 const CITY_NEEDED = 'Enter the city. Invoices with a GSTIN need it.'
@@ -31,7 +34,7 @@ const STATE_REQUIRED =
   'Choose the state of your billing address. It sets the tax split on your invoices.'
 const STATE_UNKNOWN = 'Choose a state from the list.'
 const PINCODE_FORMAT = 'Enter the 6-digit PIN code.'
-const SEZ_NEEDS_GSTIN = 'An SEZ unit has a GSTIN. Enter it first.'
+const SEZ_NEEDS_GSTIN = 'A Special Economic Zone (SEZ) unit has a GSTIN. Enter it first.'
 const NO_CHANGE = 'Change at least one tax detail before saving.'
 
 /**

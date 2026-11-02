@@ -161,10 +161,18 @@ export async function completeOnboardingStep(
       ONBOARDING_STEP_NOT_FOUND_CODE
     )
   if (step.scope === 'member' && input.userId === undefined) {
-    throw new HttpError('This step is done by each member, not the tenant.', 409, MEMBER_STEP_CODE)
+    throw new HttpError(
+      'This step is done by each member, not once for the workspace.',
+      409,
+      MEMBER_STEP_CODE
+    )
   }
   if (step.scope === 'tenant' && input.userId !== undefined) {
-    throw new HttpError('This step is done once for the tenant.', 409, SCOPE_MISMATCH_CODE)
+    throw new HttpError(
+      'This step is done once for the workspace, not by each member.',
+      409,
+      SCOPE_MISMATCH_CODE
+    )
   }
   if (input.source === 'staff' && !input.reason) {
     throw new HttpError('A staff completion needs a reason. Give one of 1 to 500 characters.', 400)
@@ -172,7 +180,11 @@ export async function completeOnboardingStep(
   const tenant = await tenantRepository.findById(input.tenantId, {}, executor)
   if (!tenant) throw notFoundError('tenant')
   if (!isOnboardingStarted(tenant)) {
-    throw new HttpError('Onboarding is not tracked for this tenant.', 409, NOT_TRACKED_CODE)
+    throw new HttpError(
+      "This workspace has no Getting started checklist running, so this step can't change. Refresh the page to see the current state.",
+      409,
+      NOT_TRACKED_CODE
+    )
   }
   return completionRepository.insertIfNew(
     {
@@ -594,7 +606,11 @@ async function lockRunningTenant(tenantId: string, tx: DbTransaction): Promise<T
   const tenant = await tenantRepository.lockById(tenantId, tx)
   if (!tenant) throw notFoundError('tenant')
   if (!isOnboardingStarted(tenant)) {
-    throw new HttpError('Onboarding is not tracked for this tenant.', 409, NOT_TRACKED_CODE)
+    throw new HttpError(
+      "This workspace has no Getting started checklist running, so it can't be hidden or shown. Refresh the page to see the current state.",
+      409,
+      NOT_TRACKED_CODE
+    )
   }
   return tenant
 }

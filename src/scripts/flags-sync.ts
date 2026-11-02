@@ -142,7 +142,9 @@ function nextOffsetOf(next: unknown, offset: number): number | undefined {
   const value = typeof next === 'string' ? URL.parse(next)?.searchParams.get('offset') : undefined
   const nextOffset = Number(value)
   if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
-    throw new SyncFailure('PostHog answered the flag list with an unusable next page')
+    throw new SyncFailure(
+      'PostHog answered the flag list with an unusable next page. Run the sync again.'
+    )
   }
   return nextOffset
 }
@@ -172,7 +174,9 @@ async function listExistingFlags(): Promise<Map<string, ExistingFlag>> {
     }
     const { results, next } = (result.json ?? {}) as { results?: unknown; next?: unknown }
     if (!Array.isArray(results)) {
-      throw new SyncFailure('PostHog answered the flag list in an unexpected shape')
+      throw new SyncFailure(
+        'PostHog answered the flag list in a shape this script does not read. Run the sync again; if it fails again, check the PostHog API version.'
+      )
     }
     for (const raw of results as unknown[]) {
       const flag = existingFlagOf(raw)
