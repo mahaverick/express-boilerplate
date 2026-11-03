@@ -15,6 +15,7 @@ import type { UserMembership } from '@/database/models/user-membership.model'
 import { isUnknownIdError } from '@/errors/billing-provider-errors'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
+import { accountDeletionRequestRepository } from '@/repositories/account-deletion-request.repository'
 import { analyticsDeletionRepository } from '@/repositories/analytics-deletion.repository'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
@@ -170,7 +171,7 @@ async function lockMembershipsForPurge(
  * sent to their account, delete the mail log rows, email messages,
  * invitations and emailed links addressed to their address up to their deletion, forget them as
  * the lifter of any email suppression, forget them as payer with the billing
- * address they gave, delete their memberships (locked first,
+ * address they gave, delete their account deletion requests, delete their memberships (locked first,
  * in the membership lock order) and then the row (the rest cascades), record
  * `user.purged` in the platform tenant, queue the deletion of their PostHog
  * person, events and recordings (`analytics_deletions`, sent an hour later by
@@ -218,6 +219,8 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
       tx
     )
     await emailSuppressionRepository.clearLiftedBy(userId, tx)
+    // Its user foreign key is RESTRICT, so the requests go before the row.
+    await accountDeletionRequestRepository.deleteForUser(userId, tx)
     // Deleted here, under the locks taken above, so the user row's cascade finds none.
     for (const membership of memberships) await userMembershipRepository.delete(membership.id, tx)
     if (!(await userRepository.purgeDeleted(userId, tx))) {

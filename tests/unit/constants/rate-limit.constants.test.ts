@@ -63,6 +63,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'billing-webhook-rejected',
   'public-plans',
   'upgrade-request',
+  'account-deletion-read',
 ]
 
 /**
@@ -233,6 +234,13 @@ const EXPECTED_RATE_LIMITS: {
     name: 'upgrade-request',
     windowMs: 3_600_000,
     limit: 10,
+    keyBy: 'user',
+  },
+  {
+    key: 'accountDeletionRead',
+    name: 'account-deletion-read',
+    windowMs: 60_000,
+    limit: 60,
     keyBy: 'user',
   },
 ]

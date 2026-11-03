@@ -288,6 +288,13 @@
       "when": 1793729256383,
       "tag": "0040_refresh_token_client",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793736441490,
+      "tag": "0041_account_deletion_requests",
+      "breakpoints": true
     }
   ]
 }

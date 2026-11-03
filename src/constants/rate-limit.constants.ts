@@ -55,7 +55,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 34 limiters in `RATE_LIMITS`.
+ * The names of the 37 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -94,6 +94,7 @@ export type RateLimitName =
   | 'billingWebhookRejected'
   | 'publicPlans'
   | 'upgradeRequest'
+  | 'accountDeletionRead'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -702,6 +703,18 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     name: 'upgrade-request',
     windowMs: 60 * 60 * 1000,
     limit: 10,
+    keyBy: 'user',
+    unit: 'requests',
+  },
+  /**
+   * `GET /account/deletion-request`: the caller's own open request, one
+   * indexed query. 60 a minute covers an account screen that refreshes on
+   * focus.
+   */
+  accountDeletionRead: {
+    name: 'account-deletion-read',
+    windowMs: 60_000,
+    limit: 60,
     keyBy: 'user',
     unit: 'requests',
   },

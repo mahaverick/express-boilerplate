@@ -818,6 +818,29 @@ export function buildPreviewMessage(
           },
         }
       }
+      case 'account_deletion_requested': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            appName: fill('appName'),
+            dueAt: fill('dueAt'),
+            supportEmail: fill('supportEmail'),
+          },
+        }
+      }
+      case 'account_deletion_alert': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            appName: fill('appName'),
+            dueAt: fill('dueAt'),
+          },
+        }
+      }
     }
   })()
   return { message, isPartial }

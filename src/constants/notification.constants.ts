@@ -14,7 +14,9 @@
  * payment failed, Paid was cancelled, a member asked
  * to upgrade, the owner who paid left, or a join was refused because the
  * workspace is full. Each billing type carries
- * its email when it has one, so the email is never sent twice. Every type
+ * its email when it has one, so the email is never sent twice.
+ * `'account_deletion_requested'` goes to every platform admin, with its
+ * email, when a customer asks us to delete their account. Every type
  * starts with both channels on: a user's preference row only turns one off.
  */
 export const NOTIFICATION_TYPES = [
@@ -26,6 +28,7 @@ export const NOTIFICATION_TYPES = [
   'billing_upgrade_requested',
   'billing_payer_left',
   'workspace_full',
+  'account_deletion_requested',
 ] as const
 
 /**
@@ -33,7 +36,10 @@ export const NOTIFICATION_TYPES = [
  * membership gets none of them in their preferences list, and an update
  * naming one is refused as a nonexistent type.
  */
-export const STAFF_ONLY_NOTIFICATION_TYPES = ['maintenance_mode_changed'] as const
+export const STAFF_ONLY_NOTIFICATION_TYPES = [
+  'maintenance_mode_changed',
+  'account_deletion_requested',
+] as const
 
 /**
  * One of the fixed set of notification types a `notifications` or

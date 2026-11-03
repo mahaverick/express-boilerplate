@@ -11,6 +11,16 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { stackFrameLinesOf } from '@/errors/stack-frames'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
+import {
+  ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
+  renderAccountDeletionAlertTemplate,
+  type AccountDeletionAlertVariables,
+} from '@/templates/email/account-deletion-alert.template'
+import {
+  ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY,
+  renderAccountDeletionRequestedTemplate,
+  type AccountDeletionRequestedVariables,
+} from '@/templates/email/account-deletion-requested.template'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
   INTERVAL_SWITCH_SCHEDULED_TEMPLATE_KEY,
@@ -278,6 +288,16 @@ export type MailMessage =
       templateKey: typeof TAX_DOCUMENT_ISSUED_TEMPLATE_KEY
       variables: TaxDocumentIssuedVariables
     }
+  | {
+      to: string
+      templateKey: typeof ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY
+      variables: AccountDeletionRequestedVariables
+    }
+  | {
+      to: string
+      templateKey: typeof ACCOUNT_DELETION_ALERT_TEMPLATE_KEY
+      variables: AccountDeletionAlertVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -379,6 +399,12 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case TAX_DOCUMENT_ISSUED_TEMPLATE_KEY: {
       return renderTaxDocumentIssuedTemplate(message.variables)
+    }
+    case ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY: {
+      return renderAccountDeletionRequestedTemplate(message.variables)
+    }
+    case ACCOUNT_DELETION_ALERT_TEMPLATE_KEY: {
+      return renderAccountDeletionAlertTemplate(message.variables)
     }
     default: {
       throw new Error(

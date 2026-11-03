@@ -546,6 +546,15 @@ const EnvSchema = z.object({
     .describe(
       'Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days, at most 36500, only where your compliance rules allow deleting audit history.'
     ),
+  ACCOUNT_DELETION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(30)
+    .default(30)
+    .describe(
+      'Days after a customer asks to delete their account by which staff must complete it. The receipt mail states this date. At least 1, at most 30. Defaults to 30.'
+    ),
   ONBOARDING_STUCK_AFTER_DAYS: z.coerce
     .number()
     .int()

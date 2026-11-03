@@ -221,6 +221,17 @@ const SAMPLE_VARIABLES: {
     issuedOn: '27 October 2026',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
+  account_deletion_requested: {
+    firstName: 'Ada',
+    appName: 'App',
+    dueAt: '15:42 UTC on 3 December 2026',
+    supportEmail: 'support@x.test',
+  },
+  account_deletion_alert: {
+    firstName: 'Ada',
+    appName: 'App',
+    dueAt: '15:42 UTC on 3 December 2026',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -431,6 +442,16 @@ describe('EMAIL_TEMPLATE_META', () => {
           'issuedOn',
           'billingLink',
         ],
+        resendAction: null,
+      },
+      account_deletion_requested: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'dueAt', 'supportEmail'],
+        resendAction: null,
+      },
+      account_deletion_alert: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'dueAt'],
         resendAction: null,
       },
     })

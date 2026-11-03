@@ -257,6 +257,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   write('PATCH', '/api/v1/auth/passkeys/:id'),
   write('DELETE', '/api/v1/auth/passkeys/:id'),
   write('PATCH', '/api/v1/profile'),
+  write('POST', '/api/v1/account/deletion-request'),
+  read('/api/v1/account/deletion-request'),
   read('/api/v1/notifications/stream'),
   read('/api/v1/notifications'),
   write('PATCH', '/api/v1/notifications/:id/read'),

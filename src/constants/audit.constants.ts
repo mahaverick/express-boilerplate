@@ -212,6 +212,11 @@ export const AUDIT_ACTIONS = {
     metadata: z.strictObject({ count: z.number().int().positive() }),
   },
   'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
+  // A customer asked us to delete their account. Only the request's row id: their own reason may name them.
+  'user.account_deletion_requested': {
+    target: 'user',
+    metadata: z.strictObject({ requestId: id }),
+  },
   'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },
   'tenant.archived': { target: 'tenant', metadata: z.strictObject({ reason }) },

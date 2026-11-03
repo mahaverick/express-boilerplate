@@ -38,6 +38,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   'upgrade_request_fulfilled',
   'winback',
   'tax_document_issued',
+  'account_deletion_requested',
+  'account_deletion_alert',
 ] as const
 
 /**

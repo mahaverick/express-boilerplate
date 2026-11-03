@@ -274,9 +274,10 @@ and points at the code or doc that holds the detail. How things work is in
   must sign in to switch maintenance off. `tenant_invitation` mail goes
   through `addEmailJob()` directly, since the invitee may have no account.
 - **These email channels can't be switched off:** `tenant_invitation`,
-  `maintenance_mode_changed` and the billing notices that carry an email.
-  (`workspace_full` is in-app only and stays switchable.) Disabling them would
-  cut off an invitee or silence the mail an account owner must see.
+  `maintenance_mode_changed`, `account_deletion_requested` and the billing
+  notices that carry an email. (`workspace_full` is in-app only and stays
+  switchable.) Disabling them would cut off an invitee, silence the mail an
+  account owner must see, or let a deletion we promised by a date go unseen.
   - `PUT /notifications/preferences` answers 400 for `emailEnabled: false` on
     any of them, and the repository's `upsert` refuses it too.
   - `inAppEnabled` can still be switched off for any type the caller can see.
