@@ -137,6 +137,19 @@ function passkeyRpIdProblem(env: Env): string | undefined {
 }
 
 /**
+ * iOS binds a passkey to the host of `WEB_URL`, so with iOS passkeys on an
+ * explicit `WEBAUTHN_RP_ID` must equal that host.
+ * @param env - The validated environment.
+ * @returns A message when the RP ID differs from the host, else undefined.
+ */
+function passkeyIosProblem(env: Env): string | undefined {
+  if (!env.WEBAUTHN_IOS_ENABLED || env.WEBAUTHN_RP_ID === undefined) return undefined
+  const host = new URL(env.WEB_URL).hostname.toLowerCase()
+  if (env.WEBAUTHN_RP_ID === host) return undefined
+  return `WEBAUTHN_RP_ID is ${env.WEBAUTHN_RP_ID}, but iOS passkeys need it to equal ${host}, the host of WEB_URL. Set WEBAUTHN_RP_ID to ${host}, or set WEBAUTHN_IOS_ENABLED=false.`
+}
+
+/**
  * Google calls back to APP_URL only. A sign-in started on an Apex host that
  * differs from APP_URL's loses its OAuth session cookie on the way back, and
  * its refresh cookie lands on APP_URL's host, unless COOKIE_DOMAIN covers both.
@@ -160,9 +173,12 @@ function apexCookieDomainProblem(env: Env): string | undefined {
  * @returns One message per rule that fails, or none.
  */
 function hostProblems(env: Env): string[] {
-  return [cookieDomainProblem(env), apexCookieDomainProblem(env), passkeyRpIdProblem(env)].filter(
-    (problem) => problem !== undefined
-  )
+  return [
+    cookieDomainProblem(env),
+    apexCookieDomainProblem(env),
+    passkeyRpIdProblem(env),
+    passkeyIosProblem(env),
+  ].filter((problem) => problem !== undefined)
 }
 
 /**

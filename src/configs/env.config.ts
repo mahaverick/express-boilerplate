@@ -49,6 +49,10 @@ function hasNoOpaqueOrigin(value: string): boolean {
   })
 }
 
+const ANDROID_ORIGIN = /^android:apk-key-hash:[A-Za-z0-9_-]{43}$/
+
+const APP_VERSION = /^\d+\.\d+\.\d+$/
+
 const NO_QUERY_OR_FRAGMENT = 'must not contain a query (?) or a fragment (#)'
 
 /**
@@ -123,6 +127,38 @@ const EnvSchema = z.object({
     .optional()
     .describe(
       'The domain a passkey is bound to, e.g. domain.com. It must equal the host of WEB_URL and APEX_URL, or be a parent domain of both. Changing it makes every stored passkey unusable. Unset uses the host of WEB_URL.'
+    ),
+
+  WEBAUTHN_ANDROID_ORIGINS: z
+    .string()
+    .refine((value) => value.split(',').every((entry) => ANDROID_ORIGIN.test(entry.trim())), {
+      message:
+        'WEBAUTHN_ANDROID_ORIGINS must list android:apk-key-hash: origins, each followed by 43 base64url characters, separated by commas.',
+    })
+    .optional()
+    .describe(
+      'Origins of the Android app that may use passkeys, comma-separated, each android:apk-key-hash: followed by the 43-character base64url SHA-256 of the app signing certificate. Unset means no Android origin.'
+    ),
+  WEBAUTHN_IOS_ENABLED: z
+    .stringbool()
+    .default(false)
+    .describe(
+      'Whether the iOS app uses passkeys. iOS binds a passkey to the host of WEB_URL, so boot refuses true when WEBAUTHN_RP_ID is set to anything else. Defaults to false.'
+    ),
+
+  MINIMUM_APP_VERSION_IOS: z
+    .string()
+    .regex(APP_VERSION, 'MINIMUM_APP_VERSION_IOS must look like 1.2.3.')
+    .optional()
+    .describe(
+      'The oldest iOS app version that may sign in, as major.minor.patch. The app reads it from GET /api/v1/status/client-settings. Unset means no minimum.'
+    ),
+  MINIMUM_APP_VERSION_ANDROID: z
+    .string()
+    .regex(APP_VERSION, 'MINIMUM_APP_VERSION_ANDROID must look like 1.2.3.')
+    .optional()
+    .describe(
+      'The oldest Android app version that may sign in, as major.minor.patch. The app reads it from GET /api/v1/status/client-settings. Unset means no minimum.'
     ),
 
   DATABASE_URL: z

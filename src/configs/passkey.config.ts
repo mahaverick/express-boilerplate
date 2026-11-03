@@ -18,7 +18,7 @@ export interface PasskeyRelyingParty {
    */
   rpName: string
   /**
-   * The browser origins that may present a passkey: `WEB_URL`, plus `APEX_URL` when set.
+   * The browser origins that may present a passkey: `WEB_URL`, plus `APEX_URL` when set, then each Android app origin.
    */
   origins: string[]
 }
@@ -30,11 +30,15 @@ export interface PasskeyRelyingParty {
  * @returns The RP ID, RP name and expected origins.
  */
 export function passkeyRelyingParty(
-  env: Pick<Env, 'WEB_URL' | 'APEX_URL' | 'WEBAUTHN_RP_ID' | 'APP_NAME'> = getEnv()
+  env: Pick<
+    Env,
+    'WEB_URL' | 'APEX_URL' | 'WEBAUTHN_RP_ID' | 'WEBAUTHN_ANDROID_ORIGINS' | 'APP_NAME'
+  > = getEnv()
 ): PasskeyRelyingParty {
   const web = new URL(env.WEB_URL)
   const origins = [web.origin]
   if (env.APEX_URL !== undefined) origins.push(new URL(env.APEX_URL).origin)
+  for (const entry of env.WEBAUTHN_ANDROID_ORIGINS?.split(',') ?? []) origins.push(entry.trim())
   return { rpId: env.WEBAUTHN_RP_ID ?? web.hostname, rpName: env.APP_NAME, origins }
 }
 

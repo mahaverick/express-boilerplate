@@ -83,6 +83,7 @@ const baseEnv: Env = {
   MAIL_FROM: 'no-reply@example.com',
   APP_NAME: 'Test App',
   APEX_APP_NAME: 'Test Apex',
+  WEBAUTHN_IOS_ENABLED: false,
   PASSKEY_MODE: 'optional',
   FAKE_EMAIL_WEBHOOK_SECRET: 'fake-webhook',
   BILLING_GST_REGISTERED: false,

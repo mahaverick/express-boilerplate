@@ -32,6 +32,10 @@ export interface ClientSettings {
   stepUpLinkTtlSeconds: number
   invitationTtlSeconds: number
   supportEmail: string
+  /**
+   * The oldest app version that may sign in, per platform; null when none is set.
+   */
+  minimumAppVersion: { ios: string | null; android: string | null }
 }
 
 /**
@@ -42,7 +46,13 @@ export interface ClientSettings {
 export function clientSettingsFrom(
   env: Pick<
     Env,
-    'SIGN_IN_LINK_TTL' | 'STEP_UP_LINK_TTL' | 'INVITATION_TTL' | 'SUPPORT_EMAIL' | 'MAIL_FROM'
+    | 'SIGN_IN_LINK_TTL'
+    | 'STEP_UP_LINK_TTL'
+    | 'INVITATION_TTL'
+    | 'SUPPORT_EMAIL'
+    | 'MAIL_FROM'
+    | 'MINIMUM_APP_VERSION_IOS'
+    | 'MINIMUM_APP_VERSION_ANDROID'
   >
 ): ClientSettings {
   return {
@@ -50,5 +60,9 @@ export function clientSettingsFrom(
     stepUpLinkTtlSeconds: seconds(env.STEP_UP_LINK_TTL),
     invitationTtlSeconds: seconds(env.INVITATION_TTL),
     supportEmail: supportAddress(env),
+    minimumAppVersion: {
+      ios: env.MINIMUM_APP_VERSION_IOS ?? null,
+      android: env.MINIMUM_APP_VERSION_ANDROID ?? null,
+    },
   }
 }

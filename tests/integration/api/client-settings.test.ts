@@ -23,9 +23,13 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
       STEP_UP_LINK_TTL: '25m',
       INVITATION_TTL: '5d',
       SUPPORT_EMAIL: 'support@test.example',
+      ...minimumVersions,
     }),
   }
 })
+
+const minimumVersions: { MINIMUM_APP_VERSION_IOS?: string; MINIMUM_APP_VERSION_ANDROID?: string } =
+  vi.hoisted(() => ({}))
 
 const app = createApp()
 
@@ -56,6 +60,30 @@ describe('GET /api/v1/status/client-settings', () => {
         supportEmail: 'support@test.example',
       },
     })
+  })
+
+  it('answers null minimum app versions when none is set', async () => {
+    const response = await request(app).get('/api/v1/status/client-settings')
+
+    expect(response.body).toMatchObject({
+      data: { minimumAppVersion: { ios: null, android: null } },
+    })
+  })
+
+  it('answers the minimum app versions when set, still cacheable for five minutes', async () => {
+    minimumVersions.MINIMUM_APP_VERSION_IOS = '1.4.0'
+    minimumVersions.MINIMUM_APP_VERSION_ANDROID = '1.5.2'
+    try {
+      const response = await request(app).get('/api/v1/status/client-settings')
+
+      expect(response.get('Cache-Control')).toBe('public, max-age=300')
+      expect(response.body).toMatchObject({
+        data: { minimumAppVersion: { ios: '1.4.0', android: '1.5.2' } },
+      })
+    } finally {
+      delete minimumVersions.MINIMUM_APP_VERSION_IOS
+      delete minimumVersions.MINIMUM_APP_VERSION_ANDROID
+    }
   })
 
   it('answers during full maintenance, so a signed-out page can still read it', async () => {

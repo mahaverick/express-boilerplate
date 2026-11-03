@@ -680,3 +680,29 @@ describe('billing settings', () => {
     })
   })
 })
+
+describe('WEBAUTHN_IOS_ENABLED', () => {
+  const split = { ...local, WEB_URL: 'https://app.domain.com', WEBAUTHN_RP_ID: 'domain.com' }
+
+  it('refuses iOS passkeys when the RP ID differs from the host of WEB_URL', () => {
+    expect(runChecks({ ...split, WEBAUTHN_IOS_ENABLED: 'true' }).error).toContain(
+      'WEBAUTHN_RP_ID is domain.com, but iOS passkeys need it to equal app.domain.com, the host of WEB_URL. Set WEBAUTHN_RP_ID to app.domain.com, or set WEBAUTHN_IOS_ENABLED=false.'
+    )
+  })
+
+  it('passes when the RP ID equals the host of WEB_URL', () => {
+    expect(
+      runChecks({ ...split, WEBAUTHN_RP_ID: 'app.domain.com', WEBAUTHN_IOS_ENABLED: 'true' }).error
+    ).toBeUndefined()
+  })
+
+  it('passes when the RP ID is unset', () => {
+    const { WEBAUTHN_RP_ID: _unused, ...unset } = split
+    expect(runChecks({ ...unset, WEBAUTHN_IOS_ENABLED: 'true' }).error).toBeUndefined()
+  })
+
+  it('passes with the flag off, whatever the RP ID', () => {
+    expect(runChecks({ ...split, WEBAUTHN_IOS_ENABLED: 'false' }).error).toBeUndefined()
+    expect(runChecks(split).error).toBeUndefined()
+  })
+})
