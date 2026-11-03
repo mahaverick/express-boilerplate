@@ -55,10 +55,11 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 33 limiters in `RATE_LIMITS`.
+ * The names of the 34 limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
+  | 'nativeRefreshIp'
   | 'logout'
   | 'googleOAuth'
   | 'googleOAuthCallback'
@@ -186,9 +187,10 @@ const REFRESH_IPV6_SUBNET = 56
  * token, so devices behind one shared address (a carrier-grade NAT, an office)
  * keep separate budgets, and the raw token never reaches a Redis key. Every
  * other request, web or a native one with no usable body token, is keyed by
- * its IP exactly as express-rate-limit's default key is: `ipKeyGenerator` at
- * its default 56-bit IPv6 subnet. Like the default, it throws when Express
- * supplies no `request.ip`.
+ * its IP with `ipKeyGenerator` at the default's 56-bit IPv6 subnet, which gives
+ * the same key as express-rate-limit's default for any valid IP. It does not
+ * reproduce the default's validation of an invalid IP (a port, say); it throws
+ * only when Express supplies no `request.ip`.
  * @param request - The incoming request, after `resolveClientKind` and the body parser.
  * @returns `refresh-token:<sha256 hex>`, or the normalised IP.
  * @throws {Error} When the request has no IP address.
@@ -208,7 +210,21 @@ export function refreshRateLimitKey(request: Request): string {
 }
 
 /**
- * The 33 rate-limit specs this API enforces, each commented with the reason
+ * The key `nativeRefreshIp`'s limiter counts attempts by: the caller's IP,
+ * normalised by `ipKeyGenerator` at the default's 56-bit IPv6 subnet.
+ * @param request - The incoming request.
+ * @returns The normalised IP.
+ * @throws {Error} When the request has no IP address.
+ */
+export function nativeRefreshIpRateLimitKey(request: Request): string {
+  if (request.ip === undefined) {
+    throw new Error("An undefined 'request.ip' was detected, so the refresh limiter has no key.")
+  }
+  return ipKeyGenerator(request.ip, REFRESH_IPV6_SUBNET)
+}
+
+/**
+ * The 34 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -228,6 +244,21 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 5 * 60 * 1000,
     limit: 300,
     keyBy: refreshRateLimitKey,
+    unit: 'attempts',
+  },
+  /**
+   * The coarse per-IP ceiling behind the per-token `refresh` key, native
+   * requests only (web requests already share `refresh`'s IP budget). Without
+   * it one IP could send unlimited refreshes with distinct junk tokens, each
+   * costing a hash, a database lookup and a new counter. Sized at 10 times
+   * `refresh`'s 300 so a carrier-grade NAT full of devices fits.
+   */
+  nativeRefreshIp: {
+    name: 'nativeRefreshIp',
+    windowMs: 5 * 60 * 1000,
+    limit: 3000,
+    keyBy: nativeRefreshIpRateLimitKey,
+    skip: (request) => !isNativeRequest(request),
     unit: 'attempts',
   },
   /**

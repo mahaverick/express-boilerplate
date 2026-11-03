@@ -17,6 +17,7 @@ import {
   authenticatedUserRateLimitKey,
   emailWebhookProviderRateLimitKey,
   flagExposureRateLimitKey,
+  nativeRefreshIpRateLimitKey,
   RATE_LIMITS,
   refreshRateLimitKey,
   submittedEmailRateLimitKey,
@@ -27,6 +28,7 @@ import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
   'refresh',
+  'nativeRefreshIp',
   'logout',
   'google-oauth',
   'google-oauth-callback',
@@ -78,6 +80,13 @@ const EXPECTED_RATE_LIMITS: {
   keyBy: 'ip' | 'user' | 'email' | 'function'
 }[] = [
   { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'function' },
+  {
+    key: 'nativeRefreshIp',
+    name: 'nativeRefreshIp',
+    windowMs: 300_000,
+    limit: 3000,
+    keyBy: 'function',
+  },
   { key: 'logout', name: 'logout', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   { key: 'googleOAuth', name: 'google-oauth', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   {
@@ -334,5 +343,16 @@ describe('RATE_LIMITS key stability', () => {
   it('throws on a request with no IP, as express-rate-limit does for its default key', () => {
     const web = { clientKind: 'web' } as unknown as Request
     expect(() => refreshRateLimitKey(web)).toThrow(/request\.ip/)
+  })
+
+  it('counts native requests on nativeRefreshIp and skips web ones, keyed by the normalised IP', () => {
+    const { skip, keyBy } = RATE_LIMITS.nativeRefreshIp
+    const native = { clientKind: 'native', ip: '2001:db8:abcd:12::1' } as unknown as Request
+    const web = { clientKind: 'web', ip: '2001:db8:abcd:12::1' } as unknown as Request
+    expect(skip?.(native)).toBe(false)
+    expect(skip?.(web)).toBe(true)
+    expect(keyBy).toBe(nativeRefreshIpRateLimitKey)
+    expect(nativeRefreshIpRateLimitKey(native)).toBe(ipKeyGenerator('2001:db8:abcd:12::1', 56))
+    expect(() => nativeRefreshIpRateLimitKey({} as unknown as Request)).toThrow(/request\.ip/)
   })
 })

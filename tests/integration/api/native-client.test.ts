@@ -7,6 +7,7 @@
  * on for this file only.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
+import express from 'express'
 import type { Response } from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import { createApp } from '@/app'
@@ -14,6 +15,9 @@ import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { errorHandler } from '@/middlewares/error.middleware'
+import { resolveClientKind } from '@/middlewares/native-client.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { db, sql } from '@/services/database.service'
@@ -63,6 +67,7 @@ const createdTenantIds: string[] = []
 beforeEach(async () => {
   await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
   await clearRateLimiter(RATE_LIMITS.refresh.name)
+  await clearRateLimiter(RATE_LIMITS.nativeRefreshIp.name)
   await clearRateLimiter(RATE_LIMITS.googleOAuth.name)
   await clearRateLimiter(RATE_LIMITS.googleOAuthCallback.name)
   await clearRateLimiter('passkey-sign-in')
@@ -531,7 +536,42 @@ describe('the native refresh limit', () => {
       .set('X-Client', 'native')
       .send({})
     expect(response.status).toBe(401)
-    expect(response.headers['ratelimit-remaining']).toBe(String(RATE_LIMITS.refresh.limit - 1))
+    // The later nativeRefreshIp limiter sets the final RateLimit headers.
+    expect(response.headers['ratelimit-remaining']).toBe(
+      String(RATE_LIMITS.nativeRefreshIp.limit - 1)
+    )
+  })
+
+  it('caps native refreshes with distinct junk tokens per IP, and never counts web ones', async () => {
+    await clearRateLimiter(RATE_LIMITS.nativeRefreshIp.name)
+    const probe = express()
+    probe.use(express.json())
+    probe.use(resolveClientKind)
+    probe.post(
+      '/refresh',
+      createRateLimiter(RATE_LIMITS.nativeRefreshIp, { limit: 3 }),
+      (_request, response) => {
+        response.status(401).json({ success: false })
+      }
+    )
+    probe.use(errorHandler)
+    /** Post a native refresh with a fresh junk token. */
+    const junk = (): Promise<Response> =>
+      request(probe)
+        .post('/refresh')
+        .set('X-Client', 'native')
+        .send({ refreshToken: randomBytes(32).toString('hex') })
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await junk()
+      expect(response.status).toBe(401)
+    }
+    const refused = await junk()
+    expect(refused.status).toBe(429)
+
+    const web = await request(probe).post('/refresh')
+    expect(web.status).toBe(401)
+    await clearRateLimiter(RATE_LIMITS.nativeRefreshIp.name)
   })
 
   it('still shares one budget across web refreshes from one IP', async () => {

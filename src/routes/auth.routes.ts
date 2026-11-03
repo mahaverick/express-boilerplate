@@ -69,6 +69,8 @@ import { createPasskeyRouter } from '@/routes/passkey.routes'
  */
 export function createAuthRouter(): Router {
   const router = Router()
+  // Built once: one instance, one budget.
+  const nativeRefreshIpLimiter = createRateLimiter(RATE_LIMITS.nativeRefreshIp)
   // First of all, so a refused native request spends no limiter budget.
   router.use(resolveClientKind)
   // Router-wide and ahead of every route, so none can miss the CSRF gate.
@@ -81,6 +83,7 @@ export function createAuthRouter(): Router {
     '/refresh',
     requireAllowedOriginWhenPresent,
     createRateLimiter(RATE_LIMITS.refresh),
+    nativeRefreshIpLimiter,
     authController.refresh
   )
   router.post(
