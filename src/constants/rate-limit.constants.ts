@@ -5,6 +5,9 @@
  * file, and `import-x/no-cycle` is an error.
  */
 import type { Request } from 'express'
+import { ipKeyGenerator } from 'express-rate-limit'
+import { isNativeRequest } from '@/middlewares/native-client.middleware'
+import { hashToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 /**
@@ -167,6 +170,44 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
+ * The key prefix of a native refresh budget, followed by the token's SHA-256 hex.
+ */
+const REFRESH_TOKEN_KEY_PREFIX = 'refresh-token:'
+
+/**
+ * The IPv6 subnet express-rate-limit's default key uses, so a web refresh
+ * keeps the key it had before `refreshRateLimitKey`.
+ */
+const REFRESH_IPV6_SUBNET = 56
+
+/**
+ * The key `refresh`'s limiter counts attempts by. A native request that
+ * presents a string `refreshToken` in its body is keyed by the SHA-256 of that
+ * token, so devices behind one shared address (a carrier-grade NAT, an office)
+ * keep separate budgets, and the raw token never reaches a Redis key. Every
+ * other request, web or a native one with no usable body token, is keyed by
+ * its IP exactly as express-rate-limit's default key is: `ipKeyGenerator` at
+ * its default 56-bit IPv6 subnet. Like the default, it throws when Express
+ * supplies no `request.ip`.
+ * @param request - The incoming request, after `resolveClientKind` and the body parser.
+ * @returns `refresh-token:<sha256 hex>`, or the normalised IP.
+ * @throws {Error} When the request has no IP address.
+ */
+export function refreshRateLimitKey(request: Request): string {
+  const body: unknown = request.body
+  if (isNativeRequest(request) && typeof body === 'object' && body !== null) {
+    const { refreshToken } = body as Record<string, unknown>
+    if (typeof refreshToken === 'string' && refreshToken !== '') {
+      return `${REFRESH_TOKEN_KEY_PREFIX}${hashToken(refreshToken)}`
+    }
+  }
+  if (request.ip === undefined) {
+    throw new Error("An undefined 'request.ip' was detected, so the refresh limiter has no key.")
+  }
+  return ipKeyGenerator(request.ip, REFRESH_IPV6_SUBNET)
+}
+
+/**
  * The 33 rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
@@ -175,16 +216,18 @@ export function flagExposureRateLimitKey(request: Request): string {
  */
 export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   /**
-   * Keyed on IP alone; volume protection, not a security boundary. A
-   * refresh token is 256 bits of randomness, and reuse detection revokes
-   * the whole session when an already-rotated token is replayed after
-   * `REFRESH_REUSE_GRACE_MS`.
+   * Keyed on IP for the web, and on the body token's hash for a native app;
+   * volume protection, not a security boundary. A refresh token is 256 bits of
+   * randomness, and reuse detection revokes the whole session when an
+   * already-rotated token is replayed after `REFRESH_REUSE_GRACE_MS`. A native
+   * app has no cookie and often shares an address with many others, so each
+   * session gets its own budget (`refreshRateLimitKey`).
    */
   refresh: {
     name: 'refresh',
     windowMs: 5 * 60 * 1000,
     limit: 300,
-    keyBy: 'ip',
+    keyBy: refreshRateLimitKey,
     unit: 'attempts',
   },
   /**

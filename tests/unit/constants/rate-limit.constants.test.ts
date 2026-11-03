@@ -11,15 +11,18 @@
  * bucket.
  */
 import type { Request } from 'express'
+import { ipKeyGenerator } from 'express-rate-limit'
 import { describe, expect, it } from 'vite-plus/test'
 import {
   authenticatedUserRateLimitKey,
   emailWebhookProviderRateLimitKey,
   flagExposureRateLimitKey,
   RATE_LIMITS,
+  refreshRateLimitKey,
   submittedEmailRateLimitKey,
   type RateLimitName,
 } from '@/constants/rate-limit.constants'
+import { hashToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
@@ -74,7 +77,7 @@ const EXPECTED_RATE_LIMITS: {
   limit: number
   keyBy: 'ip' | 'user' | 'email' | 'function'
 }[] = [
-  { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'ip' },
+  { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'function' },
   { key: 'logout', name: 'logout', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   { key: 'googleOAuth', name: 'google-oauth', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   {
@@ -285,5 +288,51 @@ describe('RATE_LIMITS key stability', () => {
     expect(flagExposureRateLimitKey(withoutSession)).toBe('user:user-123')
     expect(flagExposureRateLimitKey(anonymous)).toBe('user:anonymous')
     expect(RATE_LIMITS.flagExposure.keyBy).toBe(flagExposureRateLimitKey)
+  })
+
+  it('keys a native refresh by the hash of its body token, never the raw token or the IP', () => {
+    const raw = 'a'.repeat(64)
+    const request = {
+      clientKind: 'native',
+      ip: '203.0.113.5',
+      body: { refreshToken: raw },
+    } as unknown as Request
+    const key = refreshRateLimitKey(request)
+    expect(key).toBe(`refresh-token:${hashToken(raw)}`)
+    expect(key).not.toContain(raw)
+    expect(RATE_LIMITS.refresh.keyBy).toBe(refreshRateLimitKey)
+  })
+
+  it.each([
+    ['an IPv4 address', '203.0.113.5'],
+    ['an IPv6 address', '2001:db8:abcd:12::1'],
+  ])('falls back to the ipKeyGenerator key for %s on a web refresh', (_label, ip) => {
+    const web = { clientKind: 'web', ip, body: {} } as unknown as Request
+    expect(refreshRateLimitKey(web)).toBe(ipKeyGenerator(ip, 56))
+  })
+
+  it.each([
+    ['no body token', {}],
+    ['a non-string body token', { refreshToken: 42 }],
+    ['an empty body token', { refreshToken: '' }],
+    ['no body at all', undefined],
+  ])('keys a native refresh with %s by IP', (_label, body) => {
+    const ip = '2001:db8:abcd:12::1'
+    const native = { clientKind: 'native', ip, body } as unknown as Request
+    expect(refreshRateLimitKey(native)).toBe(ipKeyGenerator(ip, 56))
+  })
+
+  it('keys a web refresh by IP even when the body carries a token', () => {
+    const web = {
+      clientKind: 'web',
+      ip: '203.0.113.5',
+      body: { refreshToken: 'x' },
+    } as unknown as Request
+    expect(refreshRateLimitKey(web)).toBe(ipKeyGenerator('203.0.113.5', 56))
+  })
+
+  it('throws on a request with no IP, as express-rate-limit does for its default key', () => {
+    const web = { clientKind: 'web' } as unknown as Request
+    expect(() => refreshRateLimitKey(web)).toThrow(/request\.ip/)
   })
 })

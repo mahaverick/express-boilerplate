@@ -494,6 +494,57 @@ describe('a native client', () => {
 })
 
 /**
+ * Post one native refresh with the given raw token.
+ * @param raw - The raw refresh token to present in the body.
+ * @returns The refresh response.
+ */
+function nativeRefresh(raw: string): Promise<Response> {
+  return request(app)
+    .post('/api/v1/auth/refresh')
+    .set('X-Client', 'native')
+    .send({ refreshToken: raw })
+}
+
+/**
+ * The refresh limiter keys a native request by its token, so one device
+ * behind a shared address cannot spend another's budget.
+ */
+describe('the native refresh limit', () => {
+  it('keeps two tokens from one IP on separate budgets', async () => {
+    const session = await nativeSignIn(uniqueEmail('limit-native'))
+    const spent = randomBytes(32).toString('hex')
+
+    for (let attempt = 0; attempt < RATE_LIMITS.refresh.limit; attempt += 1) {
+      const response = await nativeRefresh(spent)
+      if (response.status === 429) throw new Error(`limited early, at attempt ${String(attempt)}`)
+    }
+    const refused = await nativeRefresh(spent)
+    expect(refused.status).toBe(429)
+
+    const other = await nativeRefresh(session.refreshToken)
+    expect(other.status).toBe(200)
+  })
+
+  it('answers a native refresh with no body token 401 and counts it against the IP', async () => {
+    const response = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('X-Client', 'native')
+      .send({})
+    expect(response.status).toBe(401)
+    expect(response.headers['ratelimit-remaining']).toBe(String(RATE_LIMITS.refresh.limit - 1))
+  })
+
+  it('still shares one budget across web refreshes from one IP', async () => {
+    for (let attempt = 0; attempt < RATE_LIMITS.refresh.limit; attempt += 1) {
+      const response = await request(app).post('/api/v1/auth/refresh')
+      if (response.status === 429) throw new Error(`limited early, at attempt ${String(attempt)}`)
+    }
+    const refused = await request(app).post('/api/v1/auth/refresh')
+    expect(refused.status).toBe(429)
+  })
+})
+
+/**
  * The same handlers for a browser: the token stays in the cookie and the
  * body names it nowhere.
  */
