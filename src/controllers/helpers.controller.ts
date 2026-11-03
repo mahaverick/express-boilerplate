@@ -13,6 +13,7 @@ import { refreshCookieSpec, type RefreshCookieSpec } from '@/constants/auth.cons
 import { isFrontendApp } from '@/constants/frontend.constants'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
+import { isNativeRequest } from '@/middlewares/native-client.middleware'
 import { revokeRefreshToken } from '@/services/session.service'
 import type { Actor, RequestPrincipal } from '@/types/actor'
 import type { OAuthIntent } from '@/types/oauth-intent'
@@ -162,12 +163,27 @@ export function readRefreshTokenCookie(request: Request): string | undefined {
 }
 
 /**
+ * The refresh token the request presents: a browser's cookie, or a native
+ * app's body field. Each kind reads only its own, so a native request never
+ * reads a cookie.
+ * @param request - The incoming request.
+ * @returns The raw refresh token, or undefined when the request carries none.
+ */
+export function presentedRefreshToken(request: Request): string | undefined {
+  if (!isNativeRequest(request)) return readRefreshTokenCookie(request)
+  const body: unknown = request.body
+  if (typeof body !== 'object' || body === null) return undefined
+  const { refreshToken } = body as { refreshToken?: unknown }
+  return typeof refreshToken === 'string' ? refreshToken : undefined
+}
+
+/**
  * Revoke the session of the refresh token the request carries, if any.
  * Logout's revoke, and also run after a sign-in: a session the browser's
  * cookie pointed at would otherwise stay refreshable after the new cookie
  * replaces it, outlive the next logout, and never trip reuse detection. The
  * new session's token is never the one revoked: it is only in the response.
- * @param request - The request whose cookie names the session.
+ * @param request - The request whose refresh token names the session.
  * @param options - How the revoke is reported.
  * @param options.emitSignedOut - Whether a live revoke emits `user_signed_out`; default true. A sign-in passes false, since it is not the user signing out.
  * @returns Resolves once the presented token's session, if any, is revoked.
@@ -176,7 +192,7 @@ export async function revokePresentedSession(
   request: Request,
   options: { emitSignedOut?: boolean } = {}
 ): Promise<void> {
-  const rawToken = readRefreshTokenCookie(request)
+  const rawToken = presentedRefreshToken(request)
   if (rawToken === undefined) return
   await revokeRefreshToken(rawToken, options)
 }
@@ -237,4 +253,52 @@ export function setRefreshTokenCookie(
     ...refreshCookieOptions(spec, env, sameSite),
     expires: expiresAt,
   })
+}
+
+/**
+ * What a response body carries for the refresh token: both fields for a native
+ * app, nothing for a browser, whose token travels in a cookie.
+ */
+export type RefreshTokenBody =
+  | { refreshToken: string; refreshTokenExpiresAt: string }
+  | Record<string, never>
+
+/**
+ * Hand a freshly issued refresh token to the client the way its kind holds
+ * it: a browser gets the cookie, a native app gets the token in the body
+ * and no cookie.
+ * @param request - The request, which tells the client kind.
+ * @param response - The response a browser's cookie is set on.
+ * @param token - The raw refresh token and when it expires.
+ * @param token.raw - The raw refresh token.
+ * @param token.expiresAt - When the token expires.
+ * @param sameSite - A browser cookie's `SameSite` attribute. Defaults to `'strict'`.
+ * @returns The fields to spread into the response body.
+ */
+export function deliverRefreshToken(
+  request: Request,
+  response: Response,
+  token: { raw: string; expiresAt: Date },
+  sameSite: 'strict' | 'lax' = 'strict'
+): RefreshTokenBody {
+  if (isNativeRequest(request)) {
+    return { refreshToken: token.raw, refreshTokenExpiresAt: token.expiresAt.toISOString() }
+  }
+  setRefreshTokenCookie(request, response, token.raw, token.expiresAt, sameSite)
+  return {}
+}
+
+/**
+ * Clear the refresh cookie, with the name, path and domain it was set with,
+ * and its host-only plain form when `clearHostOnlyPlainRefreshCookie`
+ * applies. Does nothing for a native app, which holds no cookie.
+ * @param request - The request, which tells the client kind.
+ * @param response - The response to add the clearing Set-Cookie lines to.
+ */
+export function clearPresentedRefreshToken(request: Request, response: Response): void {
+  if (isNativeRequest(request)) return
+  const env = getEnv()
+  const spec = currentRefreshCookie(env)
+  response.clearCookie(spec.name, refreshCookieOptions(spec, env, 'strict'))
+  clearHostOnlyPlainRefreshCookie(request, response, env)
 }
