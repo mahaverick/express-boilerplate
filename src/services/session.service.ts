@@ -10,6 +10,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE, REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
+import type { ClientKind } from '@/constants/native-client.constants'
 import { refreshTokenOf, type RefreshUserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -34,6 +35,13 @@ const RAW_TOKEN_BYTES = 32
 
 const userTokenRepository = new UserTokenRepository()
 const userRepository = new UserRepository()
+
+/**
+ * The answer to a refresh token rotation can't use: unknown, already spent
+ * outside the grace window, or presented by the other kind of client. One
+ * message for all of them, so the answer never says which.
+ */
+const UNKNOWN_SESSION_MESSAGE = "We don't recognize this session. Sign in again to continue."
 
 /**
  * Revoke every unrevoked token in one session under the user row lock, then
@@ -104,6 +112,46 @@ export interface IssuedRefreshToken {
 }
 
 /**
+ * The client a session belongs to: a browser or a native app, and the device
+ * a native app named. Recorded on the session's first refresh row and copied
+ * forward by every rotation, so a token is only ever rotated by the kind of
+ * client it was issued to.
+ */
+export interface SessionClient {
+  kind: ClientKind
+  deviceName: string | null
+}
+
+/**
+ * What every refresh row of one session shares, copied forward by each
+ * rotation and grace sibling: the chain's id, when it began, when it last
+ * authenticated, and the client that holds it.
+ */
+interface SessionState {
+  sessionId: string
+  sessionStartedAt: Date
+  /**
+   * Null for a chain from before migration 0018, or one started with `recentAuth: false`.
+   */
+  authenticatedAt: Date | null
+  client: SessionClient
+}
+
+/**
+ * The session state a refresh row carries, to copy forward to the next row.
+ * @param row - A narrowed refresh row.
+ * @returns Its session id, clocks and client.
+ */
+function sessionStateOf(row: RefreshUserToken): SessionState {
+  return {
+    sessionId: row.sessionId,
+    sessionStartedAt: row.sessionStartedAt,
+    authenticatedAt: row.authenticatedAt,
+    client: { kind: row.client, deviceName: row.deviceName },
+  }
+}
+
+/**
  * SHA-256 hash a raw token, hex-encoded. Deterministic, so a token is found
  * by its hash; that rules out a salted hash (see user-token.model.ts).
  * @param raw - The raw token, of any purpose.
@@ -127,17 +175,14 @@ function generateRawToken(): string {
  * insert (link-token.service.ts).
  * @param userId - The user the token belongs to.
  * @param ttlMs - How long the token is valid for, in milliseconds.
- * @param session - The rotation-chain id, when the chain began, and when it last authenticated.
- * @param session.sessionId - The rotation-chain id.
- * @param session.sessionStartedAt - When that chain began.
- * @param session.authenticatedAt - When it last authenticated; null for a chain from before migration 0018 or one an invitation link started.
+ * @param session - The session the row belongs to, written onto it unchanged.
  * @param executor - Where to insert. Defaults to the pool.
  * @returns The inserted row's id, the raw token to hand back, and its expiry.
  */
 async function createRefreshRow(
   userId: string,
   ttlMs: number,
-  session: { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null },
+  session: SessionState,
   executor: DbExecutor = db
 ): Promise<{ id: string; raw: string; expiresAt: Date }> {
   const raw = generateRawToken()
@@ -150,6 +195,8 @@ async function createRefreshRow(
       sessionId: session.sessionId,
       sessionStartedAt: session.sessionStartedAt,
       authenticatedAt: session.authenticatedAt,
+      client: session.client.kind,
+      deviceName: session.client.deviceName,
       tokenHash: hashToken(raw),
       expiresAt,
     },
@@ -240,15 +287,16 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
  * @param userId - The user the token belongs to.
  * @param sessionId - The session (rotation-chain) id this token starts or continues.
  * @param executor - Where to insert the token row: a caller's transaction, or the pool (default).
- * @param options - How the session counts toward step-up.
+ * @param options - The client the session belongs to, and how the session counts toward step-up.
  * @param options.recentAuth - False stores `authenticated_at` as NULL, so every step-up route asks again (`requireRecentAuth`) until the user confirms it's them. Defaults to true.
+ * @param options.client - The client signing in. Required, so no sign-in path can start a session without naming one.
  * @returns The raw token to hand to the client, and its metadata.
  */
 export async function issueRefreshToken(
   userId: string,
   sessionId: string,
   executor: DbExecutor = db,
-  options: { recentAuth?: boolean } = {}
+  options: { recentAuth?: boolean; client: SessionClient }
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
   const sessionStartedAt = new Date()
@@ -257,7 +305,7 @@ export async function issueRefreshToken(
   const { raw, expiresAt } = await createRefreshRow(
     userId,
     requireDurationMs(env.REFRESH_TOKEN_TTL),
-    { sessionId, sessionStartedAt, authenticatedAt },
+    { sessionId, sessionStartedAt, authenticatedAt, client: options.client },
     executor
   )
 
@@ -304,15 +352,13 @@ type RotationOutcome = RotationIssued | RotationRefused
  * and the session keeps its grace window.
  * @param existing - The already-claimed row the presented token hashes to.
  * @param tx - The rotation's transaction.
- * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
+ * @returns The session to continue, client included, when every grace condition holds and the session was not killed, otherwise undefined.
  */
 async function findGraceSession(
   existing: RefreshUserToken,
   tx: DbTransaction
-): Promise<
-  { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null } | undefined
-> {
-  const { sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
+): Promise<SessionState | undefined> {
+  const { sessionId, consumedAt, expiresAt, tokenHash } = existing
   // consumedAt is null for a row an explicit revoke killed, and set for one a rotation spent.
   if (consumedAt === null) return undefined
   // Judged by Postgres's own clock, not Date.now() — see wasConsumedWithin.
@@ -323,7 +369,7 @@ async function findGraceSession(
   if (expiresAt.getTime() <= Date.now()) return undefined
   // A sibling rotation's claim sets consumedAt too, so isSessionKilled never counts it as a kill.
   if (await userTokenRepository.isSessionKilled(sessionId, tokenHash, tx)) return undefined
-  return { sessionId, sessionStartedAt, authenticatedAt: existing.authenticatedAt }
+  return sessionStateOf(existing)
 }
 
 /**
@@ -332,20 +378,17 @@ async function findGraceSession(
  * ceiling every one of them is refused; the refusal's message matches the
  * expiry branch's, so a caller can't tell which clock ran out.
  * @param userId - The session's user.
- * @param sessionId - The session (rotation-chain) id.
- * @param sessionStartedAt - When the session began; copied forward so the absolute TTL never resets.
- * @param authenticatedAt - When the session last authenticated; copied forward like sessionStartedAt.
+ * @param session - The session to continue, copied onto the new row unchanged, so the absolute TTL never resets and the client never changes.
  * @param tx - The rotation's transaction.
  * @returns The new row's id and token; or, past `SESSION_ABSOLUTE_TTL`, a refusal naming the session to kill.
  */
 async function continueSession(
   userId: string,
-  sessionId: string,
-  sessionStartedAt: Date,
-  authenticatedAt: Date | null,
+  session: SessionState,
   tx: DbTransaction
 ): Promise<RotationOutcome> {
   const env = getEnv()
+  const { sessionId, sessionStartedAt, authenticatedAt } = session
   const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
   if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
     return {
@@ -358,7 +401,7 @@ async function continueSession(
   const { id, raw, expiresAt } = await createRefreshRow(
     userId,
     requireDurationMs(env.REFRESH_TOKEN_TTL),
-    { sessionId, sessionStartedAt, authenticatedAt },
+    session,
     tx
   )
   return { ok: true, id, issued: { raw, userId, sessionId, expiresAt, authenticatedAt } }
@@ -390,42 +433,24 @@ async function rotateUnderUserLock(
     const existing = await userTokenRepository.findRefreshByHash(tokenHash, tx)
     const graceSession = existing ? await findGraceSession(existing, tx) : undefined
     if (existing && graceSession) {
-      return continueSession(
-        existing.userId,
-        graceSession.sessionId,
-        graceSession.sessionStartedAt,
-        graceSession.authenticatedAt,
-        tx
-      )
+      return continueSession(existing.userId, graceSession, tx)
     }
     if (existing) {
-      return {
-        ok: false,
-        message: "We don't recognize this session. Sign in again to continue.",
-        killSessionId: existing.sessionId,
-      }
+      return { ok: false, message: UNKNOWN_SESSION_MESSAGE, killSessionId: existing.sessionId }
     }
-    return { ok: false, message: "We don't recognize this session. Sign in again to continue." }
+    return { ok: false, message: UNKNOWN_SESSION_MESSAGE }
   }
 
   // issueRefreshToken always fills these for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
   const claimed = refreshTokenOf(spent)
-  if (!claimed)
-    return { ok: false, message: "We don't recognize this session. Sign in again to continue." }
-  const { sessionId, sessionStartedAt } = claimed
+  if (!claimed) return { ok: false, message: UNKNOWN_SESSION_MESSAGE }
 
   if (claimed.expiresAt.getTime() < Date.now()) {
     // Already revoked by the claim; expiry is not a reuse signal, so the session is untouched.
     return { ok: false, message: 'Your session expired. Sign in again to continue.' }
   }
 
-  const next = await continueSession(
-    claimed.userId,
-    sessionId,
-    sessionStartedAt,
-    claimed.authenticatedAt,
-    tx
-  )
+  const next = await continueSession(claimed.userId, sessionStateOf(claimed), tx)
   if (!next.ok) return next
   await userTokenRepository.update(claimed.id, { replacedById: next.id }, {}, tx)
   return next
@@ -450,16 +475,26 @@ async function rotateUnderUserLock(
  * account claims lock the row FOR NO KEY UPDATE before their revoke, so
  * a rotation in a session they revoke either commits first and its new token
  * is revoked, or waits and finds the presented token revoked.
+ *
+ * A token presented by the other kind of client than the one it was issued
+ * to (a browser's cookie replayed by an app, or the other way round) answers
+ * exactly what an unknown token answers, before the transaction: nothing is
+ * claimed, and no session is killed, even for a spent token. The check reads
+ * the unlocked row safely, because a row's `client` is written once at insert
+ * and never updated, so the locked claim would see the same value.
  * @param raw - The raw refresh token presented by the client.
+ * @param kind - The kind of client presenting it.
  * @returns The new raw token to hand to the client, and its metadata.
- * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
+ * @throws {HttpError} 401, when the token is unknown, issued to the other kind of client, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
  */
-export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToken> {
+export async function rotateRefreshToken(
+  raw: string,
+  kind: ClientKind
+): Promise<IssuedRefreshToken> {
   const tokenHash = hashToken(raw)
-  // Read only to learn whose row to lock; everything that decides runs under the lock.
+  // Read to learn whose row to lock and which client holds it; everything else that decides runs under the lock.
   const presented = await userTokenRepository.findRefreshByHash(tokenHash)
-  if (!presented)
-    throw new HttpError("We don't recognize this session. Sign in again to continue.", 401)
+  if (presented?.client !== kind) throw new HttpError(UNKNOWN_SESSION_MESSAGE, 401)
 
   const outcome = await withTransaction((tx) =>
     rotateUnderUserLock(presented.userId, tokenHash, tx)

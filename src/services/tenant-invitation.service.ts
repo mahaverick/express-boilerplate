@@ -72,6 +72,7 @@ import {
   issueRefreshToken,
   signAccessToken,
   type IssuedRefreshToken,
+  type SessionClient,
 } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import {
@@ -1426,14 +1427,16 @@ async function lockActiveInvitee(userId: string, tx: DbTransaction): Promise<Use
  * `invitation.accepted` and issue the session.
  * @param user - The account joining.
  * @param claimed - The invitation, claimed for it.
- * @param sessionId - The new session's id.
+ * @param session - The new session's id, and the client it belongs to.
+ * @param session.sessionId - The new session's id.
+ * @param session.client - The client signing in.
  * @param tx - The join's transaction.
  * @returns The account, its session, its role, and the membership event when one was added.
  */
 async function joinAndIssueSession(
   user: User,
   claimed: TenantInvitation,
-  sessionId: string,
+  session: { sessionId: string; client: SessionClient },
   tx: DbTransaction
 ): Promise<VerifyOutcome> {
   const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
@@ -1451,7 +1454,9 @@ async function joinAndIssueSession(
     },
     tx
   )
-  const refreshToken = await issueRefreshToken(user.id, sessionId, tx)
+  const refreshToken = await issueRefreshToken(user.id, session.sessionId, tx, {
+    client: session.client,
+  })
   const settled = { user, refreshToken, role: membership.role }
   if (!inserted) return settled
   const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
@@ -1678,13 +1683,15 @@ export async function verifyInvitation(rawToken: string): Promise<InvitationVeri
  * invitation's tenant is what authorises Apex.
  * @param rawLink - The raw token from the confirm link.
  * @param shownEmail - The address the link displays, trimmed and lowercased. A link posted without one is refused: the check is what stops another person's link signing a visitor in.
+ * @param client - The client signing in, recorded on the session.
  * @returns The session, and the tenant and role it joined with.
  * @throws {HttpError} 404 `invitation_invalid`, for every link that signs nobody in; 402 `PLAN_LIMIT_REACHED`, with no `details`, when the workspace is over its members limit.
  * @throws {MaintenanceModeError} 503 `READ_ONLY_MODE` or `MAINTENANCE_MODE`.
  */
 export async function confirmInvitation(
   rawLink: string,
-  shownEmail: string | undefined
+  shownEmail: string | undefined,
+  client: SessionClient
 ): Promise<InvitationSession> {
   assertJoinAllowedByMode()
   const peeked = await peekLinkToken(rawLink, 'invitation')
@@ -1721,7 +1728,7 @@ export async function confirmInvitation(
       // Unredeemable since the lookup (accepted, revoked, expired, tenant suspended or archived).
       if (!claimed) throw confirmInvalid()
       const trialStarted = await startTrialForOwner(claimed, user.id, valid.tenant.isPlatform, tx)
-      const joined = await joinAndIssueSession(user, claimed, sessionId, tx)
+      const joined = await joinAndIssueSession(user, claimed, { sessionId, client }, tx)
       return trialStarted ? { ...joined, trialStartedFor: claimed.tenantId } : joined
     })
   })

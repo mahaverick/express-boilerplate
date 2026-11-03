@@ -344,7 +344,10 @@ export async function completeGoogleSignIn(
     // Re-checked under the lock, as a link verify does: a deactivation that committed since the lookup wins.
     if (!locked?.active) throw googleAuthFailed('Account is inactive')
     // Google may re-approve an unattended browser with no prompt, so this proves no one is present: step-up asks again.
-    return issueRefreshToken(user.id, randomUUID(), tx, { recentAuth: false })
+    return issueRefreshToken(user.id, randomUUID(), tx, {
+      recentAuth: false,
+      client: { kind: 'web', deviceName: null },
+    })
   })
   if (isNew) {
     await emitDomainEvent({

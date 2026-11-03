@@ -142,6 +142,7 @@ describe('claimOnce is atomic under real concurrency', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
     })
@@ -177,6 +178,7 @@ describe('claimOnce is atomic under real concurrency', () => {
       await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         tokenHash,
         expiresAt: new Date(Date.now() + 60_000),
       })

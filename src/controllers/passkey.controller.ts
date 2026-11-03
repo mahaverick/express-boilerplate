@@ -7,6 +7,7 @@ import { passkeyRelyingParty } from '@/configs/passkey.config'
 import { BaseController } from '@/controllers/base.controller'
 import {
   authenticatedUserId,
+  clientOf,
   revokePresentedSession,
   setRefreshTokenCookie,
   readRefreshTokenCookie,
@@ -110,7 +111,7 @@ class PasskeyController extends BaseController {
   signInVerify = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(passkeySignInVerifySchema, request.body)
-    const session = await finishPasskeySignIn(input)
+    const session = await finishPasskeySignIn(input, clientOf(request))
     await revokePresentedSession(request, { emitSignedOut: false })
     setRefreshTokenCookie(
       request,

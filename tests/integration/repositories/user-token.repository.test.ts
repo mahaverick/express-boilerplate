@@ -13,6 +13,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import { hashToken, issueRefreshToken, rotateRefreshToken } from '@/services/session.service'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
@@ -49,6 +50,7 @@ function refreshRow(userId: string, sessionId: string) {
   return userTokenRepository.create({
     userId,
     purpose: 'refresh',
+    client: 'web',
     sessionId,
     tokenHash: uniqueHash(),
     expiresAt: new Date(Date.now() + 60_000),
@@ -68,8 +70,8 @@ async function revokedAtOf(tokenHash: string): Promise<Date | null | undefined> 
  * that row's token hash.
  */
 async function consumedHashIn(userId: string, sessionId: string): Promise<string> {
-  const issued = await issueRefreshToken(userId, sessionId)
-  await rotateRefreshToken(issued.raw)
+  const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+  await rotateRefreshToken(issued.raw, 'web')
   return hashToken(issued.raw)
 }
 
@@ -173,6 +175,7 @@ describe('UserTokenRepository', () => {
     const created = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId,
       tokenHash,
       expiresAt,
@@ -195,6 +198,7 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
@@ -222,6 +226,7 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
@@ -246,6 +251,7 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
@@ -276,6 +282,7 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash,
       // Already expired when created: live only by claimOnce's actual predicate, not an expiry-aware one.
@@ -319,6 +326,7 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: refreshHash,
       expiresAt: new Date(Date.now() + 60_000),
@@ -340,6 +348,7 @@ describe('UserTokenRepository', () => {
     const inSession = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId,
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -347,6 +356,7 @@ describe('UserTokenRepository', () => {
     const outsideSession = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: otherSessionId,
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -367,6 +377,7 @@ describe('UserTokenRepository', () => {
     const first = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -374,6 +385,7 @@ describe('UserTokenRepository', () => {
     const second = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -381,6 +393,7 @@ describe('UserTokenRepository', () => {
     const otherUsers = await userTokenRepository.create({
       userId: otherUserId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -407,6 +420,7 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -416,12 +430,14 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
     await userTokenRepository.create({
       userId: otherUserId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -454,7 +470,7 @@ describe('UserTokenRepository', () => {
   ] as const)('%s revokes the row but never writes the denylist', async (_name, revoke) => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
     await revoke(userId, sessionId)
 
@@ -472,6 +488,7 @@ describe('UserTokenRepository', () => {
       const spared = await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: sparedSessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -479,6 +496,7 @@ describe('UserTokenRepository', () => {
       const other = await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: otherSessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -506,6 +524,7 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: sparedSessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -513,6 +532,7 @@ describe('UserTokenRepository', () => {
       const noSessionToken = await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -532,6 +552,7 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: sparedSessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -539,6 +560,7 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: revokedSessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -546,6 +568,7 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId: otherUserId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: randomUUID(),
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -567,6 +590,7 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: sparedSessionId,
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -574,6 +598,7 @@ describe('UserTokenRepository', () => {
       const otherUsersToken = await userTokenRepository.create({
         userId: otherUserId,
         purpose: 'refresh',
+        client: 'web',
         sessionId: randomUUID(),
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
@@ -596,6 +621,7 @@ describe('UserTokenRepository', () => {
     const created = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -615,6 +641,7 @@ describe('UserTokenRepository', () => {
     const created = await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -638,6 +665,7 @@ describe('UserTokenRepository', () => {
       const sessionless = await userTokenRepository.create({
         userId,
         purpose: 'refresh',
+        client: 'web',
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
@@ -707,7 +735,7 @@ describe('UserTokenRepository', () => {
     it('ignores a marker revoked before the presented token was consumed: a sibling-only revoke, not a kill of its chain', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      const earlier = await issueRefreshToken(userId, sessionId)
+      const earlier = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
       await sql`update user_tokens set revoked_at = now() where token_hash = ${hashToken(earlier.raw)}`
       const presented = await consumedHashIn(userId, sessionId)
 
@@ -718,7 +746,7 @@ describe('UserTokenRepository', () => {
       const userId = await createUser()
       const sessionId = randomUUID()
       const presented = await consumedHashIn(userId, sessionId)
-      const later = await issueRefreshToken(userId, sessionId)
+      const later = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
       await sql`update user_tokens set revoked_at = now() where token_hash = ${hashToken(later.raw)}`
 
       expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
@@ -728,7 +756,7 @@ describe('UserTokenRepository', () => {
       const userId = await createUser()
       const killed = randomUUID()
       const untouched = randomUUID()
-      await issueRefreshToken(userId, killed)
+      await issueRefreshToken(userId, killed, undefined, { client: WEB_CLIENT })
       const presented = await consumedHashIn(userId, untouched)
       await userTokenRepository.revokeAllForSession(killed)
 
@@ -830,7 +858,7 @@ describe('UserTokenRepository', () => {
     it("revokes only one session's live step-up links, never its refresh tokens", async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      const refresh = await issueRefreshToken(userId, sessionId)
+      const refresh = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
       const mine = await userTokenRepository.create(stepUpRow(userId, sessionId))
       const otherSession = await userTokenRepository.create(stepUpRow(userId, randomUUID()))
 
@@ -846,7 +874,7 @@ describe('UserTokenRepository', () => {
     it("sign-out revokes the session's live step-up link", async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
       const pending = await userTokenRepository.create(stepUpRow(userId, sessionId))
 
       await userTokenRepository.revokeAllForSession(sessionId)
@@ -857,7 +885,7 @@ describe('UserTokenRepository', () => {
     it('finds a refresh token by hash, but never a link', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      const refresh = await issueRefreshToken(userId, sessionId)
+      const refresh = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
       const link = await userTokenRepository.create(stepUpRow(userId, sessionId))
 
       const found = await userTokenRepository.findRefreshByHash(hashToken(refresh.raw))
@@ -869,8 +897,8 @@ describe('UserTokenRepository', () => {
       const userId = await createUser()
       const mine = randomUUID()
       const other = randomUUID()
-      await issueRefreshToken(userId, mine)
-      await issueRefreshToken(userId, other)
+      await issueRefreshToken(userId, mine, undefined, { client: WEB_CLIENT })
+      await issueRefreshToken(userId, other, undefined, { client: WEB_CLIENT })
       // A session with only a pending step-up link is not a signed-in session.
       await userTokenRepository.create(stepUpRow(userId, randomUUID()))
 

@@ -14,7 +14,7 @@ import { isFrontendApp } from '@/constants/frontend.constants'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { isNativeRequest } from '@/middlewares/native-client.middleware'
-import { revokeRefreshToken } from '@/services/session.service'
+import { revokeRefreshToken, type SessionClient } from '@/services/session.service'
 import type { Actor, RequestPrincipal } from '@/types/actor'
 import type { OAuthIntent } from '@/types/oauth-intent'
 import { redirectPathSchema } from '@/validators/redirect.validators'
@@ -175,6 +175,16 @@ export function presentedRefreshToken(request: Request): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined
   const { refreshToken } = body as { refreshToken?: unknown }
   return typeof refreshToken === 'string' ? refreshToken : undefined
+}
+
+/**
+ * The client a sign-in or a refresh comes from, as `resolveClientKind` marked
+ * the request. Names no device yet.
+ * @param request - The incoming request.
+ * @returns The client kind, with no device name yet.
+ */
+export function clientOf(request: Request): SessionClient {
+  return { kind: isNativeRequest(request) ? 'native' : 'web', deviceName: null }
 }
 
 /**

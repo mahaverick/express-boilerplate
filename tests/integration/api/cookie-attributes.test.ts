@@ -30,6 +30,7 @@ import { FakeGoogleSuccessStrategy } from '../../helpers/fake-google'
 import { isTokenRowLive, sessionWithSibling } from '../../helpers/grace-sibling'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 /**
@@ -170,7 +171,7 @@ function expectRefreshAttributes(
 async function sessionFor(email: string): Promise<string> {
   const user = await userRepository.findByEmail(email)
   if (!user) throw new Error('setup: the user exists')
-  const issued = await issueRefreshToken(user.id, randomUUID())
+  const issued = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
   return issued.raw
 }
 
@@ -911,7 +912,7 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
       present: async (email: string): Promise<string> => {
         expect(REFRESH_REUSE_GRACE_MS).toBeLessThan(11_000)
         const raw = await sessionFor(email)
-        await rotateRefreshToken(raw)
+        await rotateRefreshToken(raw, 'web')
         await sql`
           update user_tokens set consumed_at = consumed_at - interval '11 seconds'
           where token_hash = ${hashToken(raw)}
@@ -1075,7 +1076,7 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
   it('sets a fresh cookie and clears nothing for a replay inside the grace window', async () => {
     const app = appWith(PLAIN_HOST_ONLY)
     const raw = await sessionFor(await createVerifiedUser())
-    await rotateRefreshToken(raw)
+    await rotateRefreshToken(raw, 'web')
 
     const replayed = await request(app)
       .post('/api/v1/auth/refresh')

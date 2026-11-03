@@ -5,6 +5,7 @@
  * an invitation link (tenant-invitation.service.ts) or Google
  * (google-auth.service.ts).
  */
+import type { ClientKind } from '@/constants/native-client.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 import { HttpError } from '@/errors/http-error'
@@ -55,12 +56,13 @@ export async function platformRoleForLogin(userId: string): Promise<MembershipRo
  * the account is still active (as requireAuth does for every bearer request).
  * The access token keeps the session's authentication time: refreshing is not
  * re-authenticating.
- * @param rawToken - The raw refresh token from the cookie.
+ * @param rawToken - The raw refresh token the client presented.
+ * @param kind - The kind of client presenting it; a token issued to the other kind is refused as unknown.
  * @returns A new access token and the rotated refresh token.
  * @throws {HttpError} 401, from rotation or when the account is gone or inactive.
  */
-export async function refresh(rawToken: string): Promise<RefreshResult> {
-  const rotated = await rotateRefreshToken(rawToken)
+export async function refresh(rawToken: string, kind: ClientKind): Promise<RefreshResult> {
+  const rotated = await rotateRefreshToken(rawToken, kind)
   const user = await userRepository.findById(rotated.userId)
   if (!user || !user.active) {
     throw new HttpError(

@@ -18,6 +18,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH, MAX_REDIRECT_PATH_LENGTH } from '@/constants/auth.constants'
 import { FRONTEND_APPS, type FrontendApp } from '@/constants/frontend.constants'
+import { CLIENT_KINDS, type ClientKind } from '@/constants/native-client.constants'
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { userModel } from '@/database/models/user.model'
 
@@ -38,6 +39,16 @@ const TOKEN_PURPOSE_SQL_LIST = TOKEN_PURPOSES.map((purpose) => `'${purpose}'`).j
  * `FRONTEND_APPS` as a literal SQL value list, for `user_tokens_app_check`.
  */
 const APP_SQL_LIST = FRONTEND_APPS.map((app) => `'${app}'`).join(', ')
+
+/**
+ * `CLIENT_KINDS` as a literal SQL value list, for `user_tokens_client_check`.
+ */
+const CLIENT_SQL_LIST = CLIENT_KINDS.map((kind) => `'${kind}'`).join(', ')
+
+/**
+ * The longest device name a native app's session may record.
+ */
+const MAX_DEVICE_NAME_LENGTH = 64
 
 /**
  * What a `user_tokens` row is for. Every claim (`UserTokenRepository.
@@ -81,8 +92,9 @@ export type LinkTokenPurpose = (typeof LINK_TOKEN_PURPOSES)[LinkTokenIntent]
  * click looks the account up by address; an `invitation_link` row names an
  * address and the invitation it joins, and no user, for the same reason; a
  * `step_up_link` row names the user and the session it elevates; a `refresh`
- * row names a user and no address. Only an `invitation_link` row has an
- * `invitation_id`.
+ * row names a user, the client that holds it and no address. Only an
+ * `invitation_link` row has an `invitation_id`, and only a `refresh` row has a
+ * `client` or a `device_name`.
  *
  * Rotation is append-only: reuse detection (`rotateRefreshToken`,
  * session.service.ts) needs the revoked row to recognise a replay, and
@@ -198,6 +210,19 @@ export const userTokenModel = pgTable(
       () => tenantInvitationModel.id,
       { onDelete: 'cascade' }
     ),
+    /**
+     * The kind of client that holds a `refresh` row: a browser (`web`) or a
+     * native app. Set when the session starts and copied forward unchanged by
+     * every rotation and grace sibling; nothing updates it, so rotation can
+     * check it on its unlocked read (`rotateRefreshToken`). Not null on a
+     * `refresh` row, null on every other purpose (`user_tokens_shape_check`).
+     */
+    client: varchar('client', { length: 8 }).$type<ClientKind>(),
+    /**
+     * The device a native app named when the session started, copied forward
+     * like `client`. Null for a browser, and on every purpose but `refresh`.
+     */
+    deviceName: varchar('device_name', { length: MAX_DEVICE_NAME_LENGTH }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -228,8 +253,12 @@ export const userTokenModel = pgTable(
     ),
     check('user_tokens_app_check', sql`${table.app} in (${sql.raw(APP_SQL_LIST)})`),
     check(
+      'user_tokens_client_check',
+      sql`${table.client} is null or ${table.client} in (${sql.raw(CLIENT_SQL_LIST)})`
+    ),
+    check(
       'user_tokens_shape_check',
-      sql`(${table.purpose} = 'refresh' and ${table.userId} is not null and ${table.email} is null and ${table.app} is null and ${table.redirect} is null and ${table.invitationId} is null) or (${table.purpose} = 'sign_in_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null and ${table.invitationId} is null) or (${table.purpose} = 'step_up_link' and ${table.userId} is not null and ${table.sessionId} is not null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null and ${table.invitationId} is null) or (${table.purpose} = 'invitation_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null and ${table.invitationId} is not null)`
+      sql`(${table.purpose} = 'refresh' and ${table.userId} is not null and ${table.email} is null and ${table.app} is null and ${table.redirect} is null and ${table.invitationId} is null and ${table.client} is not null) or (${table.purpose} = 'sign_in_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null and ${table.invitationId} is null and ${table.client} is null and ${table.deviceName} is null) or (${table.purpose} = 'step_up_link' and ${table.userId} is not null and ${table.sessionId} is not null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null and ${table.invitationId} is null and ${table.client} is null and ${table.deviceName} is null) or (${table.purpose} = 'invitation_link' and ${table.userId} is null and ${table.sessionId} is null and ${table.email} is not null and ${table.app} is not null and ${table.redirect} is null and ${table.invitationId} is not null and ${table.client} is null and ${table.deviceName} is null)`
     ),
   ]
 )
@@ -253,6 +282,7 @@ export type RefreshUserToken = UserToken & {
   userId: string
   sessionId: string
   sessionStartedAt: Date
+  client: ClientKind
 }
 
 /**
@@ -264,7 +294,9 @@ export type RefreshUserToken = UserToken & {
  */
 export function refreshTokenOf(row: UserToken | undefined): RefreshUserToken | undefined {
   if (row?.purpose !== 'refresh') return undefined
-  const { userId, sessionId, sessionStartedAt } = row
-  if (userId === null || sessionId === null || sessionStartedAt === null) return undefined
-  return { ...row, purpose: 'refresh', userId, sessionId, sessionStartedAt }
+  const { userId, sessionId, sessionStartedAt, client } = row
+  if (userId === null || sessionId === null || sessionStartedAt === null || client === null) {
+    return undefined
+  }
+  return { ...row, purpose: 'refresh', userId, sessionId, sessionStartedAt, client }
 }

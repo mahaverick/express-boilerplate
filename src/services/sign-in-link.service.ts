@@ -44,7 +44,7 @@ import {
   assertSignInAllowed,
 } from '@/services/maintenance-mode/maintenance-mode.service'
 import { getPlatformMembership } from '@/services/platform.service'
-import type { IssuedRefreshToken } from '@/services/session.service'
+import type { IssuedRefreshToken, SessionClient } from '@/services/session.service'
 import { spendSignInLinkBudget } from '@/services/sign-in-link-limit.service'
 import { issueSignInSession } from '@/services/sign-in-session.service'
 import { mailPlatformInvitationConfirmForSignIn } from '@/services/tenant-invitation.service'
@@ -366,12 +366,14 @@ async function claimForLink(userId: string): Promise<User> {
  * later waits for the lock and revokes it.
  * @param raw - The raw token from the link.
  * @param shownEmail - The address the link displays, trimmed and lowercased. A link posted without one is refused: the check is what stops another person's link signing a visitor in.
+ * @param client - The client signing in, recorded on the session.
  * @returns The session.
  * @throws {HttpError} 400 `LINK_INVALID`; 503 `MAINTENANCE_MODE` or `READ_ONLY_MODE` (a `MaintenanceModeError`).
  */
 export async function verifySignInLink(
   raw: string,
-  shownEmail: string | undefined
+  shownEmail: string | undefined,
+  client: SessionClient
 ): Promise<LinkSession> {
   await assertVerifyAllowedByMode(raw)
   if (shownEmail === undefined) throw linkInvalid()
@@ -385,7 +387,11 @@ export async function verifySignInLink(
   await assertSignInAllowed(user.id)
 
   // After the checks, so a refused click leaves no trace.
-  const { accessToken, refreshToken, platformRole } = await issueSignInSession(user, linkInvalid)
+  const { accessToken, refreshToken, platformRole } = await issueSignInSession(
+    user,
+    linkInvalid,
+    client
+  )
   if (isNew) {
     await emitDomainEvent({
       type: 'user_signed_up',

@@ -39,6 +39,7 @@ import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-us
 import { queuedJobs } from '../../helpers/queue-jobs'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { clearRateLimiter, signInByLink } from '../../helpers/sign-in'
 import { waitUntil } from '../../helpers/timing'
 
@@ -376,7 +377,9 @@ describe('POST /api/v1/invitations/verify', () => {
 
   it('mails a confirm link instead of signing in an existing verified account', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('existing'), firstName: 'Grace' })
-    const presented = await issueRefreshToken(invitee.id, randomUUID())
+    const presented = await issueRefreshToken(invitee.id, randomUUID(), undefined, {
+      client: WEB_CLIENT,
+    })
     const { tenant, rawToken, invitationId } = await customerInvitation(invitee.email)
 
     const response = await postVerify(rawToken, `${REFRESH_COOKIE_NAME}=${presented.raw}`)
@@ -439,7 +442,7 @@ describe('POST /api/v1/invitations/verify', () => {
       email: uniqueEmail('never-verified'),
       verified: false,
     })
-    await issueRefreshToken(invitee.id, randomUUID())
+    await issueRefreshToken(invitee.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const { rawToken, invitationId } = await customerInvitation(invitee.email)
 
     const response = await postVerify(rawToken)
@@ -583,7 +586,9 @@ describe('POST /api/v1/invitations/verify', () => {
       const inviter = await createTrackedUser()
       const invitee = await createTrackedUser({ email: uniqueEmail('staff-existing') })
       if (kind === 'staff account') await makeStaff(invitee.id, 'viewer')
-      const presented = await issueRefreshToken(invitee.id, randomUUID())
+      const presented = await issueRefreshToken(invitee.id, randomUUID(), undefined, {
+        client: WEB_CLIENT,
+      })
       const { rawToken, invitationId } = await seedInvitation(
         platform,
         inviter,

@@ -32,6 +32,7 @@ import {
 } from '../../helpers/grace-sibling'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
@@ -60,7 +61,7 @@ afterAll(() => {
  * @returns The refresh token and the access token.
  */
 async function sessionFor(user: User): Promise<{ refresh: IssuedRefreshToken; bearer: string }> {
-  const refresh = await issueRefreshToken(user.id, randomUUID())
+  const refresh = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
   return { refresh, bearer: signAccessToken(user, refresh.sessionId, refresh.authenticatedAt) }
 }
 
@@ -78,7 +79,7 @@ async function revokeOthers(token?: string) {
 describe('POST /api/v1/auth/sessions/revoke-others', () => {
   it('asks a session with no recent sign-in to confirm, and ends nothing', async () => {
     const user = await createTrackedUser()
-    const stale = await issueRefreshToken(user.id, randomUUID())
+    const stale = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const other = await sessionFor(user)
 
     const response = await revokeOthers(signAccessToken(user, stale.sessionId))
@@ -102,8 +103,12 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({ success: true, data: { revoked: 2 } })
-    await expect(rotateRefreshToken(other.refresh.raw)).rejects.toMatchObject({ statusCode: 401 })
-    await expect(rotateRefreshToken(third.refresh.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(other.refresh.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
+    await expect(rotateRefreshToken(third.refresh.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
     expect(await isSessionDenied(other.refresh.sessionId)).toBe(true)
     expect(await isSessionDenied(third.refresh.sessionId)).toBe(true)
     expect(await isSessionDenied(current.refresh.sessionId)).toBe(false)
@@ -111,7 +116,7 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
       .get('/api/v1/profile')
       .set('Authorization', `Bearer ${other.bearer}`)
     expect(signedOut.status).toBe(401)
-    const rotated = await rotateRefreshToken(current.refresh.raw)
+    const rotated = await rotateRefreshToken(current.refresh.raw, 'web')
     expect(rotated.sessionId).toBe(current.refresh.sessionId)
     const stillIn = await request(app)
       .get('/api/v1/profile')
@@ -178,7 +183,7 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
     await revokeOthers(current.bearer)
 
     expect(await isSessionDenied(theirs.refresh.sessionId)).toBe(false)
-    const rotated = await rotateRefreshToken(theirs.refresh.raw)
+    const rotated = await rotateRefreshToken(theirs.refresh.raw, 'web')
     expect(rotated.userId).toBe(bystander.id)
   })
 
@@ -282,7 +287,9 @@ async function revokeOthersWithCookie(bearer: string, cookie?: string) {
  */
 async function plantForeignUsersRefresh(caller: SessionWithSibling): Promise<string> {
   const bystander = await createTrackedUser()
-  const planted = await issueRefreshToken(bystander.id, caller.head.sessionId)
+  const planted = await issueRefreshToken(bystander.id, caller.head.sessionId, undefined, {
+    client: WEB_CLIENT,
+  })
   return planted.raw
 }
 
@@ -326,7 +333,9 @@ describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
     expect(response.status).toBe(200)
     // The sibling is not another session to the user: only `other` counts.
     expect(response.body).toMatchObject({ success: true, data: { revoked: 1 } })
-    await expect(rotateRefreshToken(other.refresh.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(other.refresh.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
     expect(await isSessionDenied(other.refresh.sessionId)).toBe(true)
     // Never the caller's own sid: that would end the caller's access token too.
     expect(await isSessionDenied(caller.head.sessionId)).toBe(false)
@@ -336,7 +345,9 @@ describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
     expect(stillIn.status).toBe(200)
     // The caller rotates before the sibling is replayed: a replay of the revoked sibling is reuse and ends the whole session.
     expect(await rotatedSessionId(caller.head.raw)).toBe(caller.head.sessionId)
-    await expect(rotateRefreshToken(caller.sibling.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(caller.sibling.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
   })
 
   it('treats a later replay of the ended sibling as reuse, which ends the caller’s session too', async () => {
@@ -346,8 +357,12 @@ describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
     await revokeOthersWithCookie(caller.bearer, refreshCookieHeader(caller.head.raw))
 
     // The sibling was revoked, not rotated, so no grace applies: reuse kills the shared session.
-    await expect(rotateRefreshToken(caller.sibling.raw)).rejects.toMatchObject({ statusCode: 401 })
-    await expect(rotateRefreshToken(caller.head.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(caller.sibling.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
+    await expect(rotateRefreshToken(caller.head.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
     expect(await isSessionDenied(caller.head.sessionId)).toBe(true)
   })
 
@@ -389,7 +404,9 @@ describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({ data: { revoked: 1 } })
-    await expect(rotateRefreshToken(other.refresh.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(other.refresh.raw, 'web')).rejects.toMatchObject({
+      statusCode: 401,
+    })
     expect(await isSessionDenied(other.refresh.sessionId)).toBe(true)
     expect(await isSessionDenied(caller.head.sessionId)).toBe(false)
     expect(await rotatedSessionId(caller.sibling.raw)).toBe(caller.head.sessionId)

@@ -26,6 +26,7 @@ import { isSessionDenied } from '@/services/session-denylist.service'
 import { issueRefreshToken, rotateRefreshToken } from '@/services/session.service'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 const userRepository = new UserRepository()
 const originalClaimOnce = UserTokenRepository.prototype.claimOnce.bind(new UserTokenRepository())
@@ -69,7 +70,9 @@ describe('an account claim against a rotation in flight', () => {
       email: `account-claim-rollback-${randomUUID()}@example.test`,
     })
     createdIds.push(user.id)
-    const presented = await issueRefreshToken(user.id, randomUUID())
+    const presented = await issueRefreshToken(user.id, randomUUID(), undefined, {
+      client: WEB_CLIENT,
+    })
 
     const reachedClaim = deferred<number>()
     const release = deferred()
@@ -89,7 +92,7 @@ describe('an account claim against a rotation in flight', () => {
 
     await withMutatedMethod(UserRepository.prototype, 'lockById', lockById, async () => {
       await withMutatedMethod(UserTokenRepository.prototype, 'claimOnce', heldClaim, async () => {
-        const rotation = rotateRefreshToken(presented.raw)
+        const rotation = rotateRefreshToken(presented.raw, 'web')
         const rotationPid = await untilSignalled(reachedClaim.promise, rotation, 'the rotation')
 
         const claiming = claimNeverVerifiedAccount(user.id, failingWrite)
@@ -101,7 +104,7 @@ describe('an account claim against a rotation in flight', () => {
 
         // Before the rotation below, whose reuse kill would deny the session itself.
         expect(await isSessionDenied(successor.sessionId)).toBe(true)
-        await expect(rotateRefreshToken(successor.raw)).rejects.toMatchObject({
+        await expect(rotateRefreshToken(successor.raw, 'web')).rejects.toMatchObject({
           statusCode: 401,
         })
       })

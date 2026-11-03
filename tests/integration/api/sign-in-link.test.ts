@@ -39,6 +39,7 @@ import { withMutatedMethod } from '../../helpers/mutate'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { issueTestLink, signInByLink } from '../../helpers/sign-in'
 import { settle, waitUntil } from '../../helpers/timing'
 
@@ -635,7 +636,7 @@ describe('POST /auth/link/verify', () => {
       email: uniqueEmail('never-verified'),
       verified: false,
     })
-    await issueRefreshToken(user.id, randomUUID())
+    await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     await authProviderRepository.create({
       userId: user.id,
       provider: 'email',
@@ -766,7 +767,7 @@ describe('POST /auth/link/verify', () => {
       if (seeded.id === undefined && values.email === email) {
         const squatter = await realCreate.call(this, { email })
         seeded.id = squatter.id
-        await issueRefreshToken(squatter.id, randomUUID())
+        await issueRefreshToken(squatter.id, randomUUID(), undefined, { client: WEB_CLIENT })
       }
       return realCreate.apply(this, arguments_)
     }

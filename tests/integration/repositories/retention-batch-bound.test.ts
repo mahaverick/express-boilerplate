@@ -120,8 +120,8 @@ const cases: BoundCase[] = [
       const userId = await insertUser()
       await seedRows(
         () => sql`
-          insert into user_tokens (user_id, purpose, session_id, token_hash, expires_at)
-          values (${userId}, 'refresh', ${randomUUID()}, ${randomBytes(32).toString('hex')}, ${ROWS_AT}::timestamptz)
+          insert into user_tokens (user_id, purpose, session_id, client, token_hash, expires_at)
+          values (${userId}, 'refresh', ${randomUUID()}, 'web', ${randomBytes(32).toString('hex')}, ${ROWS_AT}::timestamptz)
         `
       )
     },

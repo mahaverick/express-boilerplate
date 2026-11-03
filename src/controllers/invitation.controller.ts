@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { BaseController } from '@/controllers/base.controller'
 import {
   authenticatedUserId,
+  clientOf,
   revokePresentedSession,
   setRefreshTokenCookie,
 } from '@/controllers/helpers.controller'
@@ -147,7 +148,7 @@ class InvitationController extends BaseController {
   confirmInvitation = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = confirmInputFrom(request.body)
-    const session = await confirmInvitation(input.token, input.email)
+    const session = await confirmInvitation(input.token, input.email, clientOf(request))
     await revokePresentedSession(request, { emitSignedOut: false })
     sendInvitationSession(request, response, session)
   })

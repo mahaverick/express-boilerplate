@@ -257,8 +257,8 @@ async function splitIntoOwnerAndThief(
   sid: string
 ): Promise<{ ownerRaw: string; thiefRaw: string }> {
   const raw = decodeURIComponent(refreshCookie.slice(refreshCookie.indexOf('=') + 1))
-  const owner = await rotateRefreshToken(raw)
-  const thief = await rotateRefreshToken(raw)
+  const owner = await rotateRefreshToken(raw, 'web')
+  const thief = await rotateRefreshToken(raw, 'web')
   await ageSession(sid)
   return { ownerRaw: owner.raw, thiefRaw: thief.raw }
 }
@@ -270,7 +270,7 @@ async function splitIntoOwnerAndThief(
  * @returns True when the rotation carries a recent time.
  */
 async function hasRecentTimeAfterRotating(raw: string): Promise<boolean> {
-  const rotated = await rotateRefreshToken(raw)
+  const rotated = await rotateRefreshToken(raw, 'web')
   return (rotated.authenticatedAt?.getTime() ?? 0) > Date.now() - 30 * 60 * 1000
 }
 

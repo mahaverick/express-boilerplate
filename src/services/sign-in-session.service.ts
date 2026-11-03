@@ -14,6 +14,7 @@ import {
   issueRefreshToken,
   signAccessToken,
   type IssuedRefreshToken,
+  type SessionClient,
 } from '@/services/session.service'
 
 const userRepository = new UserRepository()
@@ -35,6 +36,7 @@ export interface IssuedSignInSession {
  * revokes the session.
  * @param user - The account to sign in.
  * @param refuse - Builds the error thrown when the account is inactive or gone under the lock, or when `canSignInUnderLock` returns false.
+ * @param client - The client signing in, recorded on the session.
  * @param canSignInUnderLock - An extra check or write the sign-in needs under the same lock; false refuses the sign-in and rolls back.
  * @returns The tokens and the platform role.
  * @throws {Error} What `refuse` builds.
@@ -42,6 +44,7 @@ export interface IssuedSignInSession {
 export async function issueSignInSession(
   user: User,
   refuse: () => Error,
+  client: SessionClient,
   canSignInUnderLock?: (locked: User, tx: DbTransaction) => Promise<boolean>
 ): Promise<IssuedSignInSession> {
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
@@ -51,7 +54,7 @@ export async function issueSignInSession(
     const locked = await userRepository.lockById(user.id, 'share', tx)
     if (!locked?.active) throw refuse()
     if (canSignInUnderLock && !(await canSignInUnderLock(locked, tx))) throw refuse()
-    return issueRefreshToken(user.id, sessionId, tx)
+    return issueRefreshToken(user.id, sessionId, tx, { client })
   })
   const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)

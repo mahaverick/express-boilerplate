@@ -11,6 +11,7 @@ import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
 import {
   authenticatedUserId,
+  clientOf,
   clearHostOnlyPlainRefreshCookie,
   currentRefreshCookie,
   oauthIntentOf,
@@ -121,7 +122,7 @@ async function refreshOrClearCookie(
   rawToken: string
 ): Promise<authService.RefreshResult> {
   try {
-    return await authService.refresh(rawToken)
+    return await authService.refresh(rawToken, clientOf(request).kind)
   } catch (error) {
     if (error instanceof HttpError && error.statusCode === 401) {
       clearPresentedRefreshCookie(request, response)
@@ -180,7 +181,7 @@ class AuthController extends BaseController {
   verifySignInLink = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(signInLinkVerifySchema, request.body)
-    const session = await verifySignInLink(input.token, input.email)
+    const session = await verifySignInLink(input.token, input.email, clientOf(request))
     await revokePresentedSession(request, { emitSignedOut: false })
 
     setRefreshTokenCookie(

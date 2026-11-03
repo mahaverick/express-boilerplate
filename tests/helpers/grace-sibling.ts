@@ -14,6 +14,7 @@ import {
   type IssuedRefreshToken,
 } from '@/services/session.service'
 import { testRefreshCookie } from './refresh-cookie'
+import { WEB_CLIENT } from './session-client'
 
 /**
  * One session holding two live refresh chains, and a bearer on that session.
@@ -33,9 +34,9 @@ export interface SessionWithSibling {
  * @returns The spent first token, the caller's head, the sibling, and a bearer carrying their shared `sid`.
  */
 export async function sessionWithSibling(user: User): Promise<SessionWithSibling> {
-  const first = await issueRefreshToken(user.id, randomUUID())
-  const head = await rotateRefreshToken(first.raw)
-  const sibling = await rotateRefreshToken(first.raw)
+  const first = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
+  const head = await rotateRefreshToken(first.raw, 'web')
+  const sibling = await rotateRefreshToken(first.raw, 'web')
   if (sibling.sessionId !== head.sessionId || sibling.raw === head.raw) {
     throw new Error('sessionWithSibling: the replay did not mint a sibling')
   }
@@ -62,7 +63,7 @@ export function refreshCookieHeader(raw: string): string {
  * @returns The new token's session id; rejects as the rotation does.
  */
 export async function rotatedSessionId(raw: string): Promise<string> {
-  const rotated = await rotateRefreshToken(raw)
+  const rotated = await rotateRefreshToken(raw, 'web')
   return rotated.sessionId
 }
 

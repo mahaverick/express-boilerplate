@@ -25,6 +25,7 @@ import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { agent, request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 /**
  * The `state` query parameter off a Google OAuth redirect URL, if present.
@@ -309,7 +310,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       it('revokes the session of a refresh cookie the callback request presents', async () => {
         const earlier = await userRepository.create({ email: uniqueEmail() })
         createdIds.push(earlier.id)
-        const presented = await issueRefreshToken(earlier.id, randomUUID())
+        const presented = await issueRefreshToken(earlier.id, randomUUID(), undefined, {
+          client: WEB_CLIENT,
+        })
         const profile = googleProfile({ emailVerified: true })
         passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(profile))
 
@@ -580,7 +583,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       const existing = await userRepository.create({ email })
       createdIds.push(existing.id)
       expect(existing.emailVerifiedAt).toBeNull()
-      const squatterSession = await issueRefreshToken(existing.id, randomUUID())
+      const squatterSession = await issueRefreshToken(existing.id, randomUUID(), undefined, {
+        client: WEB_CLIENT,
+      })
       const credentialId = `cred-${randomUUID()}`
       await sql`
         insert into user_passkeys (user_id, credential_id, public_key, sign_count, transports, aaguid, backup_eligible, backup_state, name)

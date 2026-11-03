@@ -21,6 +21,7 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
 import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { waitUntil } from '../../helpers/timing'
 
 afterEach(async () => {
@@ -34,7 +35,7 @@ describe('the session deny through a stalled Redis', () => {
   it('lets a logout answer within the deadline and still denies the session once Redis answers', async () => {
     const user = await createTrackedUser()
     const sessionId = randomUUID()
-    const { raw } = await issueRefreshToken(user.id, sessionId)
+    const { raw } = await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
     const client = await getRedis()
     const realSet = client.set.bind(client)
     const gate = { open: () => {} }
@@ -65,7 +66,7 @@ describe('the session deny through a stalled Redis', () => {
     await expect(withRedisDeadline(stalledCommand, 'stall')).rejects.toThrow()
     const user = await createTrackedUser()
     const sessionId = randomUUID()
-    const { raw } = await issueRefreshToken(user.id, sessionId)
+    const { raw } = await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
 
     await revokeRefreshToken(raw)
 
@@ -76,7 +77,7 @@ describe('the session deny through a stalled Redis', () => {
 
   it('logs a sign-out-others deny that fails at once with the revocation error line and the user id', async () => {
     const user = await createTrackedUser()
-    await issueRefreshToken(user.id, randomUUID())
+    await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     const client = await getRedis()
 
@@ -98,7 +99,7 @@ describe('the session deny through a stalled Redis', () => {
 
   it('logs a sign-out-others deny that fails after the deadline with the user id', async () => {
     const user = await createTrackedUser()
-    await issueRefreshToken(user.id, randomUUID())
+    await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     const client = await getRedis()
     const gate = { fail: () => {} }

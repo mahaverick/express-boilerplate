@@ -1,8 +1,9 @@
 /**
- * @file What migrations 0028, 0029 and 0030 leave on `user_tokens` for emailed links,
- * asserted with raw SQL inserts so no application check stands in for the
- * database's: `user_tokens_shape_check` per purpose, `user_tokens_app_check`
- * and `user_tokens_purpose_check`. Every column but the one under
+ * @file What migrations 0028, 0029, 0030 and 0040 leave on `user_tokens` for emailed
+ * links and refresh rows, asserted with raw SQL inserts so no application check
+ * stands in for the database's: `user_tokens_shape_check` per purpose,
+ * `user_tokens_app_check`, `user_tokens_client_check` and
+ * `user_tokens_purpose_check`. Every column but the one under
  * test is valid, so each insert fails on exactly the constraint it names.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -48,6 +49,8 @@ interface TokenRowSeed {
   app?: string | null
   redirect?: string | null
   invitationId?: string | null
+  client?: string | null
+  deviceName?: string | null
 }
 
 /**
@@ -57,10 +60,11 @@ async function insertTokenRow(seed: TokenRowSeed): Promise<void> {
   const email = seed.email === undefined ? `${PREFIX}${randomUUID()}@example.test` : seed.email
   const app = seed.app === undefined ? 'web' : seed.app
   await sql`
-    insert into user_tokens (purpose, user_id, session_id, email, app, redirect, invitation_id, token_hash, expires_at)
+    insert into user_tokens (purpose, user_id, session_id, email, app, redirect, invitation_id, client, device_name, token_hash, expires_at)
     values (
       ${seed.purpose ?? 'sign_in_link'}, ${seed.userId ?? SQL_NULL}, ${seed.sessionId ?? SQL_NULL},
       ${email}, ${app}, ${seed.redirect ?? SQL_NULL}, ${seed.invitationId ?? SQL_NULL},
+      ${seed.client ?? SQL_NULL}, ${seed.deviceName ?? SQL_NULL},
       ${randomBytes(32).toString('hex')}, now() + interval '15 minutes'
     )`
 }
@@ -156,6 +160,7 @@ describe('user_tokens link CHECKs', () => {
         userId: await insertUser(),
         sessionId: randomUUID(),
         app: SQL_NULL,
+        client: 'web',
       })
     ).rejects.toMatchObject(SHAPE)
   })
@@ -167,6 +172,7 @@ describe('user_tokens link CHECKs', () => {
         sessionId: randomUUID(),
         email: SQL_NULL,
         app: SQL_NULL,
+        client: 'web',
       })
     ).rejects.toMatchObject(SHAPE)
   })
@@ -195,6 +201,7 @@ describe('user_tokens link CHECKs', () => {
         email: SQL_NULL,
         app: SQL_NULL,
         invitationId,
+        client: 'web',
       })
     ).rejects.toMatchObject(SHAPE)
   })
@@ -204,6 +211,47 @@ describe('user_tokens link CHECKs', () => {
       code: '23514',
       constraint_name: 'user_tokens_app_check',
     })
+  })
+
+  it('accepts a refresh row for either client, with or without a device name', async () => {
+    const userId = await insertUser()
+    const refresh = {
+      purpose: 'refresh',
+      userId,
+      sessionId: randomUUID(),
+      email: SQL_NULL,
+      app: SQL_NULL,
+    }
+    await insertTokenRow({ ...refresh, client: 'web' })
+    await insertTokenRow({ ...refresh, client: 'native', deviceName: "Ada's iPhone" })
+    const rows = await sql`
+      select client, device_name from user_tokens where user_id = ${userId} order by client desc`
+    expect(rows).toEqual([
+      { client: 'web', device_name: null },
+      { client: 'native', device_name: "Ada's iPhone" },
+    ])
+  })
+
+  it('refuses a client outside web and native', async () => {
+    await expect(
+      insertTokenRow({
+        purpose: 'refresh',
+        userId: await insertUser(),
+        sessionId: randomUUID(),
+        email: SQL_NULL,
+        app: SQL_NULL,
+        client: 'ios',
+      })
+    ).rejects.toMatchObject({ code: '23514', constraint_name: 'user_tokens_client_check' })
+  })
+
+  it.each(LINK_TOKEN_INTENTS)('refuses a client or a device_name on a %s link', async (intent) => {
+    await expect(
+      insertTokenRow({ ...(await seedFor(intent)), client: 'web' })
+    ).rejects.toMatchObject(SHAPE)
+    await expect(
+      insertTokenRow({ ...(await seedFor(intent)), deviceName: "Ada's iPhone" })
+    ).rejects.toMatchObject(SHAPE)
   })
 
   it('refuses a purpose outside the list', async () => {
