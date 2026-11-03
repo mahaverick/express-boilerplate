@@ -65,6 +65,7 @@ export type RateLimitName =
   | 'invitationAccept'
   | 'platformSearch'
   | 'authenticatedWrite'
+  | 'sessionsList'
   | 'platformWrite'
   | 'emailWebhook'
   | 'emailWebhookRejected'
@@ -281,6 +282,17 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 60,
     keyBy: 'user',
     unit: 'attempts',
+  },
+  /**
+   * `GET /auth/sessions`: the caller's own session list, one indexed query.
+   * 60 a minute covers a settings screen that refreshes on focus.
+   */
+  sessionsList: {
+    name: 'sessions-list',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: 'user',
+    unit: 'requests',
   },
   /**
    * One shared budget for every authenticated write that has no

@@ -21,12 +21,13 @@ import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
+import { toSessionResponse } from '@/presenters/session.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
 import { frontendUrl } from '@/services/frontend-links.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
-import { revokeOtherSessions } from '@/services/session.service'
+import { listLiveSessions, revokeOtherSessions } from '@/services/session.service'
 import { requestSignInLink, verifySignInLink } from '@/services/sign-in-link.service'
 import { confirmStepUpLink, requestStepUpLink } from '@/services/step-up.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
@@ -297,6 +298,20 @@ class AuthController extends BaseController {
     )
 
     successResponse(response, { revoked }, 'Other sessions signed out.')
+  })
+
+  /**
+   * `GET /auth/sessions`: the caller's signed-in sessions, newest use first,
+   * each with its client and device, and `current` on the one the request's
+   * access token belongs to. At most 100, so it takes no cursor.
+   */
+  listSessions = this.handle(async (request, response) => {
+    const sessions = await listLiveSessions(authenticatedUserId(request))
+
+    successResponse(
+      response,
+      sessions.map((session) => toSessionResponse(session, request.sessionId))
+    )
   })
 
   /**

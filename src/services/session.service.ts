@@ -14,7 +14,7 @@ import type { ClientKind } from '@/constants/native-client.constants'
 import { refreshTokenOf, type RefreshUserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import { UserTokenRepository } from '@/repositories/user-token.repository'
+import { UserTokenRepository, type LiveSession } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import {
   db,
@@ -723,6 +723,17 @@ export async function revokeOtherSessions(
   await denySessionsAfterCommit(userId, revoked)
   await emitDomainEvent({ type: 'other_sessions_revoked', userId, at: new Date() })
   return revoked.filter((revokedSessionId) => live.has(revokedSessionId)).length
+}
+
+/**
+ * The caller's signed-in sessions, newest use first, capped at
+ * `MAX_LISTED_SESSIONS`. A session past `SESSION_ABSOLUTE_TTL` is not listed,
+ * since no rotation would succeed for it.
+ * @param userId - The authenticated caller.
+ * @returns The live sessions.
+ */
+export function listLiveSessions(userId: string): Promise<LiveSession[]> {
+  return userTokenRepository.listLiveSessions(userId, absoluteLifetimeCutoff())
 }
 
 /**

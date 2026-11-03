@@ -32,6 +32,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'invitation-preview',
   'invitation-accept',
   'platform-search',
+  'sessions-list',
   'authenticated-write',
   'platform-write',
   'email-webhook',
@@ -106,6 +107,7 @@ const EXPECTED_RATE_LIMITS: {
     keyBy: 'user',
   },
   { key: 'platformSearch', name: 'platform-search', windowMs: 60_000, limit: 60, keyBy: 'user' },
+  { key: 'sessionsList', name: 'sessions-list', windowMs: 60_000, limit: 60, keyBy: 'user' },
   {
     key: 'authenticatedWrite',
     name: 'authenticated-write',

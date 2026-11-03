@@ -111,6 +111,13 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
+  // requireAuth first: this limiter keys on request.user.id.
+  router.get(
+    '/sessions',
+    requireAuth,
+    createRateLimiter(RATE_LIMITS.sessionsList),
+    authController.listSessions
+  )
   // Step-up by link, for any signed-in user: requireAuth first, as the limiter keys on request.user.id.
   const stepUpLinkLimiter = createRateLimiter(RATE_LIMITS.stepUpLink)
   router.post(

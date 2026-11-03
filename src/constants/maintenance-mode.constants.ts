@@ -250,6 +250,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   letThrough('GET', '/api/v1/plans'),
   // Account writes: refused in both modes.
   write('POST', '/api/v1/auth/sessions/revoke-others'),
+  read('/api/v1/auth/sessions'),
   read('/api/v1/auth/passkeys'),
   write('POST', '/api/v1/auth/passkeys/registration/options'),
   write('POST', '/api/v1/auth/passkeys/registration/verify'),
