@@ -18,7 +18,11 @@ import {
 } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH, MAX_REDIRECT_PATH_LENGTH } from '@/constants/auth.constants'
 import { FRONTEND_APPS, type FrontendApp } from '@/constants/frontend.constants'
-import { CLIENT_KINDS, type ClientKind } from '@/constants/native-client.constants'
+import {
+  CLIENT_KINDS,
+  MAX_DEVICE_NAME_LENGTH,
+  type ClientKind,
+} from '@/constants/native-client.constants'
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
 import { userModel } from '@/database/models/user.model'
 
@@ -44,11 +48,6 @@ const APP_SQL_LIST = FRONTEND_APPS.map((app) => `'${app}'`).join(', ')
  * `CLIENT_KINDS` as a literal SQL value list, for `user_tokens_client_check`.
  */
 const CLIENT_SQL_LIST = CLIENT_KINDS.map((kind) => `'${kind}'`).join(', ')
-
-/**
- * The longest device name a native app's session may record.
- */
-const MAX_DEVICE_NAME_LENGTH = 64
 
 /**
  * What a `user_tokens` row is for. Every claim (`UserTokenRepository.

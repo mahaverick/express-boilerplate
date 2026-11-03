@@ -11,6 +11,7 @@ import type { CookieOptions, Request, Response } from 'express'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import { refreshCookieSpec, type RefreshCookieSpec } from '@/constants/auth.constants'
 import { isFrontendApp } from '@/constants/frontend.constants'
+import { DEVICE_NAME_HEADER, MAX_DEVICE_NAME_LENGTH } from '@/constants/native-client.constants'
 import { HttpError } from '@/errors/http-error'
 import { notFoundError } from '@/errors/not-found-errors'
 import { isNativeRequest } from '@/middlewares/native-client.middleware'
@@ -18,6 +19,7 @@ import { revokeRefreshToken, type SessionClient } from '@/services/session.servi
 import type { Actor, RequestPrincipal } from '@/types/actor'
 import type { OAuthIntent } from '@/types/oauth-intent'
 import { redirectPathSchema } from '@/validators/redirect.validators'
+import { safeText } from '@/validators/safe-text.validators'
 
 /**
  * The authenticated principal's id, guarding against a route reaching a
@@ -178,13 +180,38 @@ export function presentedRefreshToken(request: Request): string | undefined {
 }
 
 /**
- * The client a sign-in or a refresh comes from, as `resolveClientKind` marked
- * the request. Names no device yet.
+ * Whether a value is single-line safe text.
+ */
+const isSafeSingleLine = safeText()
+
+/**
+ * The device name a native request sends, or null when it sends none or an
+ * unusable one. Postgres counts the column's width in characters, not UTF-16
+ * units, so the length is counted in code points: a name that passes here
+ * always fits `device_name`.
  * @param request - The incoming request.
- * @returns The client kind, with no device name yet.
+ * @returns The trimmed name, or null when the header is missing, repeated, blank, over `MAX_DEVICE_NAME_LENGTH` characters or has a control or hidden character.
+ */
+function deviceNameOf(request: Request): string | null {
+  const header = request.headers[DEVICE_NAME_HEADER]
+  if (typeof header !== 'string') return null
+  const name = header.trim()
+  if (name === '' || [...name].length > MAX_DEVICE_NAME_LENGTH) return null
+  return isSafeSingleLine(name) ? name : null
+}
+
+/**
+ * The client a sign-in or a refresh comes from, as `resolveClientKind` marked
+ * the request. A native request may name its device in `X-Device-Name`; an
+ * invalid name becomes null and never refuses the request. A web request
+ * never names one. Only a sign-in stores the name: a refresh reads `.kind`
+ * alone, and rotation copies the session's stored name forward.
+ * @param request - The incoming request.
+ * @returns The client kind and its device name, or null for none.
  */
 export function clientOf(request: Request): SessionClient {
-  return { kind: isNativeRequest(request) ? 'native' : 'web', deviceName: null }
+  if (!isNativeRequest(request)) return { kind: 'web', deviceName: null }
+  return { kind: 'native', deviceName: deviceNameOf(request) }
 }
 
 /**

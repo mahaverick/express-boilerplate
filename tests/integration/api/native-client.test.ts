@@ -280,6 +280,47 @@ describe('a native client', () => {
     expect(await isTokenRowLive(data.refreshToken)).toBe(true)
   })
 
+  it('stores the device name at sign-in and ignores the header on refresh', async () => {
+    const email = uniqueEmail('device')
+    const token = await issueTestLink(email)
+    await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
+    const signIn = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .set('X-Client', 'native')
+      .set('X-Device-Name', 'iPhone 16')
+      .send({ token, email })
+    expect(signIn.status).toBe(200)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('X-Client', 'native')
+      .set('X-Device-Name', 'Evil')
+      .send({ refreshToken: tokenData(signIn).refreshToken })
+
+    expect(refreshed.status).toBe(200)
+    const rows = await sql<{ device_name: string | null }[]>`
+      select device_name from user_tokens
+      where token_hash = ${hashToken(tokenData(refreshed).refreshToken)}`
+    expect(rows.map((row) => row.device_name)).toEqual(['iPhone 16'])
+  })
+
+  it('signs in with no device name when the header is over 64 characters', async () => {
+    const email = uniqueEmail('long-device')
+    const token = await issueTestLink(email)
+    await clearRateLimiter(RATE_LIMITS.signInLinkVerify.name)
+    const signIn = await request(app)
+      .post('/api/v1/auth/link/verify')
+      .set('X-Client', 'native')
+      .set('X-Device-Name', 'a'.repeat(65))
+      .send({ token, email })
+
+    expect(signIn.status).toBe(200)
+    const rows = await sql<{ device_name: string | null }[]>`
+      select device_name from user_tokens
+      where token_hash = ${hashToken(tokenData(signIn).refreshToken)}`
+    expect(rows.map((row) => row.device_name)).toEqual([null])
+  })
+
   it('refresh ignores a cookie on a native request', async () => {
     const web = await signInByLink(uniqueEmail('web-cookie'))
     const webRaw = decodeURIComponent(web.refreshCookie.slice(web.refreshCookie.indexOf('=') + 1))

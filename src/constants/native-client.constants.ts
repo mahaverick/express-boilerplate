@@ -26,6 +26,13 @@ export const NATIVE_CLIENT_HEADER = 'x-client'
 export const DEVICE_NAME_HEADER = 'x-device-name'
 
 /**
+ * The longest device name a native app's session may record. It is the width
+ * of the `device_name` column, so `clientOf` drops any longer name instead of
+ * letting the insert fail.
+ */
+export const MAX_DEVICE_NAME_LENGTH = 64
+
+/**
  * Code of the 400 for a native request that carries browser headers.
  */
 export const NATIVE_CLIENT_REFUSED = 'NATIVE_CLIENT_REFUSED'
