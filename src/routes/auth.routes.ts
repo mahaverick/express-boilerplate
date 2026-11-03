@@ -18,7 +18,7 @@ import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { authController } from '@/controllers/auth.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
-import { resolveClientKind } from '@/middlewares/native-client.middleware'
+import { refuseNativeGoogleSignIn, resolveClientKind } from '@/middlewares/native-client.middleware'
 import { refuseCrossSiteOAuthStart, rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { refusePlatformOptions } from '@/middlewares/platform.middleware'
@@ -61,7 +61,9 @@ import { createPasskeyRouter } from '@/routes/passkey.routes'
  * The Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either can handle a request; it is
  * idempotent. On both the limiter runs before `oauthSession`, so an
- * over-budget caller gets a 429 before a session is written to Redis. They
+ * over-budget caller gets a 429 before a session is written to Redis. A
+ * native request is refused on both before the limiter
+ * (`refuseNativeGoogleSignIn`). They
  * share one `oauthSession` instance, so the session middleware is built once.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
@@ -133,8 +135,10 @@ export function createAuthRouter(): Router {
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
+    // A native app cannot follow Google's redirects or hold its cookies: refused before the limiter and the session.
     router.get(
       '/google',
+      refuseNativeGoogleSignIn,
       createRateLimiter(RATE_LIMITS.googleOAuth),
       refuseCrossSiteOAuthStart,
       oauthSession,
@@ -147,6 +151,7 @@ export function createAuthRouter(): Router {
     )
     router.get(
       '/google/callback',
+      refuseNativeGoogleSignIn,
       createRateLimiter(RATE_LIMITS.googleOAuthCallback),
       oauthSession,
       passport.initialize(),

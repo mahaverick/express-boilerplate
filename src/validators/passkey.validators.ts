@@ -3,7 +3,7 @@
  * options and verify bodies, and a rename.
  */
 import { z } from 'zod'
-import { frontendAppSchema } from '@/validators/auth.validators'
+import { frontendAppSchema, refreshTokenField } from '@/validators/auth.validators'
 
 /**
  * The longest passkey name, matching the `name` column.
@@ -89,12 +89,14 @@ const assertionResponseSchema = z.object({
 })
 
 /**
- * The body of `POST /auth/passkeys/sign-in/verify`.
+ * The body of `POST /auth/passkeys/sign-in/verify`, with the refresh token a
+ * native app holds, whose session the sign-in revokes.
  */
 export const passkeySignInVerifySchema = z.object({
   challengeId: z.string().min(1).max(64),
   response: assertionResponseSchema,
   app: frontendAppSchema,
+  refreshToken: refreshTokenField,
 })
 
 /**
@@ -105,9 +107,11 @@ export const passkeyStepUpOptionsSchema = z.strictObject({})
 
 /**
  * The body of `POST /auth/passkeys/step-up/verify`: the challenge id the
- * options answered and the browser's assertion.
+ * options answered and the browser's assertion, with the refresh token a
+ * native app holds, which names the chain to confirm.
  */
 export const passkeyStepUpVerifySchema = z.strictObject({
   challengeId: z.string().min(1).max(64),
   response: assertionResponseSchema,
+  refreshToken: refreshTokenField,
 })

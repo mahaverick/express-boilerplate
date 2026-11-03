@@ -31,6 +31,19 @@ export const DEVICE_NAME_HEADER = 'x-device-name'
 export const NATIVE_CLIENT_REFUSED = 'NATIVE_CLIENT_REFUSED'
 
 /**
+ * The message of the 400 `NATIVE_CLIENT_REFUSED`.
+ */
+export const NATIVE_CLIENT_REFUSED_MESSAGE =
+  'This app request came with browser headers, so we refused it. Update the app and try again.'
+
+/**
+ * The message of the 400 `NATIVE_CLIENT_REFUSED` that the Google sign-in
+ * routes answer a native request.
+ */
+export const GOOGLE_NATIVE_REFUSED_MESSAGE =
+  "Google sign-in isn't available in the app yet. Sign in with an email link or a passkey."
+
+/**
  * Code of the 400 for a browser request that carries a refresh token in its
  * body.
  */

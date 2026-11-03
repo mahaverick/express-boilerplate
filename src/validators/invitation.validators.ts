@@ -6,6 +6,7 @@
  */
 import { z } from 'zod'
 import { INVITATION_TOKEN_LENGTH } from '@/constants/tenant.constants'
+import { refreshTokenField } from '@/validators/auth.validators'
 
 /**
  * A raw invitation token: unpadded base64url, exactly
@@ -29,9 +30,12 @@ export const invitationTokenInputSchema = z.object({
  * accepted for both, so a malformed token, or an address that is not the
  * link's, gets the same `invitation_invalid` as an unknown token; only a
  * non-string address fails as a validation error (`errors.email`). The
- * address is trimmed and lowercased here, as the link's row stores it.
+ * address is trimmed and lowercased here, as the link's row stores it. A
+ * native app may also send the refresh token it holds, whose session the
+ * sign-in revokes.
  */
 export const invitationConfirmInputSchema = z.object({
   token: z.string(),
   email: z.string().trim().toLowerCase().optional(),
+  refreshToken: refreshTokenField,
 })

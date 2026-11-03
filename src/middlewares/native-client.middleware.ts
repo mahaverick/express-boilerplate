@@ -6,8 +6,10 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import {
+  GOOGLE_NATIVE_REFUSED_MESSAGE,
   NATIVE_CLIENT_HEADER,
   NATIVE_CLIENT_REFUSED,
+  NATIVE_CLIENT_REFUSED_MESSAGE,
   REFRESH_TOKEN_IN_BODY,
   type ClientKind,
 } from '@/constants/native-client.constants'
@@ -52,13 +54,7 @@ export const resolveClientKind: RequestHandler = (
   const kind: ClientKind = request.get(NATIVE_CLIENT_HEADER) === 'native' ? 'native' : 'web'
   request.clientKind = kind
   if (kind === 'native' && hasBrowserHeaders(request)) {
-    next(
-      new HttpError(
-        'This app request came with browser headers, so we refused it. Update the app and try again.',
-        400,
-        NATIVE_CLIENT_REFUSED
-      )
-    )
+    next(new HttpError(NATIVE_CLIENT_REFUSED_MESSAGE, 400, NATIVE_CLIENT_REFUSED))
     return
   }
   if (kind === 'web' && hasRefreshTokenInBody(request)) {
@@ -81,4 +77,24 @@ export const resolveClientKind: RequestHandler = (
  */
 export function isNativeRequest(request: Request): boolean {
   return request.clientKind === 'native'
+}
+
+/**
+ * Refuse a native request on the Google sign-in routes, whose redirects and
+ * cookies a native app cannot follow. Mounted first on both, so a refusal
+ * spends no limiter budget and writes no session.
+ * @param request - The incoming request, after `resolveClientKind`.
+ * @param _response - The response. Unused: a refusal travels via `next`.
+ * @param next - Continues for a browser, or forwards the 400 to the terminal error handler.
+ */
+export const refuseNativeGoogleSignIn: RequestHandler = (
+  request: Request,
+  _response: Response,
+  next: NextFunction
+): void => {
+  if (isNativeRequest(request)) {
+    next(new HttpError(GOOGLE_NATIVE_REFUSED_MESSAGE, 400, NATIVE_CLIENT_REFUSED))
+    return
+  }
+  next()
 }

@@ -95,7 +95,7 @@ export function currentRefreshCookie(env: Env): RefreshCookieSpec {
  * @param sameSite - The cookie's `SameSite` attribute.
  * @returns Options for `response.cookie` or `response.clearCookie`.
  */
-export function refreshCookieOptions(
+function refreshCookieOptions(
   spec: RefreshCookieSpec,
   env: Env,
   sameSite: 'strict' | 'lax'
@@ -158,7 +158,7 @@ function readCookie(request: Request, name: string): string | undefined {
  * @param request - The incoming request.
  * @returns The raw refresh token, or undefined when the current cookie was not sent.
  */
-export function readRefreshTokenCookie(request: Request): string | undefined {
+function readRefreshTokenCookie(request: Request): string | undefined {
   return readCookie(request, currentRefreshCookie(getEnv()).name)
 }
 
@@ -218,11 +218,7 @@ export async function revokePresentedSession(
  * @param response - The response to add the clearing Set-Cookie line to.
  * @param env - The validated environment.
  */
-export function clearHostOnlyPlainRefreshCookie(
-  request: Request,
-  response: Response,
-  env: Env
-): void {
+function clearHostOnlyPlainRefreshCookie(request: Request, response: Response, env: Env): void {
   if (isCookieSecure(env) || env.COOKIE_DOMAIN === undefined) return
   const hostOnly = refreshCookieSpec({ COOKIE_SECURE: false })
   if (readCookie(request, hostOnly.name) === undefined) return
@@ -241,15 +237,15 @@ export function clearHostOnlyPlainRefreshCookie(
  * domains would need `SameSite=None; Secure` plus a CSRF token: refresh and
  * logout would then be cross-site `fetch` POSTs, and a browser sends a `'lax'`
  * cookie only on top-level safe navigations, so `'lax'` withholds it just as
- * `'strict'` does. `setOAuthRefreshTokenCookie` is the one caller that passes
- * `'lax'`.
+ * `'strict'` does. `setOAuthRefreshTokenCookie`, through
+ * `deliverRefreshToken`, is the one caller that passes `'lax'`.
  * @param request - The request, checked for a host-only plain cookie to clear.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
  * @param expiresAt - When the token expires.
  * @param sameSite - The cookie's `SameSite` attribute. Defaults to `'strict'`.
  */
-export function setRefreshTokenCookie(
+function setRefreshTokenCookie(
   request: Request,
   response: Response,
   rawToken: string,

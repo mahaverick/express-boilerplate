@@ -31,7 +31,17 @@ export const emailSchema = z
 export const frontendAppSchema = z.enum(FRONTEND_APPS).default('web')
 
 /**
- * Sign-out-of-other-sessions request body: empty. Strict, so an unknown key
- * is a 400 rather than silently ignored.
+ * The refresh token a native app presents in a body: the 64 hex characters a
+ * refresh token is. Optional, since a browser presents its cookie instead
+ * and `resolveClientKind` refuses the field on a browser request.
  */
-export const revokeOtherSessionsSchema = z.strictObject({})
+export const refreshTokenField = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/)
+  .optional()
+
+/**
+ * Sign-out-of-other-sessions request body: empty, or a native app's refresh
+ * token. Strict, so an unknown key is a 400 rather than silently ignored.
+ */
+export const revokeOtherSessionsSchema = z.strictObject({ refreshToken: refreshTokenField })
