@@ -3,7 +3,7 @@
  * admins a new request alerts. It does not extend `BaseRepository`: a
  * request is never soft-deleted.
  */
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNull, ne, sql } from 'drizzle-orm'
 import {
   accountDeletionRequestModel,
   type AccountDeletionRequest,
@@ -27,7 +27,7 @@ class AccountDeletionRequestRepository {
    * `account_deletion_requests_open_unique` makes a second a no-op. No
    * conflict target is named, because that index is partial. `requested_at`
    * and `due_at` come from the one `now()` of the statement, so the gap is
-   * exactly `days`.
+   * exactly `days` times 24 hours, whatever the session time zone.
    * @param userId - The customer.
    * @param reason - Why they are leaving, or null.
    * @param days - Days from now the deletion is due.
@@ -46,7 +46,8 @@ class AccountDeletionRequestRepository {
         userId,
         reason,
         requestedAt: sql`now()`,
-        dueAt: sql`now() + make_interval(days => ${days}::int)`,
+        // Seconds, not days: a day interval follows the session time zone and gains or loses an hour across a DST change.
+        dueAt: sql`now() + make_interval(secs => ${days * 86_400}::int)`,
       })
       .onConflictDoNothing()
       .returning()
@@ -88,12 +89,16 @@ class AccountDeletionRequestRepository {
   }
 
   /**
-   * The live, active platform admins: who a new request alerts. Owners are
-   * left out, as the alert is for the staff who complete requests.
+   * The live, active platform admins other than `exceptUserId`: who a new
+   * request alerts. Owners are left out, as the alert is for the staff who
+   * complete requests, and so is an admin who asked to delete their own
+   * account.
+   * @param exceptUserId - The customer who made the request.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Their ids, addresses and first names, in no guaranteed order.
    */
   async listAccountDeletionRecipients(
+    exceptUserId: string,
     executor: DbExecutor = db
   ): Promise<AccountDeletionRecipient[]> {
     return executor
@@ -106,7 +111,8 @@ class AccountDeletionRequestRepository {
           eq(tenantModel.isPlatform, true),
           eq(userMembershipModel.role, 'admin'),
           isNull(userModel.deletedAt),
-          eq(userModel.active, true)
+          eq(userModel.active, true),
+          ne(userModel.id, exceptUserId)
         )
       )
   }

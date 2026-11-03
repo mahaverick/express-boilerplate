@@ -6,13 +6,15 @@
  * request returns the open one and mails nothing. The partial unique index
  * refuses a second open request at the database level.
  */
+import { sql as drizzleSql } from 'drizzle-orm'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
-import { sql } from '@/services/database.service'
+import { accountDeletionRequestRepository } from '@/repositories/account-deletion-request.repository'
+import { sql, withTransaction } from '@/services/database.service'
 import {
   closeQueue,
   getAuthEmailQueue,
@@ -33,7 +35,7 @@ import {
   tokenFor,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
-import { waitUntil } from '../../helpers/timing'
+import { settle, waitUntil } from '../../helpers/timing'
 
 const app = createApp()
 const PATH = '/api/v1/account/deletion-request'
@@ -236,6 +238,29 @@ describe('POST /api/v1/account/deletion-request', () => {
     expect(await noticesOf(user.id)).toEqual([])
   })
 
+  it('never alerts an admin who asks to delete their own account, and alerts the other admins', async () => {
+    const { user: requester } = await createTrackedStaff('admin')
+    requesterIds.push(requester.id)
+    const { user: other } = await createTrackedStaff('admin')
+
+    const response = await requestDeletion(requester)
+
+    expect(response.status).toBe(201)
+    await waitUntil(
+      async () => {
+        const rows = await noticesOf(other.id)
+        return rows.length > 0 ? rows : undefined
+      },
+      { message: "the other admin's notice row" }
+    )
+    // The other admin's row is the barrier; a job for the requester would have been queued in the same fan-out.
+    await settle(
+      200,
+      'absence has no event: a notice job for the requester would run beside the other one'
+    )
+    expect(await noticesOf(requester.id)).toEqual([])
+  })
+
   it('refuses a reason over 500 characters with a field error', async () => {
     const user = await makeRequester()
 
@@ -297,5 +322,21 @@ describe('account_deletion_requests_open_unique', () => {
       code: '23514',
       constraint_name: 'account_deletion_requests_status_check',
     })
+  })
+})
+
+describe('accountDeletionRequestRepository.insertOpen', () => {
+  it('makes due_at exactly the days times 24 hours after requested_at, across a DST change in the session time zone', async () => {
+    const user = await makeRequester()
+    // 200 days from any date crosses a New York DST change, where a day interval gains or loses an hour.
+    const days = 200
+
+    const row = await withTransaction(async (tx) => {
+      await tx.execute(drizzleSql`set local time zone 'America/New_York'`)
+      return accountDeletionRequestRepository.insertOpen(user.id, null, days, tx)
+    })
+
+    if (!row) throw new Error('no row was inserted')
+    expect(row.dueAt.getTime() - row.requestedAt.getTime()).toBe(days * MS_PER_DAY)
   })
 })

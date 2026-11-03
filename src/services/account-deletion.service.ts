@@ -132,12 +132,15 @@ async function mailReceipt(
 
 /**
  * Queue one staff-only notification, with its email, for every live, active
- * platform admin. A failed lookup or enqueue is logged and skipped.
+ * platform admin but the requester. A failed lookup or enqueue is logged and
+ * skipped.
  * @param request - The new request.
  */
 async function alertAdmins(request: AccountDeletionRequest): Promise<void> {
   try {
-    const recipients = await accountDeletionRequestRepository.listAccountDeletionRecipients()
+    const recipients = await accountDeletionRequestRepository.listAccountDeletionRecipients(
+      request.userId
+    )
     const dueAt = formatUtcDateTime(request.dueAt)
     const appName = appNameFor('apex')
     for (const recipient of recipients) {
