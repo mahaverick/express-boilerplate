@@ -254,7 +254,7 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
    * `refresh`'s 300 so a carrier-grade NAT full of devices fits.
    */
   nativeRefreshIp: {
-    name: 'nativeRefreshIp',
+    name: 'native-refresh-ip',
     windowMs: 5 * 60 * 1000,
     limit: 3000,
     keyBy: nativeRefreshIpRateLimitKey,

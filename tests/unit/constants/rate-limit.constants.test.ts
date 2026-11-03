@@ -28,7 +28,7 @@ import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
   'refresh',
-  'nativeRefreshIp',
+  'native-refresh-ip',
   'logout',
   'google-oauth',
   'google-oauth-callback',
@@ -82,7 +82,7 @@ const EXPECTED_RATE_LIMITS: {
   { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'function' },
   {
     key: 'nativeRefreshIp',
-    name: 'nativeRefreshIp',
+    name: 'native-refresh-ip',
     windowMs: 300_000,
     limit: 3000,
     keyBy: 'function',
