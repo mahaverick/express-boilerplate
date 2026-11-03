@@ -18,6 +18,7 @@ import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { authController } from '@/controllers/auth.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
+import { resolveClientKind } from '@/middlewares/native-client.middleware'
 import { refuseCrossSiteOAuthStart, rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { refusePlatformOptions } from '@/middlewares/platform.middleware'
@@ -66,7 +67,9 @@ import { createPasskeyRouter } from '@/routes/passkey.routes'
  */
 export function createAuthRouter(): Router {
   const router = Router()
-  // Router-wide and first, so no route can miss the CSRF gate.
+  // First of all, so a refused native request spends no limiter budget.
+  router.use(resolveClientKind)
+  // Router-wide and ahead of every route, so none can miss the CSRF gate.
   router.use(requireJsonContentType)
   // Express would answer OPTIONS on the step-up paths with an Allow header; an unknown auth path gets this 404.
   router.use('/step-up', refusePlatformOptions)
