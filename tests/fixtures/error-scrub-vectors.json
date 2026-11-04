@@ -2506,22 +2506,22 @@
   },
   {
     "rule": "kv",
-    "input": "{\"refreshToken\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90\"}",
+    "input": "{\"refreshToken\":\"abababababababababababababababababababababababababababababababab\"}",
     "expected": "{\"refreshToken\":\"[redacted]\"}"
   },
   {
     "rule": "kv",
-    "input": "refreshToken=a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "input": "refreshToken=abababababababababababababababababababababababababababababababab",
     "expected": "refreshToken=[redacted]"
   },
   {
     "rule": "kv",
-    "input": "\"refresh_token\": \"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90\"",
+    "input": "\"refresh_token\": \"abababababababababababababababababababababababababababababababab\"",
     "expected": "\"refresh_token\": \"[redacted]\""
   },
   {
     "rule": "kv",
-    "input": "Request failed with status code 500 {\"method\":\"post\",\"url\":\"/api/v1/auth/refresh\",\"data\":\"{\\\"refreshToken\\\":\\\"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90\\\"}\"}",
+    "input": "Request failed with status code 500 {\"method\":\"post\",\"url\":\"/api/v1/auth/refresh\",\"data\":\"{\\\"refreshToken\\\":\\\"abababababababababababababababababababababababababababababababab\\\"}\"}",
     "expected": "Request failed with status code 500 {\"method\":\"post\",\"url\":\"/api/v1/auth/refresh\",\"data\":\"{\\\"refreshToken\\\":\\\"[redacted]\\\"}\"}"
   }
 ]

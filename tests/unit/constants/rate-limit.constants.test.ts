@@ -353,7 +353,7 @@ describe('RATE_LIMITS key stability', () => {
   })
 
   it('keys a native refresh whose body token is 64 lowercase hex characters by its hash', () => {
-    const token = '0123456789abcdef'.repeat(4)
+    const token = 'ab'.repeat(32)
     const native = {
       clientKind: 'native',
       ip: '203.0.113.5',

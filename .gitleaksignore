@@ -15,3 +15,7 @@ ba79a054262073ed589918914b584995db1fccb7:.gitleaksignore:generic-api-key:4
 # JWT header prefix and an ellipsis (no payload, no signature); the README no
 # longer carries it. Documentation placeholder, never a credential.
 382ab65dda493a1f0b524589bef49fc8e3da459c:README.md:generic-api-key:85
+# e96f784: a rate-limit unit test built a fake 64-hex refresh token from
+# '0123456789abcdef'.repeat(4); a later commit replaced it with a
+# low-entropy value. It never held a real credential.
+e96f78456c128adf65c441212f240398c94fc1d5:tests/unit/constants/rate-limit.constants.test.ts:generic-api-key:356
