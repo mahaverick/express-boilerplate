@@ -38,8 +38,9 @@ function toDeletionRequestView(request: AccountDeletionRequest): DeletionRequest
 class AccountController extends BaseController {
   /**
    * `POST /account/deletion-request`: open a request, 201, or return the
-   * one already open, 200. Both carry the same message; the receipt went
-   * with the first.
+   * one already open, 200. The 201 says the receipt is on its way: it is
+   * queued after commit, and a failed enqueue is only logged. The 200 says
+   * it went with the first request, since this call sends nothing.
    */
   requestDeletion = this.handle(async (request, response) => {
     const { reason } = parseBody(accountDeletionRequestBody, request.body)
@@ -50,7 +51,7 @@ class AccountController extends BaseController {
     successResponse(
       response,
       toDeletionRequestView(opened),
-      `We'll delete your account by ${formatUtcDateTime(opened.dueAt)}. We emailed you a receipt.`,
+      `We'll delete your account by ${formatUtcDateTime(opened.dueAt)}. ${created ? 'We are emailing you a receipt.' : 'We emailed you a receipt when you asked.'}`,
       created ? 201 : 200
     )
   })

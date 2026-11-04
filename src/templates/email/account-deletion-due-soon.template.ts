@@ -1,7 +1,8 @@
 /**
  * @file The staff alert for an account deletion request due within five
- * days, to every platform admin: the date to complete it by. The daily
- * due-soon run sends it once per request. It names no customer and carries
+ * days, or overdue, to every platform owner and admin: the date to complete
+ * it by. The daily due-soon run sends it once per request, and again about
+ * every 30 days while it stays overdue. It names no customer and carries
  * no token or link; its variables hold no secret.
  */
 import {
@@ -26,6 +27,13 @@ export const ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY =
 export const ACCOUNT_DELETION_DUE_SOON_TITLE = 'Account deletion due within 5 days'
 
 /**
+ * Whether the request was still ahead of its due date (`upcoming`) or past it
+ * (`overdue`) when the alert was queued. A string, so tracking stores it and
+ * the preview can fill it; any value but `overdue` reads as upcoming.
+ */
+export type AccountDeletionDueState = 'upcoming' | 'overdue'
+
+/**
  * The variables `renderAccountDeletionDueSoonTemplate` needs. All are
  * required strings: `requireEmailVariables` rejects anything else at runtime.
  */
@@ -36,6 +44,11 @@ export interface AccountDeletionDueSoonVariables {
    * When the deletion is due, from `formatUtcDateTime`.
    */
   dueAt: string
+  /**
+   * See `AccountDeletionDueState`. Typed `string`, as the preview fills it
+   * from stored text.
+   */
+  dueState: string
 }
 
 /**
@@ -46,7 +59,7 @@ export interface AccountDeletionDueSoonVariables {
 export const ACCOUNT_DELETION_DUE_SOON_TEMPLATE_META: EmailTemplateMeta<AccountDeletionDueSoonVariables> =
   {
     senderClass: 'general',
-    previewVariables: ['firstName', 'appName', 'dueAt'],
+    previewVariables: ['firstName', 'appName', 'dueAt', 'dueState'],
     resendAction: null,
   }
 
@@ -54,15 +67,21 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof AccountDeletionDueSoonVariabl
   'firstName',
   'appName',
   'dueAt',
+  'dueState',
 ]
 
 /**
  * The alert's one-line summary, shared with the in-app notification's body
- * so the two never drift.
+ * so the two never drift. An overdue request reads as past due, with the
+ * next step now.
  * @param dueAt - When the deletion is due, from `formatUtcDateTime`.
+ * @param dueState - `overdue` once the due date has passed; see `AccountDeletionDueState`.
  * @returns The summary.
  */
-export function accountDeletionDueSoonSummary(dueAt: string): string {
+export function accountDeletionDueSoonSummary(dueAt: string, dueState: string): string {
+  if (dueState === 'overdue') {
+    return `A customer's account deletion was due by ${dueAt}. Complete it in Deletion requests now.`
+  }
   return `A customer's account deletion is due by ${dueAt}. Complete it in Deletion requests before then.`
 }
 
@@ -75,14 +94,15 @@ export function accountDeletionDueSoonSummary(dueAt: string): string {
 export function renderAccountDeletionDueSoonTemplate(
   variables: AccountDeletionDueSoonVariables
 ): RenderedEmail {
-  const { firstName, appName, dueAt } = requireEmailVariables(
+  const { firstName, appName, dueAt, dueState } = requireEmailVariables(
     variables,
     REQUIRED_VARIABLE_NAMES,
     ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY
   )
 
-  const summary = accountDeletionDueSoonSummary(dueAt)
-  const why = 'You are receiving this because you are a platform admin. Find the request in Apex.'
+  const summary = accountDeletionDueSoonSummary(dueAt, dueState)
+  const why =
+    'You are receiving this because you are a platform owner or admin. Find the request in Apex.'
 
   const text = [`Hi ${firstName},`, '', summary, '', why, '', `— The ${appName} team`].join('\n')
 

@@ -855,6 +855,13 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       firstName: 'Ada',
       appName: 'Acme Apex',
       dueAt: EXPIRES_AT,
+      dueState: 'upcoming',
+    }),
+    renderAccountDeletionDueSoonTemplate({
+      firstName: 'Ada',
+      appName: 'Acme Apex',
+      dueAt: EXPIRES_AT,
+      dueState: 'overdue',
     }),
   ],
   account_deleted: [

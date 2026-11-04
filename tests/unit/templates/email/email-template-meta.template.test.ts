@@ -236,6 +236,7 @@ const SAMPLE_VARIABLES: {
     firstName: 'Ada',
     appName: 'App',
     dueAt: '15:42 UTC on 3 December 2026',
+    dueState: 'upcoming',
   },
   account_deleted: {
     firstName: 'Ada',
@@ -466,7 +467,7 @@ describe('EMAIL_TEMPLATE_META', () => {
       },
       account_deletion_due_soon: {
         senderClass: 'general',
-        previewVariables: ['firstName', 'appName', 'dueAt'],
+        previewVariables: ['firstName', 'appName', 'dueAt', 'dueState'],
         resendAction: null,
       },
       account_deleted: {

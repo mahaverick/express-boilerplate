@@ -1,7 +1,8 @@
 /**
  * @file The daily due-soon alert for account deletion requests: its schedule
  * at 04:00 UTC, and `alertDueSoonDeletions(now)`, which alerts every platform
- * admin once per open request due within five days of `now`. `now` is years
+ * owner and admin once per open request due within five days of `now`, and
+ * says an overdue one is overdue. A request with no one to alert is logged. `now` is years
  * in the past, so no other file's request falls inside its window. The alert
  * is a staff-only notification with its email, so the file runs its own
  * notification and email Workers.
@@ -12,8 +13,10 @@ import {
   ensureAccountDeletionSchedule,
 } from '@/jobs/account-deletion.job'
 import * as notificationJob from '@/jobs/notification.job'
+import { accountDeletionRequestRepository } from '@/repositories/account-deletion-request.repository'
 import { alertDueSoonDeletions } from '@/services/account-deletion.service'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import {
   closeQueue,
   getAccountDeletionQueue,
@@ -210,5 +213,47 @@ describe('alertDueSoonDeletions', () => {
 
     expect(await alertDueSoonDeletions(now)).toEqual([dueSoon.id])
     expect(await waitForNotice(admin.id, dueSoon.id)).toHaveLength(1)
+  })
+
+  it('alerts a platform owner as well as the admins', async () => {
+    const now = new Date(BASE_NOW + 4)
+    const { user: owner } = await createTrackedStaff('owner')
+    const dueSoon = await openRequestDue(now, 3)
+
+    expect(await alertDueSoonDeletions(now)).toEqual([dueSoon.id])
+    expect(await waitForNotice(owner.id, dueSoon.id)).toHaveLength(1)
+  })
+
+  it('says an overdue request was due, and to complete it now', async () => {
+    const now = new Date(BASE_NOW + 5)
+    const { user: admin } = await createTrackedStaff('admin')
+    const overdue = await openRequestDue(now, -2)
+
+    expect(await alertDueSoonDeletions(now)).toEqual([overdue.id])
+    expect(await waitForNotice(admin.id, overdue.id)).toEqual([
+      {
+        title: 'Account deletion due within 5 days',
+        body: `A customer's account deletion was due by ${formatUtcDateTime(overdue.dueAt)}. Complete it in Deletion requests now.`,
+      },
+    ])
+  })
+
+  it('logs a warning naming the request when no owner or admin can be alerted', async () => {
+    const now = new Date(BASE_NOW + 6)
+    const dueSoon = await openRequestDue(now, 3)
+    vi.spyOn(accountDeletionRequestRepository, 'listAccountDeletionRecipients').mockResolvedValue(
+      []
+    )
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    expect(await alertDueSoonDeletions(now)).toEqual([])
+
+    const calls = warn.mock.calls.filter(([, meta]) => meta?.requestId === dueSoon.id)
+    expect(calls).toEqual([
+      [
+        'An account deletion request has no platform owner or admin to alert',
+        { requestId: dueSoon.id },
+      ],
+    ])
   })
 })

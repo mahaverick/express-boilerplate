@@ -1,9 +1,9 @@
 /**
  * @file Query access to `account_deletion_requests`, and to the platform
- * admins a new request alerts. It does not extend `BaseRepository`: a
+ * owners and admins a request alerts. It does not extend `BaseRepository`: a
  * request is never soft-deleted.
  */
-import { and, asc, eq, isNull, lte, ne, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, lte, ne, sql } from 'drizzle-orm'
 import {
   accountDeletionRequestModel,
   type AccountDeletionRequest,
@@ -14,7 +14,7 @@ import { userModel, type User } from '@/database/models/user.model'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
- * A platform admin as a deletion alert addresses them.
+ * A platform owner or admin as a deletion alert addresses them.
  */
 type AccountDeletionRecipient = Pick<User, 'id' | 'email' | 'firstName'>
 
@@ -131,10 +131,10 @@ class AccountDeletionRequestRepository {
   }
 
   /**
-   * The live, active platform admins other than `exceptUserId`: who a new
-   * request alerts. Owners are left out, as the alert is for the staff who
-   * complete requests, and so is an admin who asked to delete their own
-   * account.
+   * The live, active platform owners and admins other than `exceptUserId`:
+   * who a request alerts. Both roles can complete a request through the staff
+   * delete, as `listMaintenanceModeNoticeRecipients` reads them. A member of
+   * staff who asked to delete their own account is left out.
    * @param exceptUserId - The customer who made the request.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Their ids, addresses and first names, in no guaranteed order.
@@ -151,7 +151,7 @@ class AccountDeletionRequestRepository {
       .where(
         and(
           eq(tenantModel.isPlatform, true),
-          eq(userMembershipModel.role, 'admin'),
+          inArray(userMembershipModel.role, ['owner', 'admin']),
           isNull(userModel.deletedAt),
           eq(userModel.active, true),
           ne(userModel.id, exceptUserId)

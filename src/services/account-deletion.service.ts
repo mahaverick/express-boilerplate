@@ -2,10 +2,10 @@
  * @file A customer's request to delete their account. The request opens a
  * row due `ACCOUNT_DELETION_DAYS` later and audits it in one transaction;
  * after commit, and only for a new request, it mails the customer a receipt
- * and alerts every platform admin. A second request returns the open one and
+ * and alerts every platform owner and admin. A second request returns the open one and
  * sends nothing. Staff complete the request by deleting the account
  * (`deleteUser`, platform-user.service.ts), which mails the customer a
- * confirmation (`mailAccountDeleted`). A daily run alerts the admins again,
+ * confirmation (`mailAccountDeleted`). A daily run alerts the staff again,
  * once per request, when one falls due within five days
  * (`alertDueSoonDeletions`).
  */
@@ -22,6 +22,7 @@ import { withTransaction } from '@/services/database.service'
 import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import { logger } from '@/services/logger.service'
 import { claimCooldown, releaseCooldown } from '@/services/mail-cooldown.service'
+import type { MailMessage } from '@/services/mailer.service'
 import { ACCOUNT_DELETED_TEMPLATE_KEY } from '@/templates/email/account-deleted.template'
 import {
   ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
@@ -31,6 +32,8 @@ import {
   ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY,
   ACCOUNT_DELETION_DUE_SOON_TITLE,
   accountDeletionDueSoonSummary,
+  type AccountDeletionDueSoonVariables,
+  type AccountDeletionDueState,
 } from '@/templates/email/account-deletion-due-soon.template'
 import { ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY } from '@/templates/email/account-deletion-requested.template'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
@@ -68,28 +71,39 @@ const DUE_SOON_SCOPE = 'account-deletion-due-soon'
  */
 interface StaffAlert {
   title: string
-  summary: (dueAt: string) => string
+  summary: (dueAt: string, dueState: AccountDeletionDueState) => string
   templateKey:
     | typeof ACCOUNT_DELETION_ALERT_TEMPLATE_KEY
     | typeof ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY
+  /**
+   * The mail for one recipient, built from what every alert knows.
+   */
+  mail: (to: string, variables: AccountDeletionDueSoonVariables) => MailMessage
 }
 
 /**
- * The alert for a new request.
+ * The alert for a new request. A new request is never overdue, so its
+ * template takes no `dueState`.
  */
 const REQUESTED_ALERT: StaffAlert = {
   title: ALERT_TITLE,
   summary: accountDeletionAlertSummary,
   templateKey: ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
+  mail: (to, { firstName, appName, dueAt }) => ({
+    to,
+    templateKey: ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
+    variables: { firstName, appName, dueAt },
+  }),
 }
 
 /**
- * The alert for an open request due within five days.
+ * The alert for an open request due within five days, or overdue.
  */
 const DUE_SOON_ALERT: StaffAlert = {
   title: ACCOUNT_DELETION_DUE_SOON_TITLE,
   summary: accountDeletionDueSoonSummary,
   templateKey: ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY,
+  mail: (to, variables) => ({ to, templateKey: ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY, variables }),
 }
 
 /**
@@ -137,7 +151,7 @@ export async function requestAccountDeletion(
   })
   if (outcome.created) {
     await mailReceipt(outcome.user, outcome.request)
-    await alertAdmins(outcome.request, REQUESTED_ALERT)
+    await alertStaff(outcome.request, REQUESTED_ALERT, new Date())
   }
   return { request: outcome.request, created: outcome.created }
 }
@@ -190,7 +204,7 @@ async function mailReceipt(
 }
 
 /**
- * Alert the platform admins, once per request, about every open request due
+ * Alert the platform owners and admins, once per request, about every open request due
  * within five days of `now`, overdue ones included. Each request is claimed
  * first under `redisKey('account-deletion-due-soon', requestId)`, `SET NX`
  * with a TTL lasting until 30 days past its `due_at` (`claimCooldown`), so a
@@ -212,7 +226,7 @@ export async function alertDueSoonDeletions(now: Date): Promise<string[]> {
     const ttlMs = Math.max(request.dueAt.getTime() - now.getTime(), 0) + DUE_SOON_KEY_MARGIN_MS
     const claim = await claimCooldown(DUE_SOON_SCOPE, request.id, ttlMs, 'skip')
     if (!claim.claimed) continue
-    if ((await alertAdmins(request, DUE_SOON_ALERT)) === 0) {
+    if ((await alertStaff(request, DUE_SOON_ALERT, now)) === 0) {
       await releaseCooldown(DUE_SOON_SCOPE, request.id)
       continue
     }
@@ -259,19 +273,34 @@ export async function mailAccountDeleted(user: {
 
 /**
  * Queue one staff-only notification, with its email, for every live, active
- * platform admin but the requester. The in-app body and the mail's summary
- * come from the one `alert.summary`. A failed lookup or enqueue is logged
- * and skipped.
+ * platform owner and admin but the requester. The in-app body and the mail's
+ * summary come from the one `alert.summary`, which says the request is
+ * overdue once `due_at` is at or before `now`. A request with no one to
+ * alert is logged as a warning naming only its id. A failed lookup or
+ * enqueue is logged and skipped.
  * @param request - The request.
  * @param alert - Which alert: a new request, or one due soon.
+ * @param now - The clock the overdue test reads.
  * @returns How many alerts were queued.
  */
-async function alertAdmins(request: AccountDeletionRequest, alert: StaffAlert): Promise<number> {
+async function alertStaff(
+  request: AccountDeletionRequest,
+  alert: StaffAlert,
+  now: Date
+): Promise<number> {
   try {
     const recipients = await accountDeletionRequestRepository.listAccountDeletionRecipients(
       request.userId
     )
+    if (recipients.length === 0) {
+      logger.warn('An account deletion request has no platform owner or admin to alert', {
+        requestId: request.id,
+      })
+      return 0
+    }
     const dueAt = formatUtcDateTime(request.dueAt)
+    const dueState: AccountDeletionDueState =
+      request.dueAt.getTime() <= now.getTime() ? 'overdue' : 'upcoming'
     const appName = appNameFor('apex')
     let queued = 0
     for (const recipient of recipients) {
@@ -280,21 +309,18 @@ async function alertAdmins(request: AccountDeletionRequest, alert: StaffAlert): 
           userId: recipient.id,
           type: 'account_deletion_requested',
           title: alert.title,
-          body: alert.summary(dueAt),
+          body: alert.summary(dueAt, dueState),
           metadata: {
             templateKey: alert.templateKey,
             requestId: request.id,
             userId: request.userId,
           },
-          email: {
-            to: recipient.email,
-            templateKey: alert.templateKey,
-            variables: {
-              firstName: recipient.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-              appName,
-              dueAt,
-            },
-          },
+          email: alert.mail(recipient.email, {
+            firstName: recipient.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+            appName,
+            dueAt,
+            dueState,
+          }),
         })
         queued += 1
       } catch (error) {

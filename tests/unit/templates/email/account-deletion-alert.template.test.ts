@@ -32,7 +32,7 @@ describe('renderAccountDeletionAlertTemplate', () => {
         '',
         'A customer asked us to delete their account. Complete it in Deletion requests by 15:42 UTC on 3 December 2026.',
         '',
-        'You are receiving this because you are a platform admin. Find the request in Apex.',
+        'You are receiving this because you are a platform owner or admin. Find the request in Apex.',
         '',
         '— The Acme team',
       ].join('\n')

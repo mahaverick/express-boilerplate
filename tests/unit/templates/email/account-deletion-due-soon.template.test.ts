@@ -1,6 +1,7 @@
 /**
  * @file The staff alert for an account deletion request due within five
- * days: the due date in both parts, the same summary as the in-app notice,
+ * days: the due date in both parts, worded as past due once it is overdue,
+ * the same summary as the in-app notice,
  * escaping in the HTML part only, and tracking metadata that never resends.
  */
 import { describe, expect, it } from 'vite-plus/test'
@@ -20,6 +21,7 @@ const VARIABLES: AccountDeletionDueSoonVariables = {
   firstName: 'Ada',
   appName: 'Acme',
   dueAt: '15:42 UTC on 3 December 2026',
+  dueState: 'upcoming',
 }
 
 describe('renderAccountDeletionDueSoonTemplate', () => {
@@ -35,12 +37,23 @@ describe('renderAccountDeletionDueSoonTemplate', () => {
         '',
         "A customer's account deletion is due by 15:42 UTC on 3 December 2026. Complete it in Deletion requests before then.",
         '',
-        'You are receiving this because you are a platform admin. Find the request in Apex.',
+        'You are receiving this because you are a platform owner or admin. Find the request in Apex.',
         '',
         '— The Acme team',
       ].join('\n')
     )
-    expect(rendered.text).toContain(accountDeletionDueSoonSummary(VARIABLES.dueAt))
+    expect(rendered.text).toContain(accountDeletionDueSoonSummary(VARIABLES.dueAt, 'upcoming'))
+  })
+
+  it('says an overdue deletion was due, and to complete it now', () => {
+    const rendered = renderAccountDeletionDueSoonTemplate({ ...VARIABLES, dueState: 'overdue' })
+    const overdue =
+      "A customer's account deletion was due by 15:42 UTC on 3 December 2026. Complete it in Deletion requests now."
+
+    expect(accountDeletionDueSoonSummary(VARIABLES.dueAt, 'overdue')).toBe(overdue)
+    expect(rendered.text).toContain(overdue)
+    expect(rendered.html).toContain(overdue.replace("'", '&#39;'))
+    expect(rendered.text).not.toContain('before then')
   })
 
   it('escapes the variables in the HTML part only', () => {
@@ -54,7 +67,7 @@ describe('renderAccountDeletionDueSoonTemplate', () => {
   it('has senderClass general, stores every variable and never resends', () => {
     expect(ACCOUNT_DELETION_DUE_SOON_TEMPLATE_META).toEqual({
       senderClass: 'general',
-      previewVariables: ['firstName', 'appName', 'dueAt'],
+      previewVariables: ['firstName', 'appName', 'dueAt', 'dueState'],
       resendAction: null,
     })
   })

@@ -849,6 +849,7 @@ export function buildPreviewMessage(
             firstName: fill('firstName'),
             appName: fill('appName'),
             dueAt: fill('dueAt'),
+            dueState: fill('dueState'),
           },
         }
       }

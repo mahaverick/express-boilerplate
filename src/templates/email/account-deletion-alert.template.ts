@@ -1,6 +1,6 @@
 /**
  * @file The staff alert for a new account deletion request, to every
- * platform admin: a customer asked us to delete their account, and the date
+ * platform owner and admin: a customer asked us to delete their account, and the date
  * to complete it by. It names no customer and carries no token or link; its
  * variables hold no secret.
  */
@@ -78,7 +78,8 @@ export function renderAccountDeletionAlertTemplate(
 
   const subject = 'Account deletion requested'
   const summary = accountDeletionAlertSummary(dueAt)
-  const why = 'You are receiving this because you are a platform admin. Find the request in Apex.'
+  const why =
+    'You are receiving this because you are a platform owner or admin. Find the request in Apex.'
 
   const text = [`Hi ${firstName},`, '', summary, '', why, '', `— The ${appName} team`].join('\n')
 

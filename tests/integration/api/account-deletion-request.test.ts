@@ -2,7 +2,7 @@
  * @file `POST` and `GET /api/v1/account/deletion-request`: a customer asks us
  * to delete their account, after a recent sign-in. The first request is due
  * `ACCOUNT_DELETION_DAYS` later, mails the customer a receipt and alerts each
- * platform admin with a staff-only notification and its email. A second
+ * platform owner and admin with a staff-only notification and its email. A second
  * request returns the open one and mails nothing. The partial unique index
  * refuses a second open request at the database level.
  */
@@ -173,7 +173,7 @@ describe('POST /api/v1/account/deletion-request', () => {
       getEnv().ACCOUNT_DELETION_DAYS * MS_PER_DAY
     )
     expect(body.message).toBe(
-      `We'll delete your account by ${formatUtcDateTime(dueAt)}. We emailed you a receipt.`
+      `We'll delete your account by ${formatUtcDateTime(dueAt)}. We are emailing you a receipt.`
     )
     const [row] = await sql<{ status: string; reason: string | null; completedAt: Date | null }[]>`
       select status, reason, completed_at as "completedAt"
@@ -198,7 +198,11 @@ describe('POST /api/v1/account/deletion-request', () => {
 
     expect(second.status).toBe(200)
     expect(envelopeOf<RequestView>(second).data).toEqual(envelopeOf<RequestView>(first).data)
-    expect(envelopeOf(second).message).toBe(envelopeOf(first).message)
+    // The receipt went with the first request, so the repeat says so rather than claim a new email.
+    const dueAt = formatUtcDateTime(new Date(envelopeOf<RequestView>(first).data?.dueAt ?? ''))
+    expect(envelopeOf(second).message).toBe(
+      `We'll delete your account by ${dueAt}. We emailed you a receipt when you asked.`
+    )
     // The receipt row is written before its job is queued, so the count is final once the reply lands.
     expect(await receiptCount(user.id)).toBe(1)
     const rows = await sql`select 1 from account_deletion_requests where user_id = ${user.id}`
@@ -206,7 +210,7 @@ describe('POST /api/v1/account/deletion-request', () => {
     expect(await findMailpitMessages(user.email)).toHaveLength(1)
   })
 
-  it('alerts each platform admin with a staff-only notification', async () => {
+  it('alerts each platform owner and admin with a staff-only notification', async () => {
     const { user: firstAdmin } = await createTrackedStaff('admin')
     const { user: secondAdmin } = await createTrackedStaff('admin')
     const { user: owner } = await createTrackedStaff('owner')
@@ -220,7 +224,7 @@ describe('POST /api/v1/account/deletion-request', () => {
       title: 'Account deletion requested',
       body: `A customer asked us to delete their account. Complete it in Deletion requests by ${dueAt}.`,
     }
-    for (const admin of [firstAdmin, secondAdmin]) {
+    for (const admin of [firstAdmin, secondAdmin, owner]) {
       const notices = await waitUntil(
         async () => {
           const rows = await noticesOf(admin.id)
@@ -233,8 +237,7 @@ describe('POST /api/v1/account/deletion-request', () => {
       expect(mail).toHaveLength(1)
       expect(mail[0]?.Subject).toBe('Account deletion requested')
     }
-    // Both admins' rows came from the one fan-out that skipped the owner and the customer.
-    expect(await noticesOf(owner.id)).toEqual([])
+    // Every staff row came from the one fan-out that skipped the customer.
     expect(await noticesOf(user.id)).toEqual([])
   })
 
@@ -325,11 +328,45 @@ describe('account_deletion_requests_open_unique', () => {
   })
 })
 
+/**
+ * New York's offset from UTC at an instant, in minutes, as Intl reports it
+ * (`GMT-5` is -300).
+ * @param at - The instant.
+ * @returns The offset.
+ */
+function newYorkOffsetMinutes(at: Date): number {
+  const name = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'shortOffset',
+  })
+    .formatToParts(at)
+    .find((part) => part.type === 'timeZoneName')?.value
+  const match = /^GMT([+-]\d+)(?::(\d+))?$/.exec(name ?? '')
+  if (!match) throw new Error(`unexpected time zone name ${String(name)}`)
+  const hours = Number(match[1])
+  return hours * 60 + Math.sign(hours) * Number(match[2] ?? 0)
+}
+
+/**
+ * The fewest whole days from `from` whose span crosses New York's next DST
+ * change: the offset at the end differs from the offset at the start. New
+ * York changes twice a year, at most 238 days apart, so the search ends.
+ * @param from - The start.
+ * @returns The day count.
+ */
+function daysToCrossNextNewYorkClockChange(from: Date): number {
+  const start = newYorkOffsetMinutes(from)
+  for (let days = 1; days <= 366; days += 1) {
+    if (newYorkOffsetMinutes(new Date(from.getTime() + days * MS_PER_DAY)) !== start) return days
+  }
+  throw new Error('no New York DST change within a year')
+}
+
 describe('accountDeletionRequestRepository.insertOpen', () => {
   it('makes due_at exactly the days times 24 hours after requested_at, across a DST change in the session time zone', async () => {
     const user = await makeRequester()
-    // 200 days from any date crosses a New York DST change, where a day interval gains or loses an hour.
-    const days = 200
+    // Counted from today, so every run crosses exactly one change, where a day interval gains or loses an hour.
+    const days = daysToCrossNextNewYorkClockChange(new Date())
 
     const row = await withTransaction(async (tx) => {
       await tx.execute(drizzleSql`set local time zone 'America/New_York'`)
@@ -337,6 +374,7 @@ describe('accountDeletionRequestRepository.insertOpen', () => {
     })
 
     if (!row) throw new Error('no row was inserted')
+    expect(newYorkOffsetMinutes(row.dueAt)).not.toBe(newYorkOffsetMinutes(row.requestedAt))
     expect(row.dueAt.getTime() - row.requestedAt.getTime()).toBe(days * MS_PER_DAY)
   })
 })
