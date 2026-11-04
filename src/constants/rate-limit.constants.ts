@@ -6,6 +6,7 @@
  */
 import type { Request } from 'express'
 import { ipKeyGenerator } from 'express-rate-limit'
+import { REFRESH_TOKEN_PATTERN } from '@/constants/auth.constants'
 import { isNativeRequest } from '@/middlewares/native-client.middleware'
 import { hashToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
@@ -55,7 +56,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 37 limiters in `RATE_LIMITS`.
+ * The names of the limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
@@ -183,12 +184,13 @@ const REFRESH_TOKEN_KEY_PREFIX = 'refresh-token:'
 const REFRESH_IPV6_SUBNET = 56
 
 /**
- * The key `refresh`'s limiter counts attempts by. A native request that
- * presents a string `refreshToken` in its body is keyed by the SHA-256 of that
- * token, so devices behind one shared address (a carrier-grade NAT, an office)
- * keep separate budgets, and the raw token never reaches a Redis key. Every
- * other request, web or a native one with no usable body token, is keyed by
- * its IP with `ipKeyGenerator` at the default's 56-bit IPv6 subnet, which gives
+ * The key `refresh`'s limiter counts attempts by. A native request whose
+ * body `refreshToken` has a refresh token's shape (`REFRESH_TOKEN_PATTERN`, 64
+ * lowercase hex characters) is keyed by the SHA-256 of that token, so devices
+ * behind one shared address (a carrier-grade NAT, an office) keep separate
+ * budgets, and the raw token never reaches a Redis key. Every other request,
+ * web or a native one with no well-formed body token, is keyed by its IP
+ * with `ipKeyGenerator` at the default's 56-bit IPv6 subnet, which gives
  * the same key as express-rate-limit's default for any valid IP. It does not
  * reproduce the default's validation of an invalid IP (a port, say); it throws
  * only when Express supplies no `request.ip`.
@@ -200,7 +202,8 @@ export function refreshRateLimitKey(request: Request): string {
   const body: unknown = request.body
   if (isNativeRequest(request) && typeof body === 'object' && body !== null) {
     const { refreshToken } = body as Record<string, unknown>
-    if (typeof refreshToken === 'string' && refreshToken !== '') {
+    // A malformed token shares the IP key, so junk spends one budget and is never hashed.
+    if (typeof refreshToken === 'string' && REFRESH_TOKEN_PATTERN.test(refreshToken)) {
       return `${REFRESH_TOKEN_KEY_PREFIX}${hashToken(refreshToken)}`
     }
   }
@@ -225,7 +228,7 @@ export function nativeRefreshIpRateLimitKey(request: Request): string {
 }
 
 /**
- * The 34 rate-limit specs this API enforces, each commented with the reason
+ * The rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -249,10 +252,12 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   },
   /**
    * The coarse per-IP ceiling behind the per-token `refresh` key, native
-   * requests only (web requests already share `refresh`'s IP budget). Without
-   * it one IP could send unlimited refreshes with distinct junk tokens, each
-   * costing a hash, a database lookup and a new counter. Sized at 10 times
-   * `refresh`'s 300 so a carrier-grade NAT full of devices fits.
+   * requests only (web requests already share `refresh`'s IP budget). A
+   * malformed token already counts on the IP key. Without this ceiling one
+   * IP could still send unlimited refreshes with distinct well-formed guesses,
+   * each costing a hash, a database lookup and a short-lived counter of its
+   * own. Sized at 10 times `refresh`'s 300 so a carrier-grade NAT full of
+   * devices fits.
    */
   nativeRefreshIp: {
     name: 'native-refresh-ip',

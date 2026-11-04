@@ -24,6 +24,7 @@ import {
 } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
+import { logger } from '@/services/logger.service'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({
@@ -97,6 +98,68 @@ describe('RATE_LIMITS.logout', () => {
     expect(limited.status).toBe(429)
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
   })
+})
+
+/**
+ * A bare app behind `limiter` whose stub sets `clientKind` from a test-only
+ * `x-test-client` header, standing in for `resolveClientKind`.
+ * @param limiter - The limiter under test.
+ * @returns The app.
+ */
+function buildAppWithClientKind(limiter: RequestHandler): Express {
+  const app = express()
+  app.set('trust proxy', true)
+  app.use(express.json())
+  app.use((thisRequest, _response, next) => {
+    thisRequest.clientKind = thisRequest.get('x-test-client') === 'native' ? 'native' : 'web'
+    next()
+  })
+  app.post('/endpoint', limiter, (_request, response) => {
+    response.status(201).json({ success: true })
+  })
+  app.use(errorHandler)
+  return app
+}
+
+describe('the 429 log line', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it.each(['web', 'native'] as const)(
+    'names the limiter and the %s client, and never the IP or the token',
+    async (client) => {
+      const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      const app = buildAppWithClientKind(
+        createRateLimiter(RATE_LIMITS.logout, { limit: 1, windowMs: 60_000 })
+      )
+      const ip = '198.51.100.23'
+      const token = 'b'.repeat(64)
+
+      /**
+       * One request from the fixed IP and client, carrying a token-shaped body.
+       */
+      const send = () =>
+        request(app)
+          .post('/endpoint')
+          .set('X-Forwarded-For', ip)
+          .set('x-test-client', client)
+          .send({ refreshToken: token })
+      const allowed = await send()
+      expect(allowed.status).toBe(201)
+      expect(info).not.toHaveBeenCalled()
+      const limited = await send()
+      expect(limited.status).toBe(429)
+
+      expect(info.mock.calls).toEqual([
+        ['A rate limit refused a request', { limiter: 'logout', client }],
+      ])
+      const logged = JSON.stringify([...info.mock.calls, ...warn.mock.calls])
+      expect(logged).not.toContain(ip)
+      expect(logged).not.toContain(token)
+    }
+  )
 })
 
 describe('the 429 message', () => {

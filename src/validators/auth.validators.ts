@@ -5,7 +5,7 @@
  * answer 500 instead of 400.
  */
 import { z } from 'zod'
-import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
+import { MAX_EMAIL_LENGTH, REFRESH_TOKEN_PATTERN } from '@/constants/auth.constants'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
 
 /**
@@ -35,10 +35,7 @@ export const frontendAppSchema = z.enum(FRONTEND_APPS).default('web')
  * refresh token is. Optional, since a browser presents its cookie instead
  * and `resolveClientKind` refuses the field on a browser request.
  */
-export const refreshTokenField = z
-  .string()
-  .regex(/^[0-9a-f]{64}$/)
-  .optional()
+export const refreshTokenField = z.string().regex(REFRESH_TOKEN_PATTERN).optional()
 
 /**
  * Sign-out-of-other-sessions request body: empty, or a native app's refresh

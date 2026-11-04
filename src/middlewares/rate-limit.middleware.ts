@@ -14,6 +14,8 @@ import {
   type RateLimiterSpec,
 } from '@/constants/rate-limit.constants'
 import { HttpError } from '@/errors/http-error'
+import { isNativeRequest } from '@/middlewares/native-client.middleware'
+import { logger } from '@/services/logger.service'
 import { redisKey } from '@/services/redis.service'
 import { formatWait, MS_PER_SECOND } from '@/utilities/duration.utilities'
 
@@ -87,6 +89,9 @@ export const RATE_LIMITER_MARK = Symbol('rateLimiter')
  * `spec.limit` is multiplied by `rateLimitScale` (`RATE_LIMIT_SCALE`, which
  * only `APP_ENV=local` honours), so an end-to-end run whose every request
  * comes from one IP gets headroom; windows and keys never change.
+ *
+ * Each 429 writes one `info` line naming the limiter and the client kind
+ * (`web` or `native`), and nothing that identifies the caller.
  * @param spec - The limiter's configuration — see `RateLimiterSpec`.
  * @param overrides - `windowMs`/`limit` to override, e.g. a small window for a test; an overridden `limit` is used as given, unscaled. Every other field is fixed by `spec`.
  * @returns Express middleware enforcing the limit, tagged with `RATE_LIMITER_MARK` set to `spec.name`.
@@ -110,7 +115,12 @@ export function createRateLimiter(
     skipFailedRequests: spec.counts === 'accepted',
     skipSuccessfulRequests: spec.counts === 'rejected',
     ...(spec.skip && { skip: spec.skip }),
-    handler: (_request: Request, response: Response, next: NextFunction) => {
+    handler: (request: Request, response: Response, next: NextFunction) => {
+      // The limiter and the client kind only: never the IP, the token or the key, which can name a caller.
+      logger.info('A rate limit refused a request', {
+        limiter: spec.name,
+        client: isNativeRequest(request) ? 'native' : 'web',
+      })
       next(
         new HttpError(limitedMessage(limit, windowMs, spec.unit, response), 429, RATE_LIMITED_CODE)
       )

@@ -2,10 +2,10 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 33 literal strings, in order; (2) every entry's
+ * stays exactly the literal strings below, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
- * (3) the four key-derivation functions produce byte-identical output
+ * (3) the key-derivation functions produce byte-identical output
  * for a fixed input, so a caller mid-window (Redis already holding
  * counts keyed by the previous output) is not silently split onto a new
  * bucket.
@@ -339,11 +339,34 @@ describe('RATE_LIMITS key stability', () => {
     expect(refreshRateLimitKey(native)).toBe(ipKeyGenerator(ip, 56))
   })
 
+  it.each([
+    ['uppercase hex', 'A'.repeat(64)],
+    ['63 characters', 'a'.repeat(63)],
+    ['65 characters', 'a'.repeat(65)],
+    ['a non-hex character', `${'a'.repeat(63)}g`],
+    ['an overlong value', 'a'.repeat(100_000)],
+    ['a trailing newline', `${'a'.repeat(64)}\n`],
+  ])('keys a native refresh whose body token has %s by IP, never by hash', (_label, token) => {
+    const ip = '203.0.113.5'
+    const native = { clientKind: 'native', ip, body: { refreshToken: token } } as unknown as Request
+    expect(refreshRateLimitKey(native)).toBe(ipKeyGenerator(ip, 56))
+  })
+
+  it('keys a native refresh whose body token is 64 lowercase hex characters by its hash', () => {
+    const token = '0123456789abcdef'.repeat(4)
+    const native = {
+      clientKind: 'native',
+      ip: '203.0.113.5',
+      body: { refreshToken: token },
+    } as unknown as Request
+    expect(refreshRateLimitKey(native)).toBe(`refresh-token:${hashToken(token)}`)
+  })
+
   it('keys a web refresh by IP even when the body carries a token', () => {
     const web = {
       clientKind: 'web',
       ip: '203.0.113.5',
-      body: { refreshToken: 'x' },
+      body: { refreshToken: 'a'.repeat(64) },
     } as unknown as Request
     expect(refreshRateLimitKey(web)).toBe(ipKeyGenerator('203.0.113.5', 56))
   })
