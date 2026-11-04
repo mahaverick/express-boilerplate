@@ -518,6 +518,17 @@ The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
   committed test gated by `MUTATION_PROOF === '1'`, as
   `tests/integration/services/token-reuse-mutation.test.ts` is. If the helpers
   can't reach the target, extend `mutate.ts`.
+- **Build a fake secret in a test from a low-entropy value,** such as
+  `'ab'.repeat(32)`, never a random-looking one like
+  `'0123456789abcdef'.repeat(4)`. gitleaks and GitGuardian flag
+  high-entropy strings, and a flagged commit fails CI on every later scan
+  of the branch. Only the scrubber's vectors
+  (`tests/fixtures/error-scrub-vectors.json`,
+  `tests/unit/services/errors/error-scrubber.service.test.ts`) need
+  realistic shapes. `.gitleaks.toml` allowlists the vectors file.
+  `.gitguardian.yaml` lists both paths, but only ggshield reads it:
+  GitGuardian's pull request check honours only a path excluded in the
+  GitGuardian dashboard.
 - **Don't build a leak assertion on `JSON.stringify(err)`:** an `Error`'s
   `message` and `stack` are non-enumerable, so it prints `{}`. Use
   `util.inspect(err, { depth: null })`. A `DrizzleQueryError`'s `query` and

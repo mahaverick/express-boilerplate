@@ -1,4 +1,6 @@
 # These two files hold fake secrets planted on purpose as inputs the error scrubber must redact.
+# Only the ggshield CLI reads this file. GitGuardian's pull request check ignores it, so the same
+# two paths must also be excluded in the GitGuardian dashboard (CLAUDE.md, under Tests).
 version: 2
 secret:
   ignored_paths:
