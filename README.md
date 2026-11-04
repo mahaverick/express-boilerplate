@@ -257,17 +257,19 @@ session in `GET /api/v1/auth/sessions`. The rules are in
 [SECURITY.md](SECURITY.md#native-clients), and the request path is in
 [ARCHITECTURE.md](ARCHITECTURE.md#native-clients).
 
-| Variable                      | Effect                                                                                                                    |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `MINIMUM_APP_VERSION_IOS`     | The oldest iOS version that may sign in, as `1.2.3`. Unset means no minimum.                                              |
-| `MINIMUM_APP_VERSION_ANDROID` | The same for Android.                                                                                                     |
-| `WEBAUTHN_ANDROID_ORIGINS`    | Comma-separated Android passkey origins, each `android:apk-key-hash:` and 43 base64url characters. Unset means none.      |
-| `WEBAUTHN_IOS_ENABLED`        | `true` lets the iOS app use passkeys. Boot refuses it when `WEBAUTHN_RP_ID` is set to anything but the host of `WEB_URL`. |
+| Variable                      | Effect                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `MINIMUM_APP_VERSION_IOS`     | The oldest iOS version the app should allow, as `1.2.3`. The server publishes it; the app enforces it. Unset means no minimum. |
+| `MINIMUM_APP_VERSION_ANDROID` | The same for Android.                                                                                                          |
+| `WEBAUTHN_ANDROID_ORIGINS`    | Comma-separated Android passkey origins, each `android:apk-key-hash:` and 43 base64url characters. Unset means none.           |
+| `WEBAUTHN_IOS_ENABLED`        | `true` lets the iOS app use passkeys. Boot refuses it when `WEBAUTHN_RP_ID` is set to anything but the host of `WEB_URL`.      |
 
 **The minimum app version.** `GET /api/v1/status/client-settings` answers
 `minimumAppVersion` as `{ "ios": "1.2.3" | null, "android": "1.2.3" | null }`.
 The response is cacheable for 300 seconds (`Cache-Control: public,
-max-age=300`). So a new minimum reaches devices within 5 minutes.
+max-age=300`). So a new minimum reaches devices within 5 minutes. The server
+only publishes the value and refuses no request for it. The app compares its
+own version and asks the user to update.
 
 **The Android signing hash.** Android binds a passkey ceremony to the key that
 signed the app, and sends it as the origin `android:apk-key-hash:<hash>`. The

@@ -58,43 +58,44 @@ a Special Economic Zone, an Indian tax zone; GSTIN is the Goods and Services
 Tax Identification Number of an Indian business; a CHECK is a Postgres check
 constraint.
 
-| Table                          | Model file                        | Holds                                                                                                                                           |
-| ------------------------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`                        | `user.model.ts`                   | Accounts; see below.                                                                                                                            |
-| `user_tokens`                  | `user-token.model.ts`             | Refresh tokens and emailed sign-in, step-up and invitation confirm links, as hashes; see below.                                                 |
-| `auth_providers`               | `auth-provider.model.ts`          | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                  |
-| `user_passkeys`                | `user-passkey.model.ts`           | One row per passkey a user has registered: the public key, counters and a name. No private key exists server-side.                              |
-| `tenants`                      | `tenant.model.ts`                 | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                       |
-| `tenant_settings`              | `tenant.model.ts`                 | The one-to-one settings row, written with its tenant in one transaction.                                                                        |
-| `user_memberships`             | `user-membership.model.ts`        | One row per (user, tenant) pair, with the user's role in it.                                                                                    |
-| `tenant_invitations`           | `tenant-invitation.model.ts`      | Offers of a role in a tenant to an email address; only the token's SHA-256 hash is stored.                                                      |
-| `audit_logs`                   | `audit-log.model.ts`              | The append-only audit trail, guarded by the `audit_logs_immutable` trigger ([SECURITY.md](SECURITY.md#the-audit-log)).                          |
-| `email_messages`               | `email-message.model.ts`          | One row per logical email; no column holds a rendered body or a token.                                                                          |
-| `email_logs`                   | `email-log.model.ts`              | One row per send attempt, pointing at its message through `message_id`.                                                                         |
-| `email_events`                 | `email-event.model.ts`            | Provider events (delivered, bounced, opened, …) matched to a message.                                                                           |
-| `email_suppressions`           | `email-suppression.model.ts`      | Addresses that hard-bounced or complained, which no email may be sent to. Lifting one keeps the row as history; retention never deletes one.    |
-| `notifications`                | `notification.model.ts`           | In-app notification history.                                                                                                                    |
-| `notification_preferences`     | `notification.model.ts`           | Per-user, per-type channel opt-outs.                                                                                                            |
-| `onboarding_completions`       | `onboarding-completion.model.ts`  | One append-only row per completed onboarding step, per tenant or per member.                                                                    |
-| `maintenance_mode_state`       | `maintenance-mode-state.model.ts` | The single row holding the platform's maintenance mode. A CHECK pins `id` to 1; migration 0024 inserts the row; no code inserts or deletes one. |
-| `analytics_outbox`             | `analytics-outbox.model.ts`       | Server analytics events waiting to reach PostHog. It holds ids and no PII, and has no foreign key.                                              |
-| `analytics_deletions`          | `analytics-deletion.model.ts`     | Purged users whose PostHog data is still to be deleted; see below.                                                                              |
-| `plans`                        | `billing.model.ts`                | The Free and Paid plans and their entitlements; migration 0033 seeds both. Staff edit them; no code creates or deletes one.                     |
-| `plan_prices`                  | `billing.model.ts`                | What a plan costs per currency, country and interval. A price change retires the row and inserts a new one; one active row per combination.     |
-| `tenant_billing`               | `billing.model.ts`                | One row per customer tenant: billing state, plan, trial, paid period and provider ids. Deleted with its tenant; the platform tenant has none.   |
-| `user_trials`                  | `billing.model.ts`                | One row per person who has had a trial, so each person gets one.                                                                                |
-| `tenant_entitlement_grants`    | `billing.model.ts`                | Staff overrides of one entitlement for one tenant, kept as history after they lapse or are revoked.                                             |
-| `billing_settings`             | `billing.model.ts`                | The single row of trial and grace settings. A CHECK pins `id` to 1; migration 0033 inserts the row; no code inserts or deletes one.             |
-| `billing_events`               | `billing.model.ts`                | One row per provider webhook event, for deduplication and retries: ids, type and outcome, never the payload body.                               |
-| `tenant_billing_subscriptions` | `billing.model.ts`                | Every subscription a tenant has held as its current one, so its invoices stay listed once replaced. Deleted with its tenant.                    |
-| `billing_state_history`        | `billing.model.ts`                | One append-only row per billing state change of a tenant.                                                                                       |
-| `upgrade_requests`             | `billing.model.ts`                | A member's request that an owner upgrade the tenant; one open request per member and tenant.                                                    |
-| `user_banner_dismissals`       | `billing.model.ts`                | The dismissible billing banners a member has closed in a tenant.                                                                                |
-| `billing_alerts`               | `billing.model.ts`                | Billing events staff must look at, such as a refunded duplicate charge or a failing webhook.                                                    |
-| `tenant_tax_details`           | `tax.model.ts`                    | A workspace's legal name, address, state and GSTIN for its invoices. Deleted with its tenant.                                                   |
-| `tax_documents`                | `tax.model.ts`                    | Every invoice and credit note issued, with a snapshot of each printed field. `tenant_id` is SET NULL: documents outlive a purged tenant.        |
-| `tax_document_counters`        | `tax.model.ts`                    | The last number issued per document type and financial year.                                                                                    |
-| `tax_held_charges`             | `tax.model.ts`                    | Charges from a SEZ buyer held for staff to issue by hand. Deleted with its tenant.                                                              |
+| Table                          | Model file                          | Holds                                                                                                                                                        |
+| ------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users`                        | `user.model.ts`                     | Accounts; see below.                                                                                                                                         |
+| `user_tokens`                  | `user-token.model.ts`               | Refresh tokens, with the client that holds each and a native device's name, and emailed sign-in, step-up and invitation confirm links, as hashes; see below. |
+| `auth_providers`               | `auth-provider.model.ts`            | One row per sign-in method a user has (`'email'` for sign-in links to the account's address, `'google'` for a linked account).                               |
+| `user_passkeys`                | `user-passkey.model.ts`             | One row per passkey a user has registered: the public key, counters and a name. No private key exists server-side.                                           |
+| `tenants`                      | `tenant.model.ts`                   | Tenants, with lifecycle state, the platform flag and onboarding tracking.                                                                                    |
+| `tenant_settings`              | `tenant.model.ts`                   | The one-to-one settings row, written with its tenant in one transaction.                                                                                     |
+| `user_memberships`             | `user-membership.model.ts`          | One row per (user, tenant) pair, with the user's role in it.                                                                                                 |
+| `tenant_invitations`           | `tenant-invitation.model.ts`        | Offers of a role in a tenant to an email address; only the token's SHA-256 hash is stored.                                                                   |
+| `audit_logs`                   | `audit-log.model.ts`                | The append-only audit trail, guarded by the `audit_logs_immutable` trigger ([SECURITY.md](SECURITY.md#the-audit-log)).                                       |
+| `email_messages`               | `email-message.model.ts`            | One row per logical email; no column holds a rendered body or a token.                                                                                       |
+| `email_logs`                   | `email-log.model.ts`                | One row per send attempt, pointing at its message through `message_id`.                                                                                      |
+| `email_events`                 | `email-event.model.ts`              | Provider events (delivered, bounced, opened, …) matched to a message.                                                                                        |
+| `email_suppressions`           | `email-suppression.model.ts`        | Addresses that hard-bounced or complained, which no email may be sent to. Lifting one keeps the row as history; retention never deletes one.                 |
+| `notifications`                | `notification.model.ts`             | In-app notification history.                                                                                                                                 |
+| `notification_preferences`     | `notification.model.ts`             | Per-user, per-type channel opt-outs.                                                                                                                         |
+| `onboarding_completions`       | `onboarding-completion.model.ts`    | One append-only row per completed onboarding step, per tenant or per member.                                                                                 |
+| `maintenance_mode_state`       | `maintenance-mode-state.model.ts`   | The single row holding the platform's maintenance mode. A CHECK pins `id` to 1; migration 0024 inserts the row; no code inserts or deletes one.              |
+| `analytics_outbox`             | `analytics-outbox.model.ts`         | Server analytics events waiting to reach PostHog. It holds ids and no PII, and has no foreign key.                                                           |
+| `analytics_deletions`          | `analytics-deletion.model.ts`       | Purged users whose PostHog data is still to be deleted; see below.                                                                                           |
+| `account_deletion_requests`    | `account-deletion-request.model.ts` | A customer's request to delete their account: when it was made, when it is due, and whether staff completed it. One open row per user; see below.            |
+| `plans`                        | `billing.model.ts`                  | The Free and Paid plans and their entitlements; migration 0033 seeds both. Staff edit them; no code creates or deletes one.                                  |
+| `plan_prices`                  | `billing.model.ts`                  | What a plan costs per currency, country and interval. A price change retires the row and inserts a new one; one active row per combination.                  |
+| `tenant_billing`               | `billing.model.ts`                  | One row per customer tenant: billing state, plan, trial, paid period and provider ids. Deleted with its tenant; the platform tenant has none.                |
+| `user_trials`                  | `billing.model.ts`                  | One row per person who has had a trial, so each person gets one.                                                                                             |
+| `tenant_entitlement_grants`    | `billing.model.ts`                  | Staff overrides of one entitlement for one tenant, kept as history after they lapse or are revoked.                                                          |
+| `billing_settings`             | `billing.model.ts`                  | The single row of trial and grace settings. A CHECK pins `id` to 1; migration 0033 inserts the row; no code inserts or deletes one.                          |
+| `billing_events`               | `billing.model.ts`                  | One row per provider webhook event, for deduplication and retries: ids, type and outcome, never the payload body.                                            |
+| `tenant_billing_subscriptions` | `billing.model.ts`                  | Every subscription a tenant has held as its current one, so its invoices stay listed once replaced. Deleted with its tenant.                                 |
+| `billing_state_history`        | `billing.model.ts`                  | One append-only row per billing state change of a tenant.                                                                                                    |
+| `upgrade_requests`             | `billing.model.ts`                  | A member's request that an owner upgrade the tenant; one open request per member and tenant.                                                                 |
+| `user_banner_dismissals`       | `billing.model.ts`                  | The dismissible billing banners a member has closed in a tenant.                                                                                             |
+| `billing_alerts`               | `billing.model.ts`                  | Billing events staff must look at, such as a refunded duplicate charge or a failing webhook.                                                                 |
+| `tenant_tax_details`           | `tax.model.ts`                      | A workspace's legal name, address, state and GSTIN for its invoices. Deleted with its tenant.                                                                |
+| `tax_documents`                | `tax.model.ts`                      | Every invoice and credit note issued, with a snapshot of each printed field. `tenant_id` is SET NULL: documents outlive a purged tenant.                     |
+| `tax_document_counters`        | `tax.model.ts`                      | The last number issued per document type and financial year.                                                                                                 |
+| `tax_held_charges`             | `tax.model.ts`                      | Charges from a SEZ buyer held for staff to issue by hand. Deleted with its tenant.                                                                           |
 
 Drizzle's own bookkeeping table is separate from these.
 
@@ -134,6 +135,13 @@ constraint enforces that list in the database, not only through TypeScript's
 - `replaced_by_id` points at the row a token rotated into. No code reads it;
   it is forensic metadata. Its foreign key is `ON DELETE SET NULL`, so a chain
   read back after the retention purge can have gaps.
+- `client` and `device_name` have meaning only on a `'refresh'` row.
+  - `client` is `'web'` or `'native'`, the kind of client that holds the
+    session (`user_tokens_client_check`). It is set when the session starts
+    and copied forward by every rotation. Migration 0040 set it to `'web'` on
+    every refresh row that existed before it.
+  - `device_name` is the device a native app named when the session started,
+    copied forward like `client`. It is null for a browser.
 - `deleted_at` exists only to satisfy `SoftDeletableTableConfig`. No path sets
   it, and the retention purge ignores it.
 
@@ -152,7 +160,8 @@ bytes, stored as a SHA-256 hash. Link rows use columns no `refresh` row fills:
 
 `user_tokens_shape_check` enforces each purpose's shape:
 
-- A `refresh` row names a user and none of the link columns.
+- A `refresh` row names a user and a `client`, and none of the link columns.
+- Every other purpose has no `client` and no `device_name`.
 - A `sign_in_link` row names an address and an app, and never a `user_id` or
   `session_id`. The click looks the account up by address, so a link can be
   mailed to an address with no account yet, and a soft-deleted user's address
@@ -235,6 +244,19 @@ such as `http_500` or `timeout`, never a response body) and `created_at`. The
 because the user row is gone once the purge commits. No retention rule prunes
 it, so a row PostHog keeps refusing stays. What writes, claims and deletes the rows is under
 [Purges and what stays in PostHog](ARCHITECTURE.md#analytics).
+
+### `account_deletion_requests`
+
+One row per customer request to delete their account: `user_id`,
+`requested_at`, `due_at`, `status` (`open` or `completed`,
+`account_deletion_requests_status_check`), `completed_at` (set exactly when
+the status is `completed`, `account_deletion_requests_completed_at_check`) and
+an optional `reason` of at most 500 characters. `account_deletion_requests_open_unique`
+is a partial unique index on `user_id` where the status is `open`, so a user
+has at most one open request. The foreign key to `users` is RESTRICT, so a
+user purge deletes the user's requests first. The staff delete completes the
+open one in its own transaction. The rules are in
+[SECURITY.md](SECURITY.md#account-deletion).
 
 ## Migrations
 
@@ -340,6 +362,22 @@ comment. The list also notes migrations whose generated SQL needs explaining.
   counter row names `invoice` or `credit_note` only, as `tax_documents` does.
   The table holds one row per type and financial year, so the check's scan is
   instant.
+- `0040` is generated, with one hand-added statement (its comment says so). It
+  adds `user_tokens.client` and `user_tokens.device_name`, and
+  `user_tokens_client_check`. Its `UPDATE` sets `client = 'web'` on every
+  existing refresh row, since only a browser held a session before it. It
+  then re-creates `user_tokens_shape_check`, which now requires `client` on
+  a refresh row and refuses `client` and `device_name` on a link row. Read
+  its entry under
+  [Schema migrations on a live database](#schema-migrations-on-a-live-database)
+  before you deploy it.
+- `0041` is generated whole. It creates `account_deletion_requests`, with
+  `account_deletion_requests_open_unique` (one open request per user, a
+  partial unique index) and a RESTRICT foreign key to `users`. The table is
+  new and empty, so its index builds are instant. Its foreign key takes a
+  `SHARE ROW EXCLUSIVE` lock on `users`, which blocks writes to `users` until
+  the batch commits; the check scans an empty table, so it adds no wait of
+  its own.
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until
@@ -817,6 +855,43 @@ For a migration that offers a manual step:
   large `audit_logs`, add the new CHECK `NOT VALID` first, then `VALIDATE
   CONSTRAINT` (a `SHARE UPDATE EXCLUSIVE` lock), and edit the `0038` file to
   match so `pnpm db:migrate` only records it.
+
+- **`0040` must be applied during maintenance or after the old pods are
+  drained.** Code from before `0040` inserts refresh rows with no `client`,
+  and the re-created `user_tokens_shape_check` refuses them, so every sign-in
+  and refresh on an old pod fails with a 500 once the migration commits. Put
+  the API in maintenance mode, or drain every pod that runs the old code,
+  before `pnpm db:migrate`. It also blocks every read and write on
+  `user_tokens` until the batch commits: its first statement drops
+  `user_tokens_shape_check`, which takes an `ACCESS EXCLUSIVE` lock, held
+  while the `UPDATE` backfills every refresh row and both CHECKs scan the
+  table. On a large `user_tokens`, apply it by hand in these steps instead:
+  1. Add the two columns, and `user_tokens_client_check` with `NOT VALID`,
+     while the old code still runs. It writes neither column, so it is
+     unaffected.
+  2. Backfill in batches, each in its own short transaction, until no row is
+     left:
+
+     ```sql
+     UPDATE user_tokens SET client = 'web' WHERE id IN (SELECT id FROM user_tokens WHERE purpose = 'refresh' AND client IS NULL LIMIT 10000);
+     ```
+
+  3. Put the API in maintenance mode or drain the old pods. Run the batch
+     once more, to catch the rows the old code wrote meanwhile.
+  4. Drop `user_tokens_shape_check`, and add the new one, as the `0040` file
+     writes it, with `NOT VALID`. The drop and the add take a brief
+     `ACCESS EXCLUSIVE` lock and scan nothing. A `NOT VALID` CHECK still
+     refuses new rows, which is why the old code must be gone first. Then
+     deploy the new code. It treats a refresh row with no `client` as
+     unknown and signs its session out, so it must not run before the
+     backfill.
+  5. Run `ALTER TABLE user_tokens VALIDATE CONSTRAINT user_tokens_client_check`
+     and then `VALIDATE CONSTRAINT user_tokens_shape_check`. Each takes a
+     `SHARE UPDATE EXCLUSIVE` lock, so reads and writes go on while it scans.
+  6. Edit the `0040` file so `pnpm db:migrate` only records it: add
+     `IF NOT EXISTS` to both `ADD COLUMN` statements, and make each
+     constraint statement a no-op (for example, guard it with a `DO` block
+     that checks `pg_constraint`).
 
 ## The test database
 

@@ -668,11 +668,16 @@ that keys by IP then shares one budget among all of them.
 - **A native refresh counts by the SHA-256 hash of its body token**
   (`refresh-token:<hash>`, `refreshRateLimitKey`). The raw token never reaches
   a Redis key, and devices behind one address keep separate budgets.
-- **A native refresh with no usable body token counts by IP**, with
-  `ipKeyGenerator` at a 56-bit IPv6 subnet. It answers 401 either way.
-- **`native-refresh-ip` caps what the per-token key cannot.** Without it, one IP
-  could send unlimited refreshes with distinct junk tokens, each costing a
-  hash, a database read and a new counter. It is 10 times `refresh` so a
+- **A native refresh with no well-formed body token counts by IP**, with
+  `ipKeyGenerator` at a 56-bit IPv6 subnet. Well-formed means a refresh
+  token's shape, 64 lowercase hex characters (`REFRESH_TOKEN_PATTERN`). So a
+  missing, malformed or overlong token is never hashed and makes no counter of
+  its own. It answers 401 either way.
+- **`native-refresh-ip` caps what the per-token key cannot.** Junk tokens
+  already share the IP key. A well-formed guess still gets its own counter,
+  so without this ceiling one IP could send unlimited refreshes with distinct
+  guesses. The ceiling bounds the hash and the database lookup each one costs,
+  and the short-lived counters they make. It is 10 times `refresh` so a
   CGNAT full of devices fits. It skips web requests, which `refresh` already
   covers.
 - **Accepted residual: the other four stay keyed by IP.** Devices behind one
@@ -1240,27 +1245,38 @@ that. Staff complete the deletion by hand, inside a stated time.
 - **Who is told, and when.**
   - The customer gets a receipt email with the due date, queued after the
     request commits.
-  - Every platform admin except the requester gets an in-app alert and an
-    email (`account_deletion_requested`). It cannot be switched off, so a
-    deletion we promised by a date cannot go unseen.
-  - A daily job on the `account-deletion` queue (04:00 UTC) alerts the admins
-    about every open request due within 5 days, overdue ones included. It
+  - Every platform owner and admin except the requester gets an in-app alert
+    and an email (`account_deletion_requested`). Both roles can complete a
+    request. It cannot be switched off, so a deletion we promised by a date
+    cannot go unseen. A request with no owner or admin to alert writes one
+    warning log line that names only the request id.
+  - A daily job on the `account-deletion` queue (04:00 UTC) alerts the same
+    staff about every open request due within 5 days, overdue ones included.
+    An overdue request's alert says it was due and asks for it now. The job
     alerts once per request, and again about every 30 days while the request
     stays overdue (`alertDueSoonDeletions`).
+  - The alerts point at a Deletion requests page in Apex. That page and the
+    staff API that lists requests arrive in part 2. Until then, staff find the
+    user and complete the request with the staff delete.
 - **Staff complete it through `DELETE /platform/users/:id`** (`deleteUser`,
   `src/services/platform-user.service.ts`), which needs the platform admin role, a
   recent sign-in and a stated reason ([Platform staff](#platform-staff)).
   - It marks the request `completed` in the same transaction as the soft
     delete, and denies the user's sessions.
-  - After the commit, it emails "We deleted your account" to the address the
-    account held.
+  - After the commit, it queues "We deleted your account" to the address the
+    account held. A confirmation that fails to queue is only logged. Staff
+    cannot resend it, since the template has no resend action.
   - A delete that refuses leaves the request open. The last owner of a
     workspace gets a 409 naming it. Staff then contact the customer to hand
     over or delete that workspace.
-- **Known gap: a subscription is not cancelled.** Completion reuses
-  `deleteUser`'s payer handling, which clears the user as the payer on
-  workspaces they paid for. It does not cancel a subscription at the provider.
-  Staff cancel one by hand before they complete a request.
+- **A paying requester is never deleted silently.** When the user has an open
+  request and still pays a live subscription (`isLiveSubscription`: Paid, on
+  a provider subscription not set to end with its period), the delete answers
+  409 `REQUESTER_PAYS_SUBSCRIPTION`, naming those workspaces. The request
+  stays open. A co-owner there takes over the payment method, or staff cancel
+  the subscription, and then staff retry. We cancel nothing at the provider
+  ourselves. A staff delete of a user with no open request keeps the usual
+  payer handling: it clears them as payer, and the subscription runs on.
 - **The reason is private.** A customer's own words may name them, so the audit
   entry holds only the request id, and no response returns the reason.
 
@@ -1813,7 +1829,7 @@ API.
 | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP, no recovery codes. Passkeys are a sign-in method and a way to confirm it's you, not a second factor.                                                                                                                                                                                                  |
 | CSRF tokens                                           | **Not implemented** | By design; see [CSRF](#csrf). A deployment that splits the frontend and the API across registrable domains needs them.                                                                                                                                                                                         |
-| Global rate limiting                                  | **Partial**         | 33 limiters, and every write route has one. Most authenticated reads have none.                                                                                                                                                                                                                                |
+| Global rate limiting                                  | **Partial**         | Every write route has a limiter. Most authenticated reads have none.                                                                                                                                                                                                                                           |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no sign-in or sign-out. It records a staff-sent sign-in link (`user.sign_in_link_sent`), each step-up (`auth.step_up_confirmed`) and each passkey created or deleted (`user.passkey_created`, `user.passkey_deleted`) and the passkeys a claim clears (`user.passkeys_cleared_on_claim`). |
 | Session list                                          | **Not implemented** | A user can end every other session, and staff can end all of a user's, but no endpoint lists sessions.                                                                                                                                                                                                         |
 | Email change and self-service account deletion        | **Not implemented** | `PATCH /profile` sets only the names and the analytics opt-out. Staff delete accounts.                                                                                                                                                                                                                         |

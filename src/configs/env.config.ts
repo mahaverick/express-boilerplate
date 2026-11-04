@@ -151,14 +151,14 @@ const EnvSchema = z.object({
     .regex(APP_VERSION, 'MINIMUM_APP_VERSION_IOS must look like 1.2.3.')
     .optional()
     .describe(
-      'The oldest iOS app version that may sign in, as major.minor.patch. The app reads it from GET /api/v1/status/client-settings. Unset means no minimum.'
+      'The oldest iOS app version the app should allow, as major.minor.patch. The server only publishes it at GET /api/v1/status/client-settings; the app enforces it. Unset means no minimum.'
     ),
   MINIMUM_APP_VERSION_ANDROID: z
     .string()
     .regex(APP_VERSION, 'MINIMUM_APP_VERSION_ANDROID must look like 1.2.3.')
     .optional()
     .describe(
-      'The oldest Android app version that may sign in, as major.minor.patch. The app reads it from GET /api/v1/status/client-settings. Unset means no minimum.'
+      'The oldest Android app version the app should allow, as major.minor.patch. The server only publishes it at GET /api/v1/status/client-settings; the app enforces it. Unset means no minimum.'
     ),
 
   DATABASE_URL: z
