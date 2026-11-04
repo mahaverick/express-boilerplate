@@ -251,11 +251,12 @@ One row per customer request to delete their account: `user_id`,
 `requested_at`, `due_at`, `status` (`open` or `completed`,
 `account_deletion_requests_status_check`), `completed_at` (set exactly when
 the status is `completed`, `account_deletion_requests_completed_at_check`) and
-an optional `reason` of at most 500 characters. `account_deletion_requests_open_unique`
-is a partial unique index on `user_id` where the status is `open`, so a user
-has at most one open request. `account_deletion_requests_open_due_sort_idx`
-orders the staff list by due date over the open rows. The foreign key to `users` is RESTRICT, so a
-user purge deletes the user's requests first. The staff delete completes the
+an optional `reason` of at most 500 characters.
+`account_deletion_requests_open_unique` is a partial unique index on `user_id`
+where the status is `open`, so a user has at most one open request.
+`account_deletion_requests_open_due_sort_idx` orders the staff list by due
+date over the open rows. The foreign key to `users` is RESTRICT, so a user
+purge deletes the user's requests first. The staff delete completes the
 open one in its own transaction. The rules are in
 [SECURITY.md](SECURITY.md#account-deletion).
 

@@ -671,8 +671,11 @@ that keys by IP then shares one budget among all of them.
 - **A native refresh with no well-formed body token counts by IP**, with
   `ipKeyGenerator` at a 56-bit IPv6 subnet. Well-formed means a refresh
   token's shape, 64 lowercase hex characters (`REFRESH_TOKEN_PATTERN`). So a
-  missing, malformed or overlong token is never hashed and makes no counter of
-  its own. It answers 401 either way.
+  missing, malformed or overlong token makes no counter of its own, and the
+  limiter's key function (`refreshRateLimitKey`) does not hash it. Only that
+  key function skips the hash. The refresh handler still hashes and looks up
+  any token it reads. The per-IP budgets bound those lookups: `refresh` allows
+  300 attempts per 5 minutes on the IP key, and `native-refresh-ip` allows 3000. It answers 401 either way.
 - **`native-refresh-ip` caps what the per-token key cannot.** Junk tokens
   already share the IP key. A well-formed guess still gets its own counter,
   so without this ceiling one IP could send unlimited refreshes with distinct
@@ -1255,9 +1258,14 @@ that. Staff complete the deletion by hand, inside a stated time.
     An overdue request's alert says it was due and asks for it now. The job
     alerts once per request, and again about every 30 days while the request
     stays overdue (`alertDueSoonDeletions`).
-  - The alerts point at a Deletion requests page in Apex. That page and the
-    staff API that lists requests arrive in part 2. Until then, staff find the
-    user and complete the request with the staff delete.
+  - The alerts point at a Deletion requests page in Apex. It reads
+    `GET /api/v1/platform/deletion-requests`, which only a platform admin or
+    owner may call. A viewer gets the standard 404. The route lists open
+    requests only, soonest due first, and searches the user's email. Each item
+    holds `id`, `requestedAt`, `dueAt`, `reason`, the user's `id`, `email`,
+    `firstName` and `lastName`, and `soleOwnedWorkspaces`. That last field
+    names the workspaces whose only owner is the user. The staff delete's
+    last-owner 409 uses the same lookup.
 - **Staff complete it through `DELETE /platform/users/:id`** (`deleteUser`,
   `src/services/platform-user.service.ts`), which needs the platform admin role, a
   recent sign-in and a stated reason ([Platform staff](#platform-staff)).

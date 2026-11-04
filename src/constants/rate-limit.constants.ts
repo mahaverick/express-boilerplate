@@ -202,7 +202,7 @@ export function refreshRateLimitKey(request: Request): string {
   const body: unknown = request.body
   if (isNativeRequest(request) && typeof body === 'object' && body !== null) {
     const { refreshToken } = body as Record<string, unknown>
-    // A malformed token shares the IP key, so junk spends one budget and is never hashed.
+    // A malformed token shares the IP key, so junk spends one budget and the limiter does not hash it.
     if (typeof refreshToken === 'string' && REFRESH_TOKEN_PATTERN.test(refreshToken)) {
       return `${REFRESH_TOKEN_KEY_PREFIX}${hashToken(refreshToken)}`
     }

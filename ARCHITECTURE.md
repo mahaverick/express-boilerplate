@@ -876,8 +876,16 @@ inside the app. [SECURITY.md](SECURITY.md#account-deletion) has the rules.
   it writes anything. A co-owner takes over the payment method, or staff
   cancel the subscription, then staff retry. A delete with no open request
   clears the user as payer and leaves the subscription running.
-- **The staff list arrives in part 2.** The alerts name a Deletion requests
-  page in Apex. That page and its list API ship with part 2.
+- **Staff list the open requests at `GET /platform/deletion-requests`.** The
+  alerts name a Deletion requests page in Apex, and this route feeds it. It
+  needs the platform admin role (`requirePlatformRole('admin')`), then the
+  shared `searchLimiter`. A viewer gets the standard 404. It is a keyset list
+  (`src/routes/platform-deletion-request.routes.ts`) of `open` requests only.
+  It searches the user's email, takes no filters and sorts by `due` (the
+  default) or `-due`. The partial index `account_deletion_requests_open_due_sort_idx`
+  backs the sort. Each item carries `soleOwnedWorkspaces`, which
+  `listSoleOwnedTenants` computes. The last-owner 409 in `deleteUser` uses the
+  same function.
 
 ### Errors and the response envelope
 
@@ -982,6 +990,7 @@ them; a client then shows "1,000+". The query is
 | `GET /platform/emails`                            | recipient                                          | `status`, `template` (lists), `user`, `tenant`, `from`, `to`       | `-created`, `created`                         |
 | `GET /platform/email-suppressions`                | address                                            | `state` (list; active)                                             | `-created`, `created`, `address`              |
 | `GET /platform/onboarding/tenants`                | tenant name                                        | `state` (one; stuck)                                               | `progress` for stuck, else `-started`; `name` |
+| `GET /platform/deletion-requests`                 | user email                                         | none                                                               | `due`, `-due`                                 |
 | `GET /platform/audit-log`                         | action, actor email, target email or name          | `tenant`, `actor`, `target`, `action`, `access` (lists)            | `-occurred`, `occurred`                       |
 | `GET /tenants/:slug/audit-log`                    | action, actor email, the entry's own tenant's name | `action`, `access` (lists), `actor`                                | `-occurred`, `occurred`                       |
 | `GET /platform/tenants/:id/billing/history`       | from state, to state, cause                        | `source` (list)                                                    | `-at`, `at`                                   |
