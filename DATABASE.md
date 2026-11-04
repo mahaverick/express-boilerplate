@@ -253,7 +253,8 @@ One row per customer request to delete their account: `user_id`,
 the status is `completed`, `account_deletion_requests_completed_at_check`) and
 an optional `reason` of at most 500 characters. `account_deletion_requests_open_unique`
 is a partial unique index on `user_id` where the status is `open`, so a user
-has at most one open request. The foreign key to `users` is RESTRICT, so a
+has at most one open request. `account_deletion_requests_open_due_sort_idx`
+orders the staff list by due date over the open rows. The foreign key to `users` is RESTRICT, so a
 user purge deletes the user's requests first. The staff delete completes the
 open one in its own transaction. The rules are in
 [SECURITY.md](SECURITY.md#account-deletion).
@@ -378,6 +379,10 @@ comment. The list also notes migrations whose generated SQL needs explaining.
   `SHARE ROW EXCLUSIVE` lock on `users`, which blocks writes to `users` until
   the batch commits; the check scans an empty table, so it adds no wait of
   its own.
+- `0042` is generated whole. It adds `account_deletion_requests_open_due_sort_idx`,
+  a partial index on `(due_at, id)` where the status is `open`, which orders the
+  staff deletion request list. The table is small, so the plain build holds
+  its `SHARE` lock for a moment.
 - The reminder columns `0033` added to `tenant_billing` are claims the
   billing schedulers take before they send
   (`src/services/billing/billing-scheduler.service.ts`). Each is null until

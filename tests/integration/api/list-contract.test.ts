@@ -66,6 +66,7 @@ const like = {
   tenants: `${tag}-t%`,
   percentTenants: `${tag}-p%`,
   users: `${tag}-u%`,
+  deletionRequests: `${tag}-d%`,
   signInUsers: `${tag}-n%`,
   fullNameUsers: `${tag}-w%`,
   replayUsers: `${tag}-r%`,
@@ -116,6 +117,15 @@ async function removeStaff(): Promise<void> {
  */
 function createdOf(item: unknown): number {
   return Date.parse((item as { createdAt: string }).createdAt)
+}
+
+/**
+ * The time a deletion request falls due, as a number.
+ * @param item - A list item.
+ * @returns Epoch milliseconds.
+ */
+function dueOf(item: unknown): number {
+  return Date.parse((item as { dueAt: string }).dueAt)
 }
 
 describeListContract({
@@ -440,6 +450,41 @@ describeListContract({
     { query: { verified: 'true' }, count: 2 },
     { query: { staff: 'false' }, count: 5 },
   ],
+})
+
+describeListContract({
+  name: 'GET /api/v1/platform/deletion-requests',
+  app: () => app,
+  path: () => '/api/v1/platform/deletion-requests',
+  headers: () => ({ Authorization: `Bearer ${staff.token}` }),
+  isolate: () => ({ search: `${tag}-d` }),
+  sorts: ['due', '-due'],
+  order: {
+    due: dueOf,
+    '-due': dueOf,
+  },
+  setup: createStaff,
+  teardown: removeStaff,
+  seed: async (count) => {
+    const users = Array.from({ length: count }, (_unused, index) => ({
+      email: `${tag}-d${pad(index)}@example.test`,
+    }))
+    const inserted = await sql<
+      { id: string }[]
+    >`insert into users ${sql(users, 'email')} returning id`
+    // Rows 2k and 2k+1 share a due time, so the sort has distinct values and ties.
+    const requests = inserted.map((user, index) => ({
+      user_id: user.id,
+      due_at: createdAtOf(index),
+    }))
+    await sql`insert into account_deletion_requests ${sql(requests, 'user_id', 'due_at')}`
+  },
+  clear: async () => {
+    await sql`delete from account_deletion_requests where user_id in (select id from users where email like ${like.deletionRequests})`
+    await sql`delete from users where email like ${like.deletionRequests}`
+  },
+  // A search on the address keeps one of the five requests.
+  search: { text: `${tag}-d0003`, count: 1 },
 })
 
 /**

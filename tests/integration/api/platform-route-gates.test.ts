@@ -127,6 +127,7 @@ const ROUTES: readonly GateRow[] = [
   { method: 'get', path: '/system/status', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/audit-log', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/users', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/deletion-requests', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/users/:id', minRole: 'viewer', requiresStepUp: false, target: 'user' },
   { method: 'post', path: '/users', minRole: 'admin', requiresStepUp: false },
   { method: 'patch', path: '/users/:id', minRole: 'admin', requiresStepUp: false, target: 'user' },
@@ -414,6 +415,7 @@ const taxRepository = new TaxRepository()
  */
 const SUB_ROUTER_MOUNTS = [
   '/users',
+  '/deletion-requests',
   '/emails',
   '/email-suppressions',
   '/onboarding',

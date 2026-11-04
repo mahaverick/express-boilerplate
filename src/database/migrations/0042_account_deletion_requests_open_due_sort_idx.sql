@@ -1,0 +1,1 @@
+CREATE INDEX "account_deletion_requests_open_due_sort_idx" ON "account_deletion_requests" USING btree ("due_at","id") WHERE "account_deletion_requests"."status" = 'open';

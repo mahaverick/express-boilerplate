@@ -16,6 +16,7 @@ import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { accountDeletionRequestRepository } from '@/repositories/account-deletion-request.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
+import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
@@ -38,9 +39,12 @@ import {
 import { ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY } from '@/templates/email/account-deletion-requested.template'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { supportAddress } from '@/utilities/email-sender.utilities'
+import type { ListPage } from '@/utilities/list-page.utilities'
+import type { PlatformDeletionRequestListQuery } from '@/validators/platform.validators'
 
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
+const userMembershipRepository = new UserMembershipRepository()
 
 /**
  * The in-app title of the staff alert, also the alert mail's subject.
@@ -338,5 +342,46 @@ async function alertStaff(
       requestId: request.id,
     })
     return 0
+  }
+}
+
+/**
+ * One open request as the staff list returns it: the requester and the
+ * workspaces they solely own, which block the staff delete until someone else
+ * owns them.
+ */
+export interface DeletionRequestRow {
+  id: string
+  requestedAt: Date
+  dueAt: Date
+  reason: string | null
+  user: { id: string; email: string; firstName: string | null; lastName: string | null }
+  soleOwnedWorkspaces: { id: string; name: string }[]
+}
+
+/**
+ * One page of the open deletion requests, soonest due first by default. One
+ * query finds the sole-owned workspaces of every requester on the page, the
+ * same one the staff delete's last-owner refusal uses.
+ * @param query - The parsed list query.
+ * @returns The page.
+ * @throws {InvalidCursorError} When the cursor does not verify.
+ */
+export async function listOpenDeletionRequests(
+  query: PlatformDeletionRequestListQuery
+): Promise<ListPage<DeletionRequestRow>> {
+  const page = await accountDeletionRequestRepository.listOpen(query.params)
+  const owned = await userMembershipRepository.listSoleOwnedTenants(
+    page.items.map((item) => item.user.id)
+  )
+  return {
+    ...page,
+    items: page.items.map((item) => ({
+      ...item,
+      soleOwnedWorkspaces: (owned.get(item.user.id) ?? []).map((tenant) => ({
+        id: tenant.tenantId,
+        name: tenant.tenantName,
+      })),
+    })),
   }
 }

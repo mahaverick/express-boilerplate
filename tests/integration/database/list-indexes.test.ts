@@ -20,6 +20,7 @@
 import { randomUUID } from 'node:crypto'
 import type { TransactionSql } from 'postgres'
 import { describe, expect, it } from 'vite-plus/test'
+import { openDeletionRequestList } from '@/repositories/account-deletion-request.repository'
 import { auditLogList } from '@/repositories/audit-log.repository'
 import { notificationList } from '@/repositories/notification.repository'
 import {
@@ -313,6 +314,16 @@ const ordered: OrderedCase[] = [
     'users_last_logged_in_sort_idx',
   ],
   [
+    'deletion requests due',
+    () => listPageQuery(db, openDeletionRequestList(undefined), first('due')).toSQL(),
+    'account_deletion_requests_open_due_sort_idx',
+  ],
+  [
+    'deletion requests -due',
+    () => listPageQuery(db, openDeletionRequestList(undefined), first('-due')).toSQL(),
+    'account_deletion_requests_open_due_sort_idx',
+  ],
+  [
     'emails -created',
     () => listPageQuery(db, platformEmailList(undefined, {}), first('-created')).toSQL(),
     'email_messages_created_sort_idx',
@@ -543,6 +554,22 @@ const seeking: OrderedCase[] = [
     },
     'users_email_sort_idx',
     ['users_email_unique'],
+  ],
+  [
+    'deletion requests due after a cursor',
+    () => {
+      const list = openDeletionRequestList(undefined)
+      return listPageQuery(db, list, after(list, 'due', [AT, ID])).toSQL()
+    },
+    'account_deletion_requests_open_due_sort_idx',
+  ],
+  [
+    'deletion requests -due after a cursor',
+    () => {
+      const list = openDeletionRequestList(undefined)
+      return listPageQuery(db, list, after(list, '-due', [AT, ID])).toSQL()
+    },
+    'account_deletion_requests_open_due_sort_idx',
   ],
   [
     'users -lastSignIn after a cursor',

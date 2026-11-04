@@ -3,6 +3,7 @@ import { NOT_FOUND } from '@/errors/not-found-errors'
 import {
   MAX_REASON_LENGTH,
   parseIdParameter,
+  platformDeletionRequestListSchema,
   platformTenantListSchema,
   platformUserListSchema,
   reasonBodySchema,
@@ -114,5 +115,16 @@ describe('platformUserListSchema', () => {
   it('takes -lastSignIn and refuses lastSignIn ascending', () => {
     expect(platformUserListSchema.parse({ sort: '-lastSignIn' }).params.sort).toBe('-lastSignIn')
     expect(platformUserListSchema.safeParse({ sort: 'lastSignIn' }).success).toBe(false)
+  })
+})
+
+describe('platformDeletionRequestListSchema', () => {
+  it('defaults the sort to due', () => {
+    expect(platformDeletionRequestListSchema.parse({}).params.sort).toBe('due')
+  })
+
+  it('takes -due and refuses an unknown sort', () => {
+    expect(platformDeletionRequestListSchema.parse({ sort: '-due' }).params.sort).toBe('-due')
+    expect(platformDeletionRequestListSchema.safeParse({ sort: 'email' }).success).toBe(false)
   })
 })
