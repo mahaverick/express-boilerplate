@@ -54,6 +54,7 @@ import {
   deleteTrackedUsers,
 } from '../../../helpers/platform-users'
 import { queuedJobs } from '../../../helpers/queue-jobs'
+import { WEB_CLIENT } from '../../../helpers/session-client'
 
 vi.mock('@/services/billing/billing-provider.service', async (importOriginal) => {
   const { fakeProviderModule } = await import('../../../helpers/billing-api')
@@ -280,7 +281,7 @@ describe('the trial started email', () => {
       requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
     )
 
-    const session = await confirmInvitation(raw, email)
+    const session = await confirmInvitation(raw, email, WEB_CLIENT)
 
     expect(session.isNewUser).toBe(true)
     const mails = await mailsOf(tenant.id, 'trial_started')
@@ -303,7 +304,7 @@ describe('the trial started email by confirm link', () => {
       requireDurationMs(getEnv().SIGN_IN_LINK_TTL)
     )
 
-    await confirmInvitation(raw, invitee.email)
+    await confirmInvitation(raw, invitee.email, WEB_CLIENT)
 
     expect(await billingColumn(tenant.id, 'state')).toBe('trialing')
     const mails = await mailsOf(tenant.id, 'trial_started')
@@ -345,7 +346,7 @@ describe('the workspace full notice', () => {
         code: 'PLAN_LIMIT_REACHED',
       })
     }
-    await expect(confirmInvitation(newcomerLink, newcomerEmail)).rejects.toMatchObject({
+    await expect(confirmInvitation(newcomerLink, newcomerEmail, WEB_CLIENT)).rejects.toMatchObject({
       statusCode: 402,
     })
 

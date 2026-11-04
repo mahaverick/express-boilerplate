@@ -12,6 +12,7 @@ import { logger } from '@/services/logger.service'
 import { verifySignInLink } from '@/services/sign-in-link.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { issueTestLink } from '../../helpers/sign-in'
 
 /**
@@ -50,7 +51,7 @@ describe('platformRoleForLogin', () => {
       'findPlatformRole',
       failingQuery,
       async () => {
-        ;({ platformRole } = await verifySignInLink(token, email))
+        ;({ platformRole } = await verifySignInLink(token, email, WEB_CLIENT))
       }
     )
 

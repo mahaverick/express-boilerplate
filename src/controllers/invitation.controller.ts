@@ -10,8 +10,9 @@ import { z } from 'zod'
 import { BaseController } from '@/controllers/base.controller'
 import {
   authenticatedUserId,
+  clientOf,
+  deliverRefreshToken,
   revokePresentedSession,
-  setRefreshTokenCookie,
 } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toProfileResponse } from '@/presenters/user.presenter'
@@ -75,9 +76,9 @@ function confirmInputFrom(input: unknown): { token: string; email?: string } {
 }
 
 /**
- * Send a join's session: the refresh cookie and the `200` body both
- * signed-out joins answer with.
- * @param request - The request, for the cookie's attributes.
+ * Send a join's session: the refresh token (a browser's cookie, a native
+ * app's body fields) and the `200` body both signed-out joins answer with.
+ * @param request - The request, for the client kind and the cookie's attributes.
  * @param response - The response.
  * @param session - The joined session.
  */
@@ -86,7 +87,6 @@ function sendInvitationSession(
   response: Response,
   session: InvitationSession
 ): void {
-  setRefreshTokenCookie(request, response, session.refreshToken.raw, session.refreshToken.expiresAt)
   successResponse(
     response,
     {
@@ -95,6 +95,7 @@ function sendInvitationSession(
       isNewUser: session.isNewUser,
       tenant: session.tenant,
       role: session.role,
+      ...deliverRefreshToken(request, response, session.refreshToken),
     },
     'Invitation accepted.'
   )
@@ -141,13 +142,13 @@ class InvitationController extends BaseController {
    * the invitee in, counted as a recent sign-in, and joins them, creating
    * the account for a new address (`isNewUser`). Every
    * refusal answers one 404 `invitation_invalid` and spends nothing. A
-   * refresh cookie the browser still presented has its session revoked once
+   * refresh token the client still presented has its session revoked once
    * the new one is issued. `no-store`.
    */
   confirmInvitation = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = confirmInputFrom(request.body)
-    const session = await confirmInvitation(input.token, input.email)
+    const session = await confirmInvitation(input.token, input.email, clientOf(request))
     await revokePresentedSession(request, { emitSignedOut: false })
     sendInvitationSession(request, response, session)
   })

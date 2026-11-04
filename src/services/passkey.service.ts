@@ -41,6 +41,7 @@ import {
 } from '@/services/passkey-challenge.service'
 import { passkeyProvider } from '@/services/passkey-provider.service'
 import { getPlatformMembership } from '@/services/platform.service'
+import type { SessionClient } from '@/services/session.service'
 import { issueSignInSession, type IssuedSignInSession } from '@/services/sign-in-session.service'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { PASSKEY_NAME_MAX_LENGTH } from '@/validators/passkey.validators'
@@ -565,14 +566,18 @@ export async function verifyStoredAssertion(
  * @param input.challengeId - The id the options call answered.
  * @param input.response - The browser's assertion response.
  * @param input.app - The frontend the request came from.
+ * @param client - The client signing in, recorded on the session.
  * @returns The account and its new session.
  * @throws {HttpError} 400 `PASSKEY_VERIFICATION_FAILED` or `PASSKEY_UNKNOWN`; 403 `PASSKEY_NO_ACCESS`; 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
  */
-export async function finishPasskeySignIn(input: {
-  challengeId: string
-  response: unknown
-  app: FrontendApp
-}): Promise<IssuedSignInSession & { user: User }> {
+export async function finishPasskeySignIn(
+  input: {
+    challengeId: string
+    response: unknown
+    app: FrontendApp
+  },
+  client: SessionClient
+): Promise<IssuedSignInSession & { user: User }> {
   const challenge = await consumePasskeyChallenge(input.challengeId, 'sign_in', {})
   if (challenge === undefined) throw passkeyVerificationFailed()
   const response = input.response as AuthenticationResponseJSON
@@ -594,6 +599,7 @@ export async function finishPasskeySignIn(input: {
   const session = await issueSignInSession(
     user,
     () => passkeyNoAccess(),
+    client,
     async (locked, tx) => {
       if (locked.emailVerifiedAt === null) throw passkeyNoAccess()
       const outcome = await userPasskeyRepository.recordUse(

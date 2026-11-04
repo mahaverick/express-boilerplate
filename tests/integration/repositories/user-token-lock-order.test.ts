@@ -205,6 +205,7 @@ async function insertRefresh(userId: string, sessionId: string): Promise<string>
     .values({
       userId,
       purpose: 'refresh',
+      client: 'web',
       sessionId,
       sessionStartedAt: new Date(),
       tokenHash: randomBytes(32).toString('hex'),

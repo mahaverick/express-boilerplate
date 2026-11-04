@@ -6,6 +6,7 @@
  * re-exporting, so it is not a barrel.
  */
 import { Router } from 'express'
+import { createAccountRouter } from '@/routes/account.routes'
 import { createAuthRouter } from '@/routes/auth.routes'
 import { createFlagsRouter } from '@/routes/flags.routes'
 import { createInvitationRouter } from '@/routes/invitation.routes'
@@ -25,6 +26,7 @@ export function createApiRouter(): Router {
   const router = Router()
   router.use('/auth', createAuthRouter())
   router.use('/profile', createProfileRouter())
+  router.use('/account', createAccountRouter())
   router.use('/notifications', createNotificationRouter())
   router.use('/tenants', createTenantRouter())
   router.use('/invitations', createInvitationRouter())

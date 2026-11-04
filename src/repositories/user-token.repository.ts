@@ -12,7 +12,8 @@
  * 'refresh'`: above all `isSessionKilled`, where a revoked link would
  * otherwise read as a kill marker and end the session.
  */
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
+import type { ClientKind } from '@/constants/native-client.constants'
 import {
   refreshTokenOf,
   userTokenModel,
@@ -29,6 +30,24 @@ import {
   type Touched,
 } from '@/repositories/base.repository'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+
+/**
+ * The most sessions `listLiveSessions` returns.
+ */
+const MAX_LISTED_SESSIONS = 100
+
+/**
+ * One signed-in session, as `listLiveSessions` reads it: the rotation chain
+ * that shares a `session_id`. `lastUsedAt` is when its newest live refresh
+ * row was written, which is the last rotation.
+ */
+export interface LiveSession {
+  sessionId: string
+  client: ClientKind
+  deviceName: string | null
+  startedAt: Date
+  lastUsedAt: Date
+}
 
 /**
  * The `revoked_at` every bulk revoker stamps: `clock_timestamp()`, the moment
@@ -522,6 +541,57 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     return rows
       .map((row) => row.sessionId)
       .filter((liveSessionId): liveSessionId is string => liveSessionId !== null)
+  }
+
+  /**
+   * A user's signed-in sessions, one per `session_id`, newest `lastUsedAt`
+   * first. A session is live by the same test `liveSessionIdsExcept` uses: a
+   * refresh row that is unrevoked (a rotation's claim revokes the row it
+   * spends), unexpired and not soft-deleted, in a session started after
+   * `startedAfter`. The query filters on `user_id` (`user_tokens_user_id_idx`)
+   * and groups the survivors. It is not a `listPage` list: one user's own
+   * live sessions are bounded by the sign-ins within SESSION_ABSOLUTE_TTL, so
+   * it has no cursor. The `limit` caps it at `MAX_LISTED_SESSIONS` so a
+   * pathological account cannot make one response unbounded; the oldest
+   * sessions drop off first.
+   * @param userId - The user whose sessions are read.
+   * @param startedAfter - A live session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @param limit - The most sessions to return. Defaults to `MAX_LISTED_SESSIONS`.
+   * @returns The live sessions, most recently used first.
+   */
+  async listLiveSessions(
+    userId: string,
+    startedAfter: Date,
+    executor: DbExecutor = db,
+    limit: number = MAX_LISTED_SESSIONS
+  ): Promise<LiveSession[]> {
+    const lastUsedAt = sql<Date>`max(${userTokenModel.createdAt})`.mapWith(userTokenModel.createdAt)
+    const startedAt = sql<Date>`min(${userTokenModel.sessionStartedAt})`.mapWith(
+      userTokenModel.createdAt
+    )
+    const rows = await executor
+      .select({
+        sessionId: userTokenModel.sessionId,
+        client: userTokenModel.client,
+        deviceName: userTokenModel.deviceName,
+        startedAt,
+        lastUsedAt,
+      })
+      .from(userTokenModel)
+      .where(
+        this.scope(
+          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = 'refresh' and ${userTokenModel.revokedAt} is null and ${userTokenModel.expiresAt} > now() and ${userTokenModel.sessionStartedAt} > ${startedAfter.toISOString()}::timestamptz`
+        )
+      )
+      .groupBy(userTokenModel.sessionId, userTokenModel.client, userTokenModel.deviceName)
+      .orderBy(desc(lastUsedAt))
+      .limit(limit)
+    return rows.flatMap((row) =>
+      row.sessionId === null || row.client === null
+        ? []
+        : [{ ...row, sessionId: row.sessionId, client: row.client }]
+    )
   }
 
   /**

@@ -7,6 +7,7 @@ import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
+import { ensureAccountDeletionSchedule } from '@/jobs/account-deletion.job'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
 import { ensureBillingSchedules } from '@/jobs/billing.job'
@@ -20,6 +21,7 @@ import {
   setWorkersFailed,
 } from '@/services/queue.service'
 import { startWorkers } from '@/services/worker-supervisor.service'
+import { startAccountDeletionWorker } from '@/workers/account-deletion.worker'
 import { startAnalyticsWorker } from '@/workers/analytics.worker'
 import { startBillingWorker } from '@/workers/billing.worker'
 import { startEmailWorker } from '@/workers/email.worker'
@@ -38,6 +40,8 @@ vi.mock('@/jobs/maintenance.job', () => ({ ensureRetentionSchedule: vi.fn() }))
 vi.mock('@/jobs/billing.job', () => ({ ensureBillingSchedules: vi.fn() }))
 vi.mock('@/workers/analytics.worker', () => ({ startAnalyticsWorker: vi.fn() }))
 vi.mock('@/workers/billing.worker', () => ({ startBillingWorker: vi.fn() }))
+vi.mock('@/workers/account-deletion.worker', () => ({ startAccountDeletionWorker: vi.fn() }))
+vi.mock('@/jobs/account-deletion.job', () => ({ ensureAccountDeletionSchedule: vi.fn() }))
 vi.mock('@/jobs/analytics.job', () => ({ ensureAnalyticsDrainSchedule: vi.fn() }))
 vi.mock('@/jobs/analytics-deletion.job', () => ({ ensureAnalyticsDeletionSchedule: vi.fn() }))
 vi.mock('@/jobs/flag-definitions.job', () => ({ ensureFlagDefinitionsSchedule: vi.fn() }))
@@ -72,7 +76,7 @@ function fakeWorker(): { worker: FakeWorker; release: () => void } {
 
 /**
  * Wires the mocks: each generation gets its own connection and a fake Worker
- * per starter (five, six with analytics or PostHog's private API enabled), and
+ * per starter (six, seven with analytics or PostHog's private API enabled), and
  * registering any schedule resolves. Returns the fakes in start order, the
  * connections, `lose` (which reports a connection lost to the listeners) and
  * the `unsubscribe` spy.
@@ -105,8 +109,10 @@ function wireMocks(): {
   vi.mocked(startMaintenanceWorker).mockImplementation(start)
   vi.mocked(startAnalyticsWorker).mockImplementation(start)
   vi.mocked(startBillingWorker).mockImplementation(start)
+  vi.mocked(startAccountDeletionWorker).mockImplementation(start)
   vi.mocked(ensureRetentionSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureBillingSchedules).mockResolvedValue(undefined)
+  vi.mocked(ensureAccountDeletionSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDrainSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDeletionSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureFlagDefinitionsSchedule).mockResolvedValue(undefined)
@@ -143,12 +149,12 @@ describe('startWorkers', () => {
     const mocks = wireMocks()
     startWorkers()
 
-    expect(mocks.workers).toHaveLength(6)
+    expect(mocks.workers).toHaveLength(7)
     expect(startAnalyticsWorker).toHaveBeenCalledOnce()
     expect(ensureFlagDefinitionsSchedule).toHaveBeenCalledOnce()
 
     mocks.lose(mocks.connections[0] as IORedis)
-    expect(mocks.workers).toHaveLength(12)
+    expect(mocks.workers).toHaveLength(14)
     expect(ensureFlagDefinitionsSchedule).toHaveBeenCalledTimes(2)
   })
 
@@ -167,7 +173,7 @@ describe('startWorkers', () => {
       expect(warn).toHaveBeenCalledWith('Registering the flag definitions schedule failed', {
         error: failure,
       })
-      expect(mocks.workers).toHaveLength(6)
+      expect(mocks.workers).toHaveLength(7)
     } finally {
       warn.mockRestore()
     }
@@ -176,13 +182,13 @@ describe('startWorkers', () => {
   it('closes the lost Workers within the same call and starts new ones on a new connection', () => {
     const mocks = wireMocks()
     startWorkers()
-    expect(mocks.workers).toHaveLength(5)
+    expect(mocks.workers).toHaveLength(6)
 
     mocks.lose(mocks.connections[0] as IORedis)
     // Synchronous: a Worker left running until a later tick would already be spinning.
-    for (const { worker } of mocks.workers.slice(0, 5))
+    for (const { worker } of mocks.workers.slice(0, 6))
       expect(worker.close).toHaveBeenCalledWith(true)
-    expect(mocks.workers).toHaveLength(10)
+    expect(mocks.workers).toHaveLength(12)
     expect(mocks.connections).toHaveLength(2)
   })
 
@@ -190,7 +196,7 @@ describe('startWorkers', () => {
     const mocks = wireMocks()
     startWorkers()
     mocks.lose({} as IORedis)
-    expect(mocks.workers).toHaveLength(5)
+    expect(mocks.workers).toHaveLength(6)
     for (const { worker } of mocks.workers) expect(worker.close).not.toHaveBeenCalled()
   })
 
@@ -200,7 +206,7 @@ describe('startWorkers', () => {
     markShuttingDown()
     mocks.lose(mocks.connections[0] as IORedis)
     for (const { worker } of mocks.workers) expect(worker.close).toHaveBeenCalledWith(true)
-    expect(mocks.workers).toHaveLength(5)
+    expect(mocks.workers).toHaveLength(6)
   })
 
   it('close() closes the current Workers, waits for lost ones still closing, and stops replacing', async () => {
@@ -213,11 +219,13 @@ describe('startWorkers', () => {
       lostNotification,
       lostMaintenance,
       lostBilling,
+      lostAccountDeletion,
       email,
       authEmail,
       notification,
       maintenance,
       billing,
+      accountDeletion,
     ] = mocks.workers
     if (
       !lostEmail ||
@@ -225,23 +233,27 @@ describe('startWorkers', () => {
       !lostNotification ||
       !lostMaintenance ||
       !lostBilling ||
+      !lostAccountDeletion ||
       !email ||
       !authEmail ||
       !notification ||
       !maintenance ||
-      !billing
+      !billing ||
+      !accountDeletion
     ) {
-      throw new Error('expected 10')
+      throw new Error('expected 12')
     }
     email.release()
     authEmail.release()
     notification.release()
     maintenance.release()
     billing.release()
+    accountDeletion.release()
     lostAuthEmail.release()
     lostNotification.release()
     lostMaintenance.release()
     lostBilling.release()
+    lostAccountDeletion.release()
 
     const outcome = { hasClosed: false }
     const closing = (async () => {
@@ -254,6 +266,7 @@ describe('startWorkers', () => {
     expect(notification.worker.close).toHaveBeenCalledWith()
     expect(maintenance.worker.close).toHaveBeenCalledWith()
     expect(billing.worker.close).toHaveBeenCalledWith()
+    expect(accountDeletion.worker.close).toHaveBeenCalledWith()
     await new Promise((resolve) => setImmediate(resolve))
     expect(outcome.hasClosed).toBe(false)
 
@@ -262,7 +275,7 @@ describe('startWorkers', () => {
     expect(outcome.hasClosed).toBe(true)
 
     mocks.lose(mocks.connections[1] as IORedis)
-    expect(mocks.workers).toHaveLength(10)
+    expect(mocks.workers).toHaveLength(12)
   })
 
   it('closes a half-started generation and keeps readiness red, then retries on its next lost connection', () => {
@@ -275,14 +288,14 @@ describe('startWorkers', () => {
     })
     mocks.lose(mocks.connections[0] as IORedis)
     // The two email Workers of the failed generation started, and are closed again.
-    const halfStarted = mocks.workers.slice(5)
-    expect(mocks.workers).toHaveLength(7)
+    const halfStarted = mocks.workers.slice(6)
+    expect(mocks.workers).toHaveLength(8)
     for (const { worker } of halfStarted) expect(worker.close).toHaveBeenCalledWith(true)
     expect(setWorkersFailed).toHaveBeenLastCalledWith(true)
 
     // Its connection remains the one watched: losing it starts a full generation.
     mocks.lose(mocks.connections[1] as IORedis)
-    expect(mocks.workers).toHaveLength(12)
+    expect(mocks.workers).toHaveLength(14)
     expect(setWorkersFailed).toHaveBeenLastCalledWith(false)
   })
 
@@ -305,7 +318,7 @@ describe('startWorkers', () => {
     expect(vi.mocked(startEmailWorker).mock.calls).toEqual([['email'], ['auth-email']])
   })
 
-  it('names the Workers it started, in start order, billing included', () => {
+  it('names the Workers it started, in start order, billing and account deletion included', () => {
     wireMocks()
 
     expect(startWorkers().names).toEqual([
@@ -314,6 +327,7 @@ describe('startWorkers', () => {
       'notification',
       'maintenance',
       'billing',
+      'account-deletion',
     ])
   })
 
@@ -327,6 +341,7 @@ describe('startWorkers', () => {
       'notification',
       'maintenance',
       'billing',
+      'account-deletion',
       'analytics',
     ])
   })
@@ -338,6 +353,15 @@ describe('startWorkers', () => {
 
     mocks.lose(mocks.connections[0] as IORedis)
     expect(ensureRetentionSchedule).toHaveBeenCalledTimes(2)
+  })
+
+  it('registers the account deletion schedule once per generation', () => {
+    const mocks = wireMocks()
+    startWorkers()
+    expect(ensureAccountDeletionSchedule).toHaveBeenCalledOnce()
+
+    mocks.lose(mocks.connections[0] as IORedis)
+    expect(ensureAccountDeletionSchedule).toHaveBeenCalledTimes(2)
   })
 
   it('registers the billing schedules once per generation', () => {
@@ -362,7 +386,7 @@ describe('startWorkers', () => {
       expect(warn).toHaveBeenCalledWith('Registering the retention schedule failed', {
         error: failure,
       })
-      expect(mocks.workers).toHaveLength(5)
+      expect(mocks.workers).toHaveLength(6)
       for (const { worker } of mocks.workers) expect(worker.close).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
@@ -373,7 +397,7 @@ describe('startWorkers', () => {
     const mocks = wireMocks()
     startWorkers()
 
-    expect(mocks.workers).toHaveLength(5)
+    expect(mocks.workers).toHaveLength(6)
     expect(startBillingWorker).toHaveBeenCalledOnce()
     expect(startAnalyticsWorker).not.toHaveBeenCalled()
     expect(ensureAnalyticsDrainSchedule).not.toHaveBeenCalled()
@@ -385,13 +409,13 @@ describe('startWorkers', () => {
     const mocks = wireMocks()
     startWorkers()
 
-    expect(mocks.workers).toHaveLength(6)
+    expect(mocks.workers).toHaveLength(7)
     expect(startAnalyticsWorker).toHaveBeenCalledOnce()
     expect(ensureAnalyticsDeletionSchedule).toHaveBeenCalledOnce()
     expect(ensureAnalyticsDrainSchedule).not.toHaveBeenCalled()
 
     mocks.lose(mocks.connections[0] as IORedis)
-    expect(mocks.workers).toHaveLength(12)
+    expect(mocks.workers).toHaveLength(14)
     expect(ensureAnalyticsDeletionSchedule).toHaveBeenCalledTimes(2)
   })
 
@@ -401,7 +425,7 @@ describe('startWorkers', () => {
     const mocks = wireMocks()
     startWorkers()
 
-    expect(mocks.workers).toHaveLength(6)
+    expect(mocks.workers).toHaveLength(7)
     expect(startAnalyticsWorker).toHaveBeenCalledOnce()
     expect(ensureAnalyticsDrainSchedule).toHaveBeenCalledOnce()
     expect(ensureAnalyticsDeletionSchedule).toHaveBeenCalledOnce()
@@ -421,7 +445,7 @@ describe('startWorkers', () => {
       expect(warn).toHaveBeenCalledWith('Registering the PostHog deletion schedule failed', {
         error: failure,
       })
-      expect(mocks.workers).toHaveLength(6)
+      expect(mocks.workers).toHaveLength(7)
       for (const { worker } of mocks.workers) expect(worker.close).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
@@ -433,15 +457,15 @@ describe('startWorkers', () => {
     const mocks = wireMocks()
     startWorkers()
 
-    expect(mocks.workers).toHaveLength(6)
+    expect(mocks.workers).toHaveLength(7)
     expect(startAnalyticsWorker).toHaveBeenCalledOnce()
     expect(ensureAnalyticsDrainSchedule).toHaveBeenCalledOnce()
 
     mocks.lose(mocks.connections[0] as IORedis)
-    for (const { worker } of mocks.workers.slice(0, 6)) {
+    for (const { worker } of mocks.workers.slice(0, 7)) {
       expect(worker.close).toHaveBeenCalledWith(true)
     }
-    expect(mocks.workers).toHaveLength(12)
+    expect(mocks.workers).toHaveLength(14)
     expect(ensureAnalyticsDrainSchedule).toHaveBeenCalledTimes(2)
     expect(ensureAnalyticsDeletionSchedule).not.toHaveBeenCalled()
   })
@@ -460,7 +484,7 @@ describe('startWorkers', () => {
       expect(warn).toHaveBeenCalledWith('Registering the analytics drain schedule failed', {
         error: failure,
       })
-      expect(mocks.workers).toHaveLength(6)
+      expect(mocks.workers).toHaveLength(7)
       for (const { worker } of mocks.workers) expect(worker.close).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()

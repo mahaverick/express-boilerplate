@@ -221,6 +221,28 @@ const SAMPLE_VARIABLES: {
     issuedOn: '27 October 2026',
     billingLink: 'https://x.test/settings/workspace/acme/billing',
   },
+  account_deletion_requested: {
+    firstName: 'Ada',
+    appName: 'App',
+    dueAt: '15:42 UTC on 3 December 2026',
+    supportEmail: 'support@x.test',
+  },
+  account_deletion_alert: {
+    firstName: 'Ada',
+    appName: 'App',
+    dueAt: '15:42 UTC on 3 December 2026',
+  },
+  account_deletion_due_soon: {
+    firstName: 'Ada',
+    appName: 'App',
+    dueAt: '15:42 UTC on 3 December 2026',
+    dueState: 'upcoming',
+  },
+  account_deleted: {
+    firstName: 'Ada',
+    appName: 'App',
+    supportEmail: 'support@x.test',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -431,6 +453,26 @@ describe('EMAIL_TEMPLATE_META', () => {
           'issuedOn',
           'billingLink',
         ],
+        resendAction: null,
+      },
+      account_deletion_requested: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'dueAt', 'supportEmail'],
+        resendAction: null,
+      },
+      account_deletion_alert: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'dueAt'],
+        resendAction: null,
+      },
+      account_deletion_due_soon: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'dueAt', 'dueState'],
+        resendAction: null,
+      },
+      account_deleted: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'supportEmail'],
         resendAction: null,
       },
     })

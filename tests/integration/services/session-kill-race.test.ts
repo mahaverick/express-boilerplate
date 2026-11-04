@@ -28,6 +28,7 @@ import {
   createTrackedUser,
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 afterEach(async () => {
   await truncateAuditLogs()
@@ -38,8 +39,8 @@ afterEach(async () => {
  * A session one rotation in, so its live head can be rotated once more and then replayed.
  */
 async function rotatedSession(user: User): Promise<IssuedRefreshToken> {
-  const first = await issueRefreshToken(user.id, randomUUID())
-  return rotateRefreshToken(first.raw)
+  const first = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
+  return rotateRefreshToken(first.raw, 'web')
 }
 
 /**
@@ -67,7 +68,7 @@ async function killWithRotationBeforeLock(
     tx: DbTransaction
   ): Promise<User | undefined> {
     if (minted === undefined && id === userId && mode === 'no key update') {
-      minted = await rotateRefreshToken(raw)
+      minted = await rotateRefreshToken(raw, 'web')
     }
     return original.call(this, id, mode, tx)
   }
@@ -88,20 +89,22 @@ describe('a kill that began before a rotation’s claim', () => {
     )
 
     expect(await isTokenRowLive(minted.raw)).toBe(false)
-    await expect(rotateRefreshToken(head.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(head.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
   })
 
   it('sign-out of other sessions from another session: the replay is refused', async () => {
     const user = await createTrackedUser()
     const head = await rotatedSession(user)
-    const elsewhere = await issueRefreshToken(user.id, randomUUID())
+    const elsewhere = await issueRefreshToken(user.id, randomUUID(), undefined, {
+      client: WEB_CLIENT,
+    })
 
     const minted = await killWithRotationBeforeLock(user.id, head.raw, () =>
       revokeOtherSessions(user.id, elsewhere.sessionId)
     )
 
     expect(await isTokenRowLive(minted.raw)).toBe(false)
-    await expect(rotateRefreshToken(head.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(head.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
   })
 
   it('a staff sign-out: the replay is refused', async () => {
@@ -114,6 +117,6 @@ describe('a kill that began before a rotation’s claim', () => {
     )
 
     expect(await isTokenRowLive(minted.raw)).toBe(false)
-    await expect(rotateRefreshToken(head.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(head.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
   })
 })

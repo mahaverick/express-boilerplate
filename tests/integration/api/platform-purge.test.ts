@@ -55,6 +55,8 @@ afterEach(async () => {
   mailedAddresses.length = 0
   if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
   tenantIds.length = 0
+  // Its user foreign key is RESTRICT, so the rows go before the users.
+  await sql`delete from account_deletion_requests`
   await deleteTrackedUsers()
 })
 
@@ -651,6 +653,31 @@ describe('onboarding rows in a purge', () => {
     ).toHaveLength(0)
     expect(
       await sql`select 1 from onboarding_completions where tenant_id = ${neighbour.id}`
+    ).toHaveLength(1)
+  })
+})
+
+describe('account deletion requests in a purge', () => {
+  it("removes the user's deletion requests, open and completed, and leaves another user's", async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    const other = await createTrackedUser()
+    await sql`
+      insert into account_deletion_requests (user_id, requested_at, due_at, status, completed_at)
+      values
+        (${gone.id}, now() - interval '40 days', now() - interval '10 days', 'completed', now() - interval '12 days'),
+        (${gone.id}, now(), now() + interval '30 days', 'open', null),
+        (${other.id}, now(), now() + interval '30 days', 'open', null)`
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    expect(await sql`select 1 from users where id = ${gone.id}`).toHaveLength(0)
+    expect(
+      await sql`select 1 from account_deletion_requests where user_id = ${gone.id}`
+    ).toHaveLength(0)
+    expect(
+      await sql`select 1 from account_deletion_requests where user_id = ${other.id}`
     ).toHaveLength(1)
   })
 })

@@ -56,6 +56,7 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deferred } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../helpers/notification-subscriber'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { settle, waitUntil } from '../../helpers/timing'
 
 const userRepository = new UserRepository()
@@ -405,7 +406,7 @@ describe('GET /api/v1/notifications/stream', () => {
   }> {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    const issued = await issueRefreshToken(user.id, randomUUID())
+    const issued = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const token = signAccessToken(user, issued.sessionId)
 
     const stream = openStream({ header: `Bearer ${token}` })
@@ -923,8 +924,8 @@ describe('GET /api/v1/notifications/stream', () => {
   it('closes another session’s open stream when the user signs out their other sessions', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    const caller = await issueRefreshToken(user.id, randomUUID())
-    const other = await issueRefreshToken(user.id, randomUUID())
+    const caller = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
+    const other = await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const stream = openStream({ header: `Bearer ${signAccessToken(user, other.sessionId)}` })
     await stream.waitForResponse()
     // Alive first, or the close below proves nothing.

@@ -68,6 +68,7 @@ const KNOWN_MOUNTS = [
   '/auth',
   '/passkeys',
   '/profile',
+  '/account',
   '/notifications',
   '/tenants',
   '/invitations',

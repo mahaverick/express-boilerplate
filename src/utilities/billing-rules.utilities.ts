@@ -181,6 +181,26 @@ export function isOtherProvider(
 }
 
 /**
+ * Whether a workspace's subscription still charges its payer: Paid runs
+ * (`active` or `past_due`) on a provider subscription that is not set to end
+ * with its period. The payer-left notice and the staff delete of a payer
+ * with an open deletion request both test it.
+ * @param row - The billing row.
+ * @returns True when the subscription still renews on the payer's card.
+ */
+export function isLiveSubscription(row: {
+  state: BillingState
+  providerSubscriptionId: string | null
+  cancelAtPeriodEnd: boolean
+}): boolean {
+  return (
+    (row.state === 'active' || row.state === 'past_due') &&
+    row.providerSubscriptionId !== null &&
+    !row.cancelAtPeriodEnd
+  )
+}
+
+/**
  * Every subscription id a billing row holds, whatever its state: the
  * current one, the checkout and the scheduled switch or resubscribe.
  * @param row - The row.

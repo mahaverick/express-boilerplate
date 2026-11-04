@@ -6,6 +6,7 @@
  */
 import { z } from 'zod'
 import { FRONTEND_APPS } from '@/constants/frontend.constants'
+import { refreshTokenField } from '@/validators/auth.validators'
 
 /**
  * A step-up link request: the frontend the emailed link opens. Required, with
@@ -17,8 +18,10 @@ export const stepUpLinkRequestSchema = z.strictObject({ app: z.enum(FRONTEND_APP
 /**
  * A step-up link confirm: the raw token from the link. Any string is
  * accepted, so a malformed token gets the same `LINK_INVALID` as an unknown
- * one; only a missing or non-string token fails validation.
+ * one; only a missing or non-string token fails validation. A native app
+ * also sends its refresh token, which names the chain to confirm.
  */
 export const stepUpLinkVerifySchema = z.object({
   token: z.string(),
+  refreshToken: refreshTokenField,
 })

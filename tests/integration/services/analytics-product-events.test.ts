@@ -50,6 +50,7 @@ import {
   recentAuthTokenFor,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { clearRateLimiter, issueTestLink } from '../../helpers/sign-in'
 
 const analytics = vi.hoisted(() => ({ isEnabled: true }))
@@ -119,7 +120,7 @@ function freshEmail(): string {
  * @returns The sign-in's session, as `verifySignInLink` answers it.
  */
 async function linkSignIn(email: string): Promise<Awaited<ReturnType<typeof verifySignInLink>>> {
-  return verifySignInLink(await issueTestLink(email), email)
+  return verifySignInLink(await issueTestLink(email), email, WEB_CLIENT)
 }
 
 /**
@@ -286,7 +287,11 @@ describe('user_signed_in', () => {
 
   it('is not written by a link that signs nobody in', async () => {
     await expect(
-      verifySignInLink(`not-a-link-${randomUUID()}`, `nobody-${randomUUID()}@example.test`)
+      verifySignInLink(
+        `not-a-link-${randomUUID()}`,
+        `nobody-${randomUUID()}@example.test`,
+        WEB_CLIENT
+      )
     ).rejects.toThrow()
 
     expect(await outboxRows()).toEqual([])

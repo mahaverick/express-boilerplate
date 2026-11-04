@@ -14,6 +14,7 @@ import { subscribeDomainEvent } from '@/services/domain-events.service'
 import { issueRefreshToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 const authProviderRepository = new AuthProviderRepository()
 
@@ -39,7 +40,7 @@ describe('claimNeverVerifiedAccount', () => {
       provider: 'google',
       providerId: googleId,
     })
-    await issueRefreshToken(user.id, randomUUID())
+    await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const inLock = vi.fn(() => Promise.resolve())
 
     const claimed = await claimNeverVerifiedAccount(user.id, inLock)
@@ -58,7 +59,7 @@ describe('claimNeverVerifiedAccount', () => {
 
   it('claims a never-verified account: inLock runs, sessions end, email_verified once', async () => {
     const user = await createTrackedUser({ verified: false })
-    await issueRefreshToken(user.id, randomUUID())
+    await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     const inLock = vi.fn(() => Promise.resolve())
 
     const claimed = await claimNeverVerifiedAccount(user.id, inLock)

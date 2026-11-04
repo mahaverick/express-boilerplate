@@ -153,9 +153,9 @@ interface TokenSeed {
 async function insertToken(userId: string, seed: TokenSeed): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
     insert into user_tokens
-      (user_id, purpose, session_id, token_hash, expires_at, revoked_at, consumed_at, replaced_by_id)
+      (user_id, purpose, session_id, client, token_hash, expires_at, revoked_at, consumed_at, replaced_by_id)
     values (
-      ${userId}, 'refresh', ${randomUUID()}, ${randomBytes(32).toString('hex')},
+      ${userId}, 'refresh', ${randomUUID()}, 'web', ${randomBytes(32).toString('hex')},
       ${seed.expiresAt}::timestamptz, ${timestampOrNull(seed.revokedAt)},
       ${timestampOrNull(seed.consumedAt)}, ${seed.replacedById ?? sql`null`}
     )

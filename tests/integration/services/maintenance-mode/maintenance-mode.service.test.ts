@@ -30,6 +30,7 @@ import {
   createTrackedUser,
   deleteTrackedUsers,
 } from '../../../helpers/platform-users'
+import { WEB_CLIENT } from '../../../helpers/session-client'
 
 /**
  * Builds a Google profile for `email` with a fresh Google id, reported
@@ -219,7 +220,7 @@ describe('Google sign-in in full', () => {
       email: googleEmail(),
       verified: false,
     })
-    await issueRefreshToken(user.id, randomUUID())
+    await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
     await enterFull()
 
     await expect(completeGoogleSignIn(googleProfile(user.email), 'web')).rejects.toBeInstanceOf(

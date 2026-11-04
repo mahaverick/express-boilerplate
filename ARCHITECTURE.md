@@ -687,12 +687,14 @@ registration order:
 | `/api/v1`                                    | `createApiRouter()` (`src/routes/index.routes.ts`).                                                                                                             |
 | 404, then `errorHandler`                     | Last, so it sees errors from everything before it.                                                                                                              |
 
-`createApiRouter()` mounts one router per feature: `auth`, `profile`,
-`notifications`, `tenants`, `invitations`, `platform`, `flags` and `status`. A
+`createApiRouter()` mounts one router per feature: `auth`, `account`,
+`profile`, `notifications`, `tenants`, `invitations`, `platform`, `flags` and
+`status`. A
 new feature router is one more `router.use(...)` there, never a change to
 `app.ts`.
 
-- **Auth.** The auth router answers 415 to any body that is not
+- **Auth.** `resolveClientKind` runs first on the auth and invitation routers
+  ([Native clients](#native-clients)). The auth router answers 415 to any body that is not
   `application/json` (`requireJsonContentType`, router-wide). Its open routes
   need no access token. `POST /auth/refresh` and `/auth/logout` check `Origin`
   first, then read the refresh cookie off the raw `Cookie` header; there is no
@@ -745,12 +747,12 @@ routes, all under `/api/v1`, are:
 
 **The tokens.** Four stores hold the credentials:
 
-| Store                | What it holds                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `user_tokens`        | Three purposes: `refresh` (the session chain), `sign_in_link` (an address and an app, never a user) and `step_up_link` (a user and the session it elevates). |
-| `user_passkeys`      | The passkeys: a public key and counters, never a private key.                                                                                                |
-| Redis                | Single-use passkey challenges, for 5 minutes (`passkey-challenge.service.ts`).                                                                               |
-| `tenant_invitations` | The invitation links.                                                                                                                                        |
+| Store                | What it holds                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_tokens`        | Three purposes: `refresh` (the session chain, with its `client` and `device_name`), `sign_in_link` (an address and an app, never a user) and `step_up_link` (a user and the session it elevates). |
+| `user_passkeys`      | The passkeys: a public key and counters, never a private key.                                                                                                                                     |
+| Redis                | Single-use passkey challenges, for 5 minutes (`passkey-challenge.service.ts`).                                                                                                                    |
+| `tenant_invitations` | The invitation links.                                                                                                                                                                             |
 
 Every token and link is 32 random bytes, and only its SHA-256 hash is stored.
 [DATABASE.md](DATABASE.md#user_tokens) has the columns and the shape CHECK
@@ -779,6 +781,103 @@ so a Google round-trip cannot prove the person is present. The checks are in
 `assertPasskeySetupDone`. An account with no passkey gets
 `403 PASSKEY_SETUP_REQUIRED` outside `PASSKEY_SETUP_ALLOWED`
 (`passkey.constants.ts`). The passkey count query runs only in that mode.
+
+### Native clients
+
+An iOS or Android app calls the same routes as the web app. It differs in one
+thing: it holds its session in the response body, not in a cookie.
+[SECURITY.md](SECURITY.md#native-clients) has the threat model.
+
+**The branch.** `resolveClientKind` (`src/middlewares/native-client.middleware.ts`)
+reads `X-Client` and sets `request.clientKind` to `web` or `native`. A native
+request carrying `Origin` or any `Sec-Fetch-*` header gets
+`400 NATIVE_CLIENT_REFUSED`. A handler never branches on the kind itself. It
+goes through three helpers in `src/controllers/helpers.controller.ts`:
+
+| Helper                       | A browser                                     | A native app                                                    |
+| ---------------------------- | --------------------------------------------- | --------------------------------------------------------------- |
+| `presentedRefreshToken`      | Reads the refresh cookie                      | Reads `refreshToken` from the body                              |
+| `deliverRefreshToken`        | Sets the cookie, `Strict` unless told `'lax'` | Returns `refreshToken` and `refreshTokenExpiresAt` for the body |
+| `clearPresentedRefreshToken` | Clears the cookie and its host-only form      | Does nothing                                                    |
+
+`tests/unit/controllers/refresh-cookie-callers.test.ts` fails a controller that
+calls the cookie functions directly. The Google callback is the one caller that
+passes `'lax'`, and a native request to either Google route is refused.
+
+**The session flow.**
+
+1. A native sign-in calls `clientOf(request)`, which returns the kind and a
+   device name read from `X-Device-Name`. `issueRefreshToken` stores both on the
+   new `user_tokens` row.
+2. A refresh passes only the kind to `rotateRefreshToken`. The row's
+   `client` must equal it, or the call answers the unknown-token 401 before
+   any transaction and kills no session.
+3. Rotation copies `client` and `device_name` onto the new row, with the
+   session id and start time.
+
+**The columns.** Migration `0040` adds `user_tokens.client` (`web` or `native`;
+a `CHECK` limits the values) and `user_tokens.device_name` (`varchar(64)`). It
+backfills `web` on every existing refresh row. `user_tokens_shape_check` requires
+a `client` on a refresh row and none on a link row.
+[DATABASE.md](DATABASE.md#user_tokens) has the other columns.
+
+**The sessions list.** `GET /auth/sessions` (`listLiveSessions`,
+`src/services/session.service.ts`) answers the caller's live sessions, newest
+use first, at most 100 (`MAX_LISTED_SESSIONS`), with no cursor. Each row has
+`id`, `client`, `deviceName`, `createdAt`, `lastUsedAt` and `current`
+(`src/presenters/session.presenter.ts`). Sessions past the 100th are not
+listed. `POST /auth/sessions/revoke-others` ends all but the current one.
+
+**Rate limits.** `refreshRateLimitKey` keys a native refresh by the hash of the
+body token. `nativeRefreshIp` adds a per-IP ceiling for native requests only.
+The numbers are in [SECURITY.md](SECURITY.md#rate-limits-behind-carrier-grade-nat).
+
+**Settings the app reads.** `GET /status/client-settings` answers
+`minimumAppVersion` as `{ ios, android }` from `MINIMUM_APP_VERSION_IOS` and
+`MINIMUM_APP_VERSION_ANDROID`, each `null` when unset. It sends
+`Cache-Control: public, max-age=300`. `WEBAUTHN_ANDROID_ORIGINS` adds the
+Android app's origins to the passkey ceremony's expected origins
+(`src/configs/passkey.config.ts`). `WEBAUTHN_IOS_ENABLED=true` makes boot refuse
+a `WEBAUTHN_RP_ID` other than `WEB_URL`'s host, since iOS binds a passkey to
+that host.
+
+### Account deletion requests
+
+A customer asks to delete their account at `POST /account/deletion-request`.
+Staff complete it by hand. Both app stores require the first step to happen
+inside the app. [SECURITY.md](SECURITY.md#account-deletion) has the rules.
+
+| Piece                                  | Where                                                            | What it does                                                                                                                                                                   |
+| -------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST`/`GET /account/deletion-request` | `src/routes/account.routes.ts`, `account.controller.ts`          | Open a request (201) or return the open one (200); read the open one                                                                                                           |
+| `requestAccountDeletion`               | `src/services/account-deletion.service.ts`                       | Locks the user row, inserts one open request, audits it, and after commit mails the receipt and alerts platform owners and admins                                              |
+| `account_deletion_requests`            | `src/database/models/account-deletion-request.model.ts`          | One open row per user. `due_at` is the request time plus `ACCOUNT_DELETION_DAYS` times 24 hours                                                                                |
+| `deleteUser`                           | `src/services/platform-user.service.ts`                          | Marks the open request completed in the delete's transaction, then mails "We deleted your account" after commit. Refuses with 409 while the requester pays a live subscription |
+| `alertDueSoonDeletions`                | `src/services/account-deletion.service.ts`                       | Alerts owners and admins about open requests due within 5 days, overdue ones included                                                                                          |
+| `due-soon-alert`                       | `src/jobs/account-deletion.job.ts`, `account-deletion.worker.ts` | The scheduler, daily at 04:00 UTC on the `account-deletion` queue, one job at a time                                                                                           |
+
+- **The alert dedupes in Redis.** Each request is claimed under
+  `redisKey('account-deletion-due-soon', requestId)` with a TTL that lasts
+  until 30 days after `due_at`. A run that finds the key skips the request. So
+  an overdue request is alerted again about every 30 days. A run that queues no
+  alert releases the key, and the next run tries again.
+- **Mail goes out after commit.** The receipt, the staff alert and the
+  confirmation are queued once the transaction commits, and a queue failure is
+  logged and skipped. The request or the delete is already recorded. No
+  template here has a resend action, so staff cannot resend a confirmation
+  that failed to queue.
+- **The staff alert cannot be switched off,** and the requester is not a
+  recipient. `account_deletion_requested` is in `NON_DISABLEABLE_EMAIL_TYPES`.
+  It goes to platform owners and admins. A request with no one to alert is
+  logged as a warning.
+- **A paying requester answers 409.** When `deleteUser` would complete an
+  open request and the user pays a live subscription (`isLiveSubscription`),
+  it refuses with `REQUESTER_PAYS_SUBSCRIPTION`, naming the workspaces, before
+  it writes anything. A co-owner takes over the payment method, or staff
+  cancel the subscription, then staff retry. A delete with no open request
+  clears the user as payer and leaves the subscription running.
+- **The staff list arrives in part 2.** The alerts name a Deletion requests
+  page in Apex. That page and its list API ship with part 2.
 
 ### Errors and the response envelope
 
@@ -1112,7 +1211,7 @@ retention purge.
 
 ### Queues and Workers
 
-Six BullMQ queues share the prefix `redisKey('bull')`:
+Seven BullMQ queues share the prefix `redisKey('bull')`:
 
 - `getAllQueues()` returns every queue, and is what the staff status lists.
   `tests/integration/services/queue-registry.test.ts` fails when a queue is
@@ -1122,21 +1221,22 @@ Six BullMQ queues share the prefix `redisKey('bull')`:
 - `emailQueueFor` (`src/jobs/email.job.ts`) picks an email's queue from its
   template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                                                                                                                                                                        | Worker concurrency   | Job options                                                                                                                                                 |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                                                                                                    | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
-| `maintenance`  | The retention purge                                                                                                                                                                                                                                                                                            | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                                                                                                     | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
-| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, a workspace's `tax-reconcile` run (priority 10, so webhooks and syncs go first), and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
+| Queue              | Carries                                                                                                                                                                                                                                                                                                        | Worker concurrency   | Job options                                                                                                                                                 |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`            | One tracked email per job (`addEmailJob`)                                                                                                                                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `auth-email`       | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `notification`     | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                                                                                                    | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
+| `maintenance`      | The retention purge                                                                                                                                                                                                                                                                                            | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
+| `analytics`        | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                                                                                                     | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
+| `billing`          | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, a workspace's `tax-reconcile` run (priority 10, so webhooks and syncs go first), and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
+| `account-deletion` | The daily due-soon alert for open account deletion requests (`src/jobs/account-deletion.job.ts`)                                                                                                                                                                                                               | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`. It
 reports to error tracking the attempt BullMQ will not retry
 (`attemptsMade >= attempts`, or an `UnrecoverableError`). What happens next
 depends on the Worker:
 
-- **Email, auth-email, notification, maintenance and billing.** The handler
+- **Email, auth-email, notification, maintenance, billing and account-deletion.** The handler
   logs a retryable attempt at `warn`. On the final attempt,
   `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
   payload, marks an email's message `failed`, and logs `job failed permanently`
@@ -1158,8 +1258,8 @@ No handler rejects, because an unhandled rejection exits the process. What a
 job payload may hold, and for how long, is in
 [SECURITY.md](SECURITY.md#mail-at-rest).
 
-`startWorkers()` starts the email, auth-email, notification, maintenance and
-billing Workers. It starts the analytics Worker when analytics or PostHog's
+`startWorkers()` starts the email, auth-email, notification, maintenance,
+billing and account-deletion Workers. It starts the analytics Worker when analytics or PostHog's
 private API is configured. `WORKER_ENABLED` (default `true`) runs the Workers
 in the API process. To split them, set it to `false` on API-only pods and
 `true` on a worker deployment that shares the Redis queues. The schedules
@@ -1171,14 +1271,15 @@ Each Worker generation upserts its schedules. These are BullMQ job schedulers,
 stored in Redis under the prefix, so every replica shares one schedule and each
 tick runs on one Worker:
 
-| Scheduler             | Queue         | When                                | Registered when                         |
-| --------------------- | ------------- | ----------------------------------- | --------------------------------------- |
-| `retention-purge`     | `maintenance` | daily at 03:00 UTC                  | always                                  |
-| `scheduler-frequent`  | `billing`     | every 15 min                        | always                                  |
-| `scheduler-daily`     | `billing`     | daily at 03:30 UTC                  | always                                  |
-| `analytics-drain`     | `analytics`   | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
-| `analytics-deletions` | `analytics`   | every 60 s                          | the personal key and project id are set |
-| `flag-definitions`    | `analytics`   | every 30 s                          | flags are configured                    |
+| Scheduler             | Queue              | When                                | Registered when                         |
+| --------------------- | ------------------ | ----------------------------------- | --------------------------------------- |
+| `retention-purge`     | `maintenance`      | daily at 03:00 UTC                  | always                                  |
+| `scheduler-frequent`  | `billing`          | every 15 min                        | always                                  |
+| `scheduler-daily`     | `billing`          | daily at 03:30 UTC                  | always                                  |
+| `due-soon-alert`      | `account-deletion` | daily at 04:00 UTC                  | always                                  |
+| `analytics-drain`     | `analytics`        | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
+| `analytics-deletions` | `analytics`        | every 60 s                          | the personal key and project id are set |
+| `flag-definitions`    | `analytics`        | every 30 s                          | flags are configured                    |
 
 Times in the table are in Coordinated Universal Time (UTC).
 
@@ -2257,6 +2358,10 @@ what `pnpm env:table` prints.
 | `APEX_URL`                            | no       | —                          | Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, step-up links, and the sign-in link and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.                                                                                                                                                                                                           |
 | `PASSKEY_MODE`                        | no       | `optional`                 | Whether users sign in with passkeys. off: every passkey route answers 404 and stored passkeys are kept. optional: users may create passkeys. required: every user must have one. Defaults to optional.                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `WEBAUTHN_RP_ID`                      | no       | —                          | The domain a passkey is bound to, e.g. domain.com. It must equal the host of WEB_URL and APEX_URL, or be a parent domain of both. Changing it makes every stored passkey unusable. Unset uses the host of WEB_URL.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `WEBAUTHN_ANDROID_ORIGINS`            | no       | —                          | Origins of the Android app that may use passkeys, comma-separated, each android:apk-key-hash: followed by the 43-character base64url SHA-256 of the app signing certificate. Unset means no Android origin.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `WEBAUTHN_IOS_ENABLED`                | no       | `false`                    | Whether the iOS app uses passkeys. iOS binds a passkey to the host of WEB_URL, so boot refuses true when WEBAUTHN_RP_ID is set to anything else. Defaults to false.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `MINIMUM_APP_VERSION_IOS`             | no       | —                          | The oldest iOS app version the app should allow, as major.minor.patch. The server only publishes it at GET /api/v1/status/client-settings; the app enforces it. Unset means no minimum.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `MINIMUM_APP_VERSION_ANDROID`         | no       | —                          | The oldest Android app version the app should allow, as major.minor.patch. The server only publishes it at GET /api/v1/status/client-settings; the app enforces it. Unset means no minimum.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `DATABASE_URL`                        | **yes**  | —                          | Postgres connection URL. The compose stack publishes Postgres on localhost:5433: postgres://boilerplate:boilerplate@localhost:5433/boilerplate.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `REDIS_URL`                           | **yes**  | —                          | Redis connection URL. The compose stack publishes Redis on localhost:6380: redis://localhost:6380.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `DB_POOL_MAX`                         | no       | `10`                       | Most open connections in the Postgres pool, per process. Defaults to 10. The test suite sets 2, so its parallel workers stay under Postgres's default 100 connections.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -2296,6 +2401,7 @@ what `pnpm env:table` prints.
 | `RETENTION_NOTIFICATIONS_READ_DAYS`   | no       | `90`                       | Days to keep a notification after it was read. 0 never purges; at most 36500. Defaults to 90.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `RETENTION_NOTIFICATIONS_UNREAD_DAYS` | no       | `365`                      | Days to keep a notification nobody read, counted from when it was created. 0 never purges; at most 36500. Defaults to 365.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `RETENTION_AUDIT_LOGS_DAYS`           | no       | `0`                        | Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days, at most 36500, only where your compliance rules allow deleting audit history.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ACCOUNT_DELETION_DAYS`               | no       | `30`                       | Days after a customer asks to delete their account by which staff must complete it. The receipt mail states this date. At least 1, at most 30. Defaults to 30.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `ONBOARDING_STUCK_AFTER_DAYS`         | no       | `7`                        | Days without onboarding progress after which a tracked tenant that is not complete or dismissed counts as stuck in the staff funnel and lists. At least 1, at most 36500. Defaults to 7.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `POSTHOG_PROJECT_KEY`                 | no       | —                          | PostHog project API key (phc_…) of the project this environment reports to. Unset disables analytics entirely: no events are recorded, none are sent, and /api/v1/collect answers 503. Use one project per environment, shared with the frontends.                                                                                                                                                                                                                                                                                                                                                        |
 | `POSTHOG_HOST`                        | no       | `https://us.i.posthog.com` | PostHog ingest host that server events are sent to and /api/v1/collect forwards to, with no trailing path. Defaults to https://us.i.posthog.com; an EU project uses https://eu.i.posthog.com.                                                                                                                                                                                                                                                                                                                                                                                                             |

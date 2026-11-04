@@ -11,6 +11,7 @@ import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { invitationController } from '@/controllers/invitation.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
+import { resolveClientKind } from '@/middlewares/native-client.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
@@ -20,6 +21,8 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  */
 export function createInvitationRouter(): Router {
   const router = Router()
+  // First of all, so a refused native request spends no limiter budget.
+  router.use(resolveClientKind)
   router.post(
     '/preview',
     requireJsonContentType,

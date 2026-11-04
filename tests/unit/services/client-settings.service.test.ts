@@ -21,6 +21,7 @@ describe('clientSettingsFrom', () => {
       stepUpLinkTtlSeconds: 1500,
       invitationTtlSeconds: 432_000,
       supportEmail: 'support@test.example',
+      minimumAppVersion: { ios: null, android: null },
     })
   })
 

@@ -5,6 +5,10 @@
  * file, and `import-x/no-cycle` is an error.
  */
 import type { Request } from 'express'
+import { ipKeyGenerator } from 'express-rate-limit'
+import { REFRESH_TOKEN_PATTERN } from '@/constants/auth.constants'
+import { isNativeRequest } from '@/middlewares/native-client.middleware'
+import { hashToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 /**
@@ -52,10 +56,11 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The names of the 33 limiters in `RATE_LIMITS`.
+ * The names of the limiters in `RATE_LIMITS`.
  */
 export type RateLimitName =
   | 'refresh'
+  | 'nativeRefreshIp'
   | 'logout'
   | 'googleOAuth'
   | 'googleOAuthCallback'
@@ -65,6 +70,7 @@ export type RateLimitName =
   | 'invitationAccept'
   | 'platformSearch'
   | 'authenticatedWrite'
+  | 'sessionsList'
   | 'platformWrite'
   | 'emailWebhook'
   | 'emailWebhookRejected'
@@ -89,6 +95,7 @@ export type RateLimitName =
   | 'billingWebhookRejected'
   | 'publicPlans'
   | 'upgradeRequest'
+  | 'accountDeletionRead'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
@@ -166,7 +173,62 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 33 rate-limit specs this API enforces, each commented with the reason
+ * The key prefix of a native refresh budget, followed by the token's SHA-256 hex.
+ */
+const REFRESH_TOKEN_KEY_PREFIX = 'refresh-token:'
+
+/**
+ * The IPv6 subnet express-rate-limit's default key uses, so a web refresh
+ * keeps the key it had before `refreshRateLimitKey`.
+ */
+const REFRESH_IPV6_SUBNET = 56
+
+/**
+ * The key `refresh`'s limiter counts attempts by. A native request whose
+ * body `refreshToken` has a refresh token's shape (`REFRESH_TOKEN_PATTERN`, 64
+ * lowercase hex characters) is keyed by the SHA-256 of that token, so devices
+ * behind one shared address (a carrier-grade NAT, an office) keep separate
+ * budgets, and the raw token never reaches a Redis key. Every other request,
+ * web or a native one with no well-formed body token, is keyed by its IP
+ * with `ipKeyGenerator` at the default's 56-bit IPv6 subnet, which gives
+ * the same key as express-rate-limit's default for any valid IP. It does not
+ * reproduce the default's validation of an invalid IP (a port, say); it throws
+ * only when Express supplies no `request.ip`.
+ * @param request - The incoming request, after `resolveClientKind` and the body parser.
+ * @returns `refresh-token:<sha256 hex>`, or the normalised IP.
+ * @throws {Error} When the request has no IP address.
+ */
+export function refreshRateLimitKey(request: Request): string {
+  const body: unknown = request.body
+  if (isNativeRequest(request) && typeof body === 'object' && body !== null) {
+    const { refreshToken } = body as Record<string, unknown>
+    // A malformed token shares the IP key, so junk spends one budget and is never hashed.
+    if (typeof refreshToken === 'string' && REFRESH_TOKEN_PATTERN.test(refreshToken)) {
+      return `${REFRESH_TOKEN_KEY_PREFIX}${hashToken(refreshToken)}`
+    }
+  }
+  if (request.ip === undefined) {
+    throw new Error("An undefined 'request.ip' was detected, so the refresh limiter has no key.")
+  }
+  return ipKeyGenerator(request.ip, REFRESH_IPV6_SUBNET)
+}
+
+/**
+ * The key `nativeRefreshIp`'s limiter counts attempts by: the caller's IP,
+ * normalised by `ipKeyGenerator` at the default's 56-bit IPv6 subnet.
+ * @param request - The incoming request.
+ * @returns The normalised IP.
+ * @throws {Error} When the request has no IP address.
+ */
+export function nativeRefreshIpRateLimitKey(request: Request): string {
+  if (request.ip === undefined) {
+    throw new Error("An undefined 'request.ip' was detected, so the refresh limiter has no key.")
+  }
+  return ipKeyGenerator(request.ip, REFRESH_IPV6_SUBNET)
+}
+
+/**
+ * The rate-limit specs this API enforces, each commented with the reason
  * for its window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -174,16 +236,35 @@ export function flagExposureRateLimitKey(request: Request): string {
  */
 export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   /**
-   * Keyed on IP alone; volume protection, not a security boundary. A
-   * refresh token is 256 bits of randomness, and reuse detection revokes
-   * the whole session when an already-rotated token is replayed after
-   * `REFRESH_REUSE_GRACE_MS`.
+   * Keyed on IP for the web, and on the body token's hash for a native app;
+   * volume protection, not a security boundary. A refresh token is 256 bits of
+   * randomness, and reuse detection revokes the whole session when an
+   * already-rotated token is replayed after `REFRESH_REUSE_GRACE_MS`. A native
+   * app has no cookie and often shares an address with many others, so each
+   * session gets its own budget (`refreshRateLimitKey`).
    */
   refresh: {
     name: 'refresh',
     windowMs: 5 * 60 * 1000,
     limit: 300,
-    keyBy: 'ip',
+    keyBy: refreshRateLimitKey,
+    unit: 'attempts',
+  },
+  /**
+   * The coarse per-IP ceiling behind the per-token `refresh` key, native
+   * requests only (web requests already share `refresh`'s IP budget). A
+   * malformed token already counts on the IP key. Without this ceiling one
+   * IP could still send unlimited refreshes with distinct well-formed guesses,
+   * each costing a hash, a database lookup and a short-lived counter of its
+   * own. Sized at 10 times `refresh`'s 300 so a carrier-grade NAT full of
+   * devices fits.
+   */
+  nativeRefreshIp: {
+    name: 'native-refresh-ip',
+    windowMs: 5 * 60 * 1000,
+    limit: 3000,
+    keyBy: nativeRefreshIpRateLimitKey,
+    skip: (request) => !isNativeRequest(request),
     unit: 'attempts',
   },
   /**
@@ -281,6 +362,17 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 60,
     keyBy: 'user',
     unit: 'attempts',
+  },
+  /**
+   * `GET /auth/sessions`: the caller's own session list, one indexed query.
+   * 60 a minute covers a settings screen that refreshes on focus.
+   */
+  sessionsList: {
+    name: 'sessions-list',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: 'user',
+    unit: 'requests',
   },
   /**
    * One shared budget for every authenticated write that has no
@@ -616,6 +708,18 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     name: 'upgrade-request',
     windowMs: 60 * 60 * 1000,
     limit: 10,
+    keyBy: 'user',
+    unit: 'requests',
+  },
+  /**
+   * `GET /account/deletion-request`: the caller's own open request, one
+   * indexed query. 60 a minute covers an account screen that refreshes on
+   * focus.
+   */
+  accountDeletionRead: {
+    name: 'account-deletion-read',
+    windowMs: 60_000,
+    limit: 60,
     keyBy: 'user',
     unit: 'requests',
   },

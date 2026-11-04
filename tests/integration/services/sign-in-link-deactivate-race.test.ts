@@ -13,6 +13,7 @@ import { verifySignInLink } from '@/services/sign-in-link.service'
 import { deferred, untilSignalled } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { createTrackedUser, deleteTrackedUsers } from '../../helpers/platform-users'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { issueTestLink } from '../../helpers/sign-in'
 
 afterEach(async () => {
@@ -46,7 +47,7 @@ async function verifyAround(
   }
   let settled: PromiseSettledResult<unknown> | undefined
   await withMutatedMethod(UserRepository.prototype, 'update', pausingUpdate, async () => {
-    const verifying = verifySignInLink(raw, email)
+    const verifying = verifySignInLink(raw, email, WEB_CLIENT)
     await untilSignalled(reached.promise, verifying, 'verify')
     await change()
     release.resolve()

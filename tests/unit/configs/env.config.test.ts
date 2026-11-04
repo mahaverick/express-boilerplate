@@ -912,3 +912,49 @@ describe('passkey variables', () => {
     expect(() => parseEnv({ ...valid, PASSKEY_MODE: 'always' })).toThrow(/PASSKEY_MODE/)
   })
 })
+
+describe('native client settings', () => {
+  const hash = 'A'.repeat(43)
+
+  it('leaves the minimum versions and Android origins unset by default', () => {
+    const env = parseEnv({ ...valid })
+    expect(env.MINIMUM_APP_VERSION_IOS).toBeUndefined()
+    expect(env.MINIMUM_APP_VERSION_ANDROID).toBeUndefined()
+    expect(env.WEBAUTHN_ANDROID_ORIGINS).toBeUndefined()
+    expect(env.WEBAUTHN_IOS_ENABLED).toBe(false)
+  })
+
+  it('accepts a well-formed Android origin list', () => {
+    const value = `android:apk-key-hash:${hash},android:apk-key-hash:${'b'.repeat(43)}`
+    expect(parseEnv({ ...valid, WEBAUTHN_ANDROID_ORIGINS: value }).WEBAUTHN_ANDROID_ORIGINS).toBe(
+      value
+    )
+  })
+
+  it.each(['android:apk-key-hash:short', `https://x.com`, `android:apk-key-hash:${hash}+`])(
+    'refuses the malformed Android origin %s',
+    (bad) => {
+      expect(() => parseEnv({ ...valid, WEBAUTHN_ANDROID_ORIGINS: bad })).toThrow(
+        /WEBAUTHN_ANDROID_ORIGINS/
+      )
+    }
+  )
+
+  it('refuses a list with one malformed entry', () => {
+    expect(() =>
+      parseEnv({ ...valid, WEBAUTHN_ANDROID_ORIGINS: `android:apk-key-hash:${hash},nope` })
+    ).toThrow(/WEBAUTHN_ANDROID_ORIGINS/)
+  })
+
+  it.each(['1.2.3', '10.0.121'])('accepts the minimum version %s', (version) => {
+    expect(parseEnv({ ...valid, MINIMUM_APP_VERSION_IOS: version }).MINIMUM_APP_VERSION_IOS).toBe(
+      version
+    )
+  })
+
+  it.each(['1.2', 'v1.2.3', '1.2.3-beta'])('refuses the minimum version %s', (version) => {
+    expect(() => parseEnv({ ...valid, MINIMUM_APP_VERSION_ANDROID: version })).toThrow(
+      /MINIMUM_APP_VERSION_ANDROID/
+    )
+  })
+})

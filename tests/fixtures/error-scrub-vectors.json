@@ -2503,5 +2503,25 @@
     "rule": "email",
     "input": "mailto:a@x.com%2C%20b@y.com?cc=c@z.org&body=s",
     "expected": "mailto:[email][email]?[query]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"refreshToken\":\"abababababababababababababababababababababababababababababababab\"}",
+    "expected": "{\"refreshToken\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "refreshToken=abababababababababababababababababababababababababababababababab",
+    "expected": "refreshToken=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "\"refresh_token\": \"abababababababababababababababababababababababababababababababab\"",
+    "expected": "\"refresh_token\": \"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "Request failed with status code 500 {\"method\":\"post\",\"url\":\"/api/v1/auth/refresh\",\"data\":\"{\\\"refreshToken\\\":\\\"abababababababababababababababababababababababababababababababab\\\"}\"}",
+    "expected": "Request failed with status code 500 {\"method\":\"post\",\"url\":\"/api/v1/auth/refresh\",\"data\":\"{\\\"refreshToken\\\":\\\"[redacted]\\\"}\"}"
   }
 ]

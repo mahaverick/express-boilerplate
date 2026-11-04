@@ -1,6 +1,7 @@
 /**
  * @file The notification types this codebase produces: invitations, the
- * maintenance-mode notice and the six billing notices.
+ * maintenance-mode notice, the six billing notices and the account deletion
+ * alert.
  */
 import { describe, expect, it } from 'vite-plus/test'
 import {
@@ -9,7 +10,7 @@ import {
 } from '@/constants/notification.constants'
 
 describe('NOTIFICATION_TYPES', () => {
-  it('lists exactly the invitation, the maintenance-mode notice and the billing notices', () => {
+  it('lists exactly the invitation, the maintenance-mode notice, the billing notices and the deletion alert', () => {
     expect(NOTIFICATION_TYPES).toEqual([
       'tenant_invitation',
       'maintenance_mode_changed',
@@ -19,10 +20,14 @@ describe('NOTIFICATION_TYPES', () => {
       'billing_upgrade_requested',
       'billing_payer_left',
       'workspace_full',
+      'account_deletion_requested',
     ])
   })
 
-  it('keeps the maintenance-mode notice staff-only', () => {
-    expect(STAFF_ONLY_NOTIFICATION_TYPES).toEqual(['maintenance_mode_changed'])
+  it('keeps the maintenance-mode notice and the deletion alert staff-only', () => {
+    expect(STAFF_ONLY_NOTIFICATION_TYPES).toEqual([
+      'maintenance_mode_changed',
+      'account_deletion_requested',
+    ])
   })
 })

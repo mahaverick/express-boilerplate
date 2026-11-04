@@ -2,7 +2,7 @@
  * @file The bodies of `POST /auth/link/request` and `POST /auth/link/verify`.
  */
 import { z } from 'zod'
-import { emailSchema, frontendAppSchema } from '@/validators/auth.validators'
+import { emailSchema, frontendAppSchema, refreshTokenField } from '@/validators/auth.validators'
 import { redirectPathSchema } from '@/validators/redirect.validators'
 
 /**
@@ -27,9 +27,11 @@ export type SignInLinkRequestInput = z.infer<typeof signInLinkRequestSchema>
  * malformed token, or an address that is not the link's, gets the same
  * `LINK_INVALID` as an unknown token; only a missing or non-string token, or
  * a non-string address, fails validation. The address is trimmed and
- * lowercased here, as the link's row stores it.
+ * lowercased here, as the link's row stores it. A native app may also send
+ * the refresh token it holds, whose session the sign-in revokes.
  */
 export const signInLinkVerifySchema = z.object({
   token: z.string(),
   email: z.string().trim().toLowerCase().optional(),
+  refreshToken: refreshTokenField,
 })

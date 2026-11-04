@@ -25,6 +25,18 @@ describe('passkeyRelyingParty', () => {
     expect(relyingParty.origins).toEqual(['https://domain.com', 'https://apex.domain.com'])
   })
 
+  it('appends each Android origin after the browser origins', () => {
+    const first = 'android:apk-key-hash:%s'
+    const one = first.replace('%s', 'A'.repeat(43))
+    const two = first.replace('%s', 'b-_'.repeat(14) + 'b')
+    const relyingParty = passkeyRelyingParty({
+      WEB_URL: 'https://domain.com',
+      WEBAUTHN_ANDROID_ORIGINS: `${one}, ${two}`,
+      APP_NAME: 'Acme',
+    })
+    expect(relyingParty.origins).toEqual(['https://domain.com', one, two])
+  })
+
   it('lists origins without a path or trailing slash', () => {
     expect(
       passkeyRelyingParty({ WEB_URL: 'https://domain.com/', APP_NAME: 'Acme' }).origins

@@ -11,10 +11,11 @@
  * tracking is enabled for this file through a mocked `getEnv()`. The payload
  * assertions run against the reporter built in the error-tracking services.
  */
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import http from 'node:http'
 import net from 'node:net'
 import type { AddressInfo } from 'node:net'
+import { inspect } from 'node:util'
 import express, { Router, type NextFunction, type Request, type Response } from 'express'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vite-plus/test'
 
@@ -51,6 +52,7 @@ const { resolveTenant } = await import('@/middlewares/tenant.middleware')
 const { TenantRepository } = await import('@/repositories/tenant.repository')
 const { isAnalyticsSignatureValid, signedFieldsOf } =
   await import('@/services/analytics/analytics-signature.service')
+const authService = await import('@/services/auth.service')
 const { db, sql } = await import('@/services/database.service')
 const reporter = await import('@/services/errors/error-reporter.service')
 const { logger } = await import('@/services/logger.service')
@@ -58,6 +60,8 @@ const { startFakePosthog } = await import('../../helpers/fake-posthog')
 const { createTrackedUser, deleteTrackedUsers, tokenFor } =
   await import('../../helpers/platform-users')
 const { request } = await import('../../helpers/request')
+const { clearRateLimiter } = await import('../../helpers/sign-in')
+const { RATE_LIMITS } = await import('@/constants/rate-limit.constants')
 
 /**
  * The fake PostHog this file reports to.
@@ -305,6 +309,33 @@ describe('an unexpected 5xx', () => {
       expect(JSON.stringify(events[0])).not.toContain('a@b.example')
     }
   )
+
+  it('sends no refresh token from a native refresh body when the rotation fails with a 500', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const refreshToken = randomBytes(32).toString('hex')
+    const body = JSON.stringify({ refreshToken })
+    // An axios-style failure: the request body rides in the message and in `config.data`.
+    vi.spyOn(authService, 'refresh').mockRejectedValue(
+      Object.assign(new Error(`Request failed with status code 500 ${body}`), {
+        config: { data: body },
+      })
+    )
+    await clearRateLimiter(RATE_LIMITS.refresh.name)
+    await clearRateLimiter(RATE_LIMITS.nativeRefreshIp.name)
+
+    const response = await request(createApp())
+      .post('/api/v1/auth/refresh')
+      .set('X-Client', 'native')
+      .send({ refreshToken })
+
+    expect(response.status).toBe(500)
+    const events = await sentExceptions()
+    expect(events).toHaveLength(1)
+    const printed = inspect(events[0], { depth: null })
+    // The message did reach the event, so the absence below is the scrubber's doing.
+    expect(printed).toContain('Request failed with status code 500')
+    expect(printed).not.toContain(refreshToken)
+  })
 
   it('sends a deliberate 503 that wraps a cause', async () => {
     vi.spyOn(logger, 'error').mockImplementation(() => {})

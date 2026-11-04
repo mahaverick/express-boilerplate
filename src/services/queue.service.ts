@@ -36,6 +36,7 @@ const state: {
   maintenanceQueue: Queue | undefined
   analyticsQueue: Queue | undefined
   billingQueue: Queue | undefined
+  accountDeletionQueue: Queue | undefined
   closed: boolean
   workerConnectionLost: Set<(dead: IORedis) => void>
   haveWorkersFailed: boolean
@@ -48,6 +49,7 @@ const state: {
   maintenanceQueue: undefined,
   analyticsQueue: undefined,
   billingQueue: undefined,
+  accountDeletionQueue: undefined,
   closed: false,
   workerConnectionLost: new Set(),
   haveWorkersFailed: false,
@@ -179,6 +181,7 @@ function getProducerConnection(): IORedis {
         state.maintenanceQueue,
         state.analyticsQueue,
         state.billingQueue,
+        state.accountDeletionQueue,
       ]
       state.emailQueue = undefined
       state.authEmailQueue = undefined
@@ -186,6 +189,7 @@ function getProducerConnection(): IORedis {
       state.maintenanceQueue = undefined
       state.analyticsQueue = undefined
       state.billingQueue = undefined
+      state.accountDeletionQueue = undefined
       for (const orphan of orphans) void discardQueue(orphan)
     }
   )
@@ -304,11 +308,31 @@ export function getBillingQueue(): Queue {
 }
 
 /**
+ * Get the shared "account-deletion" queue, creating it on first use. It
+ * carries the daily due-soon alert for open deletion requests, over the same
+ * producer connection as the others. Full maintenance pauses it, and the
+ * alerts it queues wait on the paused notification queue.
+ * @returns The account-deletion queue.
+ */
+export function getAccountDeletionQueue(): Queue {
+  if (!state.accountDeletionQueue) {
+    state.accountDeletionQueue = new Queue('account-deletion', {
+      connection: getProducerConnection(),
+      prefix: redisKey('bull'),
+    })
+    state.accountDeletionQueue.on('error', (error: unknown) => {
+      logger.error('Account deletion queue error', { error })
+    })
+  }
+  return state.accountDeletionQueue
+}
+
+/**
  * Every queue this module creates, creating any not yet created: what the
  * staff status lists. A queue added to this module must be added here;
  * `tests/integration/services/queue-registry.test.ts` compares this list with
  * every `new Queue(` in this file.
- * @returns The email, auth-email, notification, maintenance, analytics and billing queues.
+ * @returns The email, auth-email, notification, maintenance, analytics, billing and account-deletion queues.
  */
 export function getAllQueues(): Queue[] {
   return [
@@ -318,6 +342,7 @@ export function getAllQueues(): Queue[] {
     getMaintenanceQueue(),
     getAnalyticsQueue(),
     getBillingQueue(),
+    getAccountDeletionQueue(),
   ]
 }
 
@@ -334,7 +359,7 @@ export function isPausableQueueName(name: string): boolean {
 /**
  * Every queue full maintenance pauses and leaving it resumes: `getAllQueues()`
  * without auth-email (`isPausableQueueName`).
- * @returns The email, notification, maintenance, analytics and billing queues.
+ * @returns The email, notification, maintenance, analytics, billing and account-deletion queues.
  */
 export function getPausableQueues(): Queue[] {
   return getAllQueues().filter((queue) => isPausableQueueName(queue.name))
@@ -468,6 +493,11 @@ export async function closeQueue(): Promise<void> {
     const billingQueue = state.billingQueue
     state.billingQueue = undefined
     await billingQueue.close()
+  }
+  if (state.accountDeletionQueue) {
+    const accountDeletionQueue = state.accountDeletionQueue
+    state.accountDeletionQueue = undefined
+    await accountDeletionQueue.close()
   }
   const connections = [state.worker?.connection, state.producer?.connection]
   state.worker = undefined

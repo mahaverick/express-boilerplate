@@ -2,28 +2,33 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 33 literal strings, in order; (2) every entry's
+ * stays exactly the literal strings below, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
- * (3) the four key-derivation functions produce byte-identical output
+ * (3) the key-derivation functions produce byte-identical output
  * for a fixed input, so a caller mid-window (Redis already holding
  * counts keyed by the previous output) is not silently split onto a new
  * bucket.
  */
 import type { Request } from 'express'
+import { ipKeyGenerator } from 'express-rate-limit'
 import { describe, expect, it } from 'vite-plus/test'
 import {
   authenticatedUserRateLimitKey,
   emailWebhookProviderRateLimitKey,
   flagExposureRateLimitKey,
+  nativeRefreshIpRateLimitKey,
   RATE_LIMITS,
+  refreshRateLimitKey,
   submittedEmailRateLimitKey,
   type RateLimitName,
 } from '@/constants/rate-limit.constants'
+import { hashToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
   'refresh',
+  'native-refresh-ip',
   'logout',
   'google-oauth',
   'google-oauth-callback',
@@ -32,6 +37,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'invitation-preview',
   'invitation-accept',
   'platform-search',
+  'sessions-list',
   'authenticated-write',
   'platform-write',
   'email-webhook',
@@ -57,6 +63,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'billing-webhook-rejected',
   'public-plans',
   'upgrade-request',
+  'account-deletion-read',
 ]
 
 /**
@@ -73,7 +80,14 @@ const EXPECTED_RATE_LIMITS: {
   limit: number
   keyBy: 'ip' | 'user' | 'email' | 'function'
 }[] = [
-  { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'ip' },
+  { key: 'refresh', name: 'refresh', windowMs: 300_000, limit: 300, keyBy: 'function' },
+  {
+    key: 'nativeRefreshIp',
+    name: 'native-refresh-ip',
+    windowMs: 300_000,
+    limit: 3000,
+    keyBy: 'function',
+  },
   { key: 'logout', name: 'logout', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   { key: 'googleOAuth', name: 'google-oauth', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   {
@@ -106,6 +120,7 @@ const EXPECTED_RATE_LIMITS: {
     keyBy: 'user',
   },
   { key: 'platformSearch', name: 'platform-search', windowMs: 60_000, limit: 60, keyBy: 'user' },
+  { key: 'sessionsList', name: 'sessions-list', windowMs: 60_000, limit: 60, keyBy: 'user' },
   {
     key: 'authenticatedWrite',
     name: 'authenticated-write',
@@ -221,6 +236,13 @@ const EXPECTED_RATE_LIMITS: {
     limit: 10,
     keyBy: 'user',
   },
+  {
+    key: 'accountDeletionRead',
+    name: 'account-deletion-read',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: 'user',
+  },
 ]
 
 describe('RATE_LIMITS key stability', () => {
@@ -283,5 +305,85 @@ describe('RATE_LIMITS key stability', () => {
     expect(flagExposureRateLimitKey(withoutSession)).toBe('user:user-123')
     expect(flagExposureRateLimitKey(anonymous)).toBe('user:anonymous')
     expect(RATE_LIMITS.flagExposure.keyBy).toBe(flagExposureRateLimitKey)
+  })
+
+  it('keys a native refresh by the hash of its body token, never the raw token or the IP', () => {
+    const raw = 'a'.repeat(64)
+    const request = {
+      clientKind: 'native',
+      ip: '203.0.113.5',
+      body: { refreshToken: raw },
+    } as unknown as Request
+    const key = refreshRateLimitKey(request)
+    expect(key).toBe(`refresh-token:${hashToken(raw)}`)
+    expect(key).not.toContain(raw)
+    expect(RATE_LIMITS.refresh.keyBy).toBe(refreshRateLimitKey)
+  })
+
+  it.each([
+    ['an IPv4 address', '203.0.113.5'],
+    ['an IPv6 address', '2001:db8:abcd:12::1'],
+  ])('falls back to the ipKeyGenerator key for %s on a web refresh', (_label, ip) => {
+    const web = { clientKind: 'web', ip, body: {} } as unknown as Request
+    expect(refreshRateLimitKey(web)).toBe(ipKeyGenerator(ip, 56))
+  })
+
+  it.each([
+    ['no body token', {}],
+    ['a non-string body token', { refreshToken: 42 }],
+    ['an empty body token', { refreshToken: '' }],
+    ['no body at all', undefined],
+  ])('keys a native refresh with %s by IP', (_label, body) => {
+    const ip = '2001:db8:abcd:12::1'
+    const native = { clientKind: 'native', ip, body } as unknown as Request
+    expect(refreshRateLimitKey(native)).toBe(ipKeyGenerator(ip, 56))
+  })
+
+  it.each([
+    ['uppercase hex', 'A'.repeat(64)],
+    ['63 characters', 'a'.repeat(63)],
+    ['65 characters', 'a'.repeat(65)],
+    ['a non-hex character', `${'a'.repeat(63)}g`],
+    ['an overlong value', 'a'.repeat(100_000)],
+    ['a trailing newline', `${'a'.repeat(64)}\n`],
+  ])('keys a native refresh whose body token has %s by IP, never by hash', (_label, token) => {
+    const ip = '203.0.113.5'
+    const native = { clientKind: 'native', ip, body: { refreshToken: token } } as unknown as Request
+    expect(refreshRateLimitKey(native)).toBe(ipKeyGenerator(ip, 56))
+  })
+
+  it('keys a native refresh whose body token is 64 lowercase hex characters by its hash', () => {
+    const token = 'ab'.repeat(32)
+    const native = {
+      clientKind: 'native',
+      ip: '203.0.113.5',
+      body: { refreshToken: token },
+    } as unknown as Request
+    expect(refreshRateLimitKey(native)).toBe(`refresh-token:${hashToken(token)}`)
+  })
+
+  it('keys a web refresh by IP even when the body carries a token', () => {
+    const web = {
+      clientKind: 'web',
+      ip: '203.0.113.5',
+      body: { refreshToken: 'a'.repeat(64) },
+    } as unknown as Request
+    expect(refreshRateLimitKey(web)).toBe(ipKeyGenerator('203.0.113.5', 56))
+  })
+
+  it('throws on a request with no IP, as express-rate-limit does for its default key', () => {
+    const web = { clientKind: 'web' } as unknown as Request
+    expect(() => refreshRateLimitKey(web)).toThrow(/request\.ip/)
+  })
+
+  it('counts native requests on nativeRefreshIp and skips web ones, keyed by the normalised IP', () => {
+    const { skip, keyBy } = RATE_LIMITS.nativeRefreshIp
+    const native = { clientKind: 'native', ip: '2001:db8:abcd:12::1' } as unknown as Request
+    const web = { clientKind: 'web', ip: '2001:db8:abcd:12::1' } as unknown as Request
+    expect(skip?.(native)).toBe(false)
+    expect(skip?.(web)).toBe(true)
+    expect(keyBy).toBe(nativeRefreshIpRateLimitKey)
+    expect(nativeRefreshIpRateLimitKey(native)).toBe(ipKeyGenerator('2001:db8:abcd:12::1', 56))
+    expect(() => nativeRefreshIpRateLimitKey({} as unknown as Request)).toThrow(/request\.ip/)
   })
 })

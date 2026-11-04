@@ -11,6 +11,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { issueRefreshToken, rotateRefreshToken } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 const userRepository = new UserRepository()
 
@@ -92,8 +93,10 @@ describe('mutation-test harness, proven on reuse detection', () => {
      * so the tell is whether the family survives. In the product it must not.
      */
     const mutatedSessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, mutatedSessionId)
-    const rotated = await rotateRefreshToken(issued.raw)
+    const issued = await issueRefreshToken(userId, mutatedSessionId, undefined, {
+      client: WEB_CLIENT,
+    })
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
     await ageConsumedTokensPastGrace(userId)
 
     await withMutatedMethod(
@@ -101,25 +104,29 @@ describe('mutation-test harness, proven on reuse detection', () => {
       'revokeAllForSession',
       () => Promise.resolve(0),
       async () => {
-        await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+        await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({
+          statusCode: 401,
+        })
 
         // With the guard disabled the legitimate client's token is still usable: the attack that should have ended the session did nothing.
-        const stillRotatable = await rotateRefreshToken(rotated.raw)
+        const stillRotatable = await rotateRefreshToken(rotated.raw, 'web')
         expect(stillRotatable.sessionId).toBe(mutatedSessionId)
       }
     )
 
     // Restored: a fresh family, with the same sequence of calls, shows the guard is back.
     const restoredSessionId = randomUUID()
-    const issuedAfterRestore = await issueRefreshToken(userId, restoredSessionId)
-    const rotatedAfterRestore = await rotateRefreshToken(issuedAfterRestore.raw)
+    const issuedAfterRestore = await issueRefreshToken(userId, restoredSessionId, undefined, {
+      client: WEB_CLIENT,
+    })
+    const rotatedAfterRestore = await rotateRefreshToken(issuedAfterRestore.raw, 'web')
     await ageConsumedTokensPastGrace(userId)
 
-    await expect(rotateRefreshToken(issuedAfterRestore.raw)).rejects.toMatchObject({
+    await expect(rotateRefreshToken(issuedAfterRestore.raw, 'web')).rejects.toMatchObject({
       statusCode: 401,
     })
     // The family did not survive this time: the legitimate client's token is dead too.
-    await expect(rotateRefreshToken(rotatedAfterRestore.raw)).rejects.toMatchObject({
+    await expect(rotateRefreshToken(rotatedAfterRestore.raw, 'web')).rejects.toMatchObject({
       statusCode: 401,
     })
   })
@@ -139,12 +146,16 @@ describe('mutation-test harness, proven on reuse detection', () => {
         'revokeAllForSession',
         () => Promise.resolve(0),
         async () => {
-          const issued = await issueRefreshToken(userId, sessionId)
-          const rotated = await rotateRefreshToken(issued.raw)
+          const issued = await issueRefreshToken(userId, sessionId, undefined, {
+            client: WEB_CLIENT,
+          })
+          const rotated = await rotateRefreshToken(issued.raw, 'web')
           await ageConsumedTokensPastGrace(userId)
 
           // An attacker who stole the old token replays it.
-          await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+          await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({
+            statusCode: 401,
+          })
 
           // The whole family should die, the legitimate client's token included; with the guard mutated this query finds zero rows instead of one.
           const rotatedTokenRows = await sql`
@@ -154,7 +165,7 @@ describe('mutation-test harness, proven on reuse detection', () => {
           expect(rotatedTokenRows).toHaveLength(1)
 
           // From the client's side: that token can no longer be rotated; with the guard mutated it still can, so this resolves instead of rejecting.
-          await expect(rotateRefreshToken(rotated.raw)).rejects.toMatchObject({
+          await expect(rotateRefreshToken(rotated.raw, 'web')).rejects.toMatchObject({
             statusCode: 401,
           })
         }

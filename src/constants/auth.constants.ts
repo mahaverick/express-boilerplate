@@ -154,3 +154,10 @@ export const LINK_INVALID_CODE = 'LINK_INVALID'
  * The message `LINK_INVALID_CODE` is answered with.
  */
 export const LINK_INVALID_MESSAGE = 'This link expired or was already used. Ask for a new link.'
+
+/**
+ * The shape of a refresh token as a native app presents it: 32 random bytes
+ * as 64 lowercase hex characters. The body schema (`refreshTokenField`) and
+ * the refresh limiter's key (`refreshRateLimitKey`) both test it.
+ */
+export const REFRESH_TOKEN_PATTERN = /^[0-9a-f]{64}$/

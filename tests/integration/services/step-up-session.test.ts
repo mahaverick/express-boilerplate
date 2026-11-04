@@ -25,6 +25,7 @@ import { confirmStepUpLink } from '@/services/step-up.service'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff } from '../../helpers/platform-staff'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 const userRepository = new UserRepository()
 
@@ -76,7 +77,7 @@ async function stepUpLinkFor(userId: string, sessionId: string): Promise<string>
  * @returns The time as epoch milliseconds.
  */
 async function rotatedTime(raw: string): Promise<number | undefined> {
-  const rotated = await rotateRefreshToken(raw)
+  const rotated = await rotateRefreshToken(raw, 'web')
   return rotated.authenticatedAt?.getTime()
 }
 
@@ -111,7 +112,7 @@ describe('session authentication time', () => {
   it('stamps a new session with authenticated_at equal to its start', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
     const [row] = await sql<{ started: Date; authenticated: Date }[]>`
       select session_started_at as started, authenticated_at as authenticated
@@ -125,10 +126,10 @@ describe('session authentication time', () => {
   it('carries authenticated_at unchanged across rotations', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
-    const rotated = await rotateRefreshToken(issued.raw)
-    const rotatedAgain = await rotateRefreshToken(rotated.raw)
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
+    const rotatedAgain = await rotateRefreshToken(rotated.raw, 'web')
 
     expect(await authenticatedTimes(sessionId)).toEqual([issued.authenticatedAt?.getTime()])
     expect(rotatedAgain.authenticatedAt?.getTime()).toBe(issued.authenticatedAt?.getTime())
@@ -137,11 +138,11 @@ describe('session authentication time', () => {
   it('carries authenticated_at onto a grace-window sibling (a concurrent refresh)', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
-    await rotateRefreshToken(issued.raw)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    await rotateRefreshToken(issued.raw, 'web')
 
     // Replayed inside REFRESH_REUSE_GRACE_MS: findGraceSession/continueSession mint a sibling.
-    const sibling = await rotateRefreshToken(issued.raw)
+    const sibling = await rotateRefreshToken(issued.raw, 'web')
 
     expect(sibling.sessionId).toBe(sessionId)
     expect(sibling.authenticatedAt?.getTime()).toBe(issued.authenticatedAt?.getTime())
@@ -151,8 +152,8 @@ describe('session authentication time', () => {
   it('a confirmed step-up link moves authenticated_at on every refresh row of its session, live and rotated away', async () => {
     const userId = await createStaffUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
-    const rotated = await rotateRefreshToken(issued.raw)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
     await ageSession(sessionId)
     const raw = await stepUpLinkFor(userId, sessionId)
     const before = Date.now()
@@ -165,7 +166,7 @@ describe('session authentication time', () => {
     const verified = verifyAccessToken(accessToken)
     expect(verified.ok && verified.payload.auth_time).toBe(Math.floor((at ?? 0) / 1000))
     // The next rotation copies the confirmed time forward.
-    const next = await rotateRefreshToken(rotated.raw)
+    const next = await rotateRefreshToken(rotated.raw, 'web')
     expect(next.authenticatedAt?.getTime()).toBe(at)
   })
 
@@ -173,8 +174,8 @@ describe('session authentication time', () => {
     const userId = await createStaffUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
-    const other = await issueRefreshToken(userId, otherSessionId)
+    await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    const other = await issueRefreshToken(userId, otherSessionId, undefined, { client: WEB_CLIENT })
     await ageSession(otherSessionId)
     const raw = await stepUpLinkFor(userId, sessionId)
 
@@ -194,8 +195,8 @@ describe('session authentication time', () => {
     const userId = await createStaffUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
-    await issueRefreshToken(userId, otherSessionId)
+    await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    await issueRefreshToken(userId, otherSessionId, undefined, { client: WEB_CLIENT })
     await ageSession(sessionId)
     await ageSession(otherSessionId)
     const timesBefore = [
@@ -216,8 +217,8 @@ describe('session authentication time', () => {
   it('markSessionReauthenticated moves every row of the session, live and rotated away', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
-    const rotated = await rotateRefreshToken(issued.raw)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
     await ageSession(sessionId)
     const before = Date.now()
 
@@ -226,7 +227,7 @@ describe('session authentication time', () => {
     expect(at.getTime()).toBeGreaterThanOrEqual(before - 1000)
     expect(await authenticatedTimes(sessionId)).toEqual([at.getTime()])
     // The next rotation copies the reauthenticated time forward.
-    const next = await rotateRefreshToken(rotated.raw)
+    const next = await rotateRefreshToken(rotated.raw, 'web')
     expect(next.authenticatedAt?.getTime()).toBe(at.getTime())
   })
 
@@ -237,9 +238,9 @@ describe('session authentication time', () => {
    */
   async function sessionWithThief() {
     const userId = await createStaffUser()
-    const start = await issueRefreshToken(userId, randomUUID())
-    const owner = await rotateRefreshToken(start.raw)
-    const thief = await rotateRefreshToken(start.raw)
+    const start = await issueRefreshToken(userId, randomUUID(), undefined, { client: WEB_CLIENT })
+    const owner = await rotateRefreshToken(start.raw, 'web')
+    const thief = await rotateRefreshToken(start.raw, 'web')
     await ageSession(start.sessionId)
     return {
       userId,
@@ -284,12 +285,12 @@ describe('session authentication time', () => {
   it('a grace sibling minted after a reauthentication carries the new time', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
-    await rotateRefreshToken(issued.raw)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    await rotateRefreshToken(issued.raw, 'web')
     await ageSession(sessionId)
 
     const at = await markSessionReauthenticated(userId, sessionId)
-    const sibling = await rotateRefreshToken(issued.raw)
+    const sibling = await rotateRefreshToken(issued.raw, 'web')
 
     expect(sibling.authenticatedAt?.getTime()).toBe(at.getTime())
   })
@@ -298,8 +299,8 @@ describe('session authentication time', () => {
     const userId = await createUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
-    const other = await issueRefreshToken(userId, otherSessionId)
+    await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    const other = await issueRefreshToken(userId, otherSessionId, undefined, { client: WEB_CLIENT })
     await ageSession(sessionId)
     await ageSession(otherSessionId)
 
@@ -313,7 +314,7 @@ describe('session authentication time', () => {
   it('refuses a session with no live refresh token, asking the client to refresh', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
+    await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
     await sql`update user_tokens set revoked_at = now() where session_id = ${sessionId}`
 
     await expect(markSessionReauthenticated(userId, sessionId)).rejects.toMatchObject({
@@ -326,7 +327,7 @@ describe('session authentication time', () => {
     const userId = await createUser()
     const otherUserId = await createUser()
     const sessionId = randomUUID()
-    await issueRefreshToken(otherUserId, sessionId)
+    await issueRefreshToken(otherUserId, sessionId, undefined, { client: WEB_CLIENT })
 
     await expect(markSessionReauthenticated(userId, sessionId)).rejects.toMatchObject({
       statusCode: 401,
@@ -345,7 +346,7 @@ describe('session authentication time', () => {
   it('refuses a session past its absolute lifetime, as a refresh would', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
+    await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
     const lifetimeMs = requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
     await sql`
       update user_tokens
@@ -365,7 +366,7 @@ describe('session authentication time', () => {
   ])('refuses a %s user, even with a live session', async (_label, statement) => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
+    await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
     await sql.unsafe(statement, [userId])
 
     await expect(markSessionReauthenticated(userId, sessionId)).rejects.toMatchObject({

@@ -1,12 +1,13 @@
 /**
- * @file Starts the email, notification, maintenance and billing Workers, and the
- * analytics Worker when analytics or PostHog's private API is enabled, and
- * keeps them on a live connection, replacing them whenever their connection
+ * @file Starts the email, notification, maintenance, billing and
+ * account-deletion Workers, and the analytics Worker when analytics or
+ * PostHog's private API is enabled, and keeps them on a live connection, replacing them whenever their connection
  * gives up before its first 'ready' (see `startWorkers`).
  */
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { isAnalyticsEnabled, isFlagsEnabled, isPosthogApiEnabled } from '@/configs/analytics.config'
+import { ensureAccountDeletionSchedule } from '@/jobs/account-deletion.job'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
 import { ensureBillingSchedules } from '@/jobs/billing.job'
@@ -19,6 +20,7 @@ import {
   onWorkerConnectionLost,
   setWorkersFailed,
 } from '@/services/queue.service'
+import { startAccountDeletionWorker } from '@/workers/account-deletion.worker'
 import { startAnalyticsWorker } from '@/workers/analytics.worker'
 import { startBillingWorker } from '@/workers/billing.worker'
 import { startEmailWorker } from '@/workers/email.worker'
@@ -60,6 +62,7 @@ function workerStarters(): WorkerStarter[] {
     { name: 'notification', start: startNotificationWorker },
     { name: 'maintenance', start: startMaintenanceWorker },
     { name: 'billing', start: startBillingWorker },
+    { name: 'account-deletion', start: startAccountDeletionWorker },
   ]
   if (isAnalyticsEnabled() || isPosthogApiEnabled()) {
     starters.push({ name: 'analytics', start: startAnalyticsWorker })
@@ -108,13 +111,15 @@ async function registerInBackground(
 }
 
 /**
- * Start the email, auth-email, notification, maintenance and billing Workers, and the
+ * Start the email, auth-email, notification, maintenance, billing and
+ * account-deletion Workers, and the
  * analytics Worker when `isAnalyticsEnabled()` or `isPosthogApiEnabled()`
  * (feature flags need the project key, so `isFlagsEnabled()` implies the
  * first), replacing
  * them whenever their connection gives up before its first ready. Each
  * generation registers the retention schedule, the two billing schedules
  * (always: trials, grants and upgrade requests lapse with payments off too),
+ * the account deletion due-soon schedule,
  * the analytics drain schedule
  * when `isAnalyticsEnabled()`, the PostHog deletion schedule when
  * `isPosthogApiEnabled()`, and the flag definitions schedule when
@@ -179,6 +184,10 @@ export function startWorkers(): SupervisedWorkers {
         'Registering the retention schedule failed'
       )
       void registerInBackground(ensureBillingSchedules, 'Registering the billing schedules failed')
+      void registerInBackground(
+        ensureAccountDeletionSchedule,
+        'Registering the account deletion schedule failed'
+      )
       if (isAnalyticsEnabled()) {
         void registerInBackground(
           ensureAnalyticsDrainSchedule,

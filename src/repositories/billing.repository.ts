@@ -1406,6 +1406,40 @@ export class BillingRepository {
   }
 
   /**
+   * Lock and read the billing rows a user is the payer of, with each
+   * workspace's name, in workspace order: what the staff delete checks
+   * before it completes a deletion request. Its place in the lock order is
+   * `clearPayer`'s, which then finds these rows already held.
+   * @param userId - The user.
+   * @param tx - The delete's transaction.
+   * @returns Each row's workspace name and the fields `isLiveSubscription` reads.
+   */
+  async lockPaidBy(
+    userId: string,
+    tx: DbTransaction
+  ): Promise<
+    {
+      tenantName: string
+      state: BillingState
+      providerSubscriptionId: string | null
+      cancelAtPeriodEnd: boolean
+    }[]
+  > {
+    return tx
+      .select({
+        tenantName: tenantModel.name,
+        state: tenantBillingModel.state,
+        providerSubscriptionId: tenantBillingModel.providerSubscriptionId,
+        cancelAtPeriodEnd: tenantBillingModel.cancelAtPeriodEnd,
+      })
+      .from(tenantBillingModel)
+      .innerJoin(tenantModel, eq(tenantModel.id, tenantBillingModel.tenantId))
+      .where(eq(tenantBillingModel.payerUserId, userId))
+      .orderBy(tenantBillingModel.tenantId)
+      .for('no key update', { of: tenantBillingModel })
+  }
+
+  /**
    * Forget a user as the payer of every workspace they pay for, with the
    * billing address they gave, and as the starter of any checkout, when
    * their account is deleted or purged: the address is theirs, and a sync

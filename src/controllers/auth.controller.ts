@@ -6,29 +6,28 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import { getEnv } from '@/configs/env.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
 import {
   authenticatedUserId,
-  clearHostOnlyPlainRefreshCookie,
-  currentRefreshCookie,
+  clearPresentedRefreshToken,
+  clientOf,
+  deliverRefreshToken,
   oauthIntentOf,
-  readRefreshTokenCookie,
-  refreshCookieOptions,
+  presentedRefreshToken,
   revokePresentedSession,
-  setRefreshTokenCookie,
 } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
+import { toSessionResponse } from '@/presenters/session.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
 import { frontendUrl } from '@/services/frontend-links.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
-import { revokeOtherSessions } from '@/services/session.service'
+import { listLiveSessions, revokeOtherSessions } from '@/services/session.service'
 import { requestSignInLink, verifySignInLink } from '@/services/sign-in-link.service'
 import { confirmStepUpLink, requestStepUpLink } from '@/services/step-up.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
@@ -55,8 +54,9 @@ function withoutTrailingSlashes(url: string): string {
 
 /**
  * Attach a freshly issued refresh token to the response for the Google
- * OAuth callback: `setRefreshTokenCookie` with `sameSite: 'lax'` in place of
- * its `'strict'` default.
+ * OAuth callback: `deliverRefreshToken` with `sameSite: 'lax'` in place of
+ * its `'strict'` default. The callback refuses a native request first, so
+ * this always sets the browser's cookie.
  *
  * `'lax'` here is a decision, and it costs nothing: a `'lax'` cookie is still
  * withheld from cross-site `POST`s and subresource requests, and both routes
@@ -75,43 +75,15 @@ function setOAuthRefreshTokenCookie(
   rawToken: string,
   expiresAt: Date
 ): void {
-  setRefreshTokenCookie(request, response, rawToken, expiresAt, 'lax')
+  deliverRefreshToken(request, response, { raw: rawToken, expiresAt }, 'lax')
 }
 
 /**
- * Clear the refresh cookie on logout, with the same name, path and domain
- * it was set with, and its host-only plain form when
- * `clearHostOnlyPlainRefreshCookie` applies.
- * @param request - The request, checked for a host-only plain cookie to clear.
- * @param response - The response to clear the cookie on.
- */
-function clearRefreshTokenCookie(request: Request, response: Response): void {
-  const env = getEnv()
-  const spec = currentRefreshCookie(env)
-  response.clearCookie(spec.name, refreshCookieOptions(spec, env, 'strict'))
-  clearHostOnlyPlainRefreshCookie(request, response, env)
-}
-
-/**
- * Clear the refresh cookie a failed refresh read, in every form the clear
- * helpers use for that name. `readRefreshTokenCookie` reads only the current
- * name. Without COOKIE_SECURE that is the unprefixed one, and its host-only
- * form is another scope of the name that was read, so it is cleared too.
- * @param request - The refresh request.
- * @param response - The response to add the clearing Set-Cookie lines to.
- */
-function clearPresentedRefreshCookie(request: Request, response: Response): void {
-  const env = getEnv()
-  const current = currentRefreshCookie(env)
-  response.clearCookie(current.name, refreshCookieOptions(current, env, 'strict'))
-  clearHostOnlyPlainRefreshCookie(request, response, env)
-}
-
-/**
- * Rotate the presented refresh token, clearing its cookie when the answer is 401.
+ * Rotate the presented refresh token, clearing a browser's cookie when the
+ * answer is 401 (`clearPresentedRefreshToken`; a native app holds none).
  * @param request - The refresh request.
  * @param response - The response a clear is added to.
- * @param rawToken - The raw token read from the cookie.
+ * @param rawToken - The raw token the request presented.
  * @returns The new access token and refresh token.
  * @throws {Error} Whatever `authService.refresh` throws, rethrown unchanged.
  */
@@ -121,10 +93,10 @@ async function refreshOrClearCookie(
   rawToken: string
 ): Promise<authService.RefreshResult> {
   try {
-    return await authService.refresh(rawToken)
+    return await authService.refresh(rawToken, clientOf(request).kind)
   } catch (error) {
     if (error instanceof HttpError && error.statusCode === 401) {
-      clearPresentedRefreshCookie(request, response)
+      clearPresentedRefreshToken(request, response)
     }
     throw error
   }
@@ -172,23 +144,18 @@ class AuthController extends BaseController {
    * `POST /auth/link/verify`: sign in with the token from a mailed link,
    * creating the account on the first click (`isNewUser`). Every link that
    * signs nobody in answers one 400 `LINK_INVALID`, as does an `email` that
-   * is not the link's address, which spends nothing. A refresh cookie the
-   * browser still presented has its session revoked once the new one is
-   * issued; the reply carries the redirect stored with the
-   * link. `no-store`, as every token response (RFC 6749 §5.1).
+   * is not the link's address, which spends nothing. A refresh token the
+   * client still presented (a browser's cookie, a native app's body field)
+   * has its session revoked once the new one is issued; the reply carries the
+   * redirect stored with the link, and for a native app the new refresh
+   * token. `no-store`, as every token response (RFC 6749 §5.1).
    */
   verifySignInLink = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(signInLinkVerifySchema, request.body)
-    const session = await verifySignInLink(input.token, input.email)
+    const session = await verifySignInLink(input.token, input.email, clientOf(request))
     await revokePresentedSession(request, { emitSignedOut: false })
 
-    setRefreshTokenCookie(
-      request,
-      response,
-      session.refreshToken.raw,
-      session.refreshToken.expiresAt
-    )
     successResponse(
       response,
       {
@@ -196,6 +163,7 @@ class AuthController extends BaseController {
         accessToken: session.accessToken,
         isNewUser: session.isNewUser,
         redirect: session.redirect,
+        ...deliverRefreshToken(request, response, session.refreshToken),
       },
       'Signed in.'
     )
@@ -205,12 +173,15 @@ class AuthController extends BaseController {
    * `POST /auth/refresh`: rotate a refresh token for a new access/refresh
    * token pair.
    *
-   * Reads the refresh token from its httpOnly cookie ONLY, never the body:
+   * A browser's token is read from its httpOnly cookie ONLY, never the body:
    * accepting a body token would let any page that can make the browser POST
-   * attempt a refresh with a token it chose. A non-browser client sends the
-   * same `Cookie` header.
+   * attempt a refresh with a token it chose (`resolveClientKind` refuses a
+   * browser request with a body token). A native app sends its token in the
+   * body (`presentedRefreshToken`), never a cookie, and gets the next one
+   * back in the body; it has no body schema, so a malformed token gets the
+   * unknown-token 401.
    *
-   * A 401 from `authService.refresh` clears that cookie, so the browser stops
+   * For a browser, a 401 from `authService.refresh` clears that cookie, so the browser stops
    * presenting a dead token on every page load. None of those 401s leaves the
    * presented token able to refresh:
    * - unknown, or issued for another purpose: no refresh can claim it;
@@ -235,29 +206,31 @@ class AuthController extends BaseController {
    */
   refresh = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
-    const rawToken = readRefreshTokenCookie(request)
+    const rawToken = presentedRefreshToken(request)
     if (!rawToken) {
       // An empty current cookie can never refresh: clear it as any other 401 does, or the browser sends it on every refresh.
-      if (rawToken === '') clearPresentedRefreshCookie(request, response)
+      if (rawToken === '') clearPresentedRefreshToken(request, response)
       throw new HttpError("You're signed out. Sign in to continue.", 401)
     }
 
     const refreshed = await refreshOrClearCookie(request, response, rawToken)
 
-    setRefreshTokenCookie(
-      request,
+    successResponse(
       response,
-      refreshed.refreshToken.raw,
-      refreshed.refreshToken.expiresAt
+      {
+        accessToken: refreshed.accessToken,
+        ...deliverRefreshToken(request, response, refreshed.refreshToken),
+      },
+      'Session refreshed.'
     )
-    successResponse(response, { accessToken: refreshed.accessToken }, 'Session refreshed.')
   })
 
   /**
    * `POST /auth/logout`: revoke the session the presented refresh token
-   * belongs to, and clear the cookie either way.
+   * belongs to, and clear a browser's cookie either way.
    *
-   * Reads the current cookie only, never the body (see `refresh` for why).
+   * Reads a browser's current cookie only, never the body (see `refresh` for
+   * why), and a native app's body token only.
    * Deliberately does not require a valid access token: a user wanting to log
    * out has often just watched their access token expire, and revocation only
    * ever needs the refresh cookie. A missing, forged or already-revoked token
@@ -266,7 +239,7 @@ class AuthController extends BaseController {
    */
   logout = this.handle(async (request, response) => {
     await revokePresentedSession(request)
-    clearRefreshTokenCookie(request, response)
+    clearPresentedRefreshToken(request, response)
     messageResponse(response, 'Signed out.')
   })
 
@@ -288,7 +261,8 @@ class AuthController extends BaseController {
    * `POST /auth/step-up/link/verify`: confirm a step-up link for the caller's
    * session, behind `requireAuth`, and
    * reply with a new access token carrying the new `auth_time`. The refresh
-   * cookie is untouched: the session is the same. A link this session cannot
+   * token is untouched: the session is the same. The presented token (a
+   * browser's cookie, a native app's body field) names the chain to confirm. A link this session cannot
    * use answers 400 `LINK_INVALID`, never a 401. `no-store`, as every token
    * response (RFC 6749 §5.1).
    */
@@ -299,7 +273,7 @@ class AuthController extends BaseController {
       authenticatedUserId(request),
       request.sessionId,
       input.token,
-      readRefreshTokenCookie(request)
+      presentedRefreshToken(request)
     )
 
     successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
@@ -308,10 +282,11 @@ class AuthController extends BaseController {
   /**
    * `POST /auth/sessions/revoke-others`: sign the caller out of every other
    * session, behind `requireAuth`, keeping the one this request came from
-   * (`request.sessionId`): only the chain its refresh cookie names, when the
-   * browser sent a live one (`readRefreshTokenCookie`, current name only),
-   * or else the whole session. A token without a session id gets a 401. Takes
-   * `{}` or no body. Answers how many signed-in other sessions it ended.
+   * (`request.sessionId`): only the chain its refresh token names, when the
+   * client presented a live one (`presentedRefreshToken`: a browser's current
+   * cookie only, a native app's body field only), or else the whole session.
+   * A token without a session id gets a 401. Takes `{}`, a native app's
+   * `{ refreshToken }`, or no body. Answers how many signed-in other sessions it ended.
    */
   revokeOtherSessions = this.handle(async (request, response) => {
     // A body-less POST leaves request.body undefined; it means the same as `{}`.
@@ -319,10 +294,24 @@ class AuthController extends BaseController {
     const revoked = await revokeOtherSessions(
       authenticatedUserId(request),
       request.sessionId,
-      readRefreshTokenCookie(request)
+      presentedRefreshToken(request)
     )
 
     successResponse(response, { revoked }, 'Other sessions signed out.')
+  })
+
+  /**
+   * `GET /auth/sessions`: the caller's signed-in sessions, newest use first,
+   * each with its client and device, and `current` on the one the request's
+   * access token belongs to. At most 100, so it takes no cursor.
+   */
+  listSessions = this.handle(async (request, response) => {
+    const sessions = await listLiveSessions(authenticatedUserId(request))
+
+    successResponse(
+      response,
+      sessions.map((session) => toSessionResponse(session, request.sessionId))
+    )
   })
 
   /**
@@ -354,6 +343,9 @@ class AuthController extends BaseController {
    * A refresh cookie the request carried (a Lax one from an earlier Google
    * sign-in; the cross-site hop withholds a Strict one) has its session
    * revoked once the new one is issued, as a link sign-in does.
+   *
+   * A native request never reaches it: `refuseNativeGoogleSignIn` answers 400
+   * `NATIVE_CLIENT_REFUSED` first on this route and on the start.
    *
    * A success redirects to `/auth/callback` on the frontend that started the
    * sign-in, carrying the redirect the start stored (`redirect=`) and `new=1`

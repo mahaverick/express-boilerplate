@@ -7,9 +7,10 @@ import { passkeyRelyingParty } from '@/configs/passkey.config'
 import { BaseController } from '@/controllers/base.controller'
 import {
   authenticatedUserId,
+  clientOf,
+  deliverRefreshToken,
+  presentedRefreshToken,
   revokePresentedSession,
-  setRefreshTokenCookie,
-  readRefreshTokenCookie,
 } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toPublicPasskey } from '@/presenters/passkey.presenter'
@@ -103,21 +104,15 @@ class PasskeyController extends BaseController {
 
   /**
    * `POST /auth/passkeys/sign-in/verify`: verify the browser's assertion and
-   * sign in, answering exactly what `/auth/link/verify` does. A refresh cookie
-   * the browser still presented has its session revoked once the new one is
+   * sign in, answering exactly what `/auth/link/verify` does. A refresh token
+   * the client still presented has its session revoked once the new one is
    * issued. `no-store`, as every token response (RFC 6749 §5.1).
    */
   signInVerify = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(passkeySignInVerifySchema, request.body)
-    const session = await finishPasskeySignIn(input)
+    const session = await finishPasskeySignIn(input, clientOf(request))
     await revokePresentedSession(request, { emitSignedOut: false })
-    setRefreshTokenCookie(
-      request,
-      response,
-      session.refreshToken.raw,
-      session.refreshToken.expiresAt
-    )
     successResponse(
       response,
       {
@@ -125,6 +120,7 @@ class PasskeyController extends BaseController {
         accessToken: session.accessToken,
         redirect: null,
         isNewUser: false,
+        ...deliverRefreshToken(request, response, session.refreshToken),
       },
       'Signed in.'
     )
@@ -145,8 +141,9 @@ class PasskeyController extends BaseController {
   /**
    * `POST /auth/passkeys/step-up/verify`: verify the assertion and reply with
    * a new access token carrying the new `auth_time`, as the link step-up does.
-   * The refresh cookie is untouched: the session is the same. `no-store`, as
-   * every token response (RFC 6749 §5.1).
+   * The refresh token is untouched: the session is the same. The presented
+   * token (a browser's cookie, a native app's body field) names the chain to
+   * confirm. `no-store`, as every token response (RFC 6749 §5.1).
    */
   stepUpVerify = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
@@ -155,7 +152,7 @@ class PasskeyController extends BaseController {
       authenticatedUserId(request),
       request.sessionId,
       input,
-      readRefreshTokenCookie(request)
+      presentedRefreshToken(request)
     )
     successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
   })

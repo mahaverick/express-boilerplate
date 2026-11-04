@@ -4,6 +4,7 @@
  */
 import { AUTH_PROVIDERS, type AuthProvider } from '@/constants/auth-provider.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
+import { REQUESTER_PAYS_SUBSCRIPTION_CODE } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
@@ -15,6 +16,7 @@ import {
   canStaffMailTarget,
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
+import { accountDeletionRequestRepository } from '@/repositories/account-deletion-request.repository'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { BillingRepository } from '@/repositories/billing.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
@@ -28,6 +30,7 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { mailAccountDeleted } from '@/services/account-deletion.service'
 import { record } from '@/services/audit.service'
 import { sendPayerLeftEverywhere } from '@/services/billing/billing-emails.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
@@ -43,6 +46,7 @@ import { resendAvailableAt } from '@/services/tenant-invitation.service'
 import type { Actor } from '@/types/actor'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
+import { isLiveSubscription } from '@/utilities/billing-rules.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import type { ListPage } from '@/utilities/list-page.utilities'
 import type {
@@ -614,7 +618,14 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * (`clearPayer`); the subscription keeps running. After the commit, the
  * remaining owners of each workspace they paid for with a live
  * subscription, and were still a member of, are told
- * (`sendPayerLeftEverywhere`). Refused while they
+ * (`sendPayerLeftEverywhere`). An open deletion request of theirs is
+ * completed in the same transaction, and after the commit they are mailed
+ * the `account_deleted` confirmation at their address (`mailAccountDeleted`).
+ * A user with an open request who still pays a live subscription
+ * (`isLiveSubscription`) is refused, so the request stays open until a
+ * co-owner takes over the payment method or staff cancel the subscription;
+ * a delete with no open request clears them as payer as above.
+ * Refused while they
  * are the last live owner of any customer tenant or the last active platform
  * owner: those tenants' owner rows are locked first, in tenant-id order, then
  * the platform's (see `lockStaffPair`), and the owners re-counted under the
@@ -631,7 +642,7 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * @param userId - The user.
  * @param reason - Why, for the audit log.
  * @returns Resolves once the user is deleted and sessions (best-effort) denied.
- * @throws {HttpError} 409 self, last owner (naming the tenants), or owned tenants changed between the two reads; 403 staff target refused; 404 unknown.
+ * @throws {HttpError} 409 self, last owner (naming the tenants), a requester who pays a live subscription (naming the workspaces, `REQUESTER_PAYS_SUBSCRIPTION_CODE`), or owned tenants changed between the two reads; 403 staff target refused; 404 unknown.
  */
 export async function deleteUser(actor: Actor, userId: string, reason: string): Promise<void> {
   refuseSelf(actor, userId, "You can't delete your own account. Ask another platform admin.")
@@ -673,9 +684,24 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       )
     }
 
+    // Under the user row lock, so a request opened meanwhile has committed or waits for this delete.
+    if (await accountDeletionRequestRepository.findOpen(target.id, tx)) {
+      const paidBy = await billingRepository.lockPaidBy(target.id, tx)
+      const paying = paidBy.filter((row) => isLiveSubscription(row))
+      if (paying.length > 0) {
+        throw new HttpError(
+          `This user pays for ${paying.map((row) => row.tenantName).join(', ')}. Ask a co-owner there to take over the payment method, or cancel the subscription, then try again.`,
+          409,
+          REQUESTER_PAYS_SUBSCRIPTION_CODE
+        )
+      }
+    }
+
     // Read before the delete: a workspace the user already left was told then.
     const memberOf = await userMembershipRepository.listTenantIdsForUser(target.id, tx)
     await userRepository.softDelete(target.id, tx)
+    // A request the customer opened is fulfilled by this delete; a refused delete above leaves it open.
+    const completedRequest = await accountDeletionRequestRepository.completeOpenFor(target.id, tx)
     // After the user row, before the invitation writes: the billing row's place in the lock order.
     const paidFor = await billingRepository.clearPayer(target.id, tx)
     await billingRepository.closeAllOpenUpgradeRequestsOf(target.id, tx)
@@ -693,8 +719,15 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       },
       tx
     )
-    return { sessionIds, memberOf, paidFor: paidFor.map((row) => row.tenantId) }
+    return {
+      sessionIds,
+      memberOf,
+      paidFor: paidFor.map((row) => row.tenantId),
+      // The row as locked before the soft delete, which sets only deleted_at.
+      confirmTo: completedRequest ? target : undefined,
+    }
   })
   await denySessionsAfterCommit(userId, deleted.sessionIds)
+  if (deleted.confirmTo) await mailAccountDeleted(deleted.confirmTo)
   await sendPayerLeftEverywhere(userId, deleted.paidFor, deleted.memberOf, new Date())
 }

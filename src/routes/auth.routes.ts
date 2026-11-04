@@ -18,6 +18,7 @@ import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { authController } from '@/controllers/auth.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
+import { refuseNativeGoogleSignIn, resolveClientKind } from '@/middlewares/native-client.middleware'
 import { refuseCrossSiteOAuthStart, rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { refusePlatformOptions } from '@/middlewares/platform.middleware'
@@ -60,13 +61,19 @@ import { createPasskeyRouter } from '@/routes/passkey.routes'
  * The Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either can handle a request; it is
  * idempotent. On both the limiter runs before `oauthSession`, so an
- * over-budget caller gets a 429 before a session is written to Redis. They
+ * over-budget caller gets a 429 before a session is written to Redis. A
+ * native request is refused on both before the limiter
+ * (`refuseNativeGoogleSignIn`). They
  * share one `oauthSession` instance, so the session middleware is built once.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
 export function createAuthRouter(): Router {
   const router = Router()
-  // Router-wide and first, so no route can miss the CSRF gate.
+  // Built once: one instance, one budget.
+  const nativeRefreshIpLimiter = createRateLimiter(RATE_LIMITS.nativeRefreshIp)
+  // First of all, so a refused native request spends no limiter budget.
+  router.use(resolveClientKind)
+  // Router-wide and ahead of every route, so none can miss the CSRF gate.
   router.use(requireJsonContentType)
   // Express would answer OPTIONS on the step-up paths with an Allow header; an unknown auth path gets this 404.
   router.use('/step-up', refusePlatformOptions)
@@ -76,6 +83,7 @@ export function createAuthRouter(): Router {
     '/refresh',
     requireAllowedOriginWhenPresent,
     createRateLimiter(RATE_LIMITS.refresh),
+    nativeRefreshIpLimiter,
     authController.refresh
   )
   router.post(
@@ -106,6 +114,13 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.revokeOtherSessions),
     authController.revokeOtherSessions
   )
+  // requireAuth first: this limiter keys on request.user.id.
+  router.get(
+    '/sessions',
+    requireAuth,
+    createRateLimiter(RATE_LIMITS.sessionsList),
+    authController.listSessions
+  )
   // Step-up by link, for any signed-in user: requireAuth first, as the limiter keys on request.user.id.
   const stepUpLinkLimiter = createRateLimiter(RATE_LIMITS.stepUpLink)
   router.post(
@@ -130,8 +145,10 @@ export function createAuthRouter(): Router {
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
+    // A native app cannot follow Google's redirects or hold its cookies: refused before the limiter and the session.
     router.get(
       '/google',
+      refuseNativeGoogleSignIn,
       createRateLimiter(RATE_LIMITS.googleOAuth),
       refuseCrossSiteOAuthStart,
       oauthSession,
@@ -144,6 +161,7 @@ export function createAuthRouter(): Router {
     )
     router.get(
       '/google/callback',
+      refuseNativeGoogleSignIn,
       createRateLimiter(RATE_LIMITS.googleOAuthCallback),
       oauthSession,
       passport.initialize(),

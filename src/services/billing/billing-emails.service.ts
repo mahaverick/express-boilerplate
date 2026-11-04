@@ -68,6 +68,7 @@ import { payerLeftNextStep } from '@/templates/email/payer-left.template'
 import {
   cancelMarkerOf,
   graceEndsAt,
+  isLiveSubscription,
   isPeriodEndAtOrBeforeSync,
   mergeEntitlements,
   upcomingRenewalAt,
@@ -1330,11 +1331,7 @@ async function tellPayerLeft(
   leftAt: Date
 ): Promise<void> {
   const { tenantId } = row
-  const isLive =
-    (row.state === 'active' || row.state === 'past_due') &&
-    row.providerSubscriptionId !== null &&
-    !row.cancelAtPeriodEnd
-  if (!isLive) return
+  if (!isLiveSubscription(row)) return
   const context = await activeContext(tenantId, OWNERS_ONLY)
   if (context === undefined) return
   const deadline = await keepPaidDeadline(row, leftAt)

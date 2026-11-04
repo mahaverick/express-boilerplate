@@ -32,6 +32,7 @@ import {
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { issueTestLink } from '../../helpers/sign-in'
 
 const app = createApp()
@@ -190,7 +191,7 @@ describe('mail sent before the account existed', () => {
     const email = uniqueEmail('link')
     const messageId = await unownedInvitationMail(email)
 
-    const session = await verifySignInLink(await issueTestLink(email), email)
+    const session = await verifySignInLink(await issueTestLink(email), email, WEB_CLIENT)
 
     expect(await ownerOf(messageId)).toBe(session.user.id)
   })
@@ -263,7 +264,7 @@ describe('mail sent before the account existed', () => {
     const email = uniqueEmail('listed')
     const messageId = await unownedInvitationMail(email)
 
-    const session = await verifySignInLink(await issueTestLink(email), email)
+    const session = await verifySignInLink(await issueTestLink(email), email, WEB_CLIENT)
     const response = await request(app)
       .get(`/api/v1/platform/emails?user=${session.user.id}`)
       .set('Authorization', `Bearer ${token}`)
@@ -284,7 +285,7 @@ describe('mail sent before the account existed', () => {
     await sql`update users set deleted_at = now() where id = ${earlier.id}`
     const afterEarlier = await unownedInvitationMail(email, new Date(Date.now() + 1000))
 
-    const session = await verifySignInLink(await issueTestLink(email), email)
+    const session = await verifySignInLink(await issueTestLink(email), email, WEB_CLIENT)
 
     expect(await ownerOf(beforeEarlier)).toBeNull()
     expect(await ownerOf(ownedByEarlier)).toBe(earlier.id)
@@ -296,7 +297,7 @@ describe('mail sent before the account existed', () => {
     const other = uniqueEmail('other')
     const othersMessage = await unownedInvitationMail(other)
 
-    await verifySignInLink(await issueTestLink(email), email)
+    await verifySignInLink(await issueTestLink(email), email, WEB_CLIENT)
 
     expect(await ownerOf(othersMessage)).toBeNull()
   })

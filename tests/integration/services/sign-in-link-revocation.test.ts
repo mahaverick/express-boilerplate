@@ -20,6 +20,7 @@ import {
   createTrackedUser,
   deleteTrackedUsers,
 } from '../../helpers/platform-users'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { issueTestLink } from '../../helpers/sign-in'
 
 afterEach(async () => {
@@ -55,12 +56,12 @@ describe("revoking every session revokes the address's sign-in links", () => {
   it('signing out of the other sessions revokes them', async () => {
     const { user, raw } = await userWithLiveLink()
     const sessionId = randomUUID()
-    await issueRefreshToken(user.id, sessionId)
+    await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
 
     await revokeOtherSessions(user.id, sessionId)
 
     expect(await isRevoked(raw)).toBe(true)
-    await expect(verifySignInLink(raw, user.email)).rejects.toMatchObject({
+    await expect(verifySignInLink(raw, user.email, WEB_CLIENT)).rejects.toMatchObject({
       code: LINK_INVALID_CODE,
     })
   })
@@ -72,7 +73,7 @@ describe("revoking every session revokes the address's sign-in links", () => {
     await signOutUser({ userId: admin.id }, user.id, 'link revocation test')
 
     expect(await isRevoked(raw)).toBe(true)
-    await expect(verifySignInLink(raw, user.email)).rejects.toMatchObject({
+    await expect(verifySignInLink(raw, user.email, WEB_CLIENT)).rejects.toMatchObject({
       code: LINK_INVALID_CODE,
     })
   })
@@ -84,7 +85,7 @@ describe("revoking every session revokes the address's sign-in links", () => {
     await deactivateUser({ userId: admin.id }, user.id, 'link revocation test')
 
     expect(await isRevoked(raw)).toBe(true)
-    await expect(verifySignInLink(raw, user.email)).rejects.toMatchObject({
+    await expect(verifySignInLink(raw, user.email, WEB_CLIENT)).rejects.toMatchObject({
       code: LINK_INVALID_CODE,
     })
   })
@@ -93,7 +94,7 @@ describe("revoking every session revokes the address's sign-in links", () => {
     const { user } = await userWithLiveLink()
     const other = await userWithLiveLink()
     const sessionId = randomUUID()
-    await issueRefreshToken(user.id, sessionId)
+    await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
 
     await revokeOtherSessions(user.id, sessionId)
 

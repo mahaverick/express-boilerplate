@@ -236,14 +236,77 @@ Every variable, with its default and what it does, is in the table in
 
 These optional variables have their own sections:
 
-| Variable                                                        | Section                                                               |
-| --------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `APEX_URL`                                                      | [A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex)     |
-| `RESEND_WEBHOOK_SECRET`, `MAIL_FROM`, `MAIL_FROM_TRANSACTIONAL` | [Email tracking](#email-tracking)                                     |
-| `POSTHOG_*`                                                     | [Analytics (PostHog)](#analytics-posthog)                             |
-| `RATE_LIMIT_SCALE` (end-to-end runs on `APP_ENV=local` only)    | [SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter) |
-| `CURSOR_SECRET` (signs list cursors)                            | [Lists](#lists); required on every `APP_ENV` but `local`              |
-| `TRUST_PROXY`                                                   | Set it for any deployment behind a proxy ([Deploy](#deploy))          |
+| Variable                                                                    | Section                                                               |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `APEX_URL`                                                                  | [A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex)     |
+| `RESEND_WEBHOOK_SECRET`, `MAIL_FROM`, `MAIL_FROM_TRANSACTIONAL`             | [Email tracking](#email-tracking)                                     |
+| `POSTHOG_*`                                                                 | [Analytics (PostHog)](#analytics-posthog)                             |
+| `RATE_LIMIT_SCALE` (end-to-end runs on `APP_ENV=local` only)                | [SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter) |
+| `CURSOR_SECRET` (signs list cursors)                                        | [Lists](#lists); required on every `APP_ENV` but `local`              |
+| `TRUST_PROXY`                                                               | Set it for any deployment behind a proxy ([Deploy](#deploy))          |
+| `MINIMUM_APP_VERSION_*`, `WEBAUTHN_ANDROID_ORIGINS`, `WEBAUTHN_IOS_ENABLED` | [Native apps](#native-apps)                                           |
+| `ACCOUNT_DELETION_DAYS`                                                     | [Account deletion](#account-deletion)                                 |
+
+## Native apps
+
+The iOS and Android apps call the same routes as the web app. An app sends
+`X-Client: native`, keeps its refresh token in the response body and sends it
+back in the body of `POST /api/v1/auth/refresh`. It sets no cookie. It may send
+`X-Device-Name` when it signs in, so the user sees which device holds each
+session in `GET /api/v1/auth/sessions`. The rules are in
+[SECURITY.md](SECURITY.md#native-clients), and the request path is in
+[ARCHITECTURE.md](ARCHITECTURE.md#native-clients).
+
+| Variable                      | Effect                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `MINIMUM_APP_VERSION_IOS`     | The oldest iOS version the app should allow, as `1.2.3`. The server publishes it; the app enforces it. Unset means no minimum. |
+| `MINIMUM_APP_VERSION_ANDROID` | The same for Android.                                                                                                          |
+| `WEBAUTHN_ANDROID_ORIGINS`    | Comma-separated Android passkey origins, each `android:apk-key-hash:` and 43 base64url characters. Unset means none.           |
+| `WEBAUTHN_IOS_ENABLED`        | `true` lets the iOS app use passkeys. Boot refuses it when `WEBAUTHN_RP_ID` is set to anything but the host of `WEB_URL`.      |
+
+**The minimum app version.** `GET /api/v1/status/client-settings` answers
+`minimumAppVersion` as `{ "ios": "1.2.3" | null, "android": "1.2.3" | null }`.
+The response is cacheable for 300 seconds (`Cache-Control: public,
+max-age=300`). So a new minimum reaches devices within 5 minutes. The server
+only publishes the value and refuses no request for it. The app compares its
+own version and asks the user to update.
+
+**The Android signing hash.** Android binds a passkey ceremony to the key that
+signed the app, and sends it as the origin `android:apk-key-hash:<hash>`. The
+hash is the SHA-256 digest of the signing certificate, base64url encoded with
+no padding. Each environment lists only its own keys:
+
+| Environment           | Where the hash comes from                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Production            | The Play App Signing key, on the App signing page of the Play Console                                           |
+| Play internal testing | The same Play App Signing key                                                                                   |
+| EAS preview builds    | The preview keystore: run `eas credentials` and read its SHA-256 fingerprint                                    |
+| Local debug builds    | The debug key: `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android` |
+
+Production holds only the Play App Signing key. Never list the upload key, the
+EAS preview keystore or a debug key there: anyone who holds one could sign an
+app that passes the passkey origin check. The upload key signs what you send to
+Google, and users never install an app signed with it.
+
+To turn a fingerprint into the hash, drop the colons, decode the hex and
+encode it as base64url:
+
+```sh
+echo "AA:BB:…:99" | tr -d ':' | xxd -r -p | openssl base64 -A | tr '+/' '-_' | tr -d '='
+```
+
+## Account deletion
+
+A signed-in customer asks to delete their account with
+`POST /api/v1/account/deletion-request`, after confirming it's them. The
+answer carries `dueAt`: the request time plus `ACCOUNT_DELETION_DAYS` days
+(default 30, at most 30). They get a receipt email. Platform admins get an alert,
+and a daily job at 04:00 UTC alerts them about requests due within 5 days.
+
+Staff complete a request with `DELETE /api/v1/platform/users/:id` in Apex. That
+marks it completed and emails the customer. It does not cancel a paid
+subscription, so cancel one first. The rules are in
+[SECURITY.md](SECURITY.md#account-deletion).
 
 ## Available scripts
 

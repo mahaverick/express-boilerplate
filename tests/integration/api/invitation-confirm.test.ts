@@ -42,6 +42,7 @@ import {
 } from '../../helpers/platform-users'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { WEB_CLIENT } from '../../helpers/session-client'
 import { clearRateLimiter, signInByLink } from '../../helpers/sign-in'
 
 const userRepository = new UserRepository()
@@ -479,7 +480,7 @@ describe('POST /api/v1/invitations/confirm', () => {
       email: uniqueEmail('never-verified'),
       verified: false,
     })
-    await issueRefreshToken(invitee.id, randomUUID())
+    await issueRefreshToken(invitee.id, randomUUID(), undefined, { client: WEB_CLIENT })
     await authProviderRepository.create({
       userId: invitee.id,
       provider: 'email',
@@ -850,7 +851,7 @@ describe('POST /api/v1/invitations/confirm', () => {
     it('signing out of the other sessions revokes a live invitation link, and its confirm answers 404', async () => {
       const invitee = await createTrackedUser({ email: uniqueEmail('revoke-others') })
       const sessionId = randomUUID()
-      await issueRefreshToken(invitee.id, sessionId)
+      await issueRefreshToken(invitee.id, sessionId, undefined, { client: WEB_CLIENT })
       const { raw } = await invitedWithLink(invitee.email)
 
       await revokeOtherSessions(invitee.id, sessionId)
@@ -885,7 +886,9 @@ describe('POST /api/v1/invitations/confirm', () => {
   it('a claimed invitation link leaves refresh paths alone', async () => {
     const invitee = await createTrackedUser({ email: uniqueEmail('refresh-alone') })
     const sessionId = randomUUID()
-    const earlier = await issueRefreshToken(invitee.id, sessionId)
+    const earlier = await issueRefreshToken(invitee.id, sessionId, undefined, {
+      client: WEB_CLIENT,
+    })
     const { raw } = await invitedWithLink(invitee.email)
 
     const confirmed = await postConfirm({ token: raw, email: invitee.email })

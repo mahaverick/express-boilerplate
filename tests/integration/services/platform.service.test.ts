@@ -20,6 +20,7 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { passkeyCount, seedPasskey } from '../../helpers/passkey-rows'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 const tenantRepository = new TenantRepository()
 const invitationRepository = new TenantInvitationRepository()
@@ -332,7 +333,7 @@ describe('platform.service', () => {
         provider: 'google',
         providerId: `squatter-google-${randomUUID()}`,
       })
-      await issueRefreshToken(user.id, randomUUID())
+      await issueRefreshToken(user.id, randomUUID(), undefined, { client: WEB_CLIENT })
       await seedPasskey(user.id)
 
       await bootstrapGrant(user.email, 'owner')

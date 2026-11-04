@@ -6,6 +6,7 @@
  * `skipLibCheck`, leaving `request.user` typed as passport's empty `User`.
  */
 import type { FlagKey } from '@/constants/flags.constants'
+import type { ClientKind } from '@/constants/native-client.constants'
 import type { AuthenticatedUser } from '@/presenters/user.presenter'
 import type { RequestPrincipal } from '@/types/actor'
 import type { FlagContext, FlagEvaluation } from '@/types/flags'
@@ -28,6 +29,14 @@ declare global {
        * Correlation id, set by requestId middleware.
        */
       id: string
+
+      /**
+       * Whether the caller is a browser or a native app, set by
+       * `resolveClientKind` (native-client.middleware.ts) at the top of the
+       * auth and invitation routers. Always set once it has run; absent on
+       * any other router.
+       */
+      clientKind: ClientKind
 
       /**
        * The caller's tenant-scoped identity, set by `resolveTenant`

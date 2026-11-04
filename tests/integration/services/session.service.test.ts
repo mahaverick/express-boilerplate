@@ -27,6 +27,7 @@ import {
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { WEB_CLIENT } from '../../helpers/session-client'
 
 /**
  * The hex SHA-256 of a raw token, as session.service.ts's hashToken computes it, derived
@@ -147,7 +148,7 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const userId = await createUser()
     const sessionId = randomUUID()
 
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
     // The raw token never appears in the database: nothing matches it in token_hash.
     const byRawValue = await sql`select 1 from user_tokens where token_hash = ${issued.raw}`
@@ -166,9 +167,9 @@ describe('refresh token issuance, rotation, and revocation', () => {
   it('rotates: using a refresh token returns a new one and invalidates the old', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
-    const rotated = await rotateRefreshToken(issued.raw)
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
 
     expect(rotated.raw).not.toBe(issued.raw)
     expect(rotated.userId).toBe(userId)
@@ -185,16 +186,16 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(oldStored?.replacedById).toBeTruthy()
 
     // The new token is live and itself rotatable, so rotating the old one did not affect it.
-    const rotatedAgain = await rotateRefreshToken(rotated.raw)
+    const rotatedAgain = await rotateRefreshToken(rotated.raw, 'web')
     expect(rotatedAgain.sessionId).toBe(sessionId)
   })
 
   it('detects reuse: presenting an already-rotated token revokes the whole session family', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
-    const rotated = await rotateRefreshToken(issued.raw)
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
     // Past REFRESH_REUSE_GRACE_MS, so this replay is reuse rather than a concurrent refresh.
     await sql`
       update user_tokens set consumed_at = consumed_at - interval '11 seconds'
@@ -202,7 +203,7 @@ describe('refresh token issuance, rotation, and revocation', () => {
     `
 
     // The legitimate client has moved on to `rotated.raw`; an attacker who stole the old token replays it.
-    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
 
     // The whole family dies: the legitimate client's current token is revoked too, though it was never misused.
     const rotatedTokenRows = await sql`
@@ -218,11 +219,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(rotatedRow?.revokedAt).not.toBeNull()
 
     // From the client's side: the token that was valid a moment ago can no longer be rotated.
-    await expect(rotateRefreshToken(rotated.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(rotated.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
   })
 
   it('rejects an unknown refresh token', async () => {
-    await expect(rotateRefreshToken('a-token-that-was-never-issued')).rejects.toMatchObject({
+    await expect(rotateRefreshToken('a-token-that-was-never-issued', 'web')).rejects.toMatchObject({
       statusCode: 401,
     })
   })
@@ -230,9 +231,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
   it('rejects an expired refresh token without treating it as reuse of a live session', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
     // A second live token in the same session shows that expiry alone does not kill the whole family, as reuse does.
-    const otherInSameSession = await issueRefreshToken(userId, sessionId)
+    const otherInSameSession = await issueRefreshToken(userId, sessionId, undefined, {
+      client: WEB_CLIENT,
+    })
 
     // Expire only the first-created row, `issued`.
     await sql`
@@ -245,10 +248,10 @@ describe('refresh token issuance, rotation, and revocation', () => {
       )
     `
 
-    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
 
     // Expiry is not treated as reuse, so the other live token in the session is unaffected.
-    const stillRotatable = await rotateRefreshToken(otherInSameSession.raw)
+    const stillRotatable = await rotateRefreshToken(otherInSameSession.raw, 'web')
     expect(stillRotatable.sessionId).toBe(sessionId)
   })
 
@@ -260,15 +263,15 @@ describe('refresh token issuance, rotation, and revocation', () => {
      */
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
     await sql`
       update user_tokens set expires_at = now() - interval '1 second'
       where user_id = ${userId} and session_id = ${sessionId}
     `
 
-    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
     // Replayed at once, well inside REFRESH_REUSE_GRACE_MS of the claim above.
-    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
 
     const liveRows = await sql`
       select 1 from user_tokens
@@ -287,9 +290,9 @@ describe('refresh token issuance, rotation, and revocation', () => {
      */
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
     // A second live token shows the ceiling applies to the whole family, not only the row presented.
-    const sibling = await issueRefreshToken(userId, sessionId)
+    const sibling = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
     // Age the session past the ceiling, read from the same environment as the code so the test tracks `SESSION_ABSOLUTE_TTL`.
     const absoluteTtlMs = parseDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
@@ -301,10 +304,10 @@ describe('refresh token issuance, rotation, and revocation', () => {
       where session_id = ${sessionId}
     `
 
-    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
 
     // Every token in the family is refused and revoked, not just the one presented: they share the session start.
-    await expect(rotateRefreshToken(sibling.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(sibling.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
     const live = await sql`
       select 1 from user_tokens where session_id = ${sessionId} and revoked_at is null
     `
@@ -318,13 +321,13 @@ describe('refresh token issuance, rotation, and revocation', () => {
      */
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
     const [before] = await sql`
       select session_started_at from user_tokens where session_id = ${sessionId}
     `
-    const rotated = await rotateRefreshToken(issued.raw)
-    await rotateRefreshToken(rotated.raw)
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
+    await rotateRefreshToken(rotated.raw, 'web')
 
     const rows = await sql`
       select distinct session_started_at from user_tokens where session_id = ${sessionId}
@@ -342,24 +345,24 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const userId = await createUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
-    const rotated = await rotateRefreshToken(issued.raw)
-    const other = await issueRefreshToken(userId, otherSessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
+    const rotated = await rotateRefreshToken(issued.raw, 'web')
+    const other = await issueRefreshToken(userId, otherSessionId, undefined, { client: WEB_CLIENT })
 
     await revokeRefreshToken(rotated.raw)
 
     // The new token first: refusing the old token's replay revokes the session by itself.
-    await expect(rotateRefreshToken(rotated.raw)).rejects.toMatchObject({ statusCode: 401 })
-    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
-    const rotatedOther = await rotateRefreshToken(other.raw)
+    await expect(rotateRefreshToken(rotated.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(issued.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
+    const rotatedOther = await rotateRefreshToken(other.raw, 'web')
     expect(rotatedOther.sessionId).toBe(otherSessionId)
   })
 
   it('a claimed step-up link does not kill its session', async () => {
     const user = await createUserRow()
     const sessionId = randomUUID()
-    const first = await issueRefreshToken(user.id, sessionId)
-    const second = await rotateRefreshToken(first.raw)
+    const first = await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
+    const second = await rotateRefreshToken(first.raw, 'web')
     // One link superseded (revoked unused) and one claimed: both leave revoked_at on the session's id.
     await issueStepUp(user, sessionId)
     const confirm = await issueStepUp(user, sessionId)
@@ -368,30 +371,30 @@ describe('refresh token issuance, rotation, and revocation', () => {
     ).toBeDefined()
 
     // A grace-window replay of the rotated token still gets a sibling: no kill marker was read.
-    const sibling = await rotateRefreshToken(first.raw)
+    const sibling = await rotateRefreshToken(first.raw, 'web')
     expect(sibling.sessionId).toBe(sessionId)
-    const next = await rotateRefreshToken(second.raw)
+    const next = await rotateRefreshToken(second.raw, 'web')
     expect(next.sessionId).toBe(sessionId)
   })
 
   it('refuses a link presented as a refresh token, and kills no session', async () => {
     const user = await createUserRow()
     const sessionId = randomUUID()
-    const refresh = await issueRefreshToken(user.id, sessionId)
+    const refresh = await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
     const link = await issueStepUp(user, sessionId)
 
-    await expect(rotateRefreshToken(link.raw)).rejects.toMatchObject({ statusCode: 401 })
+    await expect(rotateRefreshToken(link.raw, 'web')).rejects.toMatchObject({ statusCode: 401 })
     await revokeRefreshToken(link.raw)
 
     expect(await isSessionDenied(sessionId)).toBe(false)
-    const next = await rotateRefreshToken(refresh.raw)
+    const next = await rotateRefreshToken(refresh.raw, 'web')
     expect(next.sessionId).toBe(sessionId)
   })
 
   it("sign-out revokes the session's live step-up link", async () => {
     const user = await createUserRow()
     const sessionId = randomUUID()
-    const refresh = await issueRefreshToken(user.id, sessionId)
+    const refresh = await issueRefreshToken(user.id, sessionId, undefined, { client: WEB_CLIENT })
     const link = await issueStepUp(user, sessionId)
 
     await revokeRefreshToken(refresh.raw)
@@ -424,8 +427,8 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     const userId = await createUser()
     const revoked = randomUUID()
     const untouched = randomUUID()
-    const issued = await issueRefreshToken(userId, revoked)
-    await issueRefreshToken(userId, untouched)
+    const issued = await issueRefreshToken(userId, revoked, undefined, { client: WEB_CLIENT })
+    await issueRefreshToken(userId, untouched, undefined, { client: WEB_CLIENT })
 
     await revokeRefreshToken(issued.raw)
 
@@ -439,16 +442,17 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     const sessionOne = randomUUID()
     const sessionTwo = randomUUID()
     const otherUsersSession = randomUUID()
-    await issueRefreshToken(userId, sessionOne)
-    await issueRefreshToken(userId, sessionTwo)
+    await issueRefreshToken(userId, sessionOne, undefined, { client: WEB_CLIENT })
+    await issueRefreshToken(userId, sessionTwo, undefined, { client: WEB_CLIENT })
     // No session id: must neither crash the null filter nor deny a bogus key.
     await userTokenRepository.create({
       userId,
       purpose: 'refresh',
+      client: 'web',
       tokenHash: hashRawToken(randomUUID()),
       expiresAt: new Date(Date.now() + 60_000),
     })
-    await issueRefreshToken(otherUserId, otherUsersSession)
+    await issueRefreshToken(otherUserId, otherUsersSession, undefined, { client: WEB_CLIENT })
 
     await claimNeverVerifiedAccount(userId)
 
@@ -466,7 +470,7 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     async (_name, revoke) => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
       await expect(
         withTransaction(async (tx) => {
@@ -492,7 +496,7 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
   it('denies only after the database revocation: a failed revoke denies nothing', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    const issued = await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId, undefined, { client: WEB_CLIENT })
 
     await withMutatedMethod(
       UserTokenRepository.prototype,

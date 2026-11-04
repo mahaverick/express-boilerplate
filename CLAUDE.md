@@ -81,6 +81,27 @@ and points at the code or doc that holds the detail. How things work is in
   behind the Origin check. The one `GET` that reads it, the callback, only
   revokes. And it lasts only until the first rotation re-sets it `Strict`. See
   [SECURITY.md](SECURITY.md#the-refresh-cookie).
+- **A handler reads and sets the refresh token only through
+  `presentedRefreshToken` and `deliverRefreshToken`** (plus
+  `clearPresentedRefreshToken` to clear it), all in
+  `src/controllers/helpers.controller.ts`. A native app holds its token in the
+  body and a browser in a cookie. A handler that touches the cookie itself
+  hands an app a cookie, or reads a browser's cookie on an app's request.
+  `tests/unit/controllers/refresh-cookie-callers.test.ts` fails it. The Google
+  callback passes `'lax'` to `deliverRefreshToken`; no other caller does. See
+  [SECURITY.md](SECURITY.md#native-clients).
+- **Never add `X-Client` or `X-Device-Name` to CORS `allowedHeaders`**
+  (`src/configs/cors.config.ts`). A page on another origin could then send a
+  native request, and the preflight is what stops it. A native request that
+  carries `Origin` or `Sec-Fetch-*` is refused, but that check alone does not
+  cover a page the CORS list allows.
+- **`X-Device-Name` is read only when a session starts** (`clientOf`). A refresh
+  copies the stored name forward and ignores the header, so a copied token
+  cannot relabel its session as the owner's phone. Keep the name out of logs.
+- **A refresh token shown to the wrong kind of client answers the unknown-token
+  401 and kills no session** (`rotateRefreshToken`). Don't route it into reuse
+  detection: a mismatched kind is not evidence of theft, and a kill would let
+  anyone holding a token end its owner's session.
 - **Never link a Google identity to an address Google has not verified.**
   `resolveGoogleUser` (`src/services/google-auth.service.ts`) refuses it,
   because linking an unverified address is an account takeover. Don't relax
@@ -274,9 +295,10 @@ and points at the code or doc that holds the detail. How things work is in
   must sign in to switch maintenance off. `tenant_invitation` mail goes
   through `addEmailJob()` directly, since the invitee may have no account.
 - **These email channels can't be switched off:** `tenant_invitation`,
-  `maintenance_mode_changed` and the billing notices that carry an email.
-  (`workspace_full` is in-app only and stays switchable.) Disabling them would
-  cut off an invitee or silence the mail an account owner must see.
+  `maintenance_mode_changed`, `account_deletion_requested` and the billing
+  notices that carry an email. (`workspace_full` is in-app only and stays
+  switchable.) Disabling them would cut off an invitee, silence the mail an
+  account owner must see, or let a deletion we promised by a date go unseen.
   - `PUT /notifications/preferences` answers 400 for `emailEnabled: false` on
     any of them, and the repository's `upsert` refuses it too.
   - `inAppEnabled` can still be switched off for any type the caller can see.
@@ -496,6 +518,17 @@ The seat lock is under [Tenants and roles](#tenants-and-roles); the map is in
   committed test gated by `MUTATION_PROOF === '1'`, as
   `tests/integration/services/token-reuse-mutation.test.ts` is. If the helpers
   can't reach the target, extend `mutate.ts`.
+- **Build a fake secret in a test from a low-entropy value,** such as
+  `'ab'.repeat(32)`, never a random-looking one like
+  `'0123456789abcdef'.repeat(4)`. gitleaks and GitGuardian flag
+  high-entropy strings, and a flagged commit fails CI on every later scan
+  of the branch. Only the scrubber's vectors
+  (`tests/fixtures/error-scrub-vectors.json`,
+  `tests/unit/services/errors/error-scrubber.service.test.ts`) need
+  realistic shapes. `.gitleaks.toml` allowlists the vectors file.
+  `.gitguardian.yaml` lists both paths, but only ggshield reads it:
+  GitGuardian's pull request check honours only a path excluded in the
+  GitGuardian dashboard.
 - **Don't build a leak assertion on `JSON.stringify(err)`:** an `Error`'s
   `message` and `stack` are non-enumerable, so it prints `{}`. Use
   `util.inspect(err, { depth: null })`. A `DrizzleQueryError`'s `query` and

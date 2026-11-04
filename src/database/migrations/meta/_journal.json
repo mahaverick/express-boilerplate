@@ -281,6 +281,20 @@
       "when": 1793118310526,
       "tag": "0039_tax_counter_type_check",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793729256383,
+      "tag": "0040_refresh_token_client",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793736441490,
+      "tag": "0041_account_deletion_requests",
+      "breakpoints": true
     }
   ]
 }
