@@ -3,12 +3,16 @@
  * user's open deletion request in its own transaction and, after the commit,
  * mails the user the `account_deleted` confirmation at the address they had.
  * A refused delete leaves the request open and mails nothing; a user with no
- * open request gets no confirmation.
+ * open request gets no confirmation. A request whose user still pays a
+ * live subscription answers 409 naming the workspace and stays open, while a
+ * paying user with no open request deletes as before.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
-import { afterAll, afterEach, describe, expect, it } from 'vite-plus/test'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vite-plus/test'
 import { createApp } from '@/app'
+import { REQUESTER_PAYS_SUBSCRIPTION_CODE } from '@/constants/platform.constants'
+import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
@@ -20,6 +24,7 @@ import {
 } from '@/services/queue.service'
 import { startEmailWorker } from '@/workers/email.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { loadPlans, plans, setBilling } from '../../helpers/billing-api'
 import { findMailpitMessages } from '../../helpers/mailpit'
 import {
   createTrackedStaff,
@@ -45,6 +50,10 @@ const emailWorker = startEmailWorker()
  */
 const requesterIds: string[] = []
 const createdTenantIds: string[] = []
+
+beforeAll(async () => {
+  await loadPlans()
+})
 
 afterEach(async () => {
   if (requesterIds.length > 0) {
@@ -118,6 +127,48 @@ async function confirmationCount(userId: string): Promise<number> {
   return row?.count ?? 0
 }
 
+/**
+ * A workspace `payer` co-owns with another owner, so the last-owner check
+ * passes, and pays for on Paid. The subscription is live unless
+ * `isEndingWithPeriod` says it ends with the period.
+ * @param payer - The user who pays.
+ * @param isEndingWithPeriod - True for a subscription set to end with its period.
+ * @returns The workspace.
+ */
+async function paidForBy(payer: User, isEndingWithPeriod = false): Promise<Tenant> {
+  const coOwner = await createTrackedUser()
+  const tenant = await tenantRepository.create({
+    name: 'Paying Co',
+    slug: `adc-pay-${randomUUID()}`,
+    ownerId: coOwner.id,
+  })
+  createdTenantIds.push(tenant.id)
+  await sql`insert into user_memberships (user_id, tenant_id, role) values (${payer.id}, ${tenant.id}, 'owner')`
+  await setBilling(tenant.id, {
+    state: 'active',
+    planId: plans.paidId,
+    priceId: plans.monthPriceId,
+    providerSubscriptionId: `sub_${randomUUID()}`,
+    currentPeriodEnd: new Date(Date.now() + 20 * 86_400_000),
+    provider: 'fake',
+    providerMode: 'test',
+    payerUserId: payer.id,
+    billingEmail: payer.email,
+    cancelAtPeriodEnd: isEndingWithPeriod,
+  })
+  return tenant
+}
+
+/**
+ * Whether a user is soft-deleted.
+ * @param userId - The user.
+ */
+async function isDeleted(userId: string): Promise<boolean> {
+  const [row] = await sql<{ deleted: boolean }[]>`
+    select deleted_at is not null as deleted from users where id = ${userId}`
+  return row?.deleted ?? false
+}
+
 describe('a staff delete and the open deletion request', () => {
   it('staff delete of a user with an open request completes it and mails the confirmation', async () => {
     const { token } = await createTrackedStaff('admin')
@@ -176,5 +227,50 @@ describe('a staff delete and the open deletion request', () => {
     expect(response.status).toBe(200)
     // The enqueue runs before the reply, so the count is final once the reply lands.
     expect(await confirmationCount(user.id)).toBe(0)
+  })
+
+  it('refuses with 409 naming the workspace while the requester pays a live subscription, and leaves the request open', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const { user, requestId } = await customerWithOpenRequest()
+    await paidForBy(user)
+
+    const response = await staffDelete(token, user.id)
+
+    expect(response.status).toBe(409)
+    expect(response.body).toMatchObject({
+      code: REQUESTER_PAYS_SUBSCRIPTION_CODE,
+      message:
+        'This user pays for Paying Co. Ask a co-owner there to take over the payment method, or cancel the subscription, then try again.',
+    })
+    expect(await requestState(requestId)).toEqual({ status: 'open', completedAt: null })
+    expect(await isDeleted(user.id)).toBe(false)
+    // The refusal answers before any enqueue, so the count is final once the reply lands.
+    expect(await confirmationCount(user.id)).toBe(0)
+  })
+
+  it('completes the request of a payer whose subscription ends with its period', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const { user, requestId } = await customerWithOpenRequest()
+    await paidForBy(user, true)
+
+    const response = await staffDelete(token, user.id)
+
+    expect(response.status).toBe(200)
+    expect(await requestState(requestId)).toMatchObject({ status: 'completed' })
+    expect(await isDeleted(user.id)).toBe(true)
+  })
+
+  it('still deletes a payer with no open request, and clears them as payer', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const user = await createTrackedUser()
+    const tenant = await paidForBy(user)
+
+    const response = await staffDelete(token, user.id)
+
+    expect(response.status).toBe(200)
+    expect(await isDeleted(user.id)).toBe(true)
+    const [billing] = await sql<{ payerUserId: string | null }[]>`
+      select payer_user_id as "payerUserId" from tenant_billing where tenant_id = ${tenant.id}`
+    expect(billing).toEqual({ payerUserId: null })
   })
 })

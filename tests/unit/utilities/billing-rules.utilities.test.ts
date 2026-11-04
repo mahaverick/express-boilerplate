@@ -5,6 +5,7 @@ import {
   effectiveBillingState,
   extendTrialEnd,
   graceEndsAt,
+  isLiveSubscription,
   isPeriodEndAtOrBeforeSync,
   limitUsage,
   mergeEntitlements,
@@ -272,5 +273,26 @@ describe('upcomingRenewalAt', () => {
     expect(
       upcomingRenewalAt({ currentPeriodEnd: ahead, syncedAt: now, trialEndsAt: ahead }, now)
     ).toBeNull()
+  })
+})
+
+describe('isLiveSubscription', () => {
+  const live = {
+    state: 'active',
+    providerSubscriptionId: 'sub_1',
+    cancelAtPeriodEnd: false,
+  } as const
+
+  it('holds for active and past_due on a subscription that renews', () => {
+    expect(isLiveSubscription(live)).toBe(true)
+    expect(isLiveSubscription({ ...live, state: 'past_due' })).toBe(true)
+  })
+
+  it.each([
+    ['a Free row', { ...live, state: 'free' as const }],
+    ['no provider subscription', { ...live, providerSubscriptionId: null }],
+    ['a subscription set to end with its period', { ...live, cancelAtPeriodEnd: true }],
+  ])('fails for %s', (_label, row) => {
+    expect(isLiveSubscription(row)).toBe(false)
   })
 })

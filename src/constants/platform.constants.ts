@@ -56,3 +56,10 @@ export const REDIS_STALL_COOLDOWN_MS = 5000
  * being cut off; the Redis check's own `REDIS_REQUEST_DEADLINE_MS` is shorter.
  */
 export const READINESS_CHECK_DEADLINE_MS = 500
+
+/**
+ * The `code` of the 409 a staff delete answers when it would complete the
+ * user's open deletion request while they still pay a live subscription
+ * (`deleteUser`, platform-user.service.ts).
+ */
+export const REQUESTER_PAYS_SUBSCRIPTION_CODE = 'REQUESTER_PAYS_SUBSCRIPTION'
