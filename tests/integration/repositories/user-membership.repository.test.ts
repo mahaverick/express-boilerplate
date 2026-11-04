@@ -642,6 +642,22 @@ describe('UserMembershipRepository', () => {
       expect(result.get(owner.id)).toEqual([{ tenantId: tenant.id, tenantName: tenant.name }])
     })
 
+    it('returns an empty map for no user ids', async () => {
+      const result = await userMembershipRepository.listSoleOwnedTenants([])
+
+      expect(result.size).toBe(0)
+    })
+
+    it('lists each workspace once for a duplicated user id', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([owner.id, owner.id])
+
+      expect([...result.keys()]).toEqual([owner.id])
+      expect(result.get(owner.id)).toEqual([{ tenantId: tenant.id, tenantName: tenant.name }])
+    })
+
     it('lists an archived workspace the user alone owns', async () => {
       const owner = await createUser()
       const tenant = await createTenant(owner.id)

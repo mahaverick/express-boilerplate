@@ -300,14 +300,15 @@ echo "AA:BB:…:99" | tr -d ':' | xxd -r -p | openssl base64 -A | tr '+/' '-_' |
 A signed-in customer asks to delete their account with
 `POST /api/v1/account/deletion-request`, after confirming it's them. The
 answer carries `dueAt`: the request time plus `ACCOUNT_DELETION_DAYS` days
-(default 30, at most 30). They get a receipt email. Platform admins get an alert,
-and a daily job at 04:00 UTC alerts them about requests due within 5 days.
+(default 30, at most 30). They get a receipt email. Platform admins get an
+alert, and a daily job at 04:00 UTC alerts them about requests due within 5
+days.
 
 Staff list the open requests with `GET /api/v1/platform/deletion-requests`,
 soonest due first. They complete a request with
-`DELETE /api/v1/platform/users/:id` in Apex. That marks it completed and emails the customer. It does not cancel a paid
-subscription, so cancel one first. The rules are in
-[SECURITY.md](SECURITY.md#account-deletion).
+`DELETE /api/v1/platform/users/:id` in Apex. That marks it completed and
+emails the customer. It does not cancel a paid subscription, so cancel one
+first. The rules are in [SECURITY.md](SECURITY.md#account-deletion).
 
 ## Available scripts
 

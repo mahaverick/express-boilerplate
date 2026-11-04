@@ -64,17 +64,19 @@ function requester(name: string): Promise<User> {
  * @param userId - The requester.
  * @param dueInDays - Days from now it falls due.
  * @param status - The request's status; a completed one gets a completion time.
+ * @param reason - The reason the customer gave, or null for none.
  * @returns The request id.
  */
 async function openRequest(
   userId: string,
   dueInDays: number,
-  status: 'open' | 'completed' = 'open'
+  status: 'open' | 'completed' = 'open',
+  reason: string | null = 'Moving on'
 ): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
     insert into account_deletion_requests (user_id, due_at, status, completed_at, reason)
     values (${userId}, now() + make_interval(days => ${dueInDays}), ${status},
-      ${status === 'completed' ? sql`now()` : null}, 'Moving on')
+      ${status === 'completed' ? sql`now()` : null}, ${reason})
     returning id`
   return row!.id
 }
@@ -82,6 +84,7 @@ async function openRequest(
 /**
  * List the open requests this file made.
  * @param token - The staff bearer token.
+ * @param query - Query parameters that override the default search.
  * @returns The response.
  */
 function list(token: string, query: Record<string, string> = {}): Promise<Response> {
@@ -233,6 +236,29 @@ describe('GET /api/v1/platform/deletion-requests', () => {
     const response = await list(token, { search: `${tag}-ADA` })
 
     expect(itemsOf(response).map((item) => item.id)).toEqual([adaId])
+  })
+
+  it('still lists the request of a deactivated requester', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const away = await requester('away')
+    const requestId = await openRequest(away.id, 6)
+    await sql`update users set active = false where id = ${away.id}`
+
+    const items = itemsOf(await list(token))
+
+    expect(items.map((item) => item.id)).toEqual([requestId])
+    expect(items[0]?.user.id).toBe(away.id)
+  })
+
+  it('returns a null reason when the customer gave none', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const quiet = await requester('quiet')
+    await openRequest(quiet.id, 6, 'open', null)
+
+    const items = itemsOf(await list(token))
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ reason: null })
   })
 
   it('refuses an unknown sort with 400', async () => {

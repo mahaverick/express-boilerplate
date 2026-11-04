@@ -62,6 +62,7 @@ export function openDeletionRequestList(search: string | undefined) {
           sortDue: timestampKey(accountDeletionRequestModel.dueAt),
         })
         .from(accountDeletionRequestModel)
+        // No users.deleted_at filter: deleteUser completes the open request in the same transaction that soft-deletes the user, and purge deletes requests first.
         .innerJoin(userModel, eq(accountDeletionRequestModel.userId, userModel.id))
         .where(
           and(

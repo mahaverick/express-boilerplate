@@ -14,7 +14,10 @@ import type { AccountDeletionRequest } from '@/database/models/account-deletion-
 import { HttpError } from '@/errors/http-error'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
-import { accountDeletionRequestRepository } from '@/repositories/account-deletion-request.repository'
+import {
+  accountDeletionRequestRepository,
+  type OpenDeletionRequestRow,
+} from '@/repositories/account-deletion-request.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -348,14 +351,10 @@ async function alertStaff(
 /**
  * One open request as the staff list returns it: the requester and the
  * workspaces they solely own, which block the staff delete until someone else
- * owns them.
+ * owns them. The workspaces are read outside the delete's locks, so they can
+ * lag. The staff delete re-checks them.
  */
-export interface DeletionRequestRow {
-  id: string
-  requestedAt: Date
-  dueAt: Date
-  reason: string | null
-  user: { id: string; email: string; firstName: string | null; lastName: string | null }
+export interface DeletionRequestRow extends OpenDeletionRequestRow {
   soleOwnedWorkspaces: { id: string; name: string }[]
 }
 

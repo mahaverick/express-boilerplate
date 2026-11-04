@@ -675,7 +675,7 @@ that keys by IP then shares one budget among all of them.
   limiter's key function (`refreshRateLimitKey`) does not hash it. Only that
   key function skips the hash. The refresh handler still hashes and looks up
   any token it reads. The per-IP budgets bound those lookups: `refresh` allows
-  300 attempts per 5 minutes on the IP key, and `native-refresh-ip` allows 3000. It answers 401 either way.
+  300 attempts per 5 minutes on the IP key, and `native-refresh-ip` allows 3000. A missing, malformed or unknown token answers 401.
 - **`native-refresh-ip` caps what the per-token key cannot.** Junk tokens
   already share the IP key. A well-formed guess still gets its own counter,
   so without this ceiling one IP could send unlimited refreshes with distinct
