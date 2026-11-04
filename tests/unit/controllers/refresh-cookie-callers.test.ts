@@ -1,5 +1,6 @@
 /**
- * @file Only helpers.controller.ts touches the refresh cookie directly. Every
+ * @file Only helpers.controller.ts touches the refresh cookie directly, or
+ * reads its spec through `currentRefreshCookie`. Every
  * other controller goes through `presentedRefreshToken`,
  * `deliverRefreshToken` and `clearPresentedRefreshToken`, which pick the
  * cookie or the body by client kind, so a direct call would hand a native app
@@ -13,7 +14,7 @@ const CONTROLLERS = path.resolve(process.cwd(), 'src/controllers')
 
 const HELPERS = 'helpers.controller.ts'
 
-const BANNED_CALLS = ['setRefreshTokenCookie(', 'readRefreshTokenCookie(']
+const BANNED_CALLS = ['setRefreshTokenCookie(', 'readRefreshTokenCookie(', 'currentRefreshCookie(']
 
 /**
  * The TypeScript files directly under src/controllers/.
@@ -46,8 +47,11 @@ describe('direct refresh cookie calls', () => {
 
     expect(files.length).toBeGreaterThan(1)
     expect(files).toContain(HELPERS)
-    // The helpers define both functions, so a scan that finds them there reads real source.
-    expect(bannedCallsIn(HELPERS).length).toBeGreaterThan(0)
+    // The helpers call every banned function, so a scan that finds each there reads real source.
+    const inHelpers = bannedCallsIn(HELPERS)
+    for (const call of BANNED_CALLS) {
+      expect(inHelpers.some((line) => line.includes(call))).toBe(true)
+    }
   })
 
   it('appear in no controller but helpers.controller.ts', () => {
