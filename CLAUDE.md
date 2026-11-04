@@ -81,6 +81,27 @@ and points at the code or doc that holds the detail. How things work is in
   behind the Origin check. The one `GET` that reads it, the callback, only
   revokes. And it lasts only until the first rotation re-sets it `Strict`. See
   [SECURITY.md](SECURITY.md#the-refresh-cookie).
+- **A handler reads and sets the refresh token only through
+  `presentedRefreshToken` and `deliverRefreshToken`** (plus
+  `clearPresentedRefreshToken` to clear it), all in
+  `src/controllers/helpers.controller.ts`. A native app holds its token in the
+  body and a browser in a cookie. A handler that touches the cookie itself
+  hands an app a cookie, or reads a browser's cookie on an app's request.
+  `tests/unit/controllers/refresh-cookie-callers.test.ts` fails it. The Google
+  callback passes `'lax'` to `deliverRefreshToken`; no other caller does. See
+  [SECURITY.md](SECURITY.md#native-clients).
+- **Never add `X-Client` or `X-Device-Name` to CORS `allowedHeaders`**
+  (`src/configs/cors.config.ts`). A page on another origin could then send a
+  native request, and the preflight is what stops it. A native request that
+  carries `Origin` or `Sec-Fetch-*` is refused, but that check alone does not
+  cover a page the CORS list allows.
+- **`X-Device-Name` is read only when a session starts** (`clientOf`). A refresh
+  copies the stored name forward and ignores the header, so a copied token
+  cannot relabel its session as the owner's phone. Keep the name out of logs.
+- **A refresh token shown to the wrong kind of client answers the unknown-token
+  401 and kills no session** (`rotateRefreshToken`). Don't route it into reuse
+  detection: a mismatched kind is not evidence of theft, and a kill would let
+  anyone holding a token end its owner's session.
 - **Never link a Google identity to an address Google has not verified.**
   `resolveGoogleUser` (`src/services/google-auth.service.ts`) refuses it,
   because linking an unverified address is an account takeover. Don't relax

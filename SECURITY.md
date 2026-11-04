@@ -35,15 +35,19 @@ defences this file describes. IP means Internet Protocol address; CORS is
 cross-origin resource sharing, the browser rules for requests from another
 origin.
 
-| Actor                                                         | Trusted with                                                                                                 | Main defences                                                                                          |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| An anonymous caller                                           | Nothing. It can ask for a sign-in link, sign in with one or with Google, and preview an invitation it holds. | One reply before any lookup, per-IP and per-address limits, single-use hashed links                    |
-| A signed-in user                                              | Their own account, and each tenant at the role their membership grants                                       | `requireAuth` on every request, `resolveTenant` and `requireRole`, service policies re-read under lock |
-| A page on another site                                        | Nothing                                                                                                      | Bearer access tokens, `SameSite` cookies, the JSON content-type gate, CORS                             |
-| A page on a sibling subdomain (same site, other origin)       | Nothing                                                                                                      | The Origin check on the two routes the refresh cookie authenticates, cookie prefixes                   |
-| Platform staff (members of the platform tenant)               | Reading every user and tenant; acting in customer tenants at their platform role                             | Per-route role gates answering 404, step-up, a stated reason, the audit log                            |
-| Whoever holds a stolen refresh cookie or access token         | What the token grants, until it is revoked or expires                                                        | Rotation with reuse detection, an absolute session lifetime, the session denylist                      |
-| An operator who can read Redis, logs, job payloads or PostHog | Operating the service, not reading tokens or addresses                                                       | Hashed tokens, keyed digests in Redis key names, redacted logs and job data, scrubbed error events     |
+| Actor                                                         | Trusted with                                                                                                 | Main defences                                                                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| An anonymous caller                                           | Nothing. It can ask for a sign-in link, sign in with one or with Google, and preview an invitation it holds. | One reply before any lookup, per-IP and per-address limits, single-use hashed links                     |
+| A signed-in user                                              | Their own account, and each tenant at the role their membership grants                                       | `requireAuth` on every request, `resolveTenant` and `requireRole`, service policies re-read under lock  |
+| A page on another site                                        | Nothing                                                                                                      | Bearer access tokens, `SameSite` cookies, the JSON content-type gate, CORS                              |
+| A page on a sibling subdomain (same site, other origin)       | Nothing                                                                                                      | The Origin check on the two routes the refresh cookie authenticates, cookie prefixes                    |
+| Platform staff (members of the platform tenant)               | Reading every user and tenant; acting in customer tenants at their platform role                             | Per-route role gates answering 404, step-up, a stated reason, the audit log                             |
+| Whoever holds a stolen refresh cookie or access token         | What the token grants, until it is revoked or expires                                                        | Rotation with reuse detection, an absolute session lifetime, the session denylist                       |
+| A script on a web page asking for a native session            | Nothing                                                                                                      | `X-Client` is not a CORS-allowed header, and a native request with `Origin` or `Sec-Fetch-*` gets 400   |
+| Whoever relays a sign-in link or a passkey assertion          | Accepted residual: the browser-header refusal checks a request's shape, not who sent it                      | Single-use hashed links, the address binding, user verification on every passkey ceremony               |
+| Whoever holds a copied native refresh token                   | Accepted for version 1: the app has no cookie flags to lean on, so the copy works like the original          | Rotation with reuse detection, the absolute session lifetime, the session list and revoke-others        |
+| Many devices behind one carrier address                       | A shared per-IP budget on the limiters that key by IP                                                        | A per-token refresh budget and a native-only per-IP refresh ceiling ([Native clients](#native-clients)) |
+| An operator who can read Redis, logs, job payloads or PostHog | Operating the service, not reading tokens or addresses                                                       | Hashed tokens, keyed digests in Redis key names, redacted logs and job data, scrubbed error events      |
 
 Out of scope: an attacker who controls any of these, since each can act as the
 API itself:
@@ -346,8 +350,9 @@ without `COOKIE_SECURE` (`src/configs/passport.config.ts`). A planted
 
 ### Rotation and reuse detection
 
-`POST /auth/refresh` reads the token from the cookie only, never the body, and
-rotates it (`rotateRefreshToken`). The claim is one `UPDATE … RETURNING` that
+`POST /auth/refresh` reads a browser's token from the cookie only, never the
+body, and a native app's token from the body only
+([Native clients](#native-clients)). It rotates the token (`rotateRefreshToken`). The claim is one `UPDATE … RETURNING` that
 matches the hash, `purpose = 'refresh'` and an unrevoked row. So of two
 requests presenting the same token exactly one wins, and a sign-in or step-up
 link can never be redeemed as a refresh token.
@@ -564,6 +569,126 @@ frontend knows whether to show the passkey screens.
   and only off the allowlist. A person signed in by Google has no recent
   sign-in, so they confirm it's them by link, then create a passkey. Those two
   steps are all it takes to leave the lockout.
+
+## Native clients
+
+The iOS and Android apps hold their session in the response body, not in a
+cookie. This section covers how the API tells an app from a browser, and what
+keeps the two apart.
+
+- **The header opts in.** A request is native only when `X-Client` is exactly
+  `native`. Any other value, `Native` included, is a browser.
+  `resolveClientKind` (`src/middlewares/native-client.middleware.ts`) sets
+  `request.clientKind` and runs first on the auth and invitation routers,
+  ahead of every gate and limiter, so a refusal spends no budget.
+- **A native request that looks like a browser is refused.** One carrying an
+  `Origin` header of any value (`null` and empty included) or any
+  `Sec-Fetch-*` header gets `400 NATIVE_CLIENT_REFUSED`. An app sends neither.
+  A browser adds `Origin` to every `POST` and `Sec-Fetch-*` to requests from a
+  secure page, and a page cannot remove either.
+  - It checks the request's shape, not who sent it. A script outside a browser
+    can send a native request, and it is no worse off than anyone holding the
+    token it presents.
+  - A browser request with a `refreshToken` key in its body gets
+    `400 REFRESH_TOKEN_IN_BODY`. A page can never choose which token a refresh
+    presents.
+- **The token travels in the body, and a native request ignores cookies.**
+  - A sign-in answers `refreshToken` and `refreshTokenExpiresAt` in the body
+    and sets no cookie. That covers the sign-in link verify, the invitation
+    confirm, the passkey sign-in verify and the refresh.
+  - A refresh, a logout, a revoke-others and a step-up verify read
+    `{ refreshToken }` from the body. A native request never reads a cookie,
+    so a cookie on the request is ignored.
+  - The three helpers in `src/controllers/helpers.controller.ts` are the only
+    place that choice is made: `presentedRefreshToken`,
+    `deliverRefreshToken` and `clearPresentedRefreshToken`. A source test
+    (`tests/unit/controllers/refresh-cookie-callers.test.ts`) fails a
+    controller that sets or reads the cookie itself.
+  - The error scrubber redacts a `refreshToken` value in a body or a string
+    before an error event leaves the process
+    (`src/services/errors/error-scrubber.service.ts`).
+- **Google sign-in is refused to an app.** Both Google routes answer a native
+  request `400 NATIVE_CLIENT_REFUSED` with their own message
+  (`refuseNativeGoogleSignIn`), before the limiter and before any session is
+  written. The callback is a browser flow and sets its cookie `SameSite=Lax`
+  (`deliverRefreshToken(…, 'lax')`).
+- **A token from one kind never works for the other.** Each refresh row stores
+  its `client` (`web` or `native`) when it is inserted, and rotation copies it.
+  `rotateRefreshToken` compares the row's client with the caller's before it
+  opens a transaction.
+  - A mismatch answers the unknown-token 401, claims nothing and does not
+    trigger reuse detection, even for a token already spent. The session
+    lives.
+  - This is deliberate. A mismatched kind is not evidence of theft. A kill on
+    a mismatch would also let anyone who holds a token end its owner's session
+    from the wrong kind of client.
+  - A copied cookie therefore cannot be turned into an app session, and a
+    copied app token cannot be turned into a cookie.
+- **A device name is set once.** A native sign-in may send `X-Device-Name`,
+  which `GET /auth/sessions` shows.
+  - It is read only when a session starts (`clientOf`,
+    `src/controllers/helpers.controller.ts`). A refresh ignores the header, and
+    rotation copies the stored name. So whoever holds a copied token cannot
+    relabel the session as the owner's phone.
+  - It is trimmed, at most 64 code points (`MAX_DEVICE_NAME_LENGTH`), one line
+    and free of control and hidden characters. A name that fails any of that is
+    stored as `null`, and the request still succeeds.
+  - A web request never stores one. No log line carries it.
+  - It is text a client chose. A frontend shows it as plain text and never
+    trusts it as proof of which device holds the session.
+- **The session list.** `GET /auth/sessions` needs `requireAuth` and answers the
+  caller's live sessions, newest use first, at most 100, with no cursor. Each
+  has `id`, `client`, `deviceName`, `createdAt`, `lastUsedAt` and `current`.
+  - A session past `SESSION_ABSOLUTE_TTL` is not listed, since no rotation
+    would succeed for it.
+  - It carries no token, hash or IP address.
+  - The `sessions-list` limiter allows 60 requests a minute per user.
+- **CORS stays closed to `X-Client` and `X-Device-Name`.** Neither is in
+  `allowedHeaders` (`src/configs/cors.config.ts`). A page on another origin
+  that sets either header needs a preflight, and the preflight fails. A page
+  on an allowed origin carries `Origin` and `Sec-Fetch-*`, which the refusal
+  above catches. Adding either header to the list removes the first of those
+  two defences.
+
+### Rate limits behind carrier-grade NAT
+
+Mobile carriers put many users behind one IPv4 address. This is carrier-grade
+network address translation (CGNAT). An office does the same. Every limiter
+that keys by IP then shares one budget among all of them.
+
+| Limiter                | Key                           | Budget             | Native handling                                 |
+| ---------------------- | ----------------------------- | ------------------ | ----------------------------------------------- |
+| `refresh`              | IP (web), token hash (native) | 300 per 5 minutes  | Keyed apart, so each session has its own budget |
+| `native-refresh-ip`    | IP, native requests only      | 3000 per 5 minutes | A ceiling above the per-token budgets           |
+| `sign-in-link-request` | IP                            | 10 per 15 minutes  | Shared by every device on the address           |
+| `sign-in-link-verify`  | IP                            | 20 per 15 minutes  | Shared by every device on the address           |
+| `passkey-sign-in`      | IP                            | 20 per 15 minutes  | Shared by every device on the address           |
+| `invitation-verify`    | IP                            | 20 per 15 minutes  | Shared by every device on the address           |
+
+- **A native refresh counts by the SHA-256 hash of its body token**
+  (`refresh-token:<hash>`, `refreshRateLimitKey`). The raw token never reaches
+  a Redis key, and devices behind one address keep separate budgets.
+- **A native refresh with no usable body token counts by IP**, with
+  `ipKeyGenerator` at a 56-bit IPv6 subnet. It answers 401 either way.
+- **`native-refresh-ip` caps what the per-token key cannot.** Without it, one IP
+  could send unlimited refreshes with distinct junk tokens, each costing a
+  hash, a database read and a new counter. It is 10 times `refresh` so a
+  CGNAT full of devices fits. It skips web requests, which `refresh` already
+  covers.
+- **Accepted residual: the other four stay keyed by IP.** Devices behind one
+  carrier address share 10 sign-in link requests in 15 minutes. A burst of
+  sign-ins there can see a 429 that no single user caused. A per-address key
+  would let anyone lock the owner out
+  ([Sign-in links](#sign-in-links-one-answer-one-reply-before-the-lookup)), so
+  the limits stay as they are until measured traffic says otherwise.
+
+### What a native app does not get
+
+- **No proof of possession.** A copied refresh token works from any machine
+  until it rotates, expires or is revoked. This is accepted for version 1. A
+  device-bound proof such as RFC 9449 (DPoP) is a later option, and the body
+  schema stays open to a `proof` field for it.
+- **No Google sign-in.** An app signs in by emailed link or passkey.
 
 ## Email links
 
@@ -1090,6 +1215,55 @@ purge is recorded in the platform tenant.
 [ARCHITECTURE.md](ARCHITECTURE.md#analytics), under Purges and what stays in
 PostHog, describes what stays there.
 
+## Account deletion
+
+A customer asks to delete their account from an app. App Store
+Review Guideline 5.1.1(v) and Google Play's account-deletion policy require
+that. Staff complete the deletion by hand, inside a stated time.
+
+- **The request.** `POST /account/deletion-request` needs `requireAuth` and a
+  recent sign-in (`requireRecentAuth()`), then the `authenticated-write`
+  limiter. It takes an optional `reason` of at most 500 characters.
+  `GET /account/deletion-request` answers the open request, or `null`, and
+  needs no recent sign-in. Its `account-deletion-read` limiter allows 60
+  requests a minute per user.
+- **One open request per user.** A second request returns the open one with
+  200 and sends nothing. The first answers 201. The transaction locks the user
+  row, so two requests at once serialize.
+- **The date.** `dueAt` is the request time plus `ACCOUNT_DELETION_DAYS` times
+  24 hours. The default and the maximum are 30 days, so the date sits inside
+  the one month that Article 12(3) of the General Data Protection Regulation
+  allows before an extension. The minimum is 1.
+- **The customer keeps access and can't withdraw by API.** They stay signed in
+  until staff complete the request. No route cancels a request. The receipt
+  names the support address for that.
+- **Who is told, and when.**
+  - The customer gets a receipt email with the due date, queued after the
+    request commits.
+  - Every platform admin except the requester gets an in-app alert and an
+    email (`account_deletion_requested`). It cannot be switched off, so a
+    deletion we promised by a date cannot go unseen.
+  - A daily job on the `account-deletion` queue (04:00 UTC) alerts the admins
+    about every open request due within 5 days, overdue ones included. It
+    alerts once per request, and again about every 30 days while the request
+    stays overdue (`alertDueSoonDeletions`).
+- **Staff complete it through `DELETE /platform/users/:id`** (`deleteUser`,
+  `src/services/platform-user.service.ts`), which needs the platform admin role, a
+  recent sign-in and a stated reason ([Platform staff](#platform-staff)).
+  - It marks the request `completed` in the same transaction as the soft
+    delete, and denies the user's sessions.
+  - After the commit, it emails "We deleted your account" to the address the
+    account held.
+  - A delete that refuses leaves the request open. The last owner of a
+    workspace gets a 409 naming it. Staff then contact the customer to hand
+    over or delete that workspace.
+- **Known gap: a subscription is not cancelled.** Completion reuses
+  `deleteUser`'s payer handling, which clears the user as the payer on
+  workspaces they paid for. It does not cancel a subscription at the provider.
+  Staff cancel one by hand before they complete a request.
+- **The reason is private.** A customer's own words may name them, so the audit
+  entry holds only the request id, and no response returns the reason.
+
 ## Input and output
 
 This section covers what the API accepts in a request and what it reveals in
@@ -1383,7 +1557,7 @@ the counters behave when Redis fails.
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 33 limiter specs,
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 37 limiter specs,
 each commented with the reason for its window, budget and key.
 `createRateLimiter` builds each into middleware with its own Redis key prefix
 (`<REDIS_KEY_PREFIX>:rl:<name>:`, `src/middlewares/rate-limit.middleware.ts`),
@@ -1442,9 +1616,10 @@ The auth limiters each answer a specific threat:
   budget across all four writes (20 in 15 minutes). Create and delete check
   for a recent sign-in first, so a refusal spends none of it. Listing passkeys
   has no limiter: it reads the caller's own rows.
-- **Refresh and logout** are volume protection (300 in 5 minutes per IP): a
-  refresh token is 256 random bits. Logout's budget is generous because a 429
-  leaves the cookie uncleared.
+- **Refresh and logout** are volume protection (300 in 5 minutes): a refresh
+  token is 256 random bits. A browser's refresh counts by IP and a native
+  app's by token ([Native clients](#native-clients)). Logout counts by IP, and
+  its budget is generous because a 429 leaves the cookie uncleared.
 
 The billing limiters guard the payment provider, whose own rate limit every
 workspace shares:

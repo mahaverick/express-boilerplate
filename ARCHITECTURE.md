@@ -687,12 +687,14 @@ registration order:
 | `/api/v1`                                    | `createApiRouter()` (`src/routes/index.routes.ts`).                                                                                                             |
 | 404, then `errorHandler`                     | Last, so it sees errors from everything before it.                                                                                                              |
 
-`createApiRouter()` mounts one router per feature: `auth`, `profile`,
-`notifications`, `tenants`, `invitations`, `platform`, `flags` and `status`. A
+`createApiRouter()` mounts one router per feature: `auth`, `account`,
+`profile`, `notifications`, `tenants`, `invitations`, `platform`, `flags` and
+`status`. A
 new feature router is one more `router.use(...)` there, never a change to
 `app.ts`.
 
-- **Auth.** The auth router answers 415 to any body that is not
+- **Auth.** `resolveClientKind` runs first on the auth and invitation routers
+  ([Native clients](#native-clients)). The auth router answers 415 to any body that is not
   `application/json` (`requireJsonContentType`, router-wide). Its open routes
   need no access token. `POST /auth/refresh` and `/auth/logout` check `Origin`
   first, then read the refresh cookie off the raw `Cookie` header; there is no
@@ -745,12 +747,12 @@ routes, all under `/api/v1`, are:
 
 **The tokens.** Four stores hold the credentials:
 
-| Store                | What it holds                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `user_tokens`        | Three purposes: `refresh` (the session chain), `sign_in_link` (an address and an app, never a user) and `step_up_link` (a user and the session it elevates). |
-| `user_passkeys`      | The passkeys: a public key and counters, never a private key.                                                                                                |
-| Redis                | Single-use passkey challenges, for 5 minutes (`passkey-challenge.service.ts`).                                                                               |
-| `tenant_invitations` | The invitation links.                                                                                                                                        |
+| Store                | What it holds                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_tokens`        | Three purposes: `refresh` (the session chain, with its `client` and `device_name`), `sign_in_link` (an address and an app, never a user) and `step_up_link` (a user and the session it elevates). |
+| `user_passkeys`      | The passkeys: a public key and counters, never a private key.                                                                                                                                     |
+| Redis                | Single-use passkey challenges, for 5 minutes (`passkey-challenge.service.ts`).                                                                                                                    |
+| `tenant_invitations` | The invitation links.                                                                                                                                                                             |
 
 Every token and link is 32 random bytes, and only its SHA-256 hash is stored.
 [DATABASE.md](DATABASE.md#user_tokens) has the columns and the shape CHECK
@@ -779,6 +781,93 @@ so a Google round-trip cannot prove the person is present. The checks are in
 `assertPasskeySetupDone`. An account with no passkey gets
 `403 PASSKEY_SETUP_REQUIRED` outside `PASSKEY_SETUP_ALLOWED`
 (`passkey.constants.ts`). The passkey count query runs only in that mode.
+
+### Native clients
+
+An iOS or Android app calls the same routes as the web app. It differs in one
+thing: it holds its session in the response body, not in a cookie.
+[SECURITY.md](SECURITY.md#native-clients) has the threat model.
+
+**The branch.** `resolveClientKind` (`src/middlewares/native-client.middleware.ts`)
+reads `X-Client` and sets `request.clientKind` to `web` or `native`. A native
+request carrying `Origin` or any `Sec-Fetch-*` header gets
+`400 NATIVE_CLIENT_REFUSED`. A handler never branches on the kind itself. It
+goes through three helpers in `src/controllers/helpers.controller.ts`:
+
+| Helper                       | A browser                                     | A native app                                                    |
+| ---------------------------- | --------------------------------------------- | --------------------------------------------------------------- |
+| `presentedRefreshToken`      | Reads the refresh cookie                      | Reads `refreshToken` from the body                              |
+| `deliverRefreshToken`        | Sets the cookie, `Strict` unless told `'lax'` | Returns `refreshToken` and `refreshTokenExpiresAt` for the body |
+| `clearPresentedRefreshToken` | Clears the cookie and its host-only form      | Does nothing                                                    |
+
+`tests/unit/controllers/refresh-cookie-callers.test.ts` fails a controller that
+calls the cookie functions directly. The Google callback is the one caller that
+passes `'lax'`, and a native request to either Google route is refused.
+
+**The session flow.**
+
+1. A native sign-in calls `clientOf(request)`, which returns the kind and a
+   device name read from `X-Device-Name`. `issueRefreshToken` stores both on the
+   new `user_tokens` row.
+2. A refresh passes only the kind to `rotateRefreshToken`. The row's
+   `client` must equal it, or the call answers the unknown-token 401 before
+   any transaction and kills no session.
+3. Rotation copies `client` and `device_name` onto the new row, with the
+   session id and start time.
+
+**The columns.** Migration `0040` adds `user_tokens.client` (`web` or `native`;
+a `CHECK` limits the values) and `user_tokens.device_name` (`varchar(64)`). It
+backfills `web` on every existing refresh row. `user_tokens_shape_check` requires
+a `client` on a refresh row and none on a link row.
+[DATABASE.md](DATABASE.md#user_tokens) has the other columns.
+
+**The sessions list.** `GET /auth/sessions` (`listLiveSessions`,
+`src/services/session.service.ts`) answers the caller's live sessions, newest
+use first, at most 100 (`MAX_LISTED_SESSIONS`), with no cursor. Each row has
+`id`, `client`, `deviceName`, `createdAt`, `lastUsedAt` and `current`
+(`src/presenters/session.presenter.ts`). Sessions past the 100th are not
+listed. `POST /auth/sessions/revoke-others` ends all but the current one.
+
+**Rate limits.** `refreshRateLimitKey` keys a native refresh by the hash of the
+body token. `nativeRefreshIp` adds a per-IP ceiling for native requests only.
+The numbers are in [SECURITY.md](SECURITY.md#rate-limits-behind-carrier-grade-nat).
+
+**Settings the app reads.** `GET /status/client-settings` answers
+`minimumAppVersion` as `{ ios, android }` from `MINIMUM_APP_VERSION_IOS` and
+`MINIMUM_APP_VERSION_ANDROID`, each `null` when unset. It sends
+`Cache-Control: public, max-age=300`. `WEBAUTHN_ANDROID_ORIGINS` adds the
+Android app's origins to the passkey ceremony's expected origins
+(`src/configs/passkey.config.ts`). `WEBAUTHN_IOS_ENABLED=true` makes boot refuse
+a `WEBAUTHN_RP_ID` other than `WEB_URL`'s host, since iOS binds a passkey to
+that host.
+
+### Account deletion requests
+
+A customer asks to delete their account at `POST /account/deletion-request`.
+Staff complete it by hand. Both app stores require the first step to happen
+inside the app. [SECURITY.md](SECURITY.md#account-deletion) has the rules.
+
+| Piece                                  | Where                                                            | What it does                                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `POST`/`GET /account/deletion-request` | `src/routes/account.routes.ts`, `account.controller.ts`          | Open a request (201) or return the open one (200); read the open one                                                   |
+| `requestAccountDeletion`               | `src/services/account-deletion.service.ts`                       | Locks the user row, inserts one open request, audits it, and after commit mails the receipt and alerts platform admins |
+| `account_deletion_requests`            | `src/database/models/account-deletion-request.model.ts`          | One open row per user. `due_at` is the request time plus `ACCOUNT_DELETION_DAYS` times 24 hours                        |
+| `deleteUser`                           | `src/services/platform-user.service.ts`                          | Marks the open request completed in the delete's transaction, then mails "We deleted your account" after commit        |
+| `alertDueSoonDeletions`                | `src/services/account-deletion.service.ts`                       | Alerts admins about open requests due within 5 days, overdue ones included                                             |
+| `due-soon-alert`                       | `src/jobs/account-deletion.job.ts`, `account-deletion.worker.ts` | The scheduler, daily at 04:00 UTC on the `account-deletion` queue, one job at a time                                   |
+
+- **The alert dedupes in Redis.** Each request is claimed under
+  `redisKey('account-deletion-due-soon', requestId)` with a TTL that lasts
+  until 30 days after `due_at`. A run that finds the key skips the request. So
+  an overdue request is alerted again about every 30 days. A run that queues no
+  alert releases the key, and the next run tries again.
+- **Mail goes out after commit.** The receipt, the staff alert and the
+  confirmation are queued once the transaction commits, and a queue failure is
+  logged and skipped. The request or the delete is already recorded.
+- **The staff alert cannot be switched off,** and the requester is not a
+  recipient. `account_deletion_requested` is in `NON_DISABLEABLE_EMAIL_TYPES`.
+- **A subscription is not cancelled.** `deleteUser` clears the user as payer
+  and does not cancel a paid subscription. Staff cancel it first.
 
 ### Errors and the response envelope
 
