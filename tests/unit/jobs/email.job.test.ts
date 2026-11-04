@@ -168,6 +168,8 @@ describe('emailQueueFor', () => {
       tax_document_issued: 'email',
       account_deletion_requested: 'email',
       account_deletion_alert: 'email',
+      account_deletion_due_soon: 'email',
+      account_deleted: 'email',
     })
     expect(AUTH_EMAIL_TEMPLATE_KEYS).toEqual([
       'sign_in_link',

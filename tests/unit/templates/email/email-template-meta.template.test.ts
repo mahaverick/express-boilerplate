@@ -232,6 +232,16 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
     dueAt: '15:42 UTC on 3 December 2026',
   },
+  account_deletion_due_soon: {
+    firstName: 'Ada',
+    appName: 'App',
+    dueAt: '15:42 UTC on 3 December 2026',
+  },
+  account_deleted: {
+    firstName: 'Ada',
+    appName: 'App',
+    supportEmail: 'support@x.test',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -452,6 +462,16 @@ describe('EMAIL_TEMPLATE_META', () => {
       account_deletion_alert: {
         senderClass: 'general',
         previewVariables: ['firstName', 'appName', 'dueAt'],
+        resendAction: null,
+      },
+      account_deletion_due_soon: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'dueAt'],
+        resendAction: null,
+      },
+      account_deleted: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'supportEmail'],
         resendAction: null,
       },
     })

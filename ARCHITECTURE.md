@@ -1112,7 +1112,7 @@ retention purge.
 
 ### Queues and Workers
 
-Six BullMQ queues share the prefix `redisKey('bull')`:
+Seven BullMQ queues share the prefix `redisKey('bull')`:
 
 - `getAllQueues()` returns every queue, and is what the staff status lists.
   `tests/integration/services/queue-registry.test.ts` fails when a queue is
@@ -1122,21 +1122,22 @@ Six BullMQ queues share the prefix `redisKey('bull')`:
 - `emailQueueFor` (`src/jobs/email.job.ts`) picks an email's queue from its
   template, so no caller chooses it.
 
-| Queue          | Carries                                                                                                                                                                                                                                                                                                        | Worker concurrency   | Job options                                                                                                                                                 |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `email`        | One tracked email per job (`addEmailJob`)                                                                                                                                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
-| `auth-email`   | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
-| `notification` | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                                                                                                    | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
-| `maintenance`  | The retention purge                                                                                                                                                                                                                                                                                            | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
-| `analytics`    | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                                                                                                     | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
-| `billing`      | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, a workspace's `tax-reconcile` run (priority 10, so webhooks and syncs go first), and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
+| Queue              | Carries                                                                                                                                                                                                                                                                                                        | Worker concurrency   | Job options                                                                                                                                                 |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`            | One tracked email per job (`addEmailJob`)                                                                                                                                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `auth-email`       | The same, for `sign_in_link`, `step_up_link`, `welcome`, `tenant_invitation`, `invitation_confirm`, `passkey_created` and `passkey_deleted`; never paused                                                                                                                                                      | `WORKER_CONCURRENCY` | 5 attempts, backoff from 5 s                                                                                                                                |
+| `notification`     | An in-app row and its optional email (`addNotificationJob`)                                                                                                                                                                                                                                                    | `WORKER_CONCURRENCY` | 3 attempts, backoff from 2 s                                                                                                                                |
+| `maintenance`      | The retention purge                                                                                                                                                                                                                                                                                            | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
+| `analytics`        | The outbox drain, the PostHog deletion tick and the flag definitions fetch                                                                                                                                                                                                                                     | 1                    | 1 attempt (the next tick is the retry); the last 100 failures kept                                                                                          |
+| `billing`          | One job per Razorpay webhook event, which syncs the workspace that holds its subscription, a sync of one workspace, the prompt cancel after a suspend or archive, a workspace's `tax-reconcile` run (priority 10, so webhooks and syncs go first), and the frequent and daily runs (`src/jobs/billing.job.ts`) | 2                    | 31 attempts, backoff from 30 s doubling to 1 h: about 24 h for a provider outage; the eighth other failure stops it; failures kept 7 days; a run: 1 attempt |
+| `account-deletion` | The daily due-soon alert for open account deletion requests (`src/jobs/account-deletion.job.ts`)                                                                                                                                                                                                               | 1                    | 3 attempts, backoff from 60 s                                                                                                                               |
 
 Every Worker's `failed` handler first calls `reportFinalJobFailure`. It
 reports to error tracking the attempt BullMQ will not retry
 (`attemptsMade >= attempts`, or an `UnrecoverableError`). What happens next
 depends on the Worker:
 
-- **Email, auth-email, notification, maintenance and billing.** The handler
+- **Email, auth-email, notification, maintenance, billing and account-deletion.** The handler
   logs a retryable attempt at `warn`. On the final attempt,
   `recordPermanentFailure` (`src/jobs/job-failure.job.ts`) scrubs the stored
   payload, marks an email's message `failed`, and logs `job failed permanently`
@@ -1158,8 +1159,8 @@ No handler rejects, because an unhandled rejection exits the process. What a
 job payload may hold, and for how long, is in
 [SECURITY.md](SECURITY.md#mail-at-rest).
 
-`startWorkers()` starts the email, auth-email, notification, maintenance and
-billing Workers. It starts the analytics Worker when analytics or PostHog's
+`startWorkers()` starts the email, auth-email, notification, maintenance,
+billing and account-deletion Workers. It starts the analytics Worker when analytics or PostHog's
 private API is configured. `WORKER_ENABLED` (default `true`) runs the Workers
 in the API process. To split them, set it to `false` on API-only pods and
 `true` on a worker deployment that shares the Redis queues. The schedules
@@ -1171,14 +1172,15 @@ Each Worker generation upserts its schedules. These are BullMQ job schedulers,
 stored in Redis under the prefix, so every replica shares one schedule and each
 tick runs on one Worker:
 
-| Scheduler             | Queue         | When                                | Registered when                         |
-| --------------------- | ------------- | ----------------------------------- | --------------------------------------- |
-| `retention-purge`     | `maintenance` | daily at 03:00 UTC                  | always                                  |
-| `scheduler-frequent`  | `billing`     | every 15 min                        | always                                  |
-| `scheduler-daily`     | `billing`     | daily at 03:30 UTC                  | always                                  |
-| `analytics-drain`     | `analytics`   | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
-| `analytics-deletions` | `analytics`   | every 60 s                          | the personal key and project id are set |
-| `flag-definitions`    | `analytics`   | every 30 s                          | flags are configured                    |
+| Scheduler             | Queue              | When                                | Registered when                         |
+| --------------------- | ------------------ | ----------------------------------- | --------------------------------------- |
+| `retention-purge`     | `maintenance`      | daily at 03:00 UTC                  | always                                  |
+| `scheduler-frequent`  | `billing`          | every 15 min                        | always                                  |
+| `scheduler-daily`     | `billing`          | daily at 03:30 UTC                  | always                                  |
+| `due-soon-alert`      | `account-deletion` | daily at 04:00 UTC                  | always                                  |
+| `analytics-drain`     | `analytics`        | every `ANALYTICS_DRAIN_INTERVAL_MS` | `POSTHOG_PROJECT_KEY` is set            |
+| `analytics-deletions` | `analytics`        | every 60 s                          | the personal key and project id are set |
+| `flag-definitions`    | `analytics`        | every 30 s                          | flags are configured                    |
 
 Times in the table are in Coordinated Universal Time (UTC).
 

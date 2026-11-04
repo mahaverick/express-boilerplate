@@ -3,7 +3,7 @@
  * admins a new request alerts. It does not extend `BaseRepository`: a
  * request is never soft-deleted.
  */
-import { and, eq, isNull, ne, sql } from 'drizzle-orm'
+import { and, asc, eq, isNull, lte, ne, sql } from 'drizzle-orm'
 import {
   accountDeletionRequestModel,
   type AccountDeletionRequest,
@@ -74,6 +74,48 @@ class AccountDeletionRequestRepository {
         )
       )
     return row
+  }
+
+  /**
+   * Complete a user's open request, if one is open: the staff delete's step,
+   * after the user row is soft-deleted. `completed_at` is the transaction's
+   * `now()`, so it equals the user's `deleted_at`.
+   * @param userId - The deleted user.
+   * @param tx - The delete's transaction.
+   * @returns True when a request was open and is now completed.
+   */
+  async completeOpenFor(userId: string, tx: DbTransaction): Promise<boolean> {
+    const completed = await tx
+      .update(accountDeletionRequestModel)
+      .set({ status: 'completed', completedAt: sql`now()` })
+      .where(
+        and(
+          eq(accountDeletionRequestModel.userId, userId),
+          eq(accountDeletionRequestModel.status, 'open')
+        )
+      )
+      .returning({ id: accountDeletionRequestModel.id })
+    return completed.length > 0
+  }
+
+  /**
+   * The open requests due at or before `dueBy`, overdue ones included,
+   * soonest first: what the due-soon alert reads.
+   * @param dueBy - The end of the window.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The rows.
+   */
+  async listOpenDueBy(dueBy: Date, executor: DbExecutor = db): Promise<AccountDeletionRequest[]> {
+    return executor
+      .select()
+      .from(accountDeletionRequestModel)
+      .where(
+        and(
+          eq(accountDeletionRequestModel.status, 'open'),
+          lte(accountDeletionRequestModel.dueAt, dueBy)
+        )
+      )
+      .orderBy(asc(accountDeletionRequestModel.dueAt), asc(accountDeletionRequestModel.id))
   }
 
   /**

@@ -40,6 +40,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   'tax_document_issued',
   'account_deletion_requested',
   'account_deletion_alert',
+  'account_deletion_due_soon',
+  'account_deleted',
 ] as const
 
 /**

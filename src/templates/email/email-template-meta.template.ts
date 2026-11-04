@@ -5,7 +5,9 @@
  * before anything can store it.
  */
 import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
+import { ACCOUNT_DELETED_TEMPLATE_META } from '@/templates/email/account-deleted.template'
 import { ACCOUNT_DELETION_ALERT_TEMPLATE_META } from '@/templates/email/account-deletion-alert.template'
+import { ACCOUNT_DELETION_DUE_SOON_TEMPLATE_META } from '@/templates/email/account-deletion-due-soon.template'
 import { ACCOUNT_DELETION_REQUESTED_TEMPLATE_META } from '@/templates/email/account-deletion-requested.template'
 import { INTERVAL_SWITCH_SCHEDULED_TEMPLATE_META } from '@/templates/email/interval-switch-scheduled.template'
 import { INVITATION_CONFIRM_TEMPLATE_META } from '@/templates/email/invitation-confirm.template'
@@ -92,4 +94,6 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     winback: WINBACK_TEMPLATE_META,
     account_deletion_requested: ACCOUNT_DELETION_REQUESTED_TEMPLATE_META,
     account_deletion_alert: ACCOUNT_DELETION_ALERT_TEMPLATE_META,
+    account_deletion_due_soon: ACCOUNT_DELETION_DUE_SOON_TEMPLATE_META,
+    account_deleted: ACCOUNT_DELETED_TEMPLATE_META,
   })

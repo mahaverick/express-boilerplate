@@ -26,7 +26,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vite-plus/test'
+import { renderAccountDeletedTemplate } from '@/templates/email/account-deleted.template'
 import { renderAccountDeletionAlertTemplate } from '@/templates/email/account-deletion-alert.template'
+import { renderAccountDeletionDueSoonTemplate } from '@/templates/email/account-deletion-due-soon.template'
 import { renderAccountDeletionRequestedTemplate } from '@/templates/email/account-deletion-requested.template'
 import { renderIntervalSwitchScheduledTemplate } from '@/templates/email/interval-switch-scheduled.template'
 import { renderInvitationConfirmTemplate } from '@/templates/email/invitation-confirm.template'
@@ -846,6 +848,20 @@ const RENDERED: Record<EmailTemplateKey, readonly RenderedEmail[]> = {
       firstName: 'Ada',
       appName: 'Acme Apex',
       dueAt: EXPIRES_AT,
+    }),
+  ],
+  account_deletion_due_soon: [
+    renderAccountDeletionDueSoonTemplate({
+      firstName: 'Ada',
+      appName: 'Acme Apex',
+      dueAt: EXPIRES_AT,
+    }),
+  ],
+  account_deleted: [
+    renderAccountDeletedTemplate({
+      firstName: 'Ada',
+      appName: 'Acme',
+      supportEmail: 'support@example.test',
     }),
   ],
 }

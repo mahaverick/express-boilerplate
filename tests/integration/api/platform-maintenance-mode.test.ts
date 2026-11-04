@@ -137,6 +137,7 @@ describe('GET /platform/maintenance-mode', () => {
       'maintenance',
       'analytics',
       'billing',
+      'account-deletion',
     ])
   })
 })
@@ -879,7 +880,7 @@ describe('a failure after the change committed', () => {
 
     expect(response.status).toBe(200)
     const flags = await Promise.all(getPausableQueues().map((queue) => queue.isPaused()))
-    expect(flags).toEqual([true, true, true, true, true])
+    expect(flags).toEqual([true, true, true, true, true, true])
     expect(await getAuthEmailQueue().isPaused()).toBe(false)
   })
 
@@ -902,7 +903,7 @@ describe('a failure after the change committed', () => {
       environment: ENVIRONMENT,
     })
     expect(viewOf(response).since).toEqual(expect.any(String))
-    expect(viewOf(response).queues).toHaveLength(6)
+    expect(viewOf(response).queues).toHaveLength(7)
     const fallbackWarns = warn.mock.calls.filter(([text]) => text.includes('read back'))
     expect(fallbackWarns).toHaveLength(1)
     expectLoggedAsErrorObjectOnly(fallbackWarns)

@@ -33,6 +33,7 @@ const FULL_PAUSE = {
   maintenance: true,
   analytics: true,
   billing: true,
+  'account-deletion': true,
 }
 
 /**

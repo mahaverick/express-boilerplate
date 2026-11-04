@@ -446,6 +446,22 @@ const CASES: Record<EmailTemplateKey, () => LinkCase> = {
     },
     contents: [],
   }),
+  account_deletion_due_soon: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'account_deletion_due_soon',
+      variables: { firstName: 'Ada', appName: 'App', dueAt: '15:42 UTC on 3 December 2026' },
+    },
+    contents: [],
+  }),
+  account_deleted: () => ({
+    message: {
+      to: EMAIL,
+      templateKey: 'account_deleted',
+      variables: { firstName: 'Ada', appName: 'App', supportEmail: 'support@example.test' },
+    },
+    contents: [],
+  }),
 }
 
 /**

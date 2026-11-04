@@ -841,6 +841,28 @@ export function buildPreviewMessage(
           },
         }
       }
+      case 'account_deletion_due_soon': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            appName: fill('appName'),
+            dueAt: fill('dueAt'),
+          },
+        }
+      }
+      case 'account_deleted': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            appName: fill('appName'),
+            supportEmail: fill('supportEmail'),
+          },
+        }
+      }
     }
   })()
   return { message, isPartial }

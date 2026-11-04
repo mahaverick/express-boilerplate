@@ -3,7 +3,11 @@
  * row due `ACCOUNT_DELETION_DAYS` later and audits it in one transaction;
  * after commit, and only for a new request, it mails the customer a receipt
  * and alerts every platform admin. A second request returns the open one and
- * sends nothing. Staff complete the request by deleting the account.
+ * sends nothing. Staff complete the request by deleting the account
+ * (`deleteUser`, platform-user.service.ts), which mails the customer a
+ * confirmation (`mailAccountDeleted`). A daily run alerts the admins again,
+ * once per request, when one falls due within five days
+ * (`alertDueSoonDeletions`).
  */
 import { getEnv } from '@/configs/env.config'
 import type { AccountDeletionRequest } from '@/database/models/account-deletion-request.model'
@@ -17,10 +21,17 @@ import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { appNameFor, MISSING_FIRST_NAME_FALLBACK } from '@/services/frontend-links.service'
 import { logger } from '@/services/logger.service'
+import { claimCooldown, releaseCooldown } from '@/services/mail-cooldown.service'
+import { ACCOUNT_DELETED_TEMPLATE_KEY } from '@/templates/email/account-deleted.template'
 import {
   ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
   accountDeletionAlertSummary,
 } from '@/templates/email/account-deletion-alert.template'
+import {
+  ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY,
+  ACCOUNT_DELETION_DUE_SOON_TITLE,
+  accountDeletionDueSoonSummary,
+} from '@/templates/email/account-deletion-due-soon.template'
 import { ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY } from '@/templates/email/account-deletion-requested.template'
 import { formatUtcDateTime } from '@/utilities/date-text.utilities'
 import { supportAddress } from '@/utilities/email-sender.utilities'
@@ -32,6 +43,54 @@ const tenantRepository = new TenantRepository()
  * The in-app title of the staff alert, also the alert mail's subject.
  */
 const ALERT_TITLE = 'Account deletion requested'
+
+/**
+ * How close to its due date an open request must be for the due-soon alert.
+ */
+const DUE_SOON_WINDOW_MS = 5 * 86_400_000
+
+/**
+ * How long the due-soon dedupe key outlives the request's due date. A
+ * request is alerted at most 5 days before it is due, so a key that lasts
+ * until 30 days after `due_at` covers the whole window; an open request
+ * still overdue past that is alerted once more.
+ */
+const DUE_SOON_KEY_MARGIN_MS = 30 * 86_400_000
+
+/**
+ * The dedupe key's scope: `redisKey('account-deletion-due-soon', requestId)`.
+ */
+const DUE_SOON_SCOPE = 'account-deletion-due-soon'
+
+/**
+ * One kind of staff alert: the in-app title and body, and the mail's
+ * template, which renders the same summary from the same due date.
+ */
+interface StaffAlert {
+  title: string
+  summary: (dueAt: string) => string
+  templateKey:
+    | typeof ACCOUNT_DELETION_ALERT_TEMPLATE_KEY
+    | typeof ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY
+}
+
+/**
+ * The alert for a new request.
+ */
+const REQUESTED_ALERT: StaffAlert = {
+  title: ALERT_TITLE,
+  summary: accountDeletionAlertSummary,
+  templateKey: ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
+}
+
+/**
+ * The alert for an open request due within five days.
+ */
+const DUE_SOON_ALERT: StaffAlert = {
+  title: ACCOUNT_DELETION_DUE_SOON_TITLE,
+  summary: accountDeletionDueSoonSummary,
+  templateKey: ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY,
+}
 
 /**
  * Open a deletion request for the signed-in customer, or return the one
@@ -78,7 +137,7 @@ export async function requestAccountDeletion(
   })
   if (outcome.created) {
     await mailReceipt(outcome.user, outcome.request)
-    await alertAdmins(outcome.request)
+    await alertAdmins(outcome.request, REQUESTED_ALERT)
   }
   return { request: outcome.request, created: outcome.created }
 }
@@ -131,33 +190,105 @@ async function mailReceipt(
 }
 
 /**
- * Queue one staff-only notification, with its email, for every live, active
- * platform admin but the requester. A failed lookup or enqueue is logged and
- * skipped.
- * @param request - The new request.
+ * Alert the platform admins, once per request, about every open request due
+ * within five days of `now`, overdue ones included. Each request is claimed
+ * first under `redisKey('account-deletion-due-soon', requestId)`, `SET NX`
+ * with a TTL lasting until 30 days past its `due_at` (`claimCooldown`), so a
+ * later run skips it for as long as it can still be in the window. When no
+ * alert of a request could be queued the key is released, so the next run
+ * tries again; when Redis cannot be reached the request is skipped until
+ * then. Under full maintenance the run's queue is paused, and so is the
+ * notification queue its alerts wait on.
+ * @param now - The run's clock: the scheduled job passes the current time, a test a fixed one.
+ * @returns The ids of the requests alerted by this run, soonest due first.
+ * @throws {Error} When the open requests cannot be read, so the job retries.
  */
-async function alertAdmins(request: AccountDeletionRequest): Promise<void> {
+export async function alertDueSoonDeletions(now: Date): Promise<string[]> {
+  const due = await accountDeletionRequestRepository.listOpenDueBy(
+    new Date(now.getTime() + DUE_SOON_WINDOW_MS)
+  )
+  const alerted: string[] = []
+  for (const request of due) {
+    const ttlMs = Math.max(request.dueAt.getTime() - now.getTime(), 0) + DUE_SOON_KEY_MARGIN_MS
+    const claim = await claimCooldown(DUE_SOON_SCOPE, request.id, ttlMs, 'skip')
+    if (!claim.claimed) continue
+    if ((await alertAdmins(request, DUE_SOON_ALERT)) === 0) {
+      await releaseCooldown(DUE_SOON_SCOPE, request.id)
+      continue
+    }
+    alerted.push(request.id)
+  }
+  return alerted
+}
+
+/**
+ * Queue the `account_deleted` confirmation on the normal email queue, after
+ * the staff delete that completed the customer's open request committed. A
+ * failure is logged: the account is already deleted.
+ * @param user - The customer as the delete's transaction read them, before the soft delete.
+ * @param user.id - Their id.
+ * @param user.email - Their address, which the soft delete leaves as it was.
+ * @param user.firstName - Their first name, if any.
+ */
+export async function mailAccountDeleted(user: {
+  id: string
+  email: string
+  firstName: string | null
+}): Promise<void> {
+  const env = getEnv()
+  try {
+    await addEmailJob(
+      {
+        to: user.email.toLowerCase(),
+        templateKey: ACCOUNT_DELETED_TEMPLATE_KEY,
+        variables: {
+          firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+          appName: appNameFor('web', env),
+          supportEmail: supportAddress(env),
+        },
+      },
+      user.id
+    )
+  } catch (error) {
+    logger.error('An account deleted confirmation could not be queued', {
+      error,
+      userId: user.id,
+    })
+  }
+}
+
+/**
+ * Queue one staff-only notification, with its email, for every live, active
+ * platform admin but the requester. The in-app body and the mail's summary
+ * come from the one `alert.summary`. A failed lookup or enqueue is logged
+ * and skipped.
+ * @param request - The request.
+ * @param alert - Which alert: a new request, or one due soon.
+ * @returns How many alerts were queued.
+ */
+async function alertAdmins(request: AccountDeletionRequest, alert: StaffAlert): Promise<number> {
   try {
     const recipients = await accountDeletionRequestRepository.listAccountDeletionRecipients(
       request.userId
     )
     const dueAt = formatUtcDateTime(request.dueAt)
     const appName = appNameFor('apex')
+    let queued = 0
     for (const recipient of recipients) {
       try {
         await addNotificationJob({
           userId: recipient.id,
           type: 'account_deletion_requested',
-          title: ALERT_TITLE,
-          body: accountDeletionAlertSummary(dueAt),
+          title: alert.title,
+          body: alert.summary(dueAt),
           metadata: {
-            templateKey: ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
+            templateKey: alert.templateKey,
             requestId: request.id,
             userId: request.userId,
           },
           email: {
             to: recipient.email,
-            templateKey: ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
+            templateKey: alert.templateKey,
             variables: {
               firstName: recipient.firstName ?? MISSING_FIRST_NAME_FALLBACK,
               appName,
@@ -165,6 +296,7 @@ async function alertAdmins(request: AccountDeletionRequest): Promise<void> {
             },
           },
         })
+        queued += 1
       } catch (error) {
         logger.error('An account deletion alert could not be queued', {
           error,
@@ -173,10 +305,12 @@ async function alertAdmins(request: AccountDeletionRequest): Promise<void> {
         })
       }
     }
+    return queued
   } catch (error) {
-    logger.error('Account deletion alerts could not be queued after the request committed', {
+    logger.error('Account deletion alerts could not be queued', {
       error,
       requestId: request.id,
     })
+    return 0
   }
 }

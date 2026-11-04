@@ -12,10 +12,20 @@ import { stackFrameLinesOf } from '@/errors/stack-frames'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import {
+  ACCOUNT_DELETED_TEMPLATE_KEY,
+  renderAccountDeletedTemplate,
+  type AccountDeletedVariables,
+} from '@/templates/email/account-deleted.template'
+import {
   ACCOUNT_DELETION_ALERT_TEMPLATE_KEY,
   renderAccountDeletionAlertTemplate,
   type AccountDeletionAlertVariables,
 } from '@/templates/email/account-deletion-alert.template'
+import {
+  ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY,
+  renderAccountDeletionDueSoonTemplate,
+  type AccountDeletionDueSoonVariables,
+} from '@/templates/email/account-deletion-due-soon.template'
 import {
   ACCOUNT_DELETION_REQUESTED_TEMPLATE_KEY,
   renderAccountDeletionRequestedTemplate,
@@ -298,6 +308,16 @@ export type MailMessage =
       templateKey: typeof ACCOUNT_DELETION_ALERT_TEMPLATE_KEY
       variables: AccountDeletionAlertVariables
     }
+  | {
+      to: string
+      templateKey: typeof ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY
+      variables: AccountDeletionDueSoonVariables
+    }
+  | {
+      to: string
+      templateKey: typeof ACCOUNT_DELETED_TEMPLATE_KEY
+      variables: AccountDeletedVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -405,6 +425,12 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case ACCOUNT_DELETION_ALERT_TEMPLATE_KEY: {
       return renderAccountDeletionAlertTemplate(message.variables)
+    }
+    case ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY: {
+      return renderAccountDeletionDueSoonTemplate(message.variables)
+    }
+    case ACCOUNT_DELETED_TEMPLATE_KEY: {
+      return renderAccountDeletedTemplate(message.variables)
     }
     default: {
       throw new Error(
