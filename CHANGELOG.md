@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/mahaverick/express-boilerplate/compare/v2.1.1...v2.2.0) (2026-11-04)
+
+
+### Features
+
+* native clients and account deletion requests ([#190](https://github.com/mahaverick/express-boilerplate/issues/190)) ([62319fb](https://github.com/mahaverick/express-boilerplate/commit/62319fbcf30daf42474c667881ac258fd40f49a7))
+
 ## [2.1.1](https://github.com/mahaverick/express-boilerplate/compare/v2.1.0...v2.1.1) (2026-11-02)
 
 
