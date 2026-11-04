@@ -42,6 +42,13 @@ async function listPageFor(tenantId: string, query: Record<string, string> = {})
   return userMembershipRepository.listPageByTenant(tenantId, params, { roles: filters.role })
 }
 
+/**
+ * Gives `userId` an owner membership in `tenantId`.
+ */
+async function addOwner(tenantId: string, userId: string) {
+  await userMembershipRepository.create({ userId, tenantId, role: 'owner' })
+}
+
 describe('UserMembershipRepository', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -622,6 +629,90 @@ describe('UserMembershipRepository', () => {
 
       expect(membership.id).toBe(existing.id)
       expect(membership.role).toBe('manager')
+    })
+  })
+
+  describe('listSoleOwnedTenants', () => {
+    it('lists a workspace the user alone owns', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([owner.id])
+
+      expect(result.get(owner.id)).toEqual([{ tenantId: tenant.id, tenantName: tenant.name }])
+    })
+
+    it('lists an archived workspace the user alone owns', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+      await sql`update tenants set lifecycle_state = 'archived' where id = ${tenant.id}`
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([owner.id])
+
+      expect(result.get(owner.id)?.map((row) => row.tenantId)).toEqual([tenant.id])
+    })
+
+    it('skips a workspace with a deactivated co-owner', async () => {
+      const owner = await createUser()
+      const coOwner = await createUser()
+      const tenant = await createTenant(owner.id)
+      await addOwner(tenant.id, coOwner.id)
+      await userRepository.update(coOwner.id, { active: false })
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([owner.id])
+
+      expect(result.has(owner.id)).toBe(false)
+    })
+
+    it('lists a workspace whose only other owner is soft-deleted', async () => {
+      const owner = await createUser()
+      const coOwner = await createUser()
+      const tenant = await createTenant(owner.id)
+      await addOwner(tenant.id, coOwner.id)
+      await userRepository.softDelete(coOwner.id)
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([owner.id])
+
+      expect(result.get(owner.id)?.map((row) => row.tenantId)).toEqual([tenant.id])
+    })
+
+    it('skips the platform tenant', async () => {
+      const owner = await createUser()
+      const [platform] = await sql<{ id: string }[]>`select id from tenants where is_platform`
+      await addOwner(platform!.id, owner.id)
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([owner.id])
+
+      expect(result.has(owner.id)).toBe(false)
+    })
+
+    it('answers for several users in one call', async () => {
+      const first = await createUser()
+      const second = await createUser()
+      const firstTenant = await createTenant(first.id)
+      const secondTenant = await createTenant(second.id)
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([first.id, second.id])
+
+      expect(result.get(first.id)?.map((row) => row.tenantId)).toEqual([firstTenant.id])
+      expect(result.get(second.id)?.map((row) => row.tenantId)).toEqual([secondTenant.id])
+    })
+
+    it('returns no key for a user who solely owns nothing', async () => {
+      const owner = await createUser()
+      const coOwner = await createUser()
+      const tenant = await createTenant(owner.id)
+      await addOwner(tenant.id, coOwner.id)
+      const member = await createUser()
+      await userMembershipRepository.create({ userId: member.id, tenantId: tenant.id })
+
+      const result = await userMembershipRepository.listSoleOwnedTenants([
+        owner.id,
+        coOwner.id,
+        member.id,
+      ])
+
+      expect(result.size).toBe(0)
     })
   })
 })
