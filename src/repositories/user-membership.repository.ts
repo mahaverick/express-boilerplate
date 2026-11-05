@@ -3,6 +3,7 @@
  * the table has no `deletedAt`, and `delete` is a hard delete.
  */
 import { and, count, eq, gte, inArray, isNull, ne, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
@@ -51,6 +52,20 @@ export interface MembershipWithUser {
  */
 export interface RoleFilters {
   roles: MembershipRole[] | undefined
+}
+
+/**
+ * A customer workspace whose last owner is a given user, as `listSoleOwnedTenants` returns it.
+ */
+export interface SoleOwnedTenant {
+  /**
+   * The tenant's id.
+   */
+  tenantId: string
+  /**
+   * The tenant's name, for the last-owner message and the staff list.
+   */
+  tenantName: string
 }
 
 /**
@@ -441,6 +456,61 @@ export class UserMembershipRepository {
         )
       )
     return row?.count ?? 0
+  }
+
+  /**
+   * The workspaces each user is the last owner of, in one query. A workspace
+   * counts when the user owns it, it is not soft-deleted (archived is
+   * included), it is not the platform tenant, and `countOwners` would
+   * answer 1 or less for it (a deactivated co-owner counts, a soft-deleted
+   * one does not). A user with none has no key.
+   * @param userIds - The users to look up.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns Each user's workspaces in tenant-id order, keyed by user id.
+   */
+  async listSoleOwnedTenants(
+    userIds: readonly string[],
+    executor: DbExecutor = db
+  ): Promise<Map<string, SoleOwnedTenant[]>> {
+    const result = new Map<string, SoleOwnedTenant[]>()
+    if (userIds.length === 0) return result
+    const coOwner = alias(userMembershipModel, 'co_owner_membership')
+    const coOwnerUser = alias(userModel, 'co_owner_user')
+    const liveOwners = executor
+      .select({ owners: count() })
+      .from(coOwner)
+      .innerJoin(coOwnerUser, eq(coOwner.userId, coOwnerUser.id))
+      .where(
+        and(
+          eq(coOwner.tenantId, tenantModel.id),
+          eq(coOwner.role, 'owner'),
+          isNull(coOwnerUser.deletedAt)
+        )
+      )
+    const rows = await executor
+      .select({
+        userId: userMembershipModel.userId,
+        tenantId: tenantModel.id,
+        tenantName: tenantModel.name,
+      })
+      .from(userMembershipModel)
+      .innerJoin(tenantModel, eq(tenantModel.id, userMembershipModel.tenantId))
+      .where(
+        and(
+          inArray(userMembershipModel.userId, userIds),
+          eq(userMembershipModel.role, 'owner'),
+          isNull(tenantModel.deletedAt),
+          eq(tenantModel.isPlatform, false),
+          sql`(${liveOwners}) <= 1`
+        )
+      )
+      .orderBy(tenantModel.id)
+    for (const { userId, tenantId, tenantName } of rows) {
+      const list = result.get(userId) ?? []
+      list.push({ tenantId, tenantName })
+      result.set(userId, list)
+    }
+    return result
   }
 
   /**

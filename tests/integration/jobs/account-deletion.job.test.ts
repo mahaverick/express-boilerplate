@@ -158,7 +158,7 @@ describe('alertDueSoonDeletions', () => {
     const notices = await waitForNotice(admin.id, dueSoon.id)
     expect(notices).toEqual([
       {
-        title: 'Account deletion due within 5 days',
+        title: 'Account deletion due or overdue',
         body: `A customer's account deletion is due by ${formatUtcDateTime(dueSoon.dueAt)}. Complete it in Deletion requests before then.`,
       },
     ])
@@ -172,7 +172,7 @@ describe('alertDueSoonDeletions', () => {
       { message: 'the due-soon alert mail' }
     )
     expect(mail).toHaveLength(1)
-    expect(mail[0]?.Subject).toBe('Account deletion due within 5 days')
+    expect(mail[0]?.Subject).toBe('Account deletion due or overdue')
   })
 
   it('the job does not alert twice for the same request', async () => {
@@ -232,7 +232,7 @@ describe('alertDueSoonDeletions', () => {
     expect(await alertDueSoonDeletions(now)).toEqual([overdue.id])
     expect(await waitForNotice(admin.id, overdue.id)).toEqual([
       {
-        title: 'Account deletion due within 5 days',
+        title: 'Account deletion due or overdue',
         body: `A customer's account deletion was due by ${formatUtcDateTime(overdue.dueAt)}. Complete it in Deletion requests now.`,
       },
     ])

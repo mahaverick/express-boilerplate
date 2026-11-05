@@ -295,6 +295,13 @@
       "when": 1793736441490,
       "tag": "0041_account_deletion_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793812924746,
+      "tag": "0042_account_deletion_requests_open_due_sort_idx",
+      "breakpoints": true
     }
   ]
 }

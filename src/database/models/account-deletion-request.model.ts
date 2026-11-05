@@ -67,6 +67,10 @@ export const accountDeletionRequestModel = pgTable(
       .on(table.userId)
       .where(sql`${table.status} = 'open'`),
     index('account_deletion_requests_user_id_idx').on(table.userId),
+    // The staff list's `due` sort: only open requests, in the order it pages them.
+    index('account_deletion_requests_open_due_sort_idx')
+      .on(table.dueAt, table.id)
+      .where(sql`${table.status} = 'open'`),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
     check(
       'account_deletion_requests_status_check',

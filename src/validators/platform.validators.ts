@@ -147,6 +147,21 @@ export const platformUserListSchema = listParamsSchema({
  */
 export type PlatformUserListQuery = z.output<typeof platformUserListSchema>
 
+/**
+ * `GET /api/v1/platform/deletion-requests` query: the shared list params and
+ * no filters. Only open requests are listed.
+ */
+export const platformDeletionRequestListSchema = listParamsSchema({
+  sorts: ['due', '-due'],
+  defaultSort: 'due',
+  filters: {},
+})
+
+/**
+ * A parsed deletion request list query.
+ */
+export type PlatformDeletionRequestListQuery = z.output<typeof platformDeletionRequestListSchema>
+
 const idParameterSchema = z.uuid()
 
 /**

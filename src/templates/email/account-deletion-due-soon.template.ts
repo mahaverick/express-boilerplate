@@ -24,7 +24,7 @@ export const ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY =
 /**
  * The mail's subject, also the in-app notification's title.
  */
-export const ACCOUNT_DELETION_DUE_SOON_TITLE = 'Account deletion due within 5 days'
+export const ACCOUNT_DELETION_DUE_SOON_TITLE = 'Account deletion due or overdue'
 
 /**
  * Whether the request was still ahead of its due date (`upcoming`) or past it

@@ -665,12 +665,8 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
         409
       )
     }
-    const blocking: string[] = []
-    for (const tenant of customerTenants) {
-      if ((await userMembershipRepository.countOwners(tenant.tenantId, tx)) <= 1) {
-        blocking.push(tenant.tenantName)
-      }
-    }
+    const sole = await userMembershipRepository.listSoleOwnedTenants([userId], tx)
+    const blocking: string[] = (sole.get(userId) ?? []).map((tenant) => tenant.tenantName)
     if (
       targetRole === 'owner' &&
       (await userMembershipRepository.countActiveOwners(platform.id, tx, target.id)) < 1

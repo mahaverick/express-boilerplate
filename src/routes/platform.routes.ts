@@ -26,6 +26,7 @@ import {
   addPlatformPlanRoutes,
   createPlatformTenantBillingRouter,
 } from '@/routes/platform-billing.routes'
+import { createPlatformDeletionRequestRouter } from '@/routes/platform-deletion-request.routes'
 import {
   createPlatformEmailRouter,
   createPlatformEmailSuppressionRouter,
@@ -54,6 +55,10 @@ export function createPlatformRouter(): Router {
     limit: getEnv().FLAG_EVALUATE_REQUESTS_PER_MINUTE,
   })
   router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter }))
+  router.use(
+    '/deletion-requests',
+    createPlatformDeletionRequestRouter({ searchLimiter, writeLimiter })
+  )
   router.use('/emails', createPlatformEmailRouter({ searchLimiter, writeLimiter }))
   router.use(
     '/email-suppressions',

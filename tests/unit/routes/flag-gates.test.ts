@@ -53,6 +53,7 @@ const KNOWN_MOUNTS = [
   '/status',
   '/plans',
   '/users',
+  '/deletion-requests',
   '/emails',
   '/email-suppressions',
   '/onboarding',

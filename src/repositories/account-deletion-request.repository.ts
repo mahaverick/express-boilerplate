@@ -12,11 +12,84 @@ import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import {
+  defineList,
+  listPage,
+  searchCondition,
+  timestampKey,
+  timestampSort,
+  type ListPage,
+  type ListParams,
+} from '@/utilities/list-page.utilities'
 
 /**
  * A platform owner or admin as a deletion alert addresses them.
  */
 type AccountDeletionRecipient = Pick<User, 'id' | 'email' | 'firstName'>
+
+/**
+ * One open request as the staff list reads it, with the requester's identity.
+ */
+export interface OpenDeletionRequestRow {
+  id: string
+  requestedAt: Date
+  dueAt: Date
+  reason: string | null
+  user: Pick<User, 'id' | 'email' | 'firstName' | 'lastName'>
+}
+
+/**
+ * The staff list of open deletion requests, searched by the requester's
+ * email. Only `status = 'open'` rows are listed, so the partial
+ * `account_deletion_requests_open_due_sort_idx` serves the `due` sort.
+ * @param search - The parsed search, or undefined.
+ * @returns The list definition.
+ */
+export function openDeletionRequestList(search: string | undefined) {
+  return defineList({
+    name: 'platform-deletion-requests',
+    base: (executor, seek) =>
+      executor
+        .select({
+          id: accountDeletionRequestModel.id,
+          requestedAt: accountDeletionRequestModel.requestedAt,
+          dueAt: accountDeletionRequestModel.dueAt,
+          reason: accountDeletionRequestModel.reason,
+          userId: userModel.id,
+          email: userModel.email,
+          firstName: userModel.firstName,
+          lastName: userModel.lastName,
+          sortDue: timestampKey(accountDeletionRequestModel.dueAt),
+        })
+        .from(accountDeletionRequestModel)
+        // No users.deleted_at filter: deleteUser completes the open request in the same transaction that soft-deletes the user, and purge deletes requests first.
+        .innerJoin(userModel, eq(accountDeletionRequestModel.userId, userModel.id))
+        .where(
+          and(
+            eq(accountDeletionRequestModel.status, 'open'),
+            searchCondition(search, [sql`lower(${userModel.email})`]),
+            seek
+          )
+        )
+        .$dynamic(),
+    id: accountDeletionRequestModel.id,
+    sorts: {
+      due: [timestampSort(accountDeletionRequestModel.dueAt, 'asc', 'sortDue')],
+      '-due': [timestampSort(accountDeletionRequestModel.dueAt, 'desc', 'sortDue')],
+    },
+    toItem: ({
+      sortDue: _due,
+      userId,
+      email,
+      firstName,
+      lastName,
+      ...rest
+    }): OpenDeletionRequestRow => ({
+      ...rest,
+      user: { id: userId, email, firstName, lastName },
+    }),
+  })
+}
 
 /**
  * Query access to `account_deletion_requests`.
@@ -116,6 +189,20 @@ class AccountDeletionRequestRepository {
         )
       )
       .orderBy(asc(accountDeletionRequestModel.dueAt), asc(accountDeletionRequestModel.id))
+  }
+
+  /**
+   * One page of the open requests, soonest due first unless the sort says otherwise.
+   * @param params - The parsed shared list params.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The page.
+   * @throws {InvalidCursorError} When the cursor does not verify.
+   */
+  async listOpen(
+    params: ListParams,
+    executor: DbExecutor = db
+  ): Promise<ListPage<OpenDeletionRequestRow>> {
+    return listPage(executor, openDeletionRequestList(params.search), params)
   }
 
   /**

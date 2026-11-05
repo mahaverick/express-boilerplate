@@ -29,7 +29,7 @@ describe('renderAccountDeletionDueSoonTemplate', () => {
     const rendered = renderAccountDeletionDueSoonTemplate(VARIABLES)
 
     expect(rendered.templateKey).toBe(ACCOUNT_DELETION_DUE_SOON_TEMPLATE_KEY)
-    expect(rendered.subject).toBe('Account deletion due within 5 days')
+    expect(rendered.subject).toBe('Account deletion due or overdue')
     expect(rendered.subject).toBe(ACCOUNT_DELETION_DUE_SOON_TITLE)
     expect(rendered.text).toBe(
       [
