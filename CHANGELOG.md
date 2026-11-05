@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/mahaverick/express-boilerplate/compare/v2.2.0...v2.3.0) (2026-11-05)
+
+
+### Features
+
+* **platform:** list open account deletion requests for staff ([#192](https://github.com/mahaverick/express-boilerplate/issues/192)) ([e49e716](https://github.com/mahaverick/express-boilerplate/commit/e49e716dba44ab5bb36acd69c7ca9d799864d582))
+
 ## [2.2.0](https://github.com/mahaverick/express-boilerplate/compare/v2.1.1...v2.2.0) (2026-11-04)
 
 
