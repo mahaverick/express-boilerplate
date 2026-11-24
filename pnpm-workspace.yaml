@@ -43,8 +43,14 @@ overrides:
   # commitizen's and eslint's minimatch, one entry per major line. Dev only.
   brace-expansion@>=1 <1.1.21: ^1.1.21
   brace-expansion@>=5 <5.0.12: ^5.0.12
-  # GHSA-hrr3-gc8f-f4qj: via commitizen > @commitlint > ajv. Dev only.
-  fast-uri@>=3 <3.1.8: ^3.1.8
+  # GHSA-hrr3-gc8f-f4qj, GHSA-w74x-v6f9-j3xg, GHSA-xhq7-xmqj-769h,
+  # GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp: via commitizen > @commitlint > ajv.
+  # Dev only.
+  fast-uri@>=3 <3.1.9: ^3.1.9
+  # GHSA-g3hv-75wg-m249: no 10.x fix, so eslint's minimatch 10 moves to 11.
+  # eslint-plugin-import-x needs 4.18.1 or later for it (4.17 imports makeRe,
+  # which 11 dropped). Dev only.
+  minimatch@>=7 <11.0.1: ^11.0.1
   # GHSA-67mh-4wv8-2f99: drizzle-kit's legacy @esbuild-kit loader pins
   # esbuild 0.18; 0.25 is the version drizzle-kit itself already uses. Dev only.
   '@esbuild-kit/core-utils>esbuild': 0.25.12
